@@ -1,0 +1,5 @@
+/dist/
+/var/
+/vendor/
+docker-compose.override.yml
+.phpunit.result.cache

@@ -1,0 +1,24 @@
+#!/usr/local/bin/php
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+use Roave\BetterReflection\BetterReflection;
+use Symfony\Component\Console\Input\ArgvInput;
+use Symfony\Component\Console\Output\ConsoleOutput;
+use XPHP\Console\ApplicationConsole;
+use XPHP\FileSystem\FileFinder\NativeFileFinder;
+use XPHP\FileSystem\FileReader\AsyncFileReader;
+
+$app = new ApplicationConsole(
+    new NativeFileFinder(),
+    new AsyncFileReader(),
+    new BetterReflection(),
+);
+
+return $app->run(
+    new ArgvInput(),
+    new ConsoleOutput(),
+);

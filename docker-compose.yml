@@ -1,0 +1,17 @@
+services:
+  php:
+    build:
+      dockerfile: .docker/php.Dockerfile
+    working_dir: /opt/app
+    volumes:
+      - ./:/opt/app
+    environment:
+      XDEBUG_MODE: coverage,develop
+
+  xphp:
+    extends:
+      service: php
+    entrypoint: ["/opt/app/bin/xphp"]
+
+volumes:
+  composer_cache: ~
