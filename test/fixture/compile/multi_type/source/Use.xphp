@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Map;
+use App\Containers\Pair;
+use App\Models\Plastic;
+use App\Models\User;
+
+// Two distinct classes as type params
+$userPlastic = new Pair<User, Plastic>(new User('alice'), new Plastic('red'));
+
+// Same class twice
+$plasticPair = new Pair<Plastic, Plastic>(new Plastic('green'), new Plastic('blue'));
+
+// Mixed scalar + class
+$nameAge = new Map<string, int>();
+$nameAge->set('alice', 30);
+
+// Nested multi-type: a Pair where each side is itself a generic instantiation
+$nested = new Pair<Map<string, int>, Pair<Plastic, User>>($nameAge, $userPlastic->swap());

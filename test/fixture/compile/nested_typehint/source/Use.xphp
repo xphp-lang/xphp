@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Wrapper;
+use App\Models\Plastic;
+
+$wrapper = new Wrapper<Plastic>();
+$wrapper->setBoxed(new Plastic('blue'));

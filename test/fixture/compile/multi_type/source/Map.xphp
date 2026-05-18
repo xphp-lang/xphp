@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+class Map<K, V>
+{
+    /** @var array<int, K> */
+    public array $keys = [];
+
+    /** @var array<int, V> */
+    public array $values = [];
+
+    public function set(K $key, V $value): void
+    {
+        $this->keys[] = $key;
+        $this->values[] = $value;
+    }
+
+    public function firstKey(): K
+    {
+        return $this->keys[0];
+    }
+
+    public function firstValue(): V
+    {
+        return $this->values[0];
+    }
+}

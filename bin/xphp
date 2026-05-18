@@ -11,10 +11,12 @@ use Symfony\Component\Console\Output\ConsoleOutput;
 use XPHP\Console\ApplicationConsole;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\AsyncFileReader;
+use XPHP\FileSystem\FileWriter\NativeFileWriter;
 
 $app = new ApplicationConsole(
     new NativeFileFinder(),
     new AsyncFileReader(),
+    new NativeFileWriter(),
     new BetterReflection(),
 );
 

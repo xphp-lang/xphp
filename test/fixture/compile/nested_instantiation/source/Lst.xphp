@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+class Lst<T>
+{
+    /** @var array<int, T> */
+    public array $items = [];
+
+    public function push(T $val): void
+    {
+        $this->items[] = $val;
+    }
+
+    public function first(): T
+    {
+        return $this->items[0];
+    }
+}

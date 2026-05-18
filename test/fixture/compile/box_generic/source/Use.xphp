@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Box;
+use App\Models\Metal;
+use App\Models\Plastic;
+
+$plasticBox = new Box<Plastic>();
+$plasticBox->set(new Plastic('red'));
+
+$metalBox = new Box<Metal>();
+$metalBox->set(new Metal(7));
+
+$secondPlasticBox = new Box<Plastic>();
