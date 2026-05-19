@@ -252,7 +252,7 @@ The alternative — type erasure (the path phpdoc `@template` and attribute-base
 
 ## Development
 
-Run the test suite (88 tests covering MVP, nested generics, multi-type generics, FQCN-collision safety, depth-cap cycle detection, visitor guard conditions, and runtime `TypeError` verification):
+Run the test suite (99 tests covering MVP, nested generics, multi-type generics, FQCN-collision safety, depth-cap cycle detection, visitor guard conditions, use-alias resolution, FQN-prefix args, and runtime `TypeError` verification):
 
 ```bash
 docker compose exec php php vendor/bin/phpunit
@@ -275,13 +275,13 @@ find var/play/.xphp-cache -type f
 
 ### Mutation testing
 
-The project tracks mutation-test coverage via [Infection](https://infection.github.io/). Current **MSI is 91%** (Mutation Score Indicator — the fraction of injected mutants killed by the test suite).
+The project tracks mutation-test coverage via [Infection](https://infection.github.io/). Current **MSI is 94%** (Mutation Score Indicator — the fraction of injected mutants killed by the test suite). The CI workflow fails any push/PR that drops it below 93%.
 
 ```bash
 docker compose exec php php vendor/bin/infection --threads=4
 ```
 
-`infection.json5` ships a curated set of per-mutator ignores for known-equivalent mutations (e.g. defensive `rtrim` calls on directory paths, `mkdir` permission octals, JSON pretty-print flags) so the report only surfaces real test gaps. The remaining ~50 escaped mutants are mostly token-stream boundary checks in the scanner — see the source for context.
+`infection.json5` ships a curated set of per-mutator ignores for known-equivalent mutations (e.g. defensive `rtrim` calls on directory paths, `mkdir` permission octals, JSON pretty-print flags) so the report only surfaces real test gaps. The remaining ~30 escaped mutants are mostly token-stream boundary checks in the scanner (`<` vs `<=` on `$i < $n` style bound checks) — killing those requires synthesizing token streams that end exactly at the boundary, which is high effort per mutant and low signal for real-world correctness.
 
 ---
 
