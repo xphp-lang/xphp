@@ -70,7 +70,7 @@ final class CompilerIntegrationTest extends TestCase
         self::assertStringContainsString('new \\' . $boxPlasticFqn . '()', $useContent);
         self::assertStringContainsString('new \\' . $boxMetalFqn . '()', $useContent);
 
-        $boxFile = $this->targetDir . '/Box.php';
+        $boxFile = $this->targetDir . '/Containers/Box.php';
         self::assertFileExists($boxFile);
         $boxContent = file_get_contents($boxFile);
         self::assertStringNotContainsString('class Box', $boxContent, 'generic template definition must be stripped from target');
@@ -86,7 +86,7 @@ final class CompilerIntegrationTest extends TestCase
         self::assertContains($boxMetalFqn, $generatedFqns);
     }
 
-    public function testSourcesInSubdirectoriesPreserveTheirRelativePath(): void
+    public function testPsr4SourceLayoutMirrorsToTarget(): void
     {
         $compiler = $this->buildCompiler();
         $sources = (new NativeFileFinder())
@@ -94,15 +94,50 @@ final class CompilerIntegrationTest extends TestCase
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
         $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
 
-        // src/sub/Helper.xphp -> dist/sub/Helper.php (not dist/Helper.php).
+        // src/Helpers/Helper.xphp -> dist/Helpers/Helper.php (PSR-4 layout preserved).
         // This kills the relativePath() IfNegation / ReturnRemoval mutants which would
         // otherwise collapse all paths into basename() and lose the directory prefix.
-        $expected = $this->targetDir . '/sub/Helper.php';
+        $expected = $this->targetDir . '/Helpers/Helper.php';
         self::assertFileExists($expected, "expected source-relative target at {$expected}");
         self::assertFileDoesNotExist(
             $this->targetDir . '/Helper.php',
-            'subdirectory source must not flatten to top-level target',
+            'PSR-4 source must not flatten to top-level target',
         );
+    }
+
+    public function testGeneratedCodeIsLoadableViaPsr4Autoloader(): void
+    {
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())
+            ->find($this->sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
+
+        // End-to-end PSR-4 roundtrip:
+        //   .xphp source (PSR-4 layout)
+        //   -> compile to .php (target dir preserves PSR-4)
+        //   -> register composer's PSR-4 autoloader
+        //   -> class_exists() resolves both user code and generated specializations
+        //      without explicit require statements
+        //   -> reflection on the specialized class reports the real concrete type
+        $loader = new \Composer\Autoload\ClassLoader();
+        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
+        $loader->register();
+
+        try {
+            self::assertTrue(class_exists('App\\Models\\Plastic'), 'user class App\\Models\\Plastic must autoload from the PSR-4 target dir');
+
+            $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+            self::assertTrue(class_exists($boxPlasticFqn), "specialized class {$boxPlasticFqn} must autoload from the PSR-4 cache dir");
+
+            // Confirm the autoloaded specialized class carries the real concrete type on its property.
+            $type = (new \ReflectionProperty($boxPlasticFqn, 'item'))->getType();
+            self::assertInstanceOf(\ReflectionNamedType::class, $type);
+            self::assertSame('App\\Models\\Plastic', $type->getName());
+        } finally {
+            $loader->unregister();
+        }
     }
 
     public function testGeneratedAndRewrittenFilesAreSyntacticallyValid(): void
@@ -114,7 +149,7 @@ final class CompilerIntegrationTest extends TestCase
         $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
 
         $files = array_merge(
-            glob($this->targetDir . '/*.php') ?: [],
+            self::globRecursive($this->targetDir, '*.php'),
             self::globRecursive($this->cacheDir . '/Generated', '*.php'),
         );
         self::assertNotEmpty($files);

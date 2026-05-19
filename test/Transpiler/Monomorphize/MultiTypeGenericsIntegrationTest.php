@@ -152,7 +152,7 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $this->compile();
 
         $files = array_merge(
-            glob($this->targetDir . '/*.php') ?: [],
+            self::globRecursive($this->targetDir, '*.php'),
             self::globRecursive($this->cacheDir . '/Generated', '*.php'),
         );
         self::assertNotEmpty($files);
@@ -179,8 +179,8 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         file_put_contents($runScript, <<<PHP
         <?php
         declare(strict_types=1);
-        require '{$this->targetDir}/User.php';
-        require '{$this->targetDir}/Plastic.php';
+        require '{$this->targetDir}/Models/User.php';
+        require '{$this->targetDir}/Models/Plastic.php';
         require '{$pairFile}';
         \$pair = '{$pairUserPlasticFqn}';
 

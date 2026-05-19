@@ -146,7 +146,7 @@ final class NestedGenericsIntegrationTest extends TestCase
         file_put_contents($runScript, <<<PHP
         <?php
         declare(strict_types=1);
-        require '{$this->targetDir}/Plastic.php';
+        require '{$this->targetDir}/Models/Plastic.php';
         require '{$boxFile}';
         require '{$wrapperFile}';
         \$type = (new ReflectionProperty('{$wrapperFqn}', 'box'))->getType();
@@ -190,7 +190,7 @@ final class NestedGenericsIntegrationTest extends TestCase
     private function assertAllSyntacticallyValid(): void
     {
         $files = array_merge(
-            glob($this->targetDir . '/*.php') ?: [],
+            self::globRecursive($this->targetDir, '*.php'),
             self::globRecursive($this->cacheDir . '/Generated', '*.php'),
         );
         self::assertNotEmpty($files);
