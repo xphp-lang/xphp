@@ -148,6 +148,80 @@ PHP;
         self::assertGreaterThan(2, count($ast));
     }
 
+    public function testResolvesGenericArgViaMultiSegmentUseAlias(): void
+    {
+        // `use App\Models;` aliases `Models` to `App\Models`. The arg `Models\Plastic` must
+        // resolve to `App\Models\Plastic` — i.e. resolveTypeRef appends $rest (`\Plastic`)
+        // to the use-map lookup (`App\Models`).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use App\Models;
+use App\Containers\Box;
+
+$x = new Box<Models\Plastic>();
+PHP;
+        $args = self::parseAndGetArgs($source, 'Box');
+        self::assertCount(1, $args);
+        self::assertSame('App\\Models\\Plastic', $args[0]->name);
+    }
+
+    public function testResolvesTemplateFqnViaMultiSegmentUseAlias(): void
+    {
+        // Same alias mechanism but for the OUTER name carrying the genericArgs (resolveNameOnly).
+        // `use App\Containers;` aliases `Containers` to `App\Containers`. Then `Containers\Box`
+        // as the template name must resolve to `App\Containers\Box`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use App\Containers;
+use App\Models\Plastic;
+
+$x = new Containers\Box<Plastic>();
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $templateFqn = self::firstNameTemplateFqn($ast, 'Containers\\Box');
+        self::assertSame('App\\Containers\\Box', $templateFqn);
+    }
+
+    /**
+     * @param array<int, mixed> $ast
+     */
+    private static function firstNameTemplateFqn(array $ast, string $nameLookup): ?string
+    {
+        $found = null;
+        $walker = function ($nodes) use (&$walker, &$found, $nameLookup): void {
+            foreach ($nodes as $node) {
+                if ($found !== null) {
+                    return;
+                }
+                if ($node instanceof Name && $node->toString() === $nameLookup) {
+                    $attr = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                    if (is_string($attr)) {
+                        $found = $attr;
+                        return;
+                    }
+                }
+                if (is_object($node) && method_exists($node, 'getSubNodeNames')) {
+                    foreach ($node->getSubNodeNames() as $name) {
+                        $value = $node->$name;
+                        if (is_array($value)) {
+                            $walker($value);
+                        } elseif (is_object($value)) {
+                            $walker([$value]);
+                        }
+                    }
+                }
+            }
+        };
+        $walker($ast);
+        return $found;
+    }
+
     /**
      * @return list<TypeRef>
      */

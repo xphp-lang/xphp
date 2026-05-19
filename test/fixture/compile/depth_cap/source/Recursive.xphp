@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+/**
+ * Pathologically recursive template: each specialization references a deeper
+ * generic specialization, which references a deeper one, ad infinitum.
+ * Instantiating `Recursive<int>` triggers `Recursive<Recursive<int>>`,
+ * then `Recursive<Recursive<Recursive<int>>>`, and so on — the Compiler's
+ * fixed-point loop must abort via the depth cap.
+ */
+class Recursive<T>
+{
+    public Recursive<Recursive<T>> $deeper;
+}
