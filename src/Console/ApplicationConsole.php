@@ -30,7 +30,7 @@ final class ApplicationConsole extends Application
         $phpParser = (new ParserFactory())->createForHostVersion();
         $printer = new StandardPrinter();
 
-        $this->add(new CompileCommand(
+        $this->addCommand(new CompileCommand(
             $fileFinder,
             new Compiler(
                 $fileReader,
