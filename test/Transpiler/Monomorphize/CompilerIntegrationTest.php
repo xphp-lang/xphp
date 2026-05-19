@@ -45,7 +45,7 @@ final class CompilerIntegrationTest extends TestCase
 
         $result = $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
 
-        self::assertSame(4, $result->sourceCount, 'expected 4 source .xphp files');
+        self::assertSame(5, $result->sourceCount, 'expected 5 source .xphp files (4 top-level + 1 in sub/)');
         self::assertSame(2, $result->generatedCount, 'expected 2 specializations (Box<Plastic>, Box<Metal>)');
 
         $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
@@ -57,6 +57,7 @@ final class CompilerIntegrationTest extends TestCase
         self::assertFileExists($boxMetalFile);
 
         $boxPlasticContent = file_get_contents($boxPlasticFile);
+        self::assertStringContainsString('declare (strict_types=1)', $boxPlasticContent, 'specialized class must opt in to strict types');
         self::assertStringContainsString('namespace XPHP\\Generated\\App\\Containers\\Box', $boxPlasticContent);
         self::assertStringContainsString('class ' . self::shortName($boxPlasticFqn), $boxPlasticContent);
         self::assertStringContainsString('public \\App\\Models\\Plastic $item', $boxPlasticContent);
@@ -83,6 +84,25 @@ final class CompilerIntegrationTest extends TestCase
         $generatedFqns = array_column($registry['instantiations'], 'generatedFqn');
         self::assertContains($boxPlasticFqn, $generatedFqns);
         self::assertContains($boxMetalFqn, $generatedFqns);
+    }
+
+    public function testSourcesInSubdirectoriesPreserveTheirRelativePath(): void
+    {
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())
+            ->find($this->sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
+
+        // src/sub/Helper.xphp -> dist/sub/Helper.php (not dist/Helper.php).
+        // This kills the relativePath() IfNegation / ReturnRemoval mutants which would
+        // otherwise collapse all paths into basename() and lose the directory prefix.
+        $expected = $this->targetDir . '/sub/Helper.php';
+        self::assertFileExists($expected, "expected source-relative target at {$expected}");
+        self::assertFileDoesNotExist(
+            $this->targetDir . '/Helper.php',
+            'subdirectory source must not flatten to top-level target',
+        );
     }
 
     public function testGeneratedAndRewrittenFilesAreSyntacticallyValid(): void

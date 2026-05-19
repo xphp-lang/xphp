@@ -30,11 +30,13 @@ final class Specializer
 {
     /**
      * @param array<string, TypeRef> $substitution Type-param name → concrete TypeRef.
+     *
+     * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
+     * is the single source of truth for the final shortname (derived from the generated FQCN).
      */
-    public function specialize(Class_ $template, string $mangledName, array $substitution): Class_
+    public function specialize(Class_ $template, array $substitution): Class_
     {
         $cloned = self::deepClone($template);
-        $cloned->name = new Identifier($mangledName);
         $cloned->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, null);
         $cloned->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
 

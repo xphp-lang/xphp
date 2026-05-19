@@ -84,10 +84,8 @@ final readonly class Compiler
                 }
 
                 $substitution = array_combine($definition->typeParams, $instantiation->concreteTypes);
-                $classShortName = self::shortName($generatedFqn);
                 $specialized = $this->specializer->specialize(
                     $definition->templateAst,
-                    $classShortName,
                     $substitution,
                 );
 
@@ -161,12 +159,6 @@ final readonly class Compiler
             return substr($filepath, strlen($base));
         }
         return basename($filepath);
-    }
-
-    private static function shortName(string $fqcn): string
-    {
-        $pos = strrpos($fqcn, '\\');
-        return $pos === false ? $fqcn : substr($fqcn, $pos + 1);
     }
 }
 
