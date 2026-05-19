@@ -11,14 +11,6 @@
             ]
         }
     },
-    "autoload-dev": {
-        "psr-4": {
-            "XPHP\\Demo\\": [
-                "demo/src/",
-                "demo/dist/"
-            ]
-        }
-    },
     "authors": [
         {
             "name": "Matheus Martins"
