@@ -4,7 +4,7 @@
 
 `xphp` is a superset of PHP that adds `<T>` syntax for generics. Write `class Box<T>`, `class Pair<A, B>`, `class Map<K, V>`, even `class Box<Lst<Plastic>>` — any number of type parameters, any depth of nesting. A `.xphp` source file is compiled into plain `.php`: each unique generic instantiation becomes a real, specialized class with **native PHP type hints**, so reflection, OpCache, and the engine's own `TypeError` all work — because the output is just PHP.
 
-Status: early. PHP 8.3+, MIT-licensed. Not yet on Packagist.
+Status: early. PHP 8.4+, MIT-licensed. Not yet on Packagist.
 
 ---
 
@@ -172,10 +172,10 @@ Not on Packagist yet. Clone and use the bundled Docker setup:
 git clone <repo-url> xphp
 cd xphp
 docker compose up -d
-docker run --rm -v "$(pwd):/app" -w /app composer:2 install --ignore-platform-reqs
+docker run --rm -v "$(pwd):/app" -w /app composer:2 install
 ```
 
-(`--ignore-platform-reqs` is only needed because the official composer image runs a newer PHP than the project targets.)
+`composer.json` pins `config.platform.php = "8.4.21"` so package resolution targets the project's PHP version regardless of which PHP runs composer itself — no `--ignore-platform-reqs` needed.
 
 ---
 
@@ -252,7 +252,7 @@ The alternative — type erasure (the path phpdoc `@template` and attribute-base
 
 ## Development
 
-Run the test suite (42 tests covering MVP, nested generics, multi-type generics, FQCN-collision safety, and runtime `TypeError` verification):
+Run the test suite (88 tests covering MVP, nested generics, multi-type generics, FQCN-collision safety, depth-cap cycle detection, visitor guard conditions, and runtime `TypeError` verification):
 
 ```bash
 docker compose exec php php vendor/bin/phpunit
@@ -272,6 +272,16 @@ mkdir -p var/play && cp -r test/fixture/compile/multi_type/source var/play/src
 docker compose exec php php bin/xphp compile var/play/src var/play/dist var/play/.xphp-cache
 find var/play/.xphp-cache -type f
 ```
+
+### Mutation testing
+
+The project tracks mutation-test coverage via [Infection](https://infection.github.io/). Current **MSI is 91%** (Mutation Score Indicator — the fraction of injected mutants killed by the test suite).
+
+```bash
+docker compose exec php php vendor/bin/infection --threads=4
+```
+
+`infection.json5` ships a curated set of per-mutator ignores for known-equivalent mutations (e.g. defensive `rtrim` calls on directory paths, `mkdir` permission octals, JSON pretty-print flags) so the report only surfaces real test gaps. The remaining ~50 escaped mutants are mostly token-stream boundary checks in the scanner — see the source for context.
 
 ---
 
