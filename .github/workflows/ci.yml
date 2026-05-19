@@ -30,7 +30,7 @@ jobs:
         uses: ramsey/composer-install@v3
 
       - name: Run PHPUnit
-        run: vendor/bin/phpunit --colors=never
+        run: make test/unit
 
   infection:
     name: Mutation testing
@@ -53,7 +53,7 @@ jobs:
       - name: Run Infection
         # --min-covered-msi=93 fails CI if mutation score drops below 93 (current baseline: 94%).
         # --threads=4 parallelizes mutant runs; safe on the 2-core ubuntu-latest runner.
-        run: vendor/bin/infection --threads=4 --min-covered-msi=93 --no-progress
+        run: make test/mutation
 
       - name: Upload Infection report
         if: always()
