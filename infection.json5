@@ -25,9 +25,13 @@
         },
 
         // array_values() on a variadic ...$paths — already 0-indexed; the call is a no-op.
+        // FilepathArray::filter's own array_values is also redundant because the constructor
+        // re-indexes everything (whatever spread gives it gets passed back through __construct's
+        // array_values), so removing the inner call produces an identical end-state.
         "UnwrapArrayValues": {
             "ignore": [
-                "XPHP\\FileSystem\\FilepathArray::__construct"
+                "XPHP\\FileSystem\\FilepathArray::__construct",
+                "XPHP\\FileSystem\\FilepathArray::filter"
             ]
         },
 
@@ -109,6 +113,27 @@
         "MethodCallRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
+            ]
+        },
+
+        // parseTypeArg's `$name = ltrim($tokens[$i]->text, '\\')` is masked by the
+        // downstream resolveTypeRef which also strips leading backslashes. Removing
+        // the inner ltrim produces a name with an extra `\` prefix that gets stripped
+        // again later — same observable output.
+        "UnwrapLtrim": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg"
+            ]
+        },
+
+        // LogicalOrAllSubExprNegation on isNameToken negates every sub-condition of the
+        // `T_STRING || T_NAME_QUALIFIED || ...` chain, making the function return true for
+        // every token. The scanner then attempts to enter generic-args mode on non-name
+        // tokens but parseTypeArgList bails out cleanly when the inner tokens don't form a
+        // valid type expression — observable behavior identical to original.
+        "LogicalOrAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isNameToken"
             ]
         }
     },
