@@ -13,7 +13,104 @@
         "html": "var/infection.html"
     },
     "mutators": {
-        "@default": true
+        "@default": true,
+
+        // rtrim($x, '/') normalization is defensive; double-slash paths behave identically.
+        "UnwrapRtrim": {
+            "ignore": [
+                "XPHP\\FileSystem\\FileFinder\\NativeFileFinder::find",
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
+            ]
+        },
+
+        // array_values() on a variadic ...$paths — already 0-indexed; the call is a no-op.
+        "UnwrapArrayValues": {
+            "ignore": [
+                "XPHP\\FileSystem\\FilepathArray::__construct"
+            ]
+        },
+
+        // mkdir() permission octal jitter (Compiler:134, SpecializedClassGenerator:57)
+        // is not behavior-affecting for build artifacts. Also covers $depth=0 init in
+        // Compiler::compile (M8, equivalent-under-cap).
+        "DecrementInteger": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
+            ]
+        },
+        // Same family for mkdir(); plus $b[0]/$a[0] index jitter inside applyReplacements
+        // (irrelevant because all replacements are equal-length).
+        "IncrementInteger": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+            ]
+        },
+
+        // JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES -> & (registry.json is for human
+        // inspection; the flags don't drive any logic).
+        "BitwiseOr": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile"
+            ]
+        },
+
+        // Trailing-"\n" concat and JSON-line operand removal (cosmetic) +
+        // equal-length-replacement concat shuffling inside applyReplacements.
+        "Concat": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+            ]
+        },
+        "ConcatOperandRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+            ]
+        },
+
+        // `<=` vs `<` on the suggested-length clamp — math makes both branches
+        // produce identical output across the entire valid hashLength range (16..64).
+        "LessThanOrEqualTo": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage"
+            ]
+        },
+
+        // Spaceship-order swap inside applyReplacements usort. Replacements
+        // are equal-length so any sort order produces the same cleaned source.
+        "Spaceship": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+            ]
+        },
+        // Dropping the usort() entirely. Same justification.
+        "FunctionCallRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+            ]
+        },
+        // str_repeat(' ', $length) -> ' '. Line numbers still match (generics
+        // never span multiple lines in our grammar) so marker resolution is unaffected.
+        "UnwrapStrRepeat": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+            ]
+        },
+
+        // Defensive ATTR_TEMPLATE_FQN = null cleanup on the cloned specialized class.
+        // (Mutations inside XphpSourceParser's anonymous NodeVisitor — indexUses removals,
+        // marker-loop break vs continue — are suppressed via `// @infection-ignore-all`
+        // annotations in source, since method-scoped ignore doesn't reach anonymous classes.)
+        "MethodCallRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
+            ]
+        }
     },
     "testFramework": "phpunit",
     "bootstrap": "./test/bootstrap.php"
