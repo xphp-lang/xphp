@@ -1,8 +1,8 @@
-FROM php:8.3-cli-alpine
+FROM php:8.4-cli-alpine
 
 RUN apk add --update --no-cache linux-headers
 RUN apk add --no-cache \
-    php83-dev \
+    php84-dev \
     build-base
 
 RUN pecl install \
