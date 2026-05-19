@@ -38,6 +38,7 @@ final readonly class Compiler
         private Specializer $specializer,
         private SpecializedClassGenerator $specializedClassGenerator,
         private StandardPrinter $printer,
+        private int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH,
     ) {
     }
 
@@ -47,7 +48,7 @@ final readonly class Compiler
         string $targetDir,
         string $cacheDir,
     ): CompileResult {
-        $registry = new Registry();
+        $registry = new Registry($this->hashLength);
         $collector = new RegistryCollector($registry);
 
         // Phase 1: parse + initial collect.
