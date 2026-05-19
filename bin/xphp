@@ -5,17 +5,26 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-use Roave\BetterReflection\BetterReflection;
 use Symfony\Component\Console\Input\ArgvInput;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use XPHP\Console\ApplicationConsole;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
-use XPHP\FileSystem\FileReader\AsyncFileReader;
+use XPHP\FileSystem\FileReader\NativeFileReader;
+use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\Transpiler\Monomorphize\Registry;
+
+try {
+    $hashLength = Registry::resolveHashLengthFromEnv();
+} catch (InvalidArgumentException $e) {
+    fwrite(STDERR, $e->getMessage() . PHP_EOL);
+    exit(2);
+}
 
 $app = new ApplicationConsole(
     new NativeFileFinder(),
-    new AsyncFileReader(),
-    new BetterReflection(),
+    new NativeFileReader(),
+    new NativeFileWriter(),
+    $hashLength,
 );
 
 return $app->run(

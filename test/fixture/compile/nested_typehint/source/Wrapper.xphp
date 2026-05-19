@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+use App\Containers\Box;
+
+class Wrapper<T>
+{
+    public Box<T> $box;
+
+    public function __construct()
+    {
+        $this->box = new Box<T>();
+    }
+
+    public function setBoxed(T $val): void
+    {
+        $this->box->set($val);
+    }
+
+    public function getBoxed(): T
+    {
+        return $this->box->get();
+    }
+}

@@ -1,5 +1,6 @@
 /dist/
 /var/
 /vendor/
+/.xphp-cache/
 docker-compose.override.yml
 .phpunit.result.cache

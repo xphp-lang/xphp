@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+class Pair<A, B>
+{
+    public function __construct(
+        public A $first,
+        public B $second,
+    ) {
+    }
+
+    public function swap(): Pair<B, A>
+    {
+        return new Pair<B, A>($this->second, $this->first);
+    }
+}
