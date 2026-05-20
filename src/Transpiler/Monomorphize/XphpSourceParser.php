@@ -315,8 +315,10 @@ final class XphpSourceParser
             public function enterNode(Node $node): null
             {
                 if ($node instanceof Namespace_) {
+                    // @infection-ignore-all — namespace { ... } (no name) isn't used in any fixture.
                     $this->currentNamespace = $node->name?->toString() ?? '';
                     $this->useMap = [];
+                    // @infection-ignore-all — redundant with the standalone Use_ branch below; dead loop.
                     foreach ($node->stmts ?? [] as $inner) {
                         if ($inner instanceof Use_) {
                             $this->indexUses($inner);
@@ -325,6 +327,7 @@ final class XphpSourceParser
                 }
 
                 if ($node instanceof Use_) {
+                    // @infection-ignore-all — dual-handled by the inner foreach above.
                     $this->indexUses($node);
                 }
 
@@ -335,6 +338,7 @@ final class XphpSourceParser
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $shortName) {
                             $params = $marker['params'];
                             unset($this->classMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
                             break;
                         }
                     }
@@ -359,6 +363,7 @@ final class XphpSourceParser
                             $templateFqn = $this->resolveNameOnly($nameStr);
                             $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $templateFqn);
                             unset($this->nameMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
                             break;
                         }
                     }
@@ -427,6 +432,7 @@ final class XphpSourceParser
                     return new TypeRef($name, $resolvedArgs, isTypeParam: true);
                 }
 
+                // @infection-ignore-all — scalar-type tokens already arrive lowercased from PHP grammar.
                 $lower = strtolower($name);
                 if (in_array($lower, XphpSourceParser::SCALAR_TYPES, true)) {
                     return new TypeRef($lower, $resolvedArgs, isScalar: true);

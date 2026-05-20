@@ -1,6 +1,6 @@
 {
-    "name": "xphp-lang/xphp",
-    "description": "Provides Generics in PHP via Attributes",
+    "name": "xphp-lang/xphp-parser",
+    "description": "Parse xphp files and convert them into php files",
     "type": "library",
     "license": "MIT",
     "autoload": {
@@ -11,17 +11,10 @@
             ]
         }
     },
-    "autoload-dev": {
-        "psr-4": {
-            "XPHP\\Demo\\": [
-                "demo/src/",
-                "demo/dist/"
-            ]
-        }
-    },
     "authors": [
         {
-            "name": "Matheus Martins"
+            "name": "Matheus Martins",
+            "email": "math3usmartins@github.com"
         }
     ],
     "require": {
