@@ -21,8 +21,7 @@ core parser.
 
 44 PHPUnit cases, 113 assertions — `make test/lsp`.
 
-The shipped spec lives at `agent-os/specs/shipped/2026-05-21-0700-lsp-server/` (locally
-gitignored, on-disk only). Roadmap entry: `docs/roadmap.md` Shipped → Tooling.
+See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
 
 ## Layout
 
@@ -138,8 +137,8 @@ follows the same pattern.
 
 ## Out-of-scope follow-ups
 
-Documented in `agent-os/specs/shipped/2026-05-21-0700-lsp-server/shape.md` under "Open
-risks" and the handler-level source comments. Highlights:
+Each one is also documented inline at the relevant call site so a reader doing a code dive
+finds the same caveat at the source. Highlights:
 
 - **Indexer for unopened files.** Today only documents the editor has open contribute to
   cross-file diagnostics + go-to-definition + completion. Walking `**/*.xphp` at `initialize`
