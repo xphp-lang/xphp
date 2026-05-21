@@ -32,13 +32,15 @@ final class Registry
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
-    public function __construct(private readonly int $hashLength = self::DEFAULT_HASH_HEX_LENGTH)
-    {
+    public function __construct(
+        private readonly int $hashLength = self::DEFAULT_HASH_HEX_LENGTH,
+        private readonly ?TypeHierarchy $hierarchy = null,
+    ) {
         self::validateHashLength($this->hashLength);
     }
 
     /**
-     * @param list<string> $typeParams
+     * @param list<TypeParam> $typeParams
      */
     public function recordDefinition(
         string $templateFqn,
@@ -81,6 +83,8 @@ final class Registry
             }
         }
 
+        $this->validateBounds($templateFqn, $args);
+
         $generatedFqn = self::generatedFqn($templateFqn, $args, $this->hashLength);
         $template = ltrim($templateFqn, '\\');
 
@@ -99,6 +103,69 @@ final class Registry
         );
 
         return $this->instantiations[$generatedFqn];
+    }
+
+    /**
+     * Enforce per-param bounds on a concrete instantiation. Fires before the FQCN is hashed
+     * so the error message points at the SOURCE-level violation, not the obfuscated `T_<hash>`.
+     *
+     * Strategy: for each (TypeParam with bound, concrete TypeRef) pair, ask the hierarchy
+     * whether the concrete arg satisfies the bound. The hierarchy returns:
+     *   - true:  proven subtype — accept.
+     *   - false: proven non-subtype (also the answer for scalars vs class bounds) — reject.
+     *   - null:  unknown — reject too, with a different message, so users can either widen
+     *            the bound or add the type into the source set the hierarchy was built from.
+     *
+     * The whole validation is skipped if no hierarchy was attached (e.g., bare-Registry tests
+     * that don't care about bounds) or if no definition is on file for the template yet —
+     * the latter happens transiently during fixed-point specialization; the next pass picks
+     * the definition up.
+     *
+     * @param list<TypeRef> $args
+     */
+    private function validateBounds(string $templateFqn, array $args): void
+    {
+        if ($this->hierarchy === null) {
+            return;
+        }
+        $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
+        if ($definition === null) {
+            return;
+        }
+        // typeParams + args are positional; if arity doesn't line up there's a deeper bug — let
+        // the existing pipeline error out on the count mismatch rather than masking it here.
+        $params = $definition->typeParams;
+        if (count($params) !== count($args)) {
+            return;
+        }
+        foreach ($params as $i => $param) {
+            if ($param->boundFqn === null) {
+                continue;
+            }
+            $concrete = $args[$i];
+            $verdict = $this->hierarchy->isSubtype($concrete->name, $param->boundFqn);
+            if ($verdict === true) {
+                continue;
+            }
+            $detail = $verdict === false
+                ? sprintf('"%s" does not extend/implement "%s".', $concrete->toDisplayString(), $param->boundFqn)
+                : sprintf(
+                    '"%s" is not in the source set the hierarchy was built from (and is not a recognized PHP built-in), so the compiler cannot prove it satisfies "%s".',
+                    $concrete->toDisplayString(),
+                    $param->boundFqn,
+                );
+            throw new RuntimeException(sprintf(
+                "Generic bound violated while instantiating %s.\n"
+                . "  type parameter %s is bounded by %s\n"
+                . "  but the supplied concrete type is %s\n\n"
+                . "  %s",
+                self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+                $param->name,
+                $param->boundFqn,
+                $concrete->toDisplayString(),
+                $detail,
+            ));
+        }
     }
 
     /**
@@ -197,7 +264,7 @@ final class Registry
         foreach ($this->definitions as $def) {
             $defs[] = [
                 'name'       => $def->templateFqn,
-                'typeParams' => $def->typeParams,
+                'typeParams' => $def->typeParamNames(),
                 'sourceFile' => $def->sourceFile,
             ];
         }

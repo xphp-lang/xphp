@@ -32,6 +32,7 @@ $demos = [
     'var/dist/Demos/ArraySugar.php',
     'var/dist/Demos/NestedTransitive.php',
     'var/dist/Demos/GenericInterface.php',
+    'var/dist/Demos/Bounds.php',
 ];
 
 fwrite(STDOUT, "==> Running demos\n\n");

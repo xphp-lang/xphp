@@ -48,15 +48,21 @@ final readonly class Compiler
         string $targetDir,
         string $cacheDir,
     ): CompileResult {
-        $registry = new Registry($this->hashLength);
-        $collector = new RegistryCollector($registry);
-
-        // Phase 1: parse + initial collect.
+        // Phase 0: parse every source up front. The TypeHierarchy (used to validate generic
+        // bounds at recordInstantiation time) needs to see every class/interface/trait
+        // declaration *before* any instantiation is recorded, so parsing has to finish first.
         $astPerFile = [];
         foreach ($sources->filepaths as $filepath) {
             $content = $this->fileReader->read($filepath);
-            $ast = $this->sourceParser->parse($content);
-            $astPerFile[$filepath] = $ast;
+            $astPerFile[$filepath] = $this->sourceParser->parse($content);
+        }
+
+        $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
+        $registry = new Registry($this->hashLength, $hierarchy);
+        $collector = new RegistryCollector($registry);
+
+        // Phase 1: collect (definitions + instantiations) using the now-populated hierarchy.
+        foreach ($astPerFile as $filepath => $ast) {
             $collector->collect($ast, $filepath);
         }
 
@@ -83,7 +89,7 @@ final readonly class Compiler
                     ));
                 }
 
-                $substitution = array_combine($definition->typeParams, $instantiation->concreteTypes);
+                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
                 $specialized = $this->specializer->specialize(
                     $definition->templateAst,
                     $substitution,

@@ -102,17 +102,13 @@ final class XphpSourceParser
                     $classLine = $tokens[$j]->line;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
-                        $parsed = self::parseTypeArgList($tokens, $k);
+                        $parsed = self::parseTypeParamList($tokens, $k);
                         if ($parsed !== null) {
-                            [$args, $endIdx] = $parsed;
-                            $params = [];
-                            foreach ($args as $arg) {
-                                $params[] = $arg->name;
-                            }
+                            [$paramEntries, $endIdx] = $parsed;
                             $classMarkers[] = [
                                 'line' => $classLine,
                                 'name' => $className,
-                                'params' => $params,
+                                'params' => $paramEntries,
                             ];
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
@@ -172,6 +168,73 @@ final class XphpSourceParser
         $cleaned = self::applyReplacements($source, $replacements);
 
         return [$classMarkers, $nameMarkers, $cleaned];
+    }
+
+    /**
+     * Parse a class-header type-param list: `< Name(: Bound)? (, Name(: Bound)?)* >`.
+     *
+     * Unlike `parseTypeArgList` (which is for *instantiation* sites and only handles
+     * concrete + nested-generic args), this variant only fires on the class/interface/trait
+     * header — so the `:` after a name is unambiguous and signals a bound.
+     *
+     * Returns `[entries, endIdx]` where each entry is a `{name: string, boundName: ?string,
+     * boundIsFq: bool}` record; later resolved to a TypeParam(name, ?boundFqn) inside the
+     * AST traversal step (which has access to the namespace + use map).
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: list<array{name: string, boundName: ?string, boundIsFq: bool}>, 1: int}|null
+     */
+    private static function parseTypeParamList(array $tokens, int $openIdx): ?array
+    {
+        $n = count($tokens);
+        if ($openIdx >= $n || $tokens[$openIdx]->text !== '<') {
+            return null;
+        }
+
+        $entries = [];
+        $i = self::skipWs($tokens, $openIdx + 1);
+        while ($i < $n) {
+            if (!self::isNameToken($tokens[$i])) {
+                return null;
+            }
+            $paramName = ltrim($tokens[$i]->text, '\\');
+            $i++;
+
+            $boundName = null;
+            $boundIsFq = false;
+            $afterName = self::skipWs($tokens, $i);
+            if ($afterName < $n && $tokens[$afterName]->text === ':') {
+                $afterColon = self::skipWs($tokens, $afterName + 1);
+                if ($afterColon >= $n || !self::isNameToken($tokens[$afterColon])) {
+                    return null;
+                }
+                $boundText = $tokens[$afterColon]->text;
+                $boundName = ltrim($boundText, '\\');
+                $boundIsFq = str_starts_with($boundText, '\\');
+                $i = $afterColon + 1;
+            }
+
+            $entries[] = [
+                'name' => $paramName,
+                'boundName' => $boundName,
+                'boundIsFq' => $boundIsFq,
+            ];
+
+            $i = self::skipWs($tokens, $i);
+            if ($i >= $n) {
+                return null;
+            }
+            if ($tokens[$i]->text === '>') {
+                return [$entries, $i];
+            }
+            if ($tokens[$i]->text === ',') {
+                $i = self::skipWs($tokens, $i + 1);
+                continue;
+            }
+            return null;
+        }
+
+        return null;
     }
 
     /**
@@ -402,22 +465,34 @@ final class XphpSourceParser
 
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $shortName = $node->name->toString();
-                    $params = null;
+                    $paramEntries = null;
                     foreach ($this->classMarkers as $i => $marker) {
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $shortName) {
-                            $params = $marker['params'];
+                            $paramEntries = $marker['params'];
                             unset($this->classMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
                             break;
                         }
                     }
-                    if ($params !== null && $params !== []) {
-                        $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $params);
+                    if ($paramEntries !== null && $paramEntries !== []) {
+                        $typeParams = [];
+                        $paramNames = [];
+                        foreach ($paramEntries as $entry) {
+                            $boundFqn = null;
+                            if ($entry['boundName'] !== null) {
+                                $boundFqn = $entry['boundIsFq']
+                                    ? $entry['boundName']
+                                    : $this->resolveNameOnly($entry['boundName']);
+                            }
+                            $typeParams[] = new TypeParam($entry['name'], $boundFqn);
+                            $paramNames[] = $entry['name'];
+                        }
+                        $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $typeParams);
                         $fqn = $this->currentNamespace !== ''
                             ? $this->currentNamespace . '\\' . $shortName
                             : $shortName;
                         $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
-                        $this->typeParamStack[] = $params;
+                        $this->typeParamStack[] = $paramNames;
                     } else {
                         $this->typeParamStack[] = [];
                     }

@@ -30,7 +30,7 @@ PHP;
         $class = self::findFirstClass($ast);
         self::assertNotNull($class);
         self::assertSame('Box', $class->name?->toString());
-        self::assertSame(['T'], $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
+        self::assertSame(['T'], self::paramNames($class));
     }
 
     public function testAttachesGenericParamsToInterfaceDefinition(): void
@@ -50,7 +50,7 @@ PHP;
         $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
         self::assertNotNull($iface);
         self::assertSame('Container', $iface->name?->toString());
-        self::assertSame(['T'], $iface->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
+        self::assertSame(['T'], self::paramNames($iface));
         self::assertSame('App\\Container', $iface->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
     }
 
@@ -72,7 +72,79 @@ PHP;
 
         $trait = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Trait_::class);
         self::assertNotNull($trait);
-        self::assertSame(['T'], $trait->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
+        self::assertSame(['T'], self::paramNames($trait));
+    }
+
+    public function testAttachesBoundedTypeParamToClassDefinition(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Box<T: \Stringable>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertCount(1, $params);
+        self::assertSame('T', $params[0]->name);
+        self::assertSame('Stringable', $params[0]->boundFqn, 'leading-\\ marks bound as fully qualified — must NOT get the App\\ prefix');
+    }
+
+    public function testBoundedTypeParamResolvesAgainstUseAlias(): void
+    {
+        // Locks the alias-resolution path on bounds — exactly the same logic the rest of the
+        // scanner uses for type args, but reached via the new parseTypeParamList code path.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use App\Contracts\HasName as NamedThing;
+
+class Repo<T: NamedThing>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame('App\\Contracts\\HasName', $params[0]->boundFqn);
+    }
+
+    public function testMixesBoundedAndUnboundedTypeParams(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Pair<K: \Stringable, V>
+{
+    public K $key;
+    public V $value;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertCount(2, $params);
+        self::assertSame('K', $params[0]->name);
+        self::assertSame('Stringable', $params[0]->boundFqn);
+        self::assertSame('V', $params[1]->name);
+        self::assertNull($params[1]->boundFqn, 'V has no bound — boundFqn must stay null');
     }
 
     public function testAttachesGenericArgsToNewExpressionResolvedAgainstNamespace(): void
@@ -321,6 +393,18 @@ PHP;
         return $found ?? [];
     }
 
+    /**
+     * @return list<string>
+     */
+    private static function paramNames(\PhpParser\Node\Stmt\ClassLike $node): array
+    {
+        $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        if (!is_array($params)) {
+            return [];
+        }
+        return array_map(static fn (TypeParam $p): string => $p->name, $params);
+    }
+
     /** @param array<int, mixed> $ast */
     private static function findFirstClass(array $ast): ?Class_
     {
@@ -394,10 +478,7 @@ PHP;
             $byName['Helper']->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS),
             'Helper must not steal Box\'s marker via line-only OR matching',
         );
-        self::assertSame(
-            ['T'],
-            $byName['Box']->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS),
-        );
+        self::assertSame(['T'], self::paramNames($byName['Box']));
     }
 
     public function testNameMarkerRequiresBothLineAndNameMatch(): void
