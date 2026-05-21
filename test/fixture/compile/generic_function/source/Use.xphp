@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+$asInt = identity<int>(42);
+$asString = identity<string>('world');

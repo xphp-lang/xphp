@@ -534,10 +534,10 @@ final class XphpSourceParser
                     }
                 }
 
-                if ($node instanceof Node\Stmt\ClassMethod) {
-                    $methodName = $node->name->toString();
+                if ($node instanceof Node\Stmt\ClassMethod || $node instanceof Node\Stmt\Function_) {
+                    $declName = $node->name->toString();
                     foreach ($this->methodMarkers as $i => $marker) {
-                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $methodName) {
+                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $declName) {
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $boundFqn = null;
@@ -562,6 +562,22 @@ final class XphpSourceParser
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $callMethodName) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
+                            unset($this->nameMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
+                    }
+                }
+
+                if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Name) {
+                    // Claim the marker on FuncCall enter (parent fires before children) so the
+                    // inner Name doesn't pick it up and trigger the class-rewrite path.
+                    $funcName = $node->name->toString();
+                    foreach ($this->nameMarkers as $i => $marker) {
+                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $funcName) {
+                            $resolvedArgs = $this->resolveTypeRefList($marker['args']);
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
+                            $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $this->resolveNameOnly($funcName));
                             unset($this->nameMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
                             break;

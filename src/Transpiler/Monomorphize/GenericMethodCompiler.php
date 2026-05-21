@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
@@ -57,49 +59,68 @@ final class GenericMethodCompiler
      */
     public function process(array $astSet): void
     {
-        // Step 1: index every generic-method template by classFqn::methodName.
-        // Templates can live in user files AND in specialized class files (since generic
-        // methods on generic classes would survive the class-level specialization step —
-        // although the MVP doesn't fully support that combination, we still index for safety).
-        /** @var array<string, ClassMethod> $templates */
-        $templates = [];
+        /** @var array<string, ClassMethod> $methodTemplates keyed by "classFqn::methodName" */
+        $methodTemplates = [];
         /** @var array<string, ClassLike> $classByFqn */
         $classByFqn = [];
+        /** @var array<string, Function_> $functionTemplates keyed by namespace\\functionName */
+        $functionTemplates = [];
+        /** @var array<string, Namespace_> $functionNamespaceByFqn  enclosing Namespace_ per fqn */
+        $functionNamespaceByFqn = [];
+
         foreach ($astSet as $ast) {
-            $this->indexTemplates($ast, $templates, $classByFqn);
+            $this->indexTemplates($ast, $methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn);
         }
 
-        if ($templates === []) {
+        if ($methodTemplates === [] && $functionTemplates === []) {
             return;
         }
 
-        // Step 2 + 3 + 4 are interleaved per call site. As we walk we mint specialized methods
-        // (mutating the owner class) and rewrite the call's Identifier.
-        /** @var array<string, true> $alreadyGenerated keyed by "classFqn::mangledName" */
+        /** @var array<string, true> $alreadyGenerated */
         $alreadyGenerated = [];
         foreach ($astSet as $ast) {
-            $this->rewriteCallSites($ast, $templates, $classByFqn, $alreadyGenerated);
+            $this->rewriteCallSites(
+                $ast,
+                $methodTemplates,
+                $classByFqn,
+                $functionTemplates,
+                $functionNamespaceByFqn,
+                $alreadyGenerated,
+            );
         }
 
-        // Step 5: strip the original generic-method ClassMethod nodes (templates have done
-        // their job; the specialized mangled versions carry the actual implementation).
-        foreach ($templates as $key => $template) {
+        // Strip the original method templates from their owning classes.
+        foreach ($methodTemplates as $key => $template) {
             [$classFqn, $methodName] = explode('::', $key, 2);
             $class = $classByFqn[$classFqn] ?? null;
-            if ($class === null) {
-                continue;
+            if ($class !== null) {
+                $this->stripMethod($class, $methodName);
             }
-            $this->stripMethod($class, $methodName);
+        }
+
+        // Strip the original function templates from their owning namespaces.
+        foreach ($functionTemplates as $fqn => $template) {
+            $namespace = $functionNamespaceByFqn[$fqn] ?? null;
+            if ($namespace !== null) {
+                $this->stripFunction($namespace, $template->name->toString());
+            }
         }
     }
 
     /**
      * @param list<Node\Stmt> $ast
-     * @param array<string, ClassMethod> $templates  out-param
-     * @param array<string, ClassLike> $classByFqn   out-param
+     * @param array<string, ClassMethod> $methodTemplates  out-param
+     * @param array<string, ClassLike> $classByFqn         out-param
+     * @param array<string, Function_> $functionTemplates  out-param
+     * @param array<string, Namespace_> $functionNamespaceByFqn  out-param
      */
-    private function indexTemplates(array $ast, array &$templates, array &$classByFqn): void
-    {
+    private function indexTemplates(
+        array $ast,
+        array &$methodTemplates,
+        array &$classByFqn,
+        array &$functionTemplates,
+        array &$functionNamespaceByFqn,
+    ): void {
         // @infection-ignore-all — visitor body is a flat AST walk: every guard either
         // (a) survives because the outer pipeline's tests prove the contract end-to-end,
         // or (b) toggles a defensive isset/`?->` check whose alternate branch is
@@ -107,20 +128,24 @@ final class GenericMethodCompiler
         // already have failed before we got here).
         $visitor = new class extends NodeVisitorAbstract {
             private string $currentNamespace = '';
+            private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, ClassMethod> */
-            public array $templates = [];
+            public array $methodTemplates = [];
             /** @var array<string, ClassLike> */
             public array $classByFqn = [];
-            private ?ClassLike $currentClass = null;
+            /** @var array<string, Function_> */
+            public array $functionTemplates = [];
+            /** @var array<string, Namespace_> */
+            public array $functionNamespaceByFqn = [];
             private ?string $currentClassFqn = null;
 
             public function enterNode(Node $node): null
             {
                 if ($node instanceof Namespace_) {
                     $this->currentNamespace = $node->name?->toString() ?? '';
+                    $this->currentNamespaceNode = $node;
                 }
                 if ($node instanceof ClassLike && $node->name !== null) {
-                    $this->currentClass = $node;
                     $this->currentClassFqn = $this->currentNamespace !== ''
                         ? $this->currentNamespace . '\\' . $node->name->toString()
                         : $node->name->toString();
@@ -130,7 +155,17 @@ final class GenericMethodCompiler
                     $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                     if (is_array($params) && $params !== [] && $this->currentClassFqn !== null) {
                         $key = $this->currentClassFqn . '::' . $node->name->toString();
-                        $this->templates[$key] = $node;
+                        $this->methodTemplates[$key] = $node;
+                    }
+                }
+                if ($node instanceof Function_) {
+                    $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                    if (is_array($params) && $params !== [] && $this->currentNamespaceNode !== null) {
+                        $fqn = $this->currentNamespace !== ''
+                            ? $this->currentNamespace . '\\' . $node->name->toString()
+                            : $node->name->toString();
+                        $this->functionTemplates[$fqn] = $node;
+                        $this->functionNamespaceByFqn[$fqn] = $this->currentNamespaceNode;
                     }
                 }
                 return null;
@@ -139,7 +174,6 @@ final class GenericMethodCompiler
             public function leaveNode(Node $node): null
             {
                 if ($node instanceof ClassLike) {
-                    $this->currentClass = null;
                     $this->currentClassFqn = null;
                 }
                 return null;
@@ -150,43 +184,60 @@ final class GenericMethodCompiler
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
 
-        foreach ($visitor->templates as $k => $v) {
-            $templates[$k] = $v;
+        foreach ($visitor->methodTemplates as $k => $v) {
+            $methodTemplates[$k] = $v;
         }
         foreach ($visitor->classByFqn as $k => $v) {
             $classByFqn[$k] = $v;
+        }
+        foreach ($visitor->functionTemplates as $k => $v) {
+            $functionTemplates[$k] = $v;
+        }
+        foreach ($visitor->functionNamespaceByFqn as $k => $v) {
+            $functionNamespaceByFqn[$k] = $v;
         }
     }
 
     /**
      * @param list<Node\Stmt> $ast
-     * @param array<string, ClassMethod> $templates
+     * @param array<string, ClassMethod> $methodTemplates
      * @param array<string, ClassLike> $classByFqn
+     * @param array<string, Function_> $functionTemplates
+     * @param array<string, Namespace_> $functionNamespaceByFqn
      * @param array<string, true> $alreadyGenerated
      */
     private function rewriteCallSites(
         array $ast,
-        array $templates,
+        array $methodTemplates,
         array $classByFqn,
+        array $functionTemplates,
+        array $functionNamespaceByFqn,
         array &$alreadyGenerated,
     ): void {
         $hashLength = $this->hashLength;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($templates, $classByFqn, $alreadyGenerated, $hashLength) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
 
+            /** @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_}> */
+            public array $pendingAppends = [];
+
             /**
-             * @param array<string, ClassMethod> $templates
+             * @param array<string, ClassMethod> $methodTemplates
              * @param array<string, ClassLike> $classByFqn
+             * @param array<string, Function_> $functionTemplates
+             * @param array<string, Namespace_> $functionNamespaceByFqn
              * @param array<string, true> $alreadyGenerated
              */
             public function __construct(
-                private array $templates,
+                private array $methodTemplates,
                 private array $classByFqn,
+                private array $functionTemplates,
+                private array $functionNamespaceByFqn,
                 private array &$alreadyGenerated,
                 private int $hashLength,
             ) {
@@ -213,9 +264,17 @@ final class GenericMethodCompiler
 
             public function leaveNode(Node $node): ?Node
             {
-                if (!$node instanceof StaticCall) {
-                    return null;
+                if ($node instanceof StaticCall) {
+                    return $this->rewriteStaticCall($node);
                 }
+                if ($node instanceof FuncCall) {
+                    return $this->rewriteFuncCall($node);
+                }
+                return null;
+            }
+
+            private function rewriteStaticCall(StaticCall $node): ?Node
+            {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
                 if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
                     return null;
@@ -230,7 +289,7 @@ final class GenericMethodCompiler
                 $classFqn = $this->resolveClassName($node->class);
                 $methodName = $node->name->toString();
                 $key = $classFqn . '::' . $methodName;
-                $template = $this->templates[$key] ?? null;
+                $template = $this->methodTemplates[$key] ?? null;
                 if ($template === null) {
                     return null;
                 }
@@ -239,7 +298,7 @@ final class GenericMethodCompiler
                     return null;
                 }
 
-                $mangled = self::mangleMethodName($methodName, $args, $this->hashLength);
+                $mangled = self::mangleName($methodName, $args, $this->hashLength);
                 $generatedKey = $classFqn . '::' . $mangled;
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
                     $substitution = [];
@@ -249,7 +308,8 @@ final class GenericMethodCompiler
                     $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
                     $owner = $this->classByFqn[$classFqn] ?? null;
                     if ($owner !== null) {
-                        $owner->stmts[] = $specialized;
+                        // Buffer the append (see rewriteFuncCall for the rationale).
+                        $this->pendingAppends[] = [$owner, $specialized];
                         $this->alreadyGenerated[$generatedKey] = true;
                     }
                 }
@@ -257,12 +317,62 @@ final class GenericMethodCompiler
                 $node->name = new Identifier($mangled, $node->name->getAttributes());
                 $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
 
-                // Also fully-qualify the class reference so the rewritten call works
-                // regardless of the caller's `use` map (the existing class-rewrite pass
-                // would have done this only if the class itself was generic).
                 if (!$node->class instanceof FullyQualified) {
                     $node->class = new FullyQualified($classFqn, $node->class->getAttributes());
                 }
+
+                return $node;
+            }
+
+            private function rewriteFuncCall(FuncCall $node): ?Node
+            {
+                $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
+                    return null;
+                }
+                if (!$node->name instanceof Name) {
+                    return null;
+                }
+
+                $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                if (!is_string($fqn)) {
+                    return null;
+                }
+                $template = $this->functionTemplates[$fqn] ?? null;
+                if ($template === null) {
+                    return null;
+                }
+                $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (!is_array($params) || count($params) !== count($args)) {
+                    return null;
+                }
+
+                $funcName = $template->name->toString();
+                $mangled = self::mangleName($funcName, $args, $this->hashLength);
+                $pos = strrpos($fqn, '\\');
+                $namespace = $pos === false ? '' : substr($fqn, 0, $pos);
+                $mangledFqn = $namespace !== '' ? $namespace . '\\' . $mangled : $mangled;
+                $generatedKey = 'fn::' . $mangledFqn;
+
+                if (!isset($this->alreadyGenerated[$generatedKey])) {
+                    $substitution = [];
+                    foreach ($params as $i => $param) {
+                        $substitution[$param->name] = $args[$i];
+                    }
+                    $specialized = (new Specializer())->specializeFunction($template, $substitution, $mangled);
+                    $namespaceNode = $this->functionNamespaceByFqn[$fqn] ?? null;
+                    if ($namespaceNode !== null) {
+                        // Buffer the append — modifying $namespaceNode->stmts mid-traversal
+                        // doesn't reliably propagate through nikic's NodeTraverser. The
+                        // outer process() loop flushes pendingAppends after the walk.
+                        $this->pendingAppends[] = [$namespaceNode, $specialized];
+                        $this->alreadyGenerated[$generatedKey] = true;
+                    }
+                }
+
+                $node->name = new FullyQualified($mangledFqn, $node->name->getAttributes());
+                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+                $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
 
                 return $node;
             }
@@ -302,11 +412,11 @@ final class GenericMethodCompiler
             /**
              * @param list<TypeRef> $args
              */
-            private static function mangleMethodName(string $methodName, array $args, int $hashLength): string
+            private static function mangleName(string $shortName, array $args, int $hashLength): string
             {
                 $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
                 $hash = substr(hash('sha256', $canonical), 0, $hashLength);
-                return $methodName . '_T_' . $hash;
+                return $shortName . '_T_' . $hash;
             }
 
             private static function firstSegment(string $name): string
@@ -325,6 +435,12 @@ final class GenericMethodCompiler
         $traverser = new NodeTraverser();
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
+
+        // Apply buffered appends now that the traversal has finished, so we don't fight
+        // nikic's NodeTraverser's child-array iteration semantics mid-walk.
+        foreach ($visitor->pendingAppends as [$container, $stmt]) {
+            $container->stmts[] = $stmt;
+        }
     }
 
     private function stripMethod(ClassLike $class, string $methodName): void
@@ -342,5 +458,20 @@ final class GenericMethodCompiler
             $newStmts[] = $stmt;
         }
         $class->stmts = $newStmts;
+    }
+
+    private function stripFunction(Namespace_ $namespace, string $functionName): void
+    {
+        $newStmts = [];
+        foreach ($namespace->stmts as $stmt) {
+            if ($stmt instanceof Function_
+                && $stmt->name->toString() === $functionName
+                && $stmt->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS) !== null
+            ) {
+                continue;
+            }
+            $newStmts[] = $stmt;
+        }
+        $namespace->stmts = $newStmts;
     }
 }

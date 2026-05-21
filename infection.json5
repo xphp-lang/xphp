@@ -174,7 +174,8 @@
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod"
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
             ]
         },
 
@@ -224,7 +225,9 @@
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -261,6 +264,8 @@
         "MethodCallRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },

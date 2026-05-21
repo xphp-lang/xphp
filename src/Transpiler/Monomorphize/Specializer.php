@@ -10,6 +10,7 @@ use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 
@@ -122,6 +123,46 @@ final class Specializer
     public function specializeMethod(ClassMethod $template, array $substitution, string $mangledName): ClassMethod
     {
         /** @var ClassMethod $cloned */
+        $cloned = self::deepClone($template);
+        $cloned->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, null);
+        $cloned->name = new Identifier($mangledName, $cloned->name->getAttributes());
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($substitution) extends \PhpParser\NodeVisitorAbstract {
+            /** @param array<string, TypeRef> $substitution */
+            public function __construct(private array $substitution)
+            {
+            }
+
+            public function leaveNode(Node $node): ?Node
+            {
+                if ($node instanceof Name && !$node->isFullyQualified()) {
+                    $parts = $node->getParts();
+                    if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
+                        $concrete = $this->substitution[$parts[0]];
+                        if ($concrete->isScalar) {
+                            return new Identifier($concrete->name, $node->getAttributes());
+                        }
+                        return new FullyQualified(ltrim($concrete->name, '\\'), $node->getAttributes());
+                    }
+                }
+                return null;
+            }
+        });
+        $traverser->traverse([$cloned]);
+
+        return $cloned;
+    }
+
+    /**
+     * Specialize a free generic function. Same substitution shape as specializeMethod;
+     * the only difference is the AST node kind (Function_ vs ClassMethod).
+     *
+     * @param array<string, TypeRef> $substitution
+     */
+    public function specializeFunction(Function_ $template, array $substitution, string $mangledName): Function_
+    {
+        /** @var Function_ $cloned */
         $cloned = self::deepClone($template);
         $cloned->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, null);
         $cloned->name = new Identifier($mangledName, $cloned->name->getAttributes());
