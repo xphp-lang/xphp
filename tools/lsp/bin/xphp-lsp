@@ -10,6 +10,12 @@ declare(strict_types=1);
 // The actual server boot lives in XPHP\Lsp\Server::run() — this script is
 // just the thinnest possible CLI veneer plus autoloader resolution.
 
+// Silence E_DEPRECATED at the entry-point. phpactor/language-server pulls in
+// thecodingmachine/safe, which currently emits many implicit-nullable deprecation
+// notices under PHP 8.4 at autoload time. Without this, the deprecation chatter
+// drowns the analyzer's actual output (an LSP client sees this on stderr too).
+error_reporting(E_ALL & ~E_DEPRECATED);
+
 $autoload = null;
 foreach ([
     __DIR__ . '/../vendor/autoload.php',          // standalone install (composer install in tools/lsp/)
