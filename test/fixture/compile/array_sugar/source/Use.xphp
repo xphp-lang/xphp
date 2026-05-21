@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Collection;
+use App\Models\User;
+
+$users = new Collection<User>(new User('Alice'), new User('Bob'));
+$first = $users->first();
+$all = $users->all();
