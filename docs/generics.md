@@ -60,6 +60,13 @@ $box = new \XPHP\Generated\App\Model\Box\T_0364b272c7219329(new Drink());
 
 ## What works
 
+### Generic classes, interfaces, and traits
+
+All three `ClassLike` shapes are templates. `interface Container<T>` and `trait HasItem<T>` flow through the same
+specialization pipeline as `class Box<T>`. The only difference at emit time: traits are stripped (PHP can't `instanceof`
+a trait), while classes and interfaces both leave behind an empty marker — see "`instanceof` on the original template"
+below.
+
 ### Type parameters
 
 Any arity (`Box<T>`, `List<Box<T>>`, `Map<K, V>`, ...). Scalars and class names mix freely.
@@ -99,6 +106,56 @@ typically the variadic `T ...$items` constructor parameter, or any single-elemen
 
 if `class Wrapper<T> { public Box<T> $b; }` is instantiated as `Wrapper<Plastic>`, the compiler discovers and
 specializes `Box<Plastic>` too, via a fixed-point loop with a 16-iteration depth cap to abort recursive types.
+
+### Type-parameter bounds
+
+`class Box<T: \Stringable> { ... }` — each concrete arg must satisfy the bound (extend / implement / equal it). The
+compiler validates bounds at instantiation-record time, _before_ the FQCN is hashed, so error messages reference the
+source-level `Box<int>`, not the obfuscated `T_<hash>`. The hierarchy is built from every parsed source file plus a
+small whitelist of PHP built-in interfaces (`Stringable`, `Countable`, `Iterator`, `ArrayAccess`, `JsonSerializable`,
+`Throwable`, etc.). Concrete types the hierarchy can't reason about (not in the source set, not a built-in) fail with a
+distinct "compiler cannot prove satisfaction" message so users can either widen the bound or include the type in the
+source set.
+
+### Method-scoped generics
+
+`function NAME<T>(...)` declared inside a class body. Each unique call-site arg list mints one mangled specialization
+(`NAME_T_<hash>`) appended to the same class; call sites rewrite to the mangled name. Specializations are deduped — two
+`identity<int>` calls share one method body.
+
+```php
+class Util {
+    public static function identity<T>(T $x): T { return $x; }
+}
+
+Util::identity<int>(42);    // -> Util::identity_T_<hash-of-int>(42)
+Util::identity<string>('hi'); // -> Util::identity_T_<hash-of-string>('hi')
+```
+
+MVP limits: static-call sites only (`Util::method<…>`); method must be on a non-generic enclosing class; bound checks on
+method-level type-params aren't enforced yet.
+
+### Free generic functions
+
+Same shape as method generics but at namespace scope. `function foo<T>(...)` becomes one mangled function per unique
+arg-list, appended to the enclosing namespace; call sites rewrite to fully-qualified mangled refs.
+
+MVP limit: the function must live inside a `namespace { ... }` block; bare top-level functions aren't supported yet.
+
+### `instanceof` on the original template
+
+For every generic class or interface template, the compiler emits an **empty marker interface** at the original FQN,
+and every specialization `implements` (or `extends`, for interfaces) it. So `$x instanceof App\Containers\Box` returns
+`true` for any `Box<…>` specialization, no concrete arg list required.
+
+```php
+$x = new Box<Plastic>();
+$y = new Box<Metal>();
+$x instanceof App\Containers\Box; // true
+$y instanceof App\Containers\Box; // true
+```
+
+Generic traits get dropped entirely — PHP can't `instanceof` a trait, so a marker would be useless.
 
 ### Collision-safe naming
 
@@ -142,3 +199,12 @@ In exchange:
 
 Type erasure (the phpdoc / attribute path) generates fewer files at the price of re-introducing the exact problem `xphp`
 exists to solve. The trade is intentional.
+
+---
+
+## Where xphp's generics stand vs other languages
+
+For a side-by-side comparison against TypeScript, Kotlin, and Rust — including the features xphp doesn't have yet,
+ordered by tier and tied to the monomorphization model — see [`generics-comparison.md`](generics-comparison.md). It's
+the strategic counterpart to this reference: this file documents _what works_; the comparison documents _what's next,
+and why_.
