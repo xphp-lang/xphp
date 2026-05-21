@@ -4,43 +4,57 @@ LSP implementation that powers diagnostics, hover, go-to-definition, and complet
 files in VS Code (and any LSP-aware editor). Reuses the `xphp-parser` AST + `Registry` +
 `TypeHierarchy` from the parent package directly — no separate parser, no duplication.
 
-This is a separate Composer package living under `tools/lsp/` so it can declare its own
-dependencies (notably `phpactor/language-server` for the JSON-RPC scaffolding) without
-weighing down the core parser.
+A separate Composer package living under `tools/lsp/` so it can declare its own dependencies
+(notably `phpactor/language-server` for the JSON-RPC scaffolding) without weighing down the
+core parser.
 
 ## Status
 
 | Feature | Status |
 |---|---|
 | `--lint <file>` headless mode (parse + bound checks) | ✅ shipped |
-| `textDocument/publishDiagnostics` over stdio | 🚧 wiring next |
-| `textDocument/hover` | 🚧 |
-| `textDocument/definition` | 🚧 |
-| `textDocument/completion` | 🚧 |
-| VS Code extension client | 🚧 lives at `vscode-extension/` |
+| `textDocument/publishDiagnostics` over stdio | ✅ shipped |
+| `textDocument/hover` | ✅ shipped |
+| `textDocument/definition` | ✅ shipped |
+| `textDocument/completion` (inside `<…>` type-arg positions) | ✅ shipped |
+| VS Code extension client at `vscode-extension/` | ✅ shipped |
 
-The plan that drives this implementation is in `agent-os/product/specs/feat-lsp.md`
-(internal) / referenced from `docs/roadmap.md`.
+44 PHPUnit cases, 113 assertions — `make test/lsp`.
+
+The shipped spec lives at `agent-os/specs/shipped/2026-05-21-0700-lsp-server/` (locally
+gitignored, on-disk only). Roadmap entry: `docs/roadmap.md` Shipped → Tooling.
 
 ## Layout
 
 ```
 tools/lsp/
 ├── composer.json              path-references the parent xphp-parser
-├── bin/xphp-lsp               CLI entry; --lint mode works today, LSP mode pending
+├── bin/xphp-lsp               CLI entry — `--lint <file>` for CI, no args for LSP stdio
 ├── src/
-│   ├── Server.php             entry-point router; dispatches --lint vs LSP
-│   ├── PositionMap.php        byte offset <-> {line, char} for LSP positions
+│   ├── Server.php             entry-point router (--lint vs LSP transport)
+│   ├── LspDispatcherFactory   wires phpactor middleware + DiagnosticsService + handlers
+│   ├── PositionMap.php        byte offset ↔ {line, char} for LSP positions
 │   ├── Analyzer/
 │   │   ├── Analyzer.php       per-file parse + syntax-error collection
 │   │   ├── WorkspaceAnalyzer  cross-file Registry + TypeHierarchy + bound check
 │   │   ├── Diagnostic.php     framework-neutral diagnostic value object
 │   │   ├── DiagnosticSeverity LSP-aligned enum
 │   │   └── ParseResult.php    {ast, diagnostics}
-│   ├── Handler/               (one file per LSP request type — coming soon)
-│   └── Workspace/             document store + indexer
-├── test/                      PHPUnit suite
-└── vscode-extension/          minimal VS Code client (spawn server over stdio)
+│   ├── Diagnostics/
+│   │   ├── XphpDiagnosticsProvider     phpactor DiagnosticsProvider impl
+│   │   └── DiagnosticTranslator        framework-neutral → wire-format
+│   ├── Handler/
+│   │   ├── AstPositionResolver         find smallest Name at byte offset
+│   │   ├── XphpHoverHandler            textDocument/hover
+│   │   ├── XphpDefinitionHandler       textDocument/definition
+│   │   ├── XphpCompletionHandler       textDocument/completion
+│   │   ├── TypeArgPositionDetector     backwards-scanner for cursor-in-<…>
+│   │   └── WorkspaceSymbols            collect ClassLike FQNs across open docs
+│   └── Workspace/
+│       └── DocumentStore.php           in-memory doc cache (phpactor Workspace
+│                                       handles open/change/close itself)
+├── test/                      PHPUnit suite (44 cases)
+└── vscode-extension/          VS Code client — spawns server over stdio (F5 dev loop)
 ```
 
 ## Install
@@ -51,49 +65,65 @@ composer install
 ```
 
 The parent `xphp-parser` package is path-referenced via composer (`repositories: type=path`),
-so any local edits there are picked up immediately without re-publishing.
+so local edits there are picked up immediately without re-publishing.
 
 ## Run
 
-### Lint mode (works today)
+### Lint mode (CI-friendly)
 
 ```bash
-tools/lsp/bin/xphp-lsp --lint path/to/file.xphp [more.xphp...]
+tools/lsp/bin/xphp-lsp --lint path/to/file.xphp [more.xphp ...]
 ```
 
 Output format: `<file>:<line>:<col>: <severity>: [<code>] <message>` — the same shape PHPStan
-and PHP itself emit, so editors / CI grep it without ceremony. Exits non-zero if any file has
-diagnostics, zero otherwise.
+and PHP itself emit, so editors and CI grep it without ceremony. Exits non-zero if any file
+has diagnostics, zero otherwise.
 
-This is genuinely useful in CI today, independent of the LSP wiring: run it over a `.xphp`
-glob to catch bound violations and syntax errors in PRs before merge.
+Genuinely useful in CI today, independent of the LSP transport: run it over a `.xphp` glob to
+catch bound violations and syntax errors in PRs before merge.
 
-### LSP mode (coming next)
+### LSP mode (stdio)
 
 ```bash
-tools/lsp/bin/xphp-lsp        # speaks LSP over stdio
+tools/lsp/bin/xphp-lsp        # speaks LSP over stdio; no arguments
 ```
 
-Currently exits cleanly with a "not yet wired" stderr message. The next commit wires the
-phpactor/language-server bootstrap and `textDocument/publishDiagnostics`.
+Use this as the `command` in any LSP client (Neovim's `vim.lsp.start`, Helix's
+`languages.toml`, etc.). The bundled VS Code extension under `vscode-extension/` does this
+spawn for you.
+
+Capabilities advertised at `initialize`:
+
+- `textDocumentSync: 1` (Full)
+- `hoverProvider`
+- `definitionProvider`
+- `completionProvider` with `triggerCharacters: ["<", ","]`
 
 ## Test
+
+```bash
+make test/lsp
+```
+
+That target runs `composer install --quiet` then PHPUnit with
+`php -d error_reporting='E_ALL & ~E_DEPRECATED'` so noisy PHP 8.4 implicit-nullable warnings
+from phpactor transitive deps stay out of the output. Running phpunit directly works too —
+the suppression lives in `phpunit.xml.dist`'s `<source ignoreIndirectDeprecations="true">`
+block:
 
 ```bash
 cd tools/lsp
 vendor/bin/phpunit
 ```
 
-Or from the repo root:
-
-```bash
-make test/lsp
-```
-
 ## VS Code extension
 
-See `vscode-extension/README.md` for client-side setup (a follow-up commit; the directory is
-currently a placeholder).
+See `vscode-extension/README.md` for the client-side setup. Quick start:
+
+```bash
+make build/lsp-extension      # npm install + tsc
+# then open tools/lsp/vscode-extension/ in VS Code and hit F5
+```
 
 ## Why a separate composer package
 
@@ -105,3 +135,21 @@ compile`) doesn't pull in any of the LSP machinery.
 
 The path-repo precedent for this setup is `playground/composer.json` — the layout here
 follows the same pattern.
+
+## Out-of-scope follow-ups
+
+Documented in `agent-os/specs/shipped/2026-05-21-0700-lsp-server/shape.md` under "Open
+risks" and the handler-level source comments. Highlights:
+
+- **Indexer for unopened files.** Today only documents the editor has open contribute to
+  cross-file diagnostics + go-to-definition + completion. Walking `**/*.xphp` at `initialize`
+  is the obvious next pass.
+- **Cross-file diagnostic broadcast.** Editing `Box.xphp` doesn't re-publish diagnostics for
+  every `Use.xphp` that instantiates it; the diagnostic catches up when those files are
+  re-touched.
+- **Bound-aware completion filtering.** `Box<T: \Stringable>` still suggests non-Stringable
+  classes; the diagnostic catches the violation after selection.
+- **Use-alias short-form completion.** `insertText` is always the full FQN today.
+- **Hover/jump on bound names in template headers.** XphpSourceParser strips the `<…>` clause
+  so there's no AST node positioned over the bound text.
+- **Marketplace publication** of the VS Code extension.
