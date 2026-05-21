@@ -1,0 +1,108 @@
+<?php
+
+declare(strict_types=1);
+
+namespace XPHP\Lsp;
+
+use OutOfBoundsException;
+
+/**
+ * Byte-offset <-> LSP {line, character} conversion for a single in-memory document.
+ *
+ * The xphp pipeline (nikic/php-parser + the custom scanner) hands us byte offsets
+ * and 1-based line numbers. LSP wants 0-based lines and 0-based UTF-16 code-unit
+ * columns within each line. This class owns the conversion for one source string.
+ *
+ * MVP simplification: column = UTF-8 character index, not UTF-16 code-unit index.
+ * For pure ASCII (which describes basically all .xphp source we'll see in practice)
+ * these are identical. A real UTF-16 implementation is a small follow-up — see
+ * `toLspCharacter()` for the seam.
+ */
+final readonly class PositionMap
+{
+    /** @var list<int> Byte offsets of the start of each line (0-indexed by line number). */
+    private array $lineOffsets;
+
+    public function __construct(private string $source)
+    {
+        $offsets = [0];
+        $length = strlen($source);
+        for ($i = 0; $i < $length; $i++) {
+            if ($source[$i] === "\n") {
+                $offsets[] = $i + 1;
+            }
+        }
+        $this->lineOffsets = $offsets;
+    }
+
+    /**
+     * Convert a 1-based line number (as nikic reports) to a 0-based LSP line number.
+     */
+    public static function lspLineFromNikic(int $nikicLine): int
+    {
+        return max(0, $nikicLine - 1);
+    }
+
+    /**
+     * Resolve a byte offset to {line, character} (both 0-based) for this document.
+     *
+     * @return array{0: int, 1: int} [line, character]
+     */
+    public function offsetToPosition(int $byteOffset): array
+    {
+        if ($byteOffset < 0) {
+            throw new OutOfBoundsException("Negative byte offset: {$byteOffset}");
+        }
+        $line = self::binarySearchLine($this->lineOffsets, $byteOffset);
+        $lineStart = $this->lineOffsets[$line];
+        $character = self::toLspCharacter(substr($this->source, $lineStart, $byteOffset - $lineStart));
+        return [$line, $character];
+    }
+
+    /**
+     * Resolve a 1-based nikic line number to the {line, character} range covering that whole line.
+     *
+     * Useful when a Registry RuntimeException carries only line information and we need to
+     * produce a Diagnostic range — underlining the full line is the safe default.
+     *
+     * @return array{0: int, 1: int, 2: int, 3: int} [startLine, startChar, endLine, endChar]
+     */
+    public function fullLineRangeFromNikic(int $nikicLine): array
+    {
+        $line = self::lspLineFromNikic($nikicLine);
+        if ($line >= count($this->lineOffsets)) {
+            return [$line, 0, $line, 0];
+        }
+        $lineStart = $this->lineOffsets[$line];
+        $nextLineStart = $this->lineOffsets[$line + 1] ?? strlen($this->source) + 1;
+        $lineText = substr($this->source, $lineStart, $nextLineStart - $lineStart - 1);
+        return [$line, 0, $line, self::toLspCharacter($lineText)];
+    }
+
+    /**
+     * Character count as the LSP client sees it. See class doc — MVP: UTF-8 chars.
+     */
+    private static function toLspCharacter(string $text): int
+    {
+        // mb_strlen falls back to byte-length on missing extension; explicit utf-8 is safer.
+        return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
+    }
+
+    /**
+     * @param list<int> $offsets
+     */
+    private static function binarySearchLine(array $offsets, int $target): int
+    {
+        $low = 0;
+        $high = count($offsets) - 1;
+        while ($low < $high) {
+            $mid = intdiv($low + $high + 1, 2);
+            if ($offsets[$mid] <= $target) {
+                $low = $mid;
+            } else {
+                $high = $mid - 1;
+            }
+        }
+        return $low;
+    }
+}

@@ -1,0 +1,31 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Entry point for the xphp Language Server. Speaks LSP over stdio so any
+// LSP-aware client (VS Code via the bundled extension, Neovim, Helix, etc.)
+// can drive it without a transport-specific shim.
+//
+// The actual server boot lives in XPHP\Lsp\Server::run() — this script is
+// just the thinnest possible CLI veneer plus autoloader resolution.
+
+$autoload = null;
+foreach ([
+    __DIR__ . '/../vendor/autoload.php',          // standalone install (composer install in tools/lsp/)
+    __DIR__ . '/../../../vendor/autoload.php',    // installed as a dep of the root xphp package
+] as $candidate) {
+    if (is_file($candidate)) {
+        $autoload = $candidate;
+        break;
+    }
+}
+
+if ($autoload === null) {
+    fwrite(STDERR, "xphp-lsp: could not locate vendor/autoload.php — run `composer install` inside tools/lsp/.\n");
+    exit(1);
+}
+
+require $autoload;
+
+exit(XPHP\Lsp\Server::run($argv));

@@ -6,6 +6,10 @@ test/unit:
 test/mutation:
 	php vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=93
 
+.PHONY: test/lsp
+test/lsp:
+	cd tools/lsp && composer install --quiet && php vendor/bin/phpunit
+
 .PHONY: playground
 playground:
 	playground/bin/run
