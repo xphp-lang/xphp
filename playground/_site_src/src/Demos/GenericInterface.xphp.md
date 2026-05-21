@@ -33,10 +33,9 @@ $firstReturn = (new ReflectionMethod($repo::class, 'first'))->getReturnType();
 echo '  reflected save(): param    = ', $saveParam instanceof \ReflectionNamedType ? $saveParam->getName() : '<unnamed>', PHP_EOL;
 echo '  reflected first(): return  = ', $firstReturn instanceof \ReflectionNamedType ? $firstReturn->getName() : '<unnamed>', PHP_EOL;
 
-// Marker test: the specialized class implements the specialized interface, so instanceof works
-// against the generated Repository<User> FQCN. (Asking "is this *any* Repository?" without a
-// concrete arg is gap #5 — covered separately.)
-echo '  implements Repository<User>? ', $repo instanceof Repository ? 'INTERFACE_OK' : 'no — only the specialized iface is implemented', PHP_EOL;
+// Item 5: marker interface at the original FQN — `$x instanceof Repository` matches any
+// `Repository<…>` specialization without the caller having to know the concrete arg list.
+echo '  instanceof Repository?     ', $repo instanceof Repository ? 'INSTANCEOF_OK' : 'INSTANCEOF_BAD', PHP_EOL;
 
 try {
     $repo->save('not-a-user');

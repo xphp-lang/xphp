@@ -147,6 +147,8 @@ final class NestedGenericsIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         require '{$this->targetDir}/Models/Plastic.php';
+        require '{$this->targetDir}/Containers/Box.php';
+        require '{$this->targetDir}/Containers/Wrapper.php';
         require '{$boxFile}';
         require '{$wrapperFile}';
         \$type = (new ReflectionProperty('{$wrapperFqn}', 'box'))->getType();

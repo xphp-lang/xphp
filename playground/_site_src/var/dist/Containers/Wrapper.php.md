@@ -14,4 +14,7 @@ declare (strict_types=1);
 namespace App\Containers;
 
 use App\Containers\Box;
+interface Wrapper
+{
+}
 ```

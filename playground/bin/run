@@ -35,6 +35,7 @@ $demos = [
     'var/dist/Demos/Bounds.php',
     'var/dist/Demos/GenericMethod.php',
     'var/dist/Demos/GenericFunction.php',
+    'var/dist/Demos/InstanceofTemplate.php',
 ];
 
 fwrite(STDOUT, "==> Running demos\n\n");

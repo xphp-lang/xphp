@@ -38,9 +38,24 @@ final class Specializer
      */
     public function specialize(ClassLike $template, array $substitution): ClassLike
     {
+        $originalTemplateFqn = $template->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+
         $cloned = self::deepClone($template);
         $cloned->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, null);
         $cloned->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
+
+        // Wire the specialized class/interface to the template's marker so user code can
+        // do `$x instanceof App\Containers\Box` and get true for ANY Box<...>. Classes
+        // implement, interfaces extend; traits don't get a marker (PHP can't instanceof
+        // a trait) — see CallSiteRewriter for the matching marker emission.
+        if (is_string($originalTemplateFqn)) {
+            $marker = new FullyQualified(ltrim($originalTemplateFqn, '\\'));
+            if ($cloned instanceof \PhpParser\Node\Stmt\Class_) {
+                $cloned->implements[] = $marker;
+            } elseif ($cloned instanceof \PhpParser\Node\Stmt\Interface_) {
+                $cloned->extends[] = $marker;
+            }
+        }
 
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new class($substitution) extends NodeVisitorAbstract {

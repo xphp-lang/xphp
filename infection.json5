@@ -150,12 +150,17 @@
         // returns FQ names WITHOUT a leading backslash (the FQ-ness is encoded in
         // the FullyQualified subclass, not the string), so the ltrim there is
         // similarly a defensive no-op.
+        //
+        // Specializer::specialize's `ltrim($originalTemplateFqn, '\\')` is also
+        // defensive — the FQN gets stored on the AST attribute without a leading
+        // backslash, so the ltrim is a no-op on every actual input.
         "UnwrapLtrim": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::isSameInstantiation",
-                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype"
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
             ]
         },
 
@@ -174,6 +179,7 @@
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
             ]

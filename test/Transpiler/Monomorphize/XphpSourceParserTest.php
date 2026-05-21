@@ -54,6 +54,37 @@ PHP;
         self::assertSame('App\\Container', $iface->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
     }
 
+    public function testGenericTraitTemplateIsDroppedFromOutputWithoutBecomingAMarker(): void
+    {
+        // Locks the `instanceof Class_ || instanceof Interface_` guard in CallSiteRewriter:
+        // traits don't get a marker interface (PHP can't instanceof a trait), so the
+        // generic trait template must be stripped entirely. A mutation that loosens the
+        // guard (e.g., LogicalOrAllSubExprNegation -> true-for-all-ClassLike) would
+        // smuggle the trait through as an empty marker interface, which would corrupt
+        // any class that `use`s it.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+trait HasTimestamps<T>
+{
+    private T $first;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $rewriter = new CallSiteRewriter(new Registry());
+        $rewritten = $rewriter->rewrite($ast);
+
+        $printer = new \PhpParser\PrettyPrinter\Standard();
+        $printed = $printer->prettyPrintFile($rewritten);
+
+        self::assertStringNotContainsString('HasTimestamps', $printed, 'generic trait must be removed, not replaced with an interface marker');
+        self::assertStringNotContainsString('interface HasTimestamps', $printed);
+        self::assertStringNotContainsString('trait HasTimestamps', $printed);
+    }
+
     public function testAttachesGenericParamsToTraitDefinition(): void
     {
         // Traits ride the same ClassLike pathway as classes/interfaces. Locks the

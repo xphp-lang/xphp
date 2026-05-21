@@ -11,10 +11,10 @@ Browse the `.xphp` sources and the compiled artifacts from a recent run.
 |---|---|
 | Branch | `unknown` |
 | Commit | [`unknown`](https://github.com/xphp-lang/xphp-parser) |
-| Built | `2026-05-21T03:05:06Z` |
+| Built | `2026-05-21T03:12:00Z` |
 | Source | [https://github.com/xphp-lang/xphp-parser](https://github.com/xphp-lang/xphp-parser) |
 
-## Source `.xphp` files (21)
+## Source `.xphp` files (22)
 {: id="source"}
 
 Authored input that the xphp compiler consumes. Generic templates live under `Containers/`; the demo scripts under `Demos/` instantiate them.
@@ -33,6 +33,7 @@ Authored input that the xphp compiler consumes. Generic templates live under `Co
 - [`Demos/GenericFunction.xphp`](src/Demos/GenericFunction.xphp.md)
 - [`Demos/GenericInterface.xphp`](src/Demos/GenericInterface.xphp.md)
 - [`Demos/GenericMethod.xphp`](src/Demos/GenericMethod.xphp.md)
+- [`Demos/InstanceofTemplate.xphp`](src/Demos/InstanceofTemplate.xphp.md)
 - [`Demos/MultiType.xphp`](src/Demos/MultiType.xphp.md)
 - [`Demos/NestedTransitive.xphp`](src/Demos/NestedTransitive.xphp.md)
 - [`Demos/SingleType.xphp`](src/Demos/SingleType.xphp.md)
@@ -41,7 +42,7 @@ Authored input that the xphp compiler consumes. Generic templates live under `Co
 - [`Models/Tag.xphp`](src/Models/Tag.xphp.md)
 - [`Models/User.xphp`](src/Models/User.xphp.md)
 
-## Rewritten user code (`var/dist/`) (21)
+## Rewritten user code (`var/dist/`) (22)
 {: id="dist"}
 
 Each `.xphp` source rewritten to native PHP — generic call sites get pointed at the matching specialized class.
@@ -60,6 +61,7 @@ Each `.xphp` source rewritten to native PHP — generic call sites get pointed a
 - [`Demos/GenericFunction.php`](var/dist/Demos/GenericFunction.php.md)
 - [`Demos/GenericInterface.php`](var/dist/Demos/GenericInterface.php.md)
 - [`Demos/GenericMethod.php`](var/dist/Demos/GenericMethod.php.md)
+- [`Demos/InstanceofTemplate.php`](var/dist/Demos/InstanceofTemplate.php.md)
 - [`Demos/MultiType.php`](var/dist/Demos/MultiType.php.md)
 - [`Demos/NestedTransitive.php`](var/dist/Demos/NestedTransitive.php.md)
 - [`Demos/SingleType.php`](var/dist/Demos/SingleType.php.md)

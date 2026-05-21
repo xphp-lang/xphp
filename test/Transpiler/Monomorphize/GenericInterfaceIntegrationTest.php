@@ -63,14 +63,19 @@ final class GenericInterfaceIntegrationTest extends TestCase
         self::assertStringContainsString('implements \\' . $ifaceFqn, $boxContent, 'specialized class must implement the matching specialized interface');
     }
 
-    public function testGenericInterfaceTemplateIsStrippedFromTargetOutput(): void
+    public function testGenericInterfaceTemplateIsReplacedByEmptyMarkerInOutput(): void
     {
+        // Item 5: instead of stripping the generic interface template outright (which would
+        // break `instanceof App\Containers\Container`), it gets replaced with an empty marker
+        // interface at the same FQN. The original `function get(): T` method signature is
+        // gone — only the empty marker remains.
         $this->compile();
 
         $rewrittenInterfacePath = $this->targetDir . '/Containers/Container.php';
         self::assertFileExists($rewrittenInterfacePath);
         $content = file_get_contents($rewrittenInterfacePath);
-        self::assertStringNotContainsString('interface Container', $content, 'generic interface template must be stripped from the target output');
+        self::assertStringContainsString('interface Container', $content, 'marker interface must be emitted at the original FQN');
+        self::assertStringNotContainsString('function get()', $content, 'original generic method signature must NOT survive on the marker');
     }
 
     public function testSpecializedClassIsInstanceOfSpecializedInterfaceAtRuntime(): void
@@ -94,6 +99,8 @@ final class GenericInterfaceIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         require '{$this->targetDir}/Models/Plastic.php';
+        require '{$this->targetDir}/Containers/Container.php';
+        require '{$this->targetDir}/Containers/Box.php';
         require '{$ifaceFile}';
         require '{$boxFile}';
 
