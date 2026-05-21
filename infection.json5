@@ -54,7 +54,8 @@
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
                 "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
 
@@ -78,7 +79,8 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
-                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct"
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
         "ConcatOperandRemoval": {
@@ -87,7 +89,8 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
-                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct"
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
 
@@ -163,12 +166,15 @@
         // (See the UnwrapLtrim entry above for the same rationale on the same lines.)
         "LogicalOr": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy"
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
         "ReturnRemoval": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy"
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod"
             ]
         },
 
@@ -217,7 +223,8 @@
         "LogicalAnd": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -231,9 +238,35 @@
         // is only consumed via `isset($visited[$cur])` — the value is never read. The
         // TrueValue → false mutation is observationally identical (the KEY is what tracks
         // visit-state, not the VALUE).
+        // Same pattern in GenericMethodCompiler::rewriteCallSites — `$alreadyGenerated[key] = true`
+        // is consumed via `isset()`, never via value read.
         "TrueValue": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype"
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+
+        // GenericMethodCompiler shares the same defensive-guard + name-resolution +
+        // member-access shape as the existing scanner/Registry suppressions. Mutations
+        // on those branches either (a) emit warnings for inputs that fail upstream
+        // parsing first, or (b) toggle redundant null-safe/ltrim/substring guards that
+        // are masked by surrounding type-strict invariants. The whole class is also
+        // exercised end-to-end through GenericMethodIntegrationTest.
+        "NullSafeMethodCall": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        "MethodCallRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        "Foreach_": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         }
     },

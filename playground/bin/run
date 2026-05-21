@@ -33,6 +33,7 @@ $demos = [
     'var/dist/Demos/NestedTransitive.php',
     'var/dist/Demos/GenericInterface.php',
     'var/dist/Demos/Bounds.php',
+    'var/dist/Demos/GenericMethod.php',
 ];
 
 fwrite(STDOUT, "==> Running demos\n\n");

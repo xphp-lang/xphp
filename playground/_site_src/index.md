@@ -11,10 +11,10 @@ Browse the `.xphp` sources and the compiled artifacts from a recent run.
 |---|---|
 | Branch | `unknown` |
 | Commit | [`unknown`](https://github.com/xphp-lang/xphp-parser) |
-| Built | `2026-05-21T02:35:38Z` |
+| Built | `2026-05-21T02:54:30Z` |
 | Source | [https://github.com/xphp-lang/xphp-parser](https://github.com/xphp-lang/xphp-parser) |
 
-## Source `.xphp` files (18)
+## Source `.xphp` files (20)
 {: id="source"}
 
 Authored input that the xphp compiler consumes. Generic templates live under `Containers/`; the demo scripts under `Demos/` instantiate them.
@@ -26,10 +26,12 @@ Authored input that the xphp compiler consumes. Generic templates live under `Co
 - [`Containers/Pair.xphp`](src/Containers/Pair.xphp.md)
 - [`Containers/Repository.xphp`](src/Containers/Repository.xphp.md)
 - [`Containers/StringableBox.xphp`](src/Containers/StringableBox.xphp.md)
+- [`Containers/Util.xphp`](src/Containers/Util.xphp.md)
 - [`Containers/Wrapper.xphp`](src/Containers/Wrapper.xphp.md)
 - [`Demos/ArraySugar.xphp`](src/Demos/ArraySugar.xphp.md)
 - [`Demos/Bounds.xphp`](src/Demos/Bounds.xphp.md)
 - [`Demos/GenericInterface.xphp`](src/Demos/GenericInterface.xphp.md)
+- [`Demos/GenericMethod.xphp`](src/Demos/GenericMethod.xphp.md)
 - [`Demos/MultiType.xphp`](src/Demos/MultiType.xphp.md)
 - [`Demos/NestedTransitive.xphp`](src/Demos/NestedTransitive.xphp.md)
 - [`Demos/SingleType.xphp`](src/Demos/SingleType.xphp.md)
@@ -38,7 +40,7 @@ Authored input that the xphp compiler consumes. Generic templates live under `Co
 - [`Models/Tag.xphp`](src/Models/Tag.xphp.md)
 - [`Models/User.xphp`](src/Models/User.xphp.md)
 
-## Rewritten user code (`var/dist/`) (18)
+## Rewritten user code (`var/dist/`) (20)
 {: id="dist"}
 
 Each `.xphp` source rewritten to native PHP — generic call sites get pointed at the matching specialized class.
@@ -50,10 +52,12 @@ Each `.xphp` source rewritten to native PHP — generic call sites get pointed a
 - [`Containers/Pair.php`](var/dist/Containers/Pair.php.md)
 - [`Containers/Repository.php`](var/dist/Containers/Repository.php.md)
 - [`Containers/StringableBox.php`](var/dist/Containers/StringableBox.php.md)
+- [`Containers/Util.php`](var/dist/Containers/Util.php.md)
 - [`Containers/Wrapper.php`](var/dist/Containers/Wrapper.php.md)
 - [`Demos/ArraySugar.php`](var/dist/Demos/ArraySugar.php.md)
 - [`Demos/Bounds.php`](var/dist/Demos/Bounds.php.md)
 - [`Demos/GenericInterface.php`](var/dist/Demos/GenericInterface.php.md)
+- [`Demos/GenericMethod.php`](var/dist/Demos/GenericMethod.php.md)
 - [`Demos/MultiType.php`](var/dist/Demos/MultiType.php.md)
 - [`Demos/NestedTransitive.php`](var/dist/Demos/NestedTransitive.php.md)
 - [`Demos/SingleType.php`](var/dist/Demos/SingleType.php.md)

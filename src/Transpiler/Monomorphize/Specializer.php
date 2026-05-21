@@ -9,6 +9,7 @@ use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 
@@ -102,6 +103,51 @@ final class Specializer
             }
         });
 
+        $traverser->traverse([$cloned]);
+
+        return $cloned;
+    }
+
+    /**
+     * Specialize a single generic method: clone the ClassMethod, substitute every
+     * Name reference to a type-param with the matching concrete TypeRef, drop the
+     * method-level genericParams attribute, and rename to the supplied mangled form.
+     *
+     * The mangled name is supplied by the caller (GenericMethodCompiler) so the
+     * hashing scheme stays in one place — Specializer is dumb about the naming
+     * convention.
+     *
+     * @param array<string, TypeRef> $substitution
+     */
+    public function specializeMethod(ClassMethod $template, array $substitution, string $mangledName): ClassMethod
+    {
+        /** @var ClassMethod $cloned */
+        $cloned = self::deepClone($template);
+        $cloned->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, null);
+        $cloned->name = new Identifier($mangledName, $cloned->name->getAttributes());
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($substitution) extends \PhpParser\NodeVisitorAbstract {
+            /** @param array<string, TypeRef> $substitution */
+            public function __construct(private array $substitution)
+            {
+            }
+
+            public function leaveNode(Node $node): ?Node
+            {
+                if ($node instanceof Name && !$node->isFullyQualified()) {
+                    $parts = $node->getParts();
+                    if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
+                        $concrete = $this->substitution[$parts[0]];
+                        if ($concrete->isScalar) {
+                            return new Identifier($concrete->name, $node->getAttributes());
+                        }
+                        return new FullyQualified(ltrim($concrete->name, '\\'), $node->getAttributes());
+                    }
+                }
+                return null;
+            }
+        });
         $traverser->traverse([$cloned]);
 
         return $cloned;

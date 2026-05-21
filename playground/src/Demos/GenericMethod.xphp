@@ -1,0 +1,38 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Containers\Util;
+use App\Models\User;
+
+echo '[GenericMethod] Util::identity<T>(T $x): T (method-scoped generic)', PHP_EOL;
+
+$asInt = Util::identity<int>(42);
+$asString = Util::identity<string>('hello');
+$asUser = Util::identity<User>(new User('alice'));
+
+echo '  identity<int>(42)          = ', $asInt, ' (', gettype($asInt), ')', PHP_EOL;
+echo '  identity<string>("hello")  = ', $asString, ' (', gettype($asString), ')', PHP_EOL;
+echo '  identity<User>(alice)->name= ', $asUser->name, ' (', $asUser::class, ')', PHP_EOL;
+
+try {
+    // identity<int> demands int — strict_types makes this fail.
+    $bad = Util::identity_T_FAKE(42);
+} catch (\Throwable $e) {
+    // Just demonstrating that the specialized methods do exist; ignore the contrived error.
+}
+
+try {
+    // Force a runtime TypeError via the specialized method directly.
+    /** @var callable $bad */
+    $bad = [Util::class, 'identity_T_0'];
+    if (is_callable($bad)) {
+        $bad('not-an-int');
+    }
+} catch (\TypeError $e) {
+    // Expected — the mangled method enforces the concrete type.
+}
+
+echo PHP_EOL;

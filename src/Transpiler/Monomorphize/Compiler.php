@@ -122,7 +122,24 @@ final readonly class Compiler
         $rewriter = new CallSiteRewriter($registry);
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             $rewritten = $rewriter->rewrite([$classAst]);
-            $this->specializedClassGenerator->emit($rewritten[0], $generatedFqn, $cacheDir);
+            $specializedAsts[$generatedFqn] = $rewritten[0];
+        }
+
+        // Phase 3.5: method-level generic specialization. Pass the *rewritten* class
+        // bodies + user files together so call sites of `ClassFqn::method<T>(...)` find
+        // their templates regardless of which file the class lives in. Specialized cache
+        // entries are single ClassLike nodes; wrap each one in a list so the method
+        // compiler's per-AST visitor traverses uniformly.
+        $methodCompiler = new GenericMethodCompiler($this->hashLength);
+        $methodAstSet = $astPerFile;
+        foreach ($specializedAsts as $generatedFqn => $classAst) {
+            $methodAstSet['<specialized:' . $generatedFqn . '>'] = [$classAst];
+        }
+        $methodCompiler->process($methodAstSet);
+
+        // Emit the specialized classes after the method pass has had a chance to mutate them.
+        foreach ($specializedAsts as $generatedFqn => $classAst) {
+            $this->specializedClassGenerator->emit($classAst, $generatedFqn, $cacheDir);
         }
 
         // Phase 4: rewrite + emit user source files.

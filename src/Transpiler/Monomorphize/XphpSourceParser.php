@@ -51,6 +51,10 @@ final class XphpSourceParser
     public const ATTR_GENERIC_ARGS = 'xphp:genericArgs';
     public const ATTR_TEMPLATE_FQN = 'xphp:templateFqn';
 
+    // Method-scoped generics (one type-param set per method, distinct from any class-level set).
+    public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
+    public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
+
     public const SCALAR_TYPES = [
         'int', 'integer', 'string', 'bool', 'boolean', 'float', 'double',
         'void', 'mixed', 'never', 'null', 'false', 'true',
@@ -66,20 +70,20 @@ final class XphpSourceParser
      */
     public function parse(string $source): array
     {
-        [$classMarkers, $nameMarkers, $cleanedSource] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource] = $this->scanAndStrip($source);
 
         $ast = $this->parser->parse($cleanedSource);
         if ($ast === null) {
             throw new RuntimeException('Parser returned null AST.');
         }
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
         return $ast;
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, params:list<string>}>, 1: list<array{line:int, name:string, args:list<TypeRef>}>, 2: string}
+     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string}
      */
     private function scanAndStrip(string $source): array
     {
@@ -88,12 +92,41 @@ final class XphpSourceParser
 
         $classMarkers = [];
         $nameMarkers = [];
+        $methodMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
 
         $i = 0;
         while ($i < $n) {
             $tok = $tokens[$i];
+
+            if ($tok->id === T_FUNCTION) {
+                $j = self::skipWs($tokens, $i + 1);
+                if ($j < $n && $tokens[$j]->id === T_STRING) {
+                    $methodName = $tokens[$j]->text;
+                    $methodLine = $tokens[$j]->line;
+                    $k = self::skipWs($tokens, $j + 1);
+                    if ($k < $n && $tokens[$k]->text === '<') {
+                        $parsed = self::parseTypeParamList($tokens, $k);
+                        if ($parsed !== null) {
+                            [$paramEntries, $endIdx] = $parsed;
+                            $methodMarkers[] = [
+                                'line' => $methodLine,
+                                'name' => $methodName,
+                                'params' => $paramEntries,
+                            ];
+                            $startByte = $tokens[$k]->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
+                    }
+                }
+                $i++;
+                continue;
+            }
 
             if ($tok->id === T_CLASS || $tok->id === T_INTERFACE || $tok->id === T_TRAIT) {
                 $j = self::skipWs($tokens, $i + 1);
@@ -167,7 +200,7 @@ final class XphpSourceParser
 
         $cleaned = self::applyReplacements($source, $replacements);
 
-        return [$classMarkers, $nameMarkers, $cleaned];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned];
     }
 
     /**
@@ -421,13 +454,14 @@ final class XphpSourceParser
      * Walk the AST: attach markers to ClassLike and Name nodes by (line, name) + order; resolve TypeRef names.
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{line:int, name:string, params:list<string>}> $classMarkers
+     * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $classMarkers
      * @param list<array{line:int, name:string, args:list<TypeRef>}> $nameMarkers
+     * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $methodMarkers
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers): void
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
     {
         $traverser = new NodeTraverser();
-        $traverser->addVisitor(new class($classMarkers, $nameMarkers) extends NodeVisitorAbstract {
+        $traverser->addVisitor(new class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             /** @var array<string, string> alias → FQN */
             private array $useMap = [];
@@ -435,12 +469,14 @@ final class XphpSourceParser
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, params:list<string>}> $classMarkers
+             * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $classMarkers
              * @param list<array{line:int, name:string, args:list<TypeRef>}> $nameMarkers
+             * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,
                 private array $nameMarkers,
+                private array $methodMarkers,
             ) {
             }
 
@@ -495,6 +531,41 @@ final class XphpSourceParser
                         $this->typeParamStack[] = $paramNames;
                     } else {
                         $this->typeParamStack[] = [];
+                    }
+                }
+
+                if ($node instanceof Node\Stmt\ClassMethod) {
+                    $methodName = $node->name->toString();
+                    foreach ($this->methodMarkers as $i => $marker) {
+                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $methodName) {
+                            $typeParams = [];
+                            foreach ($marker['params'] as $entry) {
+                                $boundFqn = null;
+                                if ($entry['boundName'] !== null) {
+                                    $boundFqn = $entry['boundIsFq']
+                                        ? $entry['boundName']
+                                        : $this->resolveNameOnly($entry['boundName']);
+                                }
+                                $typeParams[] = new TypeParam($entry['name'], $boundFqn);
+                            }
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $typeParams);
+                            unset($this->methodMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
+                    }
+                }
+
+                if ($node instanceof Node\Expr\StaticCall && $node->name instanceof Node\Identifier) {
+                    $callMethodName = $node->name->toString();
+                    foreach ($this->nameMarkers as $i => $marker) {
+                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $callMethodName) {
+                            $resolvedArgs = $this->resolveTypeRefList($marker['args']);
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
+                            unset($this->nameMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
                     }
                 }
 

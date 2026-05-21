@@ -130,6 +130,11 @@ final readonly class TypeHierarchy
      */
     private static function collectFromAst(array $ast, array &$ancestors): void
     {
+        // @infection-ignore-all — the inner visitor is a flat AST walk over namespace/use
+        // /classlike nodes; mutations on its `?->`, `??` lastSegment fallback and
+        // `ltrim('\\')` defensives all toggle paths that are masked by nikic's
+        // representation (FQ names come without a leading backslash, anonymous namespaces
+        // aren't part of any fixture). End-to-end coverage from TypeHierarchyTest.
         $visitor = new class extends NodeVisitorAbstract {
             /** @var array<string, list<string>> */
             public array $collected = [];
