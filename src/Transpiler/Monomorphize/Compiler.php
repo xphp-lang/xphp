@@ -61,7 +61,19 @@ final readonly class Compiler
         $registry = new Registry($this->hashLength, $hierarchy);
         $collector = new RegistryCollector($registry);
 
-        // Phase 1: collect (definitions + instantiations) using the now-populated hierarchy.
+        // Phase 1a: method/function-level specialization runs FIRST, against the raw user-file
+        // ASTs. The substitution visitor recursively rewrites ATTR_GENERIC_ARGS, so a body like
+        // `function wrap<T>(T): Box<T> { return new Box<T>(...); }` produces a specialized
+        // `wrap_T_<hash>(int): Box<int> { return new Box<int>(...); }` AFTER substitution. By
+        // running this before the class collector + fixed-point loop, the newly-introduced
+        // concrete `Box<int>` reference gets collected and specialized through the usual
+        // class-level path. The hierarchy is passed through so method/function-level
+        // `T: Bound` is validated at compile time too (same shape as the class-level path).
+        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
+        $methodCompiler->process($astPerFile);
+
+        // Phase 1b: collect class definitions + instantiations (now including any concrete
+        // references introduced by Phase 1a).
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collect($ast, $filepath);
         }
@@ -125,19 +137,12 @@ final readonly class Compiler
             $specializedAsts[$generatedFqn] = $rewritten[0];
         }
 
-        // Phase 3.5: method-level generic specialization. Pass the *rewritten* class
-        // bodies + user files together so call sites of `ClassFqn::method<T>(...)` find
-        // their templates regardless of which file the class lives in. Specialized cache
-        // entries are single ClassLike nodes; wrap each one in a list so the method
-        // compiler's per-AST visitor traverses uniformly.
-        $methodCompiler = new GenericMethodCompiler($this->hashLength);
-        $methodAstSet = $astPerFile;
-        foreach ($specializedAsts as $generatedFqn => $classAst) {
-            $methodAstSet['<specialized:' . $generatedFqn . '>'] = [$classAst];
-        }
-        $methodCompiler->process($methodAstSet);
-
-        // Emit the specialized classes after the method pass has had a chance to mutate them.
+        // Note for future-proofing (review F9): method-level specialization runs in Phase 1a
+        // against the raw user-file ASTs, NOT against the specialized cache classes. That's
+        // safe under the current MVP limit ("generic methods on non-generic classes only" —
+        // see GenericMethodCompiler's docblock). If that limit ever relaxes, the specialized
+        // class ASTs would need to be fed back through the method compiler with their
+        // enclosing namespace preserved so FQN keying still works.
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             $this->specializedClassGenerator->emit($classAst, $generatedFqn, $cacheDir);
         }

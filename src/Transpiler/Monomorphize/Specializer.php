@@ -8,9 +8,11 @@ use PhpParser\Node;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
+use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\Interface_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 
@@ -27,6 +29,12 @@ use PhpParser\NodeVisitorAbstract;
  *     pick these up.
  *  3. `new T(...)` expressions inside method bodies are covered automatically because the
  *     class field of New_ is itself a Name that the same logic handles.
+ *
+ * The three public entry points (`specialize`, `specializeMethod`, `specializeFunction`)
+ * share a single substitution visitor — see `buildSubstitutingVisitor`. Keeping the
+ * substitution logic in one place is what lets `function wrap<T>(T $x): Box<T> { ... }`
+ * specialize correctly: the visitor recursively descends into ATTR_GENERIC_ARGS so the
+ * inner `Box<T>` arg list becomes `Box<int>` after substitution.
  */
 final class Specializer
 {
@@ -50,76 +58,14 @@ final class Specializer
         // a trait) — see CallSiteRewriter for the matching marker emission.
         if (is_string($originalTemplateFqn)) {
             $marker = new FullyQualified(ltrim($originalTemplateFqn, '\\'));
-            if ($cloned instanceof \PhpParser\Node\Stmt\Class_) {
+            if ($cloned instanceof Class_) {
                 $cloned->implements[] = $marker;
-            } elseif ($cloned instanceof \PhpParser\Node\Stmt\Interface_) {
+            } elseif ($cloned instanceof Interface_) {
                 $cloned->extends[] = $marker;
             }
         }
 
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor(new class($substitution) extends NodeVisitorAbstract {
-            /** @param array<string, TypeRef> $substitution */
-            public function __construct(private array $substitution)
-            {
-            }
-
-            public function leaveNode(Node $node): ?Node
-            {
-                if ($node instanceof Name && !$node->isFullyQualified()) {
-                    $parts = $node->getParts();
-                    if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
-                        $concrete = $this->substitution[$parts[0]];
-                        return self::typeRefToNode($concrete, $node->getAttributes());
-                    }
-
-                    $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
-                    if (is_array($args) && $args !== []) {
-                        $substituted = array_map(
-                            fn (TypeRef $a): TypeRef => self::substituteTypeRef($a, $this->substitution),
-                            $args,
-                        );
-                        $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $substituted);
-                    }
-                }
-
-                return null;
-            }
-
-            private static function typeRefToNode(TypeRef $ref, array $attrs): Node
-            {
-                if ($ref->isScalar) {
-                    return new Identifier($ref->name, $attrs);
-                }
-                if (!$ref->isGeneric()) {
-                    return new FullyQualified(ltrim($ref->name, '\\'), $attrs);
-                }
-                $name = new Name(ltrim($ref->name, '\\'), $attrs);
-                $name->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $ref->args);
-                $name->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, ltrim($ref->name, '\\'));
-                return $name;
-            }
-
-            /**
-             * @param array<string, TypeRef> $subst
-             */
-            private static function substituteTypeRef(TypeRef $ref, array $subst): TypeRef
-            {
-                if ($ref->isTypeParam && isset($subst[$ref->name])) {
-                    return $subst[$ref->name];
-                }
-                if ($ref->args === []) {
-                    return $ref;
-                }
-                $newArgs = array_map(
-                    static fn (TypeRef $a): TypeRef => self::substituteTypeRef($a, $subst),
-                    $ref->args,
-                );
-                return new TypeRef($ref->name, $newArgs, $ref->isScalar, $ref->isTypeParam);
-            }
-        });
-
-        $traverser->traverse([$cloned]);
+        self::runSubstitutingVisitor($cloned, $substitution);
 
         return $cloned;
     }
@@ -142,29 +88,7 @@ final class Specializer
         $cloned->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, null);
         $cloned->name = new Identifier($mangledName, $cloned->name->getAttributes());
 
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor(new class($substitution) extends \PhpParser\NodeVisitorAbstract {
-            /** @param array<string, TypeRef> $substitution */
-            public function __construct(private array $substitution)
-            {
-            }
-
-            public function leaveNode(Node $node): ?Node
-            {
-                if ($node instanceof Name && !$node->isFullyQualified()) {
-                    $parts = $node->getParts();
-                    if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
-                        $concrete = $this->substitution[$parts[0]];
-                        if ($concrete->isScalar) {
-                            return new Identifier($concrete->name, $node->getAttributes());
-                        }
-                        return new FullyQualified(ltrim($concrete->name, '\\'), $node->getAttributes());
-                    }
-                }
-                return null;
-            }
-        });
-        $traverser->traverse([$cloned]);
+        self::runSubstitutingVisitor($cloned, $substitution);
 
         return $cloned;
     }
@@ -182,8 +106,38 @@ final class Specializer
         $cloned->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, null);
         $cloned->name = new Identifier($mangledName, $cloned->name->getAttributes());
 
+        self::runSubstitutingVisitor($cloned, $substitution);
+
+        return $cloned;
+    }
+
+    /**
+     * Run the shared substitution visitor over a cloned template. Mutates `$cloned` in place.
+     *
+     * @param array<string, TypeRef> $substitution
+     */
+    private static function runSubstitutingVisitor(Node $cloned, array $substitution): void
+    {
         $traverser = new NodeTraverser();
-        $traverser->addVisitor(new class($substitution) extends \PhpParser\NodeVisitorAbstract {
+        $traverser->addVisitor(self::buildSubstitutingVisitor($substitution));
+        $traverser->traverse([$cloned]);
+    }
+
+    /**
+     * Build the AST visitor that performs both type-param substitution flavors:
+     *  - Bare single-segment `Name` matching a type-param key → replace with the
+     *    concrete type as a Node (Identifier for scalars, FullyQualified for class names,
+     *    Name carrying ATTR_GENERIC_ARGS for nested generics).
+     *  - Any Name carrying ATTR_GENERIC_ARGS → walk the TypeRef tree and substitute
+     *    type-param leaves with their concrete TypeRefs. This is what makes
+     *    `Box<T>` inside `class Wrapper<T> { ... }` (or `function wrap<T>(...): Box<T>`)
+     *    end up as `Box<int>` after specialization, ready for the call-site rewriter.
+     *
+     * @param array<string, TypeRef> $substitution
+     */
+    private static function buildSubstitutingVisitor(array $substitution): NodeVisitorAbstract
+    {
+        return new class($substitution) extends NodeVisitorAbstract {
             /** @param array<string, TypeRef> $substitution */
             public function __construct(private array $substitution)
             {
@@ -195,18 +149,71 @@ final class Specializer
                     $parts = $node->getParts();
                     if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
                         $concrete = $this->substitution[$parts[0]];
-                        if ($concrete->isScalar) {
-                            return new Identifier($concrete->name, $node->getAttributes());
-                        }
-                        return new FullyQualified(ltrim($concrete->name, '\\'), $node->getAttributes());
+                        return Specializer::typeRefToNode($concrete, $node->getAttributes());
+                    }
+
+                    $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                    if (is_array($args) && $args !== []) {
+                        $substituted = array_map(
+                            fn (TypeRef $a): TypeRef => Specializer::substituteTypeRef($a, $this->substitution),
+                            $args,
+                        );
+                        $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $substituted);
                     }
                 }
+
                 return null;
             }
-        });
-        $traverser->traverse([$cloned]);
+        };
+    }
 
-        return $cloned;
+    /**
+     * Convert a concrete TypeRef into the AST node form a type-hint slot accepts:
+     *  - scalars → `Identifier('int')` etc.
+     *  - non-generic class → `FullyQualified('App\\Models\\Plastic')`.
+     *  - generic class → `Name` carrying ATTR_GENERIC_ARGS so the downstream
+     *    call-site rewriter can rewrite it to the specialized FQCN.
+     *
+     * Public to keep the shared visitor (which lives in an anonymous class) able to
+     * call into it without leaking visibility through reflection tricks.
+     *
+     * @param array<string, mixed> $attrs
+     */
+    public static function typeRefToNode(TypeRef $ref, array $attrs): Node
+    {
+        if ($ref->isScalar) {
+            return new Identifier($ref->name, $attrs);
+        }
+        if (!$ref->isGeneric()) {
+            return new FullyQualified(ltrim($ref->name, '\\'), $attrs);
+        }
+        $name = new Name(ltrim($ref->name, '\\'), $attrs);
+        $name->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $ref->args);
+        $name->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, ltrim($ref->name, '\\'));
+        return $name;
+    }
+
+    /**
+     * Recursively substitute type-param leaves inside a TypeRef tree.
+     *
+     * Public for the same reason as `typeRefToNode` — the anonymous-class visitor
+     * calls back into Specializer to avoid duplicating the logic.
+     *
+     * @param array<string, TypeRef> $subst
+     */
+    public static function substituteTypeRef(TypeRef $ref, array $subst): TypeRef
+    {
+        if ($ref->isTypeParam && isset($subst[$ref->name])) {
+            return $subst[$ref->name];
+        }
+        if ($ref->args === []) {
+            return $ref;
+        }
+        $newArgs = array_map(
+            static fn (TypeRef $a): TypeRef => self::substituteTypeRef($a, $subst),
+            $ref->args,
+        );
+        return new TypeRef($ref->name, $newArgs, $ref->isScalar, $ref->isTypeParam);
     }
 
     /**

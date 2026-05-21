@@ -40,12 +40,15 @@ use RuntimeException;
  *  - Methods declared on non-generic classes only. Calling a generic method on a generic class
  *    (where the method has its own distinct type-param) requires merging two type-param scopes;
  *    that's a follow-up.
- *  - Bound validation on method-level type-params is not enforced yet.
+ *  - Bound validation on method-level type-params fires when a TypeHierarchy is wired in
+ *    (compiler always passes one); if none is given (bare unit tests), bounds become
+ *    advisory — matching the class-level Registry's behavior.
  */
 final class GenericMethodCompiler
 {
     public function __construct(
         private readonly int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH,
+        private readonly ?TypeHierarchy $hierarchy = null,
     ) {
     }
 
@@ -67,9 +70,44 @@ final class GenericMethodCompiler
         $functionTemplates = [];
         /** @var array<string, Namespace_> $functionNamespaceByFqn  enclosing Namespace_ per fqn */
         $functionNamespaceByFqn = [];
+        /** @var array<string, string> $functionSourceByFqn  ast-key (filepath or "<specialized:…>") per fqn — used to point duplicate-declaration errors at both source locations */
+        $functionSourceByFqn = [];
 
-        foreach ($astSet as $ast) {
-            $this->indexTemplates($ast, $methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn);
+        foreach ($astSet as $astKey => $ast) {
+            $perFileMethods = [];
+            $perFileClasses = [];
+            $perFileFns = [];
+            $perFileFnNs = [];
+            $this->indexTemplates($ast, $perFileMethods, $perFileClasses, $perFileFns, $perFileFnNs);
+
+            // Surface duplicate generic-function declarations (same FQN in two source
+            // files) with both paths, matching the shape `Registry::recordDefinition`
+            // uses for generic classes. Silently overwriting the first body — which is
+            // the prior behavior here — costs a real refactoring footgun.
+            foreach ($perFileFns as $fqn => $_template) {
+                if (isset($functionTemplates[$fqn])) {
+                    throw new RuntimeException(sprintf(
+                        'Generic function template "%s" already declared (in %s); duplicate declaration in %s.',
+                        $fqn,
+                        $functionSourceByFqn[$fqn],
+                        (string) $astKey,
+                    ));
+                }
+            }
+
+            foreach ($perFileMethods as $k => $v) {
+                $methodTemplates[$k] = $v;
+            }
+            foreach ($perFileClasses as $k => $v) {
+                $classByFqn[$k] = $v;
+            }
+            foreach ($perFileFns as $k => $v) {
+                $functionTemplates[$k] = $v;
+                $functionSourceByFqn[$k] = (string) $astKey;
+            }
+            foreach ($perFileFnNs as $k => $v) {
+                $functionNamespaceByFqn[$k] = $v;
+            }
         }
 
         if ($methodTemplates === [] && $functionTemplates === []) {
@@ -215,10 +253,11 @@ final class GenericMethodCompiler
         array &$alreadyGenerated,
     ): void {
         $hashLength = $this->hashLength;
+        $hierarchy = $this->hierarchy;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
@@ -240,6 +279,7 @@ final class GenericMethodCompiler
                 private array $functionNamespaceByFqn,
                 private array &$alreadyGenerated,
                 private int $hashLength,
+                private ?TypeHierarchy $hierarchy,
             ) {
             }
 
@@ -298,6 +338,15 @@ final class GenericMethodCompiler
                     return null;
                 }
 
+                if ($this->hierarchy !== null) {
+                    Registry::checkBounds(
+                        $params,
+                        $args,
+                        $this->hierarchy,
+                        $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
+                    );
+                }
+
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
                 $generatedKey = $classFqn . '::' . $mangled;
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
@@ -345,6 +394,15 @@ final class GenericMethodCompiler
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                 if (!is_array($params) || count($params) !== count($args)) {
                     return null;
+                }
+
+                if ($this->hierarchy !== null) {
+                    Registry::checkBounds(
+                        $params,
+                        $args,
+                        $this->hierarchy,
+                        $fqn . '<' . self::formatArgList($args) . '>',
+                    );
                 }
 
                 $funcName = $template->name->toString();
@@ -414,9 +472,17 @@ final class GenericMethodCompiler
              */
             private static function mangleName(string $shortName, array $args, int $hashLength): string
             {
-                $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
-                $hash = substr(hash('sha256', $canonical), 0, $hashLength);
-                return $shortName . '_T_' . $hash;
+                return $shortName . '_T_' . Registry::canonicalHash($args, $hashLength);
+            }
+
+            /**
+             * Display-style "T1, T2, ..." for the bound-violation error context.
+             *
+             * @param list<TypeRef> $args
+             */
+            private static function formatArgList(array $args): string
+            {
+                return implode(', ', array_map(static fn (TypeRef $r): string => $r->toDisplayString(), $args));
             }
 
             private static function firstSegment(string $name): string

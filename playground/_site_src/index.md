@@ -11,7 +11,7 @@ Browse the `.xphp` sources and the compiled artifacts from a recent run.
 |---|---|
 | Branch | `unknown` |
 | Commit | [`unknown`](https://github.com/xphp-lang/xphp-parser) |
-| Built | `2026-05-21T03:12:00Z` |
+| Built | `2026-05-21T05:47:38Z` |
 | Source | [https://github.com/xphp-lang/xphp-parser](https://github.com/xphp-lang/xphp-parser) |
 
 ## Source `.xphp` files (22)

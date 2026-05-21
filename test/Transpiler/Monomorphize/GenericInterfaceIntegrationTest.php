@@ -78,6 +78,32 @@ final class GenericInterfaceIntegrationTest extends TestCase
         self::assertStringNotContainsString('function get()', $content, 'original generic method signature must NOT survive on the marker');
     }
 
+    public function testSpecializedClassIsInstanceOfOriginalInterfaceMarker(): void
+    {
+        // F3 from the review: `$x instanceof App\Containers\Container` must hold for the
+        // specialized Box<Plastic>, traveling the chain
+        //   Box_<Plastic> implements Container_<Plastic> extends App\Containers\Container.
+        // This is the marker-interface contract (item 5) applied to the interface case.
+        $this->compile();
+
+        $loader = new \Composer\Autoload\ClassLoader();
+        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
+        $loader->register();
+
+        try {
+            $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+            $box = new $boxFqn(new \App\Models\Plastic('red'));
+
+            self::assertInstanceOf('App\\Containers\\Container', $box, 'specialized Box must transitively satisfy the original Container interface marker');
+
+            $r = new \ReflectionClass('App\\Containers\\Container');
+            self::assertTrue($r->isInterface(), 'original generic interface FQN must now be the marker interface');
+        } finally {
+            $loader->unregister();
+        }
+    }
+
     public function testSpecializedClassIsInstanceOfSpecializedInterfaceAtRuntime(): void
     {
         $this->compile();

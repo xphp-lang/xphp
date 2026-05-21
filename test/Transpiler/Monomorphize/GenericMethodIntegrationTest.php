@@ -117,6 +117,102 @@ final class GenericMethodIntegrationTest extends TestCase
         self::assertContains('OK_string', $output);
     }
 
+    public function testMethodLevelBoundViolationFailsCompilation(): void
+    {
+        // D2 from the review: `Util::identity<T: \Stringable>` called with `<int>` is
+        // now caught at compile time, not silently passed through to a runtime TypeError.
+        $sourceDir = sys_get_temp_dir() . '/xphp-genmethod-bound-' . uniqid('', true);
+        mkdir($sourceDir, 0o755, true);
+        $utilPath = $sourceDir . '/Util.xphp';
+        $usePath = $sourceDir . '/Use.xphp';
+        file_put_contents($utilPath, <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        class Util {
+            public static function describe<T: \Stringable>(T $x): string { return (string) $x; }
+        }
+        PHP);
+        file_put_contents($usePath, <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        $out = Util::describe<int>(42);
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $targetDir = sys_get_temp_dir() . '/xphp-mb-out-' . uniqid('', true) . '/dist';
+        $cacheDir = dirname($targetDir) . '/.xphp-cache';
+        mkdir(dirname($targetDir), 0o755, true);
+
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Generic bound violated');
+            $this->expectExceptionMessage('Stringable');
+            $compiler->compile($sources, $sourceDir, $targetDir, $cacheDir);
+        } finally {
+            unlink($utilPath);
+            unlink($usePath);
+            @rmdir($sourceDir);
+            if (is_dir(dirname($targetDir))) {
+                self::rrmdir(dirname($targetDir));
+            }
+        }
+    }
+
+    public function testMultilineStaticCallSiteIsStillRewrittenToMangledName(): void
+    {
+        // Regression for F2: nikic's StaticCall::getStartLine() returns the receiver's
+        // line (`Foo`), but the scanner used to record the marker against the identifier
+        // line (`identity`). Splitting them across lines desyncs the two and the
+        // marker never attaches. The line-range fix anchors the marker to the receiver.
+        $sourceDir = sys_get_temp_dir() . '/xphp-multiline-' . uniqid('', true);
+        mkdir($sourceDir, 0o755, true);
+        $utilPath = $sourceDir . '/Util.xphp';
+        $usePath = $sourceDir . '/Use.xphp';
+        file_put_contents($utilPath, <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        class Util {
+            public static function identity<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($usePath, <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        $asInt = Util::
+            identity<int>(42);
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $targetDir = sys_get_temp_dir() . '/xphp-multiline-out-' . uniqid('', true) . '/dist';
+        $cacheDir = dirname($targetDir) . '/.xphp-cache';
+        mkdir(dirname($targetDir), 0o755, true);
+
+        try {
+            $compiler->compile($sources, $sourceDir, $targetDir, $cacheDir);
+            $useContent = file_get_contents($targetDir . '/Use.php');
+            self::assertMatchesRegularExpression(
+                '/Util::identity_T_[0-9a-f]+\(42\)/',
+                $useContent,
+                'multi-line `Util::\n    identity<int>` must still rewrite to the mangled name',
+            );
+        } finally {
+            unlink($utilPath);
+            unlink($usePath);
+            @rmdir($sourceDir);
+            if (is_dir(dirname($targetDir))) {
+                self::rrmdir(dirname($targetDir));
+            }
+        }
+    }
+
     public function testEmittedFilesAreSyntacticallyValid(): void
     {
         $this->compile();

@@ -157,13 +157,17 @@ final class CompilerIntegrationTest extends TestCase
             $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
             $boxMetalFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
 
-            $plasticBox = new $boxPlasticFqn();
-            $metalBox = new $boxMetalFqn();
+            // Use reflection rather than `new $fqn()` to avoid coupling this test to whether
+            // the box_generic Box<T> template happens to declare a constructor at any given
+            // moment — the marker-interface contract is what we're locking, not the
+            // specialized class's signature.
+            $plasticRefl = new \ReflectionClass($boxPlasticFqn);
+            $metalRefl = new \ReflectionClass($boxMetalFqn);
 
             // Both specializations satisfy `instanceof OriginalTemplate` via the
             // marker interface emitted at the original FQN.
-            self::assertInstanceOf('App\\Containers\\Box', $plasticBox);
-            self::assertInstanceOf('App\\Containers\\Box', $metalBox);
+            self::assertTrue($plasticRefl->implementsInterface('App\\Containers\\Box'));
+            self::assertTrue($metalRefl->implementsInterface('App\\Containers\\Box'));
 
             // And reflection sees the marker as an interface, not the old class.
             $r = new \ReflectionClass('App\\Containers\\Box');

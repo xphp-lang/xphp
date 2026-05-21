@@ -132,25 +132,52 @@ final class Registry
         if ($definition === null) {
             return;
         }
-        // typeParams + args are positional; if arity doesn't line up there's a deeper bug — let
-        // the existing pipeline error out on the count mismatch rather than masking it here.
-        $params = $definition->typeParams;
-        if (count($params) !== count($args)) {
+        self::checkBounds(
+            $definition->typeParams,
+            $args,
+            $this->hierarchy,
+            self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+        );
+    }
+
+    /**
+     * Reusable bound check for any (typeParams, concreteArgs) pair against a hierarchy.
+     *
+     * Used both by `validateBounds` (class/interface instantiation) and by
+     * `GenericMethodCompiler` (method/function-level type-param bounds at call-site time).
+     * Single home for the verdict-formatting + error-shape contract so the user-facing
+     * error message looks the same regardless of where the violation surfaces.
+     *
+     * `$instantiationLabel` is the human-readable context string that opens the error
+     * (e.g. `"App\Box<int>"` or `"App\Util::identity<int>"`).
+     *
+     * @param list<TypeParam> $typeParams
+     * @param list<TypeRef> $args
+     */
+    public static function checkBounds(
+        array $typeParams,
+        array $args,
+        TypeHierarchy $hierarchy,
+        string $instantiationLabel,
+    ): void {
+        // Arity mismatch is a different error class (caught upstream); skip silently here
+        // so that the existing pipeline can produce the more specific message.
+        if (count($typeParams) !== count($args)) {
             return;
         }
-        foreach ($params as $i => $param) {
+        foreach ($typeParams as $i => $param) {
             if ($param->boundFqn === null) {
                 continue;
             }
             $concrete = $args[$i];
-            $verdict = $this->hierarchy->isSubtype($concrete->name, $param->boundFqn);
+            $verdict = $hierarchy->isSubtype($concrete->name, $param->boundFqn);
             if ($verdict === true) {
                 continue;
             }
             $detail = $verdict === false
                 ? sprintf('"%s" does not extend/implement "%s".', $concrete->toDisplayString(), $param->boundFqn)
                 : sprintf(
-                    '"%s" is not in the source set the hierarchy was built from (and is not a recognized PHP built-in), so the compiler cannot prove it satisfies "%s".',
+                    '"%s" is not in the source set the hierarchy was built from (and is not a recognized PHP built-in, or its bound satisfaction comes via a trait the compiler does not yet follow), so the compiler cannot prove it satisfies "%s".',
                     $concrete->toDisplayString(),
                     $param->boundFqn,
                 );
@@ -159,7 +186,7 @@ final class Registry
                 . "  type parameter %s is bounded by %s\n"
                 . "  but the supplied concrete type is %s\n\n"
                 . "  %s",
-                self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+                $instantiationLabel,
                 $param->name,
                 $param->boundFqn,
                 $concrete->toDisplayString(),
@@ -299,13 +326,23 @@ final class Registry
         array $args,
         int $hashLength = self::DEFAULT_HASH_HEX_LENGTH,
     ): string {
-        self::validateHashLength($hashLength);
-
         $template = ltrim($templateFqn, '\\');
-        $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
-        $hash = substr(hash('sha256', $canonical), 0, $hashLength);
 
-        return self::GENERATED_NAMESPACE_PREFIX . '\\' . $template . '\\T_' . $hash;
+        return self::GENERATED_NAMESPACE_PREFIX . '\\' . $template . '\\T_' . self::canonicalHash($args, $hashLength);
+    }
+
+    /**
+     * Canonical-argument-list hex hash, used to name both specialized classes (FQCN suffix)
+     * and specialized methods/functions (mangled-name suffix). Single home for the hashing
+     * logic so future tweaks (e.g. shorter hash for methods) live in one place.
+     *
+     * @param list<TypeRef> $args
+     */
+    public static function canonicalHash(array $args, int $hashLength = self::DEFAULT_HASH_HEX_LENGTH): string
+    {
+        self::validateHashLength($hashLength);
+        $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
+        return substr(hash('sha256', $canonical), 0, $hashLength);
     }
 
     /**

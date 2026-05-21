@@ -100,6 +100,76 @@ final class GenericFunctionIntegrationTest extends TestCase
         self::assertContains('OK_string', $output);
     }
 
+    public function testFunctionLevelBoundViolationFailsCompilation(): void
+    {
+        // Locks D2 from the review: `function NAME<T: \Stringable>` bound is now
+        // validated at compile time, not silently deferred to a runtime TypeError.
+        $sourceDir = sys_get_temp_dir() . '/xphp-genfn-bound-' . uniqid('', true);
+        mkdir($sourceDir, 0o755, true);
+        $funcsPath = $sourceDir . '/funcs.xphp';
+        $usePath = $sourceDir . '/Use.xphp';
+        file_put_contents($funcsPath, <<<'PHP'
+        <?php
+        namespace App;
+        function describe<T: \Stringable>(T $x): string { return (string) $x; }
+        PHP);
+        file_put_contents($usePath, <<<'PHP'
+        <?php
+        namespace App;
+        $out = describe<int>(42);
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Generic bound violated');
+            $this->expectExceptionMessage('Stringable');
+            $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+        } finally {
+            unlink($funcsPath);
+            unlink($usePath);
+            @rmdir($sourceDir);
+        }
+    }
+
+    public function testDuplicateGenericFunctionDeclarationFailsCompilationWithBothPaths(): void
+    {
+        // Mirrors Registry::recordDefinition's duplicate-class behavior: silently
+        // overwriting the first body would lose work and ship the second declaration
+        // unannounced — that's a real refactor footgun.
+        $sourceDir = sys_get_temp_dir() . '/xphp-genfn-dup-' . uniqid('', true);
+        mkdir($sourceDir, 0o755, true);
+        $aPath = $sourceDir . '/a.xphp';
+        $bPath = $sourceDir . '/b.xphp';
+        file_put_contents($aPath, <<<'PHP'
+        <?php
+        namespace App;
+        function identity<T>(T $x): T { return $x; }
+        PHP);
+        file_put_contents($bPath, <<<'PHP'
+        <?php
+        namespace App;
+        function identity<T>(T $x): T { return $x; }
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Generic function template "App\\identity" already declared');
+            $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+        } finally {
+            unlink($aPath);
+            unlink($bPath);
+            @rmdir($sourceDir);
+        }
+    }
+
     public function testEmittedFilesAreSyntacticallyValid(): void
     {
         $this->compile();
