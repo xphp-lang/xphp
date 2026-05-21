@@ -57,6 +57,8 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
         ];
     }
 
+    // `registerCapabiltiies` is misspelled in phpactor's Handler interface (sic).
+    // We match the typo deliberately — overriding requires the same name.
     public function registerCapabiltiies(ServerCapabilities $capabilities): void
     {
         // `<` is the canonical trigger; `,` lets the next-arg case fire without

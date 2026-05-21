@@ -14,6 +14,15 @@ declare(strict_types=1);
 // thecodingmachine/safe, which currently emits many implicit-nullable deprecation
 // notices under PHP 8.4 at autoload time. Without this, the deprecation chatter
 // drowns the analyzer's actual output (an LSP client sees this on stderr too).
+//
+// CAVEAT: this suppression is intentionally broad — it ALSO masks deprecations
+// we ourselves might introduce in xphp source under tools/lsp/. The PHPUnit
+// surface has a finer-grained equivalent (`<source ignoreIndirectDeprecations
+// ="true">` in phpunit.xml.dist) that distinguishes by source path, but the
+// runtime PHP API doesn't expose anything equivalent. If we ever start
+// emitting deprecations in our own code, revisit this — the easy mitigation
+// is to drop the suppression and instead pin phpactor / thecodingmachine/safe
+// to versions that have caught up with PHP 8.4.
 error_reporting(E_ALL & ~E_DEPRECATED);
 
 $autoload = null;

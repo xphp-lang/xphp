@@ -19,7 +19,7 @@ core parser.
 | `textDocument/completion` (inside `<…>` type-arg positions) | ✅ shipped |
 | VS Code extension client at `vscode-extension/` | ✅ shipped |
 
-44 PHPUnit cases, 113 assertions — `make test/lsp`.
+121 PHPUnit cases, 276 assertions — `make test/lsp`.
 
 See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
 
@@ -49,10 +49,9 @@ tools/lsp/
 │   │   ├── XphpCompletionHandler       textDocument/completion
 │   │   ├── TypeArgPositionDetector     backwards-scanner for cursor-in-<…>
 │   │   └── WorkspaceSymbols            collect ClassLike FQNs across open docs
-│   └── Workspace/
-│       └── DocumentStore.php           in-memory doc cache (phpactor Workspace
-│                                       handles open/change/close itself)
-├── test/                      PHPUnit suite (44 cases)
+│   └── (phpactor's own Workspace handles document open/change/close; no
+│        local DocumentStore wrapper needed)
+├── test/                      PHPUnit suite (121 cases)
 └── vscode-extension/          VS Code client — spawns server over stdio (F5 dev loop)
 ```
 
@@ -101,7 +100,7 @@ Capabilities advertised at `initialize`:
 ## Test
 
 ```bash
-make test/lsp           # PHPUnit, ~121 cases
+make test/lsp           # PHPUnit, 121 cases / 276 assertions
 make test/lsp/mutation  # Infection, 95 % MSI under a 93 % gate
 ```
 
