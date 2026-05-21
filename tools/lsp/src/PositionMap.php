@@ -61,10 +61,15 @@ final readonly class PositionMap
             return $length;
         }
         $lineStart = $this->lineOffsets[$line];
-        $nextLineStart = $this->lineOffsets[$line + 1] ?? $length + 1;
-        // The terminator (\n) sits at $nextLineStart - 1. Cap at that byte for
-        // every line except the last, where there's no terminator.
-        $lineEnd = ($line + 1 < count($this->lineOffsets)) ? $nextLineStart - 1 : $length;
+        // lineEnd is the byte just past the line's last visible character: the
+        // terminator (\n) for any non-last line, or document length for the
+        // last line. Computed branchlessly to keep mutation testing happy
+        // (the ternary that used to live here had a dead-store on the
+        // fallback constant — `?? $length + 1` — which surfaced as
+        // un-killable equivalent mutations).
+        $lineEnd = isset($this->lineOffsets[$line + 1])
+            ? $this->lineOffsets[$line + 1] - 1
+            : $length;
         $lineText = substr($this->source, $lineStart, $lineEnd - $lineStart);
         // Walk characters until we've consumed `$character` of them — handles
         // multibyte UTF-8 the same way offsetToPosition does (one Unicode char

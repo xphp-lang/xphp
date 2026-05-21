@@ -41,8 +41,24 @@ final class AnalyzerTest extends TestCase
         self::assertCount(1, $result->diagnostics);
         self::assertSame('xphp.parse', $result->diagnostics[0]->code);
         self::assertSame(DiagnosticSeverity::Error, $result->diagnostics[0]->severity);
-        self::assertStringContainsString('Syntax error', $result->diagnostics[0]->message);
+        // The message MUST carry both the literal "Syntax error: " prefix AND
+        // the parser's own error description. Locks the Concat mutation that
+        // would drop either operand.
+        self::assertStringStartsWith('Syntax error: ', $result->diagnostics[0]->message);
+        self::assertGreaterThan(
+            strlen('Syntax error: '),
+            strlen($result->diagnostics[0]->message),
+            'message must include the underlying parser detail, not just the literal prefix',
+        );
     }
+
+    // Note: the `catch (RuntimeException $e)` branch in Analyzer::analyzeFile
+    // is defensive — XphpSourceParser only throws RuntimeException when its
+    // underlying parser returns null, which the default nikic configuration
+    // doesn't do (Throwing error handler is the default). Constructing a
+    // failure scenario would need a custom parser, but XphpSourceParser is
+    // `final` so we can't extend it. The catch block is ignored in
+    // infection.json5 with documented rationale.
 
     public function testSyntaxErrorRangeReferencesAValidLine(): void
     {

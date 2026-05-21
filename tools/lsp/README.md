@@ -101,10 +101,11 @@ Capabilities advertised at `initialize`:
 ## Test
 
 ```bash
-make test/lsp
+make test/lsp           # PHPUnit, ~121 cases
+make test/lsp/mutation  # Infection, 95 % MSI under a 93 % gate
 ```
 
-That target runs `composer install --quiet` then PHPUnit with
+`test/lsp` runs `composer install --quiet` then PHPUnit with
 `php -d error_reporting='E_ALL & ~E_DEPRECATED'` so noisy PHP 8.4 implicit-nullable warnings
 from phpactor transitive deps stay out of the output. Running phpunit directly works too —
 the suppression lives in `phpunit.xml.dist`'s `<source ignoreIndirectDeprecations="true">`
@@ -114,6 +115,19 @@ block:
 cd tools/lsp
 vendor/bin/phpunit
 ```
+
+### Mutation testing
+
+`test/lsp/mutation` downloads `infection.phar` lazily into `tools/lsp/var/` and runs against
+the same source + test set. The PHAR distribution ships its internal deps under PHP-Scoper
+prefixes, so it sidesteps the `thecodingmachine/safe` / `psr/log` conflicts that prevent
+composer-installed Infection from coexisting with `phpactor/language-server` (`phpactor` pins
+`psr/log ^1.0` while Infection 0.33 needs `^2.0 || ^3.0`; older Infection lines that allow
+`psr/log ^1.0` in turn require `symfony/console ^7` instead of the parent package's `^8`).
+The PHAR avoids all of that.
+
+Curated equivalent-mutation ignores live in `infection.json5` with per-mutator
+`ignore` rules and inline rationale — mirrors the pattern at the repo root.
 
 ## VS Code extension
 
@@ -152,15 +166,3 @@ finds the same caveat at the source. Highlights:
 - **Hover/jump on bound names in template headers.** XphpSourceParser strips the `<…>` clause
   so there's no AST node positioned over the bound text.
 - **Marketplace publication** of the VS Code extension.
-- **Mutation testing (Infection).** The core parser package runs Infection at a
-  93 % MSI gate (`make test/mutation`). The LSP package doesn't — `infection`
-  ^0.33 requires `psr/log` ^2.0 || ^3.0 and `symfony/console` ^8, while
-  `phpactor/language-server` (every published version, including 7.0.1 and
-  dev-master) pins `psr/log` ^1.0; older Infection lines that allow psr/log
-  ^1.0 in turn require `symfony/console` ^7, which conflicts with the parent
-  package's ^8.0. Running the root's Infection against `tools/lsp/` also fails
-  at autoload time because both vendor trees install
-  `thecodingmachine/safe` and the two copies redeclare the same global
-  functions. Mutation coverage will be added when one of the upstream
-  constraints loosens (the obvious candidate is `phpactor/language-server`
-  bumping psr/log).

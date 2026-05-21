@@ -1,3 +1,5 @@
 /vendor/
 /composer.lock
+/var/
 .phpunit.result.cache
+.infection.json5.tmp.log

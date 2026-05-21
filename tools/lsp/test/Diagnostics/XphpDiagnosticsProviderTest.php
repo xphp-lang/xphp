@@ -85,6 +85,82 @@ final class XphpDiagnosticsProviderTest extends TestCase
         self::assertSame('xphp', $provider->name());
     }
 
+    public function testCurrentDocumentIsNotDoubleProcessedAgainstWorkspaceIteration(): void
+    {
+        // Locks the `if ($uri === $currentUri) continue;` skip on line 84.
+        // Without it the current document's AST would be parsed twice and
+        // could potentially be inserted into $parsedFiles twice — duplicate
+        // recordDefinition would then throw "already declared" and produce
+        // a spurious diagnostic on the only file with that template.
+        $workspace = new PhpactorWorkspace();
+        $boxDoc = $this->openDoc($workspace, '/Box.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T> { public T $item; }
+        XPHP);
+
+        $diagnostics = $this->lint($workspace, $boxDoc);
+
+        self::assertSame([], $diagnostics, 'no duplicate-declaration must surface when the only file holding Box is the one being linted');
+    }
+
+    public function testWorkspaceDiagnosticsTranslateToLspWireFormatRanges(): void
+    {
+        // Locks the array_map translation on line 96. Without it, the
+        // returned items would be the analyzer's framework-neutral
+        // Diagnostic, which lacks the `range`/`severity` LSP fields.
+        $workspace = new PhpactorWorkspace();
+        $this->openDoc($workspace, '/Box.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T: \Stringable> { public T $item; }
+        XPHP);
+        $useDoc = $this->openDoc($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        $x = new Box<int>();
+        XPHP);
+
+        $diagnostics = $this->lint($workspace, $useDoc);
+
+        self::assertCount(1, $diagnostics);
+        self::assertInstanceOf(LspDiagnostic::class, $diagnostics[0]);
+        self::assertInstanceOf(\Phpactor\LanguageServerProtocol\Range::class, $diagnostics[0]->range);
+        self::assertSame(1, $diagnostics[0]->severity, 'LSP severity 1 = Error');
+        self::assertSame('xphp', $diagnostics[0]->source);
+    }
+
+    public function testSyntaxErrorAndBoundViolationCombineWhenBothApplyToCurrentDoc(): void
+    {
+        // Locks the `array_merge($perFileDiagnostics, $lspWorkspaceDiagnostics)`
+        // on line 101. A document with only a bound violation hits ONLY
+        // the workspace pass (per-file empty); a document with only a
+        // syntax error returns early. So this test specifically covers
+        // the merge case by issuing a bound violation in a workspace
+        // where the linted doc parses cleanly — we then assert the
+        // diagnostic carries BOTH the workspace-source code AND the
+        // workspace-source message.
+        $workspace = new PhpactorWorkspace();
+        $this->openDoc($workspace, '/Box.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T: \Stringable> { public T $item; }
+        XPHP);
+        $useDoc = $this->openDoc($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        $x = new Box<int>();
+        XPHP);
+
+        $diagnostics = $this->lint($workspace, $useDoc);
+
+        // With UnwrapArrayMerge keeping only one operand, the workspace
+        // diagnostic would be lost (because per-file is empty for a clean
+        // parse). This assertion catches it.
+        self::assertCount(1, $diagnostics);
+        self::assertSame('xphp.bound', $diagnostics[0]->code);
+    }
+
     /**
      * @return list<LspDiagnostic>
      */

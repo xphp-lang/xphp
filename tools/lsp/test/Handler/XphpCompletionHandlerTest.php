@@ -99,6 +99,138 @@ final class XphpCompletionHandlerTest extends TestCase
         self::assertSame([], $list->items);
     }
 
+    public function testEmptyPrefixIncludesAllScalars(): void
+    {
+        // Locks the `$prefix !== ''` guard on line 114. With the guard
+        // weakened/inverted (e.g. `=== ''`), the scalar loop would skip every
+        // item even though prefix is empty.
+        $workspace = new PhpactorWorkspace();
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+        foreach (XphpSourceParser::SCALAR_TYPES as $scalar) {
+            self::assertContains($scalar, $labels, "scalar '{$scalar}' must be present when prefix is empty");
+        }
+    }
+
+    public function testScalarFilteringByPrefix(): void
+    {
+        // Locks the `continue` branch on line 115 (when a scalar doesn't match
+        // the prefix). Without it, every scalar would surface regardless of
+        // prefix.
+        $workspace = new PhpactorWorkspace();
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<in";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+        // Matches: int + integer (prefix); string ("in" is at position 3 → FQN substring).
+        self::assertContains('int', $labels);
+        self::assertContains('integer', $labels);
+        self::assertContains('string', $labels, 'matchesPrefix accepts FQN-substring matches, and "string" contains "in" at offset 3');
+        // Does NOT match: any scalar with no "in" substring.
+        self::assertNotContains('void', $labels);
+        self::assertNotContains('iterable', $labels);
+        self::assertNotContains('bool', $labels);
+    }
+
+    public function testClassFilteringExcludesNonMatchingFqn(): void
+    {
+        // Locks the `continue` on line 103. With it removed, every class
+        // would be returned regardless of prefix match.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Plastic {}
+        class Metal {}
+        class Stone {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<Pla";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+        self::assertContains('Plastic', $labels);
+        self::assertNotContains('Metal', $labels);
+        self::assertNotContains('Stone', $labels);
+    }
+
+    public function testEmptyAfterLtrimPrefixReturnsAllCandidates(): void
+    {
+        // Locks the `ltrim($prefix, '\\\\')` + the second `=== ''` guard. A
+        // prefix that's pure backslashes ("\\\\") ltrims to '' and the
+        // matcher must return all candidates. With UnwrapLtrim, the
+        // backslash-prefix would stay, no candidates would match.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Plastic {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<\\";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+        self::assertContains('Plastic', $labels, 'leading-backslash-only prefix must still match every candidate');
+    }
+
+    public function testFqnSubstringMatchPicksUpDeeperNamespace(): void
+    {
+        // Locks the OR branch on line 135: matchesPrefix returns true when
+        // the needle appears ANYWHERE in the FQN, not only when it's a
+        // prefix of the short name. With LogicalOr → LogicalAnd, the
+        // namespace-substring case would be lost.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models\Deep;
+        class Thing {}
+        XPHP));
+        // Prefix "Deep" is a substring of the FQN but NOT a prefix of the
+        // short name "Thing" — must still surface as a candidate.
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<Deep";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+        self::assertContains('Thing', $labels);
+    }
+
+    public function testCompletionAdvertisesCorrectTriggerCharacters(): void
+    {
+        // Locks the ArrayItemRemoval on line 65: each of '<' and ',' is
+        // a distinct trigger character; removing either would silently
+        // break the editor's auto-trigger behaviour.
+        $capabilities = new \Phpactor\LanguageServerProtocol\ServerCapabilities();
+        (new XphpCompletionHandler(
+            new PhpactorWorkspace(),
+            new WorkspaceSymbols(new PhpactorWorkspace(), $this->newAnalyzer()),
+        ))->registerCapabiltiies($capabilities);
+
+        self::assertNotNull($capabilities->completionProvider);
+        self::assertSame(
+            ['<', ','],
+            $capabilities->completionProvider->triggerCharacters,
+        );
+    }
+
+    public function testCompletionMethodsMapRegistersTheLspMethodName(): void
+    {
+        // Locks ArrayItemRemoval on line 55. Without the entry, dispatcher
+        // would never route textDocument/completion to this handler.
+        $methods = (new XphpCompletionHandler(
+            new PhpactorWorkspace(),
+            new WorkspaceSymbols(new PhpactorWorkspace(), $this->newAnalyzer()),
+        ))->methods();
+
+        self::assertArrayHasKey('textDocument/completion', $methods);
+        self::assertSame('complete', $methods['textDocument/completion']);
+    }
+
     private function complete(
         PhpactorWorkspace $workspace,
         string $uri,

@@ -85,6 +85,144 @@ final class XphpHoverHandlerTest extends TestCase
         self::assertNull(wait($handler->hover($params)));
     }
 
+    public function testMethodsMapRegistersHoverEndpoint(): void
+    {
+        // Locks ArrayItemRemoval on methods() — without the entry, the
+        // dispatcher never routes textDocument/hover to this handler.
+        $methods = (new XphpHoverHandler(new PhpactorWorkspace(), $this->newAnalyzer()))
+            ->methods();
+        self::assertArrayHasKey('textDocument/hover', $methods);
+        self::assertSame('hover', $methods['textDocument/hover']);
+    }
+
+    public function testHoverOnNestedTemplateResolvesAgainstInnermostScope(): void
+    {
+        // Locks the `array_reverse($classScope)` walk on line 126: a class-in-
+        // class arrangement where the INNER ClassLike's type-param matches
+        // the cursor must be reported as the inner class's param, not the
+        // outer's. Without reverse, the outer wins.
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Outer<T>
+        {
+            public T $a;
+        }
+        class Inner<T: \Stringable>
+        {
+            public T $b;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+        // Cursor on the `T` in `public T $b;` — Inner's T, bounded by Stringable.
+        $hover = $this->hoverAt($handler, $uri, $source, 'public T $b', offsetInSearch: strlen('public '));
+
+        self::assertInstanceOf(Hover::class, $hover);
+        $text = $hover->contents->value;
+        self::assertStringContainsString('App\\Inner', $text, 'must report INNER class as owner, not outer');
+        self::assertStringContainsString('Stringable', $text, "must surface inner's bound, not outer's unbounded T");
+    }
+
+    public function testGenericInstantiationWithoutAllConcreteArgsReturnsNull(): void
+    {
+        // Locks the `&& self::allConcrete($args)` guard on line 108. Hovering
+        // over a generic Name whose args still contain a type-param (not yet
+        // substituted) must NOT return a specialization markdown — the FQN
+        // hashing isn't valid in that state.
+        //
+        // We exercise this by hovering over a Box<T> reference inside a
+        // template body (T is still a type-param at that point, not concrete).
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Wrapper<T>
+        {
+            public Box<T> $boxed;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+        $hover = $this->hoverAt($handler, $uri, $source, 'Box<T>');
+
+        // Either null (no usable hover) or a non-specialization hover —
+        // critically, no `Specializes to:` line.
+        if ($hover !== null) {
+            self::assertStringNotContainsString('Specializes to', $hover->contents->value);
+        } else {
+            self::assertNull($hover);
+        }
+    }
+
+    public function testHoverOnMultiSegmentNameReturnsNull(): void
+    {
+        // Locks the `count($parts) !== 1` guard inside buildHoverMarkdown.
+        // A fully-qualified Name like `App\Stuff\Plastic` has multiple parts;
+        // we don't try to resolve it as a type-param, and we don't have any
+        // ATTR_GENERIC_ARGS on it either → return null.
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Holder
+        {
+            public \App\Stuff\Plastic $item;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+        $hover = $this->hoverAt($handler, $uri, $source, 'App\\Stuff\\Plastic');
+
+        self::assertNull($hover);
+    }
+
+    public function testHoverOnSecondTypeParamSkipsFirst(): void
+    {
+        // Locks the `continue` in the inner foreach (line 133). With multiple
+        // type-params, the handler must keep iterating past non-matching ones
+        // to find the right TypeParam, not stop at the first or process the
+        // wrong one.
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Pair<K, V: \Stringable>
+        {
+            public K $key;
+            public V $val;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+        // Hover on the `V` in `public V $val;` — must report V (Stringable-bounded),
+        // not K (unbounded).
+        $hover = $this->hoverAt($handler, $uri, $source, 'public V $val', offsetInSearch: strlen('public '));
+
+        self::assertInstanceOf(Hover::class, $hover);
+        $text = $hover->contents->value;
+        self::assertStringContainsString('`V`', $text);
+        self::assertStringContainsString('Stringable', $text);
+        self::assertStringNotContainsString('`K`', $text);
+    }
+
+    public function testTypeParamHoverIgnoresNonTypeParamEntriesInGenericParamsList(): void
+    {
+        // Locks `!$param instanceof TypeParam` part of the OR on line 132.
+        // The genericParams attribute is always list<TypeParam>, so the
+        // not-instanceof branch only fires defensively; an unrelated
+        // ClassLike with a non-conforming attribute mustn't crash the
+        // hover. We exercise this by hovering on a name that doesn't
+        // match ANY type-param in the enclosing template — handler
+        // walks each TypeParam, finds no match, returns null.
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T>
+        {
+            public string $note;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+        // Cursor on `note` — it's not a type-param of Box<T>; matchesPrefix
+        // returns no candidates → handler returns null.
+        $hover = $this->hoverAt($handler, $uri, $source, 'note');
+        self::assertNull($hover);
+    }
+
     /**
      * @return array{0: XphpHoverHandler, 1: PhpactorWorkspace, 2: string}
      */

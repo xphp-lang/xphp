@@ -74,4 +74,107 @@ final class TypeArgPositionDetectorTest extends TestCase
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
         self::assertSame(['prefix' => 'Pla'], $hit);
     }
+
+    public function testOffsetPastSourceLengthReturnsNull(): void
+    {
+        $hit = TypeArgPositionDetector::detect('abc', 99);
+        self::assertNull($hit);
+    }
+
+    public function testCursorAtOffsetZeroReturnsNull(): void
+    {
+        // Probes the `$prefixStart > 0` guard at the boundary. With `>= 0`,
+        // we'd read source[-1] and crash. With `> 0`, the loop doesn't execute
+        // and prefixStart stays at 0; the backwards walk then has $i = -1
+        // immediately, exits at `$i >= 0`, returns null.
+        $hit = TypeArgPositionDetector::detect('Box<int>', 0);
+        self::assertNull($hit);
+    }
+
+    public function testCursorAfterTabSeparatorAcceptsTypeArgContext(): void
+    {
+        // Locks the `$byte === "\t"` check in isInterArgByte. Each char of the
+        // chain on line 96 is its own Identical mutation; testing each
+        // independently is the only way to kill them.
+        $source = "new Box<Foo,\t";
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
+
+    public function testCursorAfterNewlineSeparatorAcceptsTypeArgContext(): void
+    {
+        // Locks the `$byte === "\n"` check.
+        $source = "new Box<Foo,\n";
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
+
+    public function testCursorAfterCarriageReturnSeparatorAcceptsTypeArgContext(): void
+    {
+        // Locks the `$byte === "\r"` check.
+        $source = "new Box<Foo,\r";
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
+
+    public function testCursorAfterCommaWithoutSpaceAcceptsTypeArgContext(): void
+    {
+        // Locks the `$byte === ','` check.
+        $source = "new Box<Foo,";
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
+
+    public function testCursorAfterSpaceSeparatorAcceptsTypeArgContext(): void
+    {
+        // Locks the `$byte === ' '` check. (Already implicitly covered by
+        // testDetectsAfterCommaInMultiArgList but isolated here to nail
+        // the specific char mutation.)
+        $source = "new Box<Foo, ";
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
+
+    public function testNonSeparatorAndNonIdentifierByteBreaksContext(): void
+    {
+        // Inside `<…>`, encountering a byte that's neither identifier nor
+        // separator (e.g. `(`, `)`, `;`) terminates the backwards walk →
+        // returns null. Locks the `isInterArgByte($c) || isIdentifierByte($c)`
+        // OR-chain on line 77 by feeding a byte that fails both predicates.
+        $source = "new Box<Foo(";
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertNull($hit);
+    }
+
+    public function testOpenBracketAtOffsetOnePassesIdentifierCheckAtZero(): void
+    {
+        // Probes the `$j < 0` guard at the exact boundary. Source `A<`:
+        // - prefixStart = 2 (no identifier bytes after cursor)
+        // - walking back: $i = 1 = `<` at depth 0
+        // - $j = 0, source[0] = 'A' is identifier → returns success
+        // With mutation `$j <= 0`, we'd return null for the 'A' case.
+        $source = 'A<';
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
+
+    public function testOpenBracketAtOffsetZeroFailsIdentifierCheck(): void
+    {
+        // Source `<` — no character before the `<`. $j = -1. Original returns
+        // null. Locks the `$j < 0` guard against being weakened.
+        $source = '<';
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertNull($hit);
+    }
+
+    public function testDetectsAfterDepthBalancedNestedGenerics(): void
+    {
+        // Confirms the depth counter handles closing `>` correctly. With the
+        // `$depth++; $i--;` decrement removed via mutation, this case would
+        // infinite-loop (and infection reports it as a timeout, not an
+        // escape — still good signal).
+        $source = 'new Box<Foo<Bar>, ';
+        $hit = TypeArgPositionDetector::detect($source, strlen($source));
+        self::assertSame(['prefix' => ''], $hit);
+    }
 }

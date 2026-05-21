@@ -72,6 +72,43 @@ final class AstPositionResolverTest extends TestCase
         self::assertNull($hit);
     }
 
+    public function testClassScopeIsPoppedAfterLeavingNestedClass(): void
+    {
+        // Locks the `array_pop($this->classStack)` on leaveNode. Without it,
+        // the stack accumulates and a Name AFTER an unrelated earlier class
+        // would carry that class as a (wrong) enclosing scope.
+        //
+        // Layout:
+        //   class A {}             <- popped
+        //   class B<T> {           <- enters, stays on stack while inside
+        //       public T $item;
+        //   }                      <- popped
+        //   $x = T;                <- the T HERE has empty scope
+        //
+        // We hover on the standalone T outside any class: the resolved
+        // classScope must be EMPTY. With the array_pop removed, B would
+        // still be on the stack and reported as scope.
+        $source = <<<'XPHP'
+        <?php
+        namespace App;
+        class A {}
+        class B<T> { public T $item; }
+        $x = T;
+        XPHP;
+        $ast = $this->parse($source);
+
+        $offset = strpos($source, '$x = T') + strlen('$x = ');
+        $hit = AstPositionResolver::nameAtOffset($ast, $offset);
+
+        self::assertNotNull($hit);
+        self::assertSame('T', $hit['name']->toString());
+        self::assertSame(
+            [],
+            $hit['classScope'],
+            'standalone T outside any class must have an empty class scope; otherwise array_pop is failing',
+        );
+    }
+
     /**
      * @return list<\PhpParser\Node\Stmt>
      */
