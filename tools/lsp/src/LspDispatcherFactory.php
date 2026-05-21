@@ -42,6 +42,7 @@ use Psr\Log\NullLogger;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 use XPHP\Lsp\Diagnostics\XphpDiagnosticsProvider;
+use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -112,6 +113,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
             new XphpHoverHandler($workspace, $analyzer),
+            new XphpDefinitionHandler($workspace, $analyzer),
         );
 
         $runner = new HandlerMethodRunner(
