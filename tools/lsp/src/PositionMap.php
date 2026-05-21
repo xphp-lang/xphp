@@ -44,6 +44,61 @@ final readonly class PositionMap
     }
 
     /**
+     * Resolve an LSP {line, character} (both 0-based) to a byte offset for this
+     * document. Inverse of offsetToPosition(). Used by handlers that receive a
+     * cursor position from the client and need to walk the AST for the node
+     * sitting under it.
+     *
+     * If the line is past EOF, returns the document length. If the character is
+     * past EOL, returns the byte offset of the line's terminator (or document
+     * length for the last line). These clamps mirror typical editor behavior so
+     * a click just-past-the-end-of-line still resolves to the last token.
+     */
+    public function positionToOffset(int $line, int $character): int
+    {
+        $length = strlen($this->source);
+        if ($line >= count($this->lineOffsets)) {
+            return $length;
+        }
+        $lineStart = $this->lineOffsets[$line];
+        $nextLineStart = $this->lineOffsets[$line + 1] ?? $length + 1;
+        // The terminator (\n) sits at $nextLineStart - 1. Cap at that byte for
+        // every line except the last, where there's no terminator.
+        $lineEnd = ($line + 1 < count($this->lineOffsets)) ? $nextLineStart - 1 : $length;
+        $lineText = substr($this->source, $lineStart, $lineEnd - $lineStart);
+        // Walk characters until we've consumed `$character` of them — handles
+        // multibyte UTF-8 the same way offsetToPosition does (one Unicode char
+        // = one column in our MVP UTF-16 stand-in).
+        $consumed = 0;
+        $bytes = 0;
+        while ($consumed < $character && $bytes < strlen($lineText)) {
+            $bytes += self::utf8CharLength($lineText[$bytes]);
+            $consumed++;
+        }
+        return $lineStart + $bytes;
+    }
+
+    private static function utf8CharLength(string $byte): int
+    {
+        $code = ord($byte);
+        if ($code < 0x80) {
+            return 1;
+        }
+        if (($code & 0xE0) === 0xC0) {
+            return 2;
+        }
+        if (($code & 0xF0) === 0xE0) {
+            return 3;
+        }
+        if (($code & 0xF8) === 0xF0) {
+            return 4;
+        }
+        // Invalid leading byte — treat as a single byte rather than throwing,
+        // so a malformed file doesn't blow up the hover handler.
+        return 1;
+    }
+
+    /**
      * Resolve a byte offset to {line, character} (both 0-based) for this document.
      *
      * @return array{0: int, 1: int} [line, character]

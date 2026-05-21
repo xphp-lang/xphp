@@ -42,6 +42,7 @@ use Psr\Log\NullLogger;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 use XPHP\Lsp\Diagnostics\XphpDiagnosticsProvider;
+use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -75,9 +76,11 @@ final class LspDispatcherFactory implements DispatcherFactory
         $clientApi = new ClientApi(new JsonRpcClient($transmitter, $responseWatcher));
 
         $workspace = new PhpactorWorkspace($this->logger);
+        // Shared analyzer instance: stateless, so handlers can share it safely.
+        $analyzer = new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(
-            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+            $analyzer,
             new WorkspaceAnalyzer(),
             $workspace,
         );
@@ -108,6 +111,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new ServiceHandler($serviceManager, $clientApi),
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
+            new XphpHoverHandler($workspace, $analyzer),
         );
 
         $runner = new HandlerMethodRunner(
