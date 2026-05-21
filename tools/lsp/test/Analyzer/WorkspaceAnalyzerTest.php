@@ -7,6 +7,7 @@ namespace XPHP\Lsp\Test\Analyzer;
 use PhpParser\ParserFactory;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\DiagnosticCode;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -35,7 +36,7 @@ final class WorkspaceAnalyzerTest extends TestCase
         self::assertSame([], $diagnostics['/Box.xphp'], 'template file itself has no violation');
         self::assertCount(1, $diagnostics['/Use.xphp'], 'instantiation file should carry one bound-violation diagnostic');
         self::assertStringContainsString('Generic bound violated', $diagnostics['/Use.xphp'][0]->message);
-        self::assertSame('xphp.bound', $diagnostics['/Use.xphp'][0]->code);
+        self::assertSame(DiagnosticCode::BoundViolation, $diagnostics['/Use.xphp'][0]->code);
     }
 
     public function testBoundViolationOnUnknownClassReportsDistinctMessage(): void
@@ -188,7 +189,7 @@ final class WorkspaceAnalyzerTest extends TestCase
         self::assertSame([], $diagnostics['/BoxOne.xphp']);
         self::assertCount(1, $diagnostics['/BoxTwo.xphp']);
         self::assertStringContainsString('already declared', $diagnostics['/BoxTwo.xphp'][0]->message);
-        self::assertSame('xphp.definition', $diagnostics['/BoxTwo.xphp'][0]->code);
+        self::assertSame(DiagnosticCode::Definition, $diagnostics['/BoxTwo.xphp'][0]->code);
     }
 
     /**

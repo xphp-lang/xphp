@@ -26,7 +26,7 @@ final readonly class DiagnosticTranslator
             message: $d->message,
         );
         $lsp->severity = $d->severity->value;
-        $lsp->code = $d->code !== '' ? $d->code : null;
+        $lsp->code = $d->code->value;
         $lsp->source = 'xphp';
         return $lsp;
     }

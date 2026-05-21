@@ -7,6 +7,7 @@ namespace XPHP\Lsp\Test\Analyzer;
 use PhpParser\ParserFactory;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\DiagnosticCode;
 use XPHP\Lsp\Analyzer\DiagnosticSeverity;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -39,7 +40,7 @@ final class AnalyzerTest extends TestCase
 
         self::assertNull($result->ast, 'unrecoverable syntax error should null out the AST');
         self::assertCount(1, $result->diagnostics);
-        self::assertSame('xphp.parse', $result->diagnostics[0]->code);
+        self::assertSame(DiagnosticCode::Parse, $result->diagnostics[0]->code);
         self::assertSame(DiagnosticSeverity::Error, $result->diagnostics[0]->severity);
         // The message MUST carry both the literal "Syntax error: " prefix AND
         // the parser's own error description. Locks the Concat mutation that

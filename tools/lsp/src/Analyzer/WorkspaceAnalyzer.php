@@ -104,12 +104,12 @@ final readonly class WorkspaceAnalyzer
                         $this->sourceFile,
                     );
                 } catch (RuntimeException $e) {
-                    $this->diagnostics[] = self::buildDiagnostic($this->positionMap, $node->getStartLine(), 'xphp.definition', $e->getMessage());
+                    $this->diagnostics[] = self::buildDiagnostic($this->positionMap, $node->getStartLine(), DiagnosticCode::Definition, $e->getMessage());
                 }
                 return null;
             }
 
-            private static function buildDiagnostic(PositionMap $positionMap, int $nikicLine, string $code, string $message): Diagnostic
+            private static function buildDiagnostic(PositionMap $positionMap, int $nikicLine, DiagnosticCode $code, string $message): Diagnostic
             {
                 [$sl, $sc, $el, $ec] = $positionMap->fullLineRangeFromNikic($nikicLine);
                 return new Diagnostic($sl, $sc, $el, $ec, $message, code: $code);
@@ -165,7 +165,12 @@ final readonly class WorkspaceAnalyzer
                         endLine: $el,
                         endCharacter: $ec,
                         message: $e->getMessage(),
-                        code: 'xphp.bound',
+                        // Registry::recordInstantiation has two error paths
+                        // (bound violation vs. hash collision). The triage helper
+                        // distinguishes them by the message's leading phrase so
+                        // editors / users can act on the right hint (raise
+                        // XPHP_HASH_LENGTH vs. fix the bound).
+                        code: DiagnosticCode::fromRegistryRecordInstantiationException($e),
                     );
                 }
                 return null;

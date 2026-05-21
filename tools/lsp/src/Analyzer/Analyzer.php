@@ -41,7 +41,7 @@ final readonly class Analyzer
                 diagnostics: [self::buildLineDiagnostic(
                     $positionMap,
                     $e->getStartLine(),
-                    'xphp.parse',
+                    DiagnosticCode::Parse,
                     'Syntax error: ' . $e->getRawMessage(),
                 )],
             );
@@ -54,7 +54,7 @@ final readonly class Analyzer
                 diagnostics: [self::buildLineDiagnostic(
                     $positionMap,
                     1,
-                    'xphp.parse.internal',
+                    DiagnosticCode::ParseInternal,
                     $e->getMessage(),
                 )],
             );
@@ -64,7 +64,7 @@ final readonly class Analyzer
     private static function buildLineDiagnostic(
         PositionMap $positionMap,
         int $nikicLine,
-        string $code,
+        DiagnosticCode $code,
         string $message,
     ): Diagnostic {
         [$startLine, $startChar, $endLine, $endChar] = $positionMap->fullLineRangeFromNikic($nikicLine);
