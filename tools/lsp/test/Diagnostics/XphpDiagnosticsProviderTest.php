@@ -11,6 +11,7 @@ use Phpactor\LanguageServerProtocol\Diagnostic as LspDiagnostic;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 use XPHP\Lsp\Diagnostics\XphpDiagnosticsProvider;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -177,7 +178,7 @@ final class XphpDiagnosticsProviderTest extends TestCase
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         return new XphpDiagnosticsProvider(
-            new Analyzer($parser),
+            new ParsedDocumentCache(new Analyzer($parser)),
             new WorkspaceAnalyzer(),
             $workspace,
         );

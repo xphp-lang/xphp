@@ -16,7 +16,7 @@ use Phpactor\LanguageServerProtocol\HoverParams;
 use Phpactor\LanguageServerProtocol\MarkupContent;
 use Phpactor\LanguageServerProtocol\MarkupKind;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
-use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\TypeParam;
@@ -47,7 +47,7 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
 {
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
-        private readonly Analyzer $analyzer,
+        private readonly ParsedDocumentCache $cache,
     ) {
     }
 
@@ -74,7 +74,7 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
             return new Success(null);
         }
         $item = $this->workspace->get($params->textDocument->uri);
-        $result = $this->analyzer->analyzeFile($item->text);
+        $result = $this->cache->getOrParse($params->textDocument->uri, $item->version, $item->text);
         if ($result->ast === null) {
             return new Success(null);
         }

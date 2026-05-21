@@ -9,6 +9,7 @@ use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -101,7 +102,9 @@ final class WorkspaceSymbolsTest extends TestCase
 
     private function newSymbols(PhpactorWorkspace $workspace): WorkspaceSymbols
     {
-        $analyzer = new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));
-        return new WorkspaceSymbols($workspace, $analyzer);
+        $cache = new ParsedDocumentCache(
+            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+        );
+        return new WorkspaceSymbols($workspace, $cache);
     }
 }

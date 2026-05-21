@@ -19,9 +19,9 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  * are layered on top of this in `WorkspaceAnalyzer`; the per-file analyzer here
  * handles only what's local to a single document.
  */
-final readonly class Analyzer
+class Analyzer
 {
-    public function __construct(private XphpSourceParser $parser)
+    public function __construct(private readonly XphpSourceParser $parser)
     {
     }
 

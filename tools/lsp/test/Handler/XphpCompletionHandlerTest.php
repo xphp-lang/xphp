@@ -15,6 +15,7 @@ use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\PositionMap;
@@ -88,7 +89,7 @@ final class XphpCompletionHandlerTest extends TestCase
         $workspace = new PhpactorWorkspace();
         $handler = new XphpCompletionHandler(
             $workspace,
-            new WorkspaceSymbols($workspace, $this->newAnalyzer()),
+            new WorkspaceSymbols($workspace, $this->newCache()),
         );
         $params = new CompletionParams(
             new TextDocumentIdentifier('/never-opened.xphp'),
@@ -208,7 +209,7 @@ final class XphpCompletionHandlerTest extends TestCase
         $capabilities = new \Phpactor\LanguageServerProtocol\ServerCapabilities();
         (new XphpCompletionHandler(
             new PhpactorWorkspace(),
-            new WorkspaceSymbols(new PhpactorWorkspace(), $this->newAnalyzer()),
+            new WorkspaceSymbols(new PhpactorWorkspace(), $this->newCache()),
         ))->registerCapabiltiies($capabilities);
 
         self::assertNotNull($capabilities->completionProvider);
@@ -224,7 +225,7 @@ final class XphpCompletionHandlerTest extends TestCase
         // would never route textDocument/completion to this handler.
         $methods = (new XphpCompletionHandler(
             new PhpactorWorkspace(),
-            new WorkspaceSymbols(new PhpactorWorkspace(), $this->newAnalyzer()),
+            new WorkspaceSymbols(new PhpactorWorkspace(), $this->newCache()),
         ))->methods();
 
         self::assertArrayHasKey('textDocument/completion', $methods);
@@ -242,16 +243,18 @@ final class XphpCompletionHandlerTest extends TestCase
             new TextDocumentIdentifier($uri),
             new Position($line, $character),
         );
-        $analyzer = $this->newAnalyzer();
+        $cache = $this->newCache();
         $handler = new XphpCompletionHandler(
             $workspace,
-            new WorkspaceSymbols($workspace, $analyzer),
+            new WorkspaceSymbols($workspace, $cache),
         );
         return wait($handler->complete($params));
     }
 
-    private function newAnalyzer(): Analyzer
+    private function newCache(): ParsedDocumentCache
     {
-        return new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));
+        return new ParsedDocumentCache(
+            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+        );
     }
 }

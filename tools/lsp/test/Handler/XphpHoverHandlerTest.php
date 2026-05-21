@@ -14,6 +14,7 @@ use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\PositionMap;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -77,7 +78,7 @@ final class XphpHoverHandlerTest extends TestCase
     public function testUnknownUriYieldsNull(): void
     {
         $workspace = new PhpactorWorkspace();
-        $handler = new XphpHoverHandler($workspace, $this->newAnalyzer());
+        $handler = new XphpHoverHandler($workspace, $this->newCache());
         $params = new HoverParams(
             new TextDocumentIdentifier('/never-opened.xphp'),
             new Position(0, 0),
@@ -89,7 +90,7 @@ final class XphpHoverHandlerTest extends TestCase
     {
         // Locks ArrayItemRemoval on methods() — without the entry, the
         // dispatcher never routes textDocument/hover to this handler.
-        $methods = (new XphpHoverHandler(new PhpactorWorkspace(), $this->newAnalyzer()))
+        $methods = (new XphpHoverHandler(new PhpactorWorkspace(), $this->newCache()))
             ->methods();
         self::assertArrayHasKey('textDocument/hover', $methods);
         self::assertSame('hover', $methods['textDocument/hover']);
@@ -231,7 +232,7 @@ final class XphpHoverHandlerTest extends TestCase
         $workspace = new PhpactorWorkspace();
         $uri = '/doc.xphp';
         $workspace->open(new TextDocumentItem($uri, 'xphp', 1, $source));
-        $handler = new XphpHoverHandler($workspace, $this->newAnalyzer());
+        $handler = new XphpHoverHandler($workspace, $this->newCache());
         return [$handler, $workspace, $uri];
     }
 
@@ -253,8 +254,10 @@ final class XphpHoverHandlerTest extends TestCase
         return wait($handler->hover($params));
     }
 
-    private function newAnalyzer(): Analyzer
+    private function newCache(): ParsedDocumentCache
     {
-        return new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));
+        return new ParsedDocumentCache(
+            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+        );
     }
 }

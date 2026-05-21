@@ -18,7 +18,7 @@ use Phpactor\LanguageServerProtocol\Location;
 use Phpactor\LanguageServerProtocol\Position;
 use Phpactor\LanguageServerProtocol\Range;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
-use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -45,7 +45,7 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
 {
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
-        private readonly Analyzer $analyzer,
+        private readonly ParsedDocumentCache $cache,
     ) {
     }
 
@@ -72,7 +72,11 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
             return new Success(null);
         }
         $currentItem = $this->workspace->get($params->textDocument->uri);
-        $currentResult = $this->analyzer->analyzeFile($currentItem->text);
+        $currentResult = $this->cache->getOrParse(
+            $params->textDocument->uri,
+            $currentItem->version,
+            $currentItem->text,
+        );
         if ($currentResult->ast === null) {
             return new Success(null);
         }
@@ -97,7 +101,7 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
     private function findDefinitionAcrossWorkspace(string $templateFqn): ?Location
     {
         foreach ($this->workspace as $uri => $item) {
-            $result = $this->analyzer->analyzeFile($item->text);
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
             if ($result->ast === null) {
                 continue;
             }

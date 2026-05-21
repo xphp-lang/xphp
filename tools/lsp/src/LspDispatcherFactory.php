@@ -40,6 +40,7 @@ use Phpactor\LanguageServerProtocol\InitializeParams;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 use XPHP\Lsp\Diagnostics\XphpDiagnosticsProvider;
 use XPHP\Lsp\Handler\WorkspaceSymbols;
@@ -79,11 +80,15 @@ final class LspDispatcherFactory implements DispatcherFactory
         $clientApi = new ClientApi(new JsonRpcClient($transmitter, $responseWatcher));
 
         $workspace = new PhpactorWorkspace($this->logger);
-        // Shared analyzer instance: stateless, so handlers can share it safely.
+        // Shared analyzer + version-keyed AST cache, scoped to this LSP session.
+        // Every handler (hover, definition, completion, diagnostics) reads
+        // through the cache so a workspace pass costs O(unchanged docs serves
+        // from cache) rather than O(N parses per keystroke).
         $analyzer = new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));
+        $cache = new ParsedDocumentCache($analyzer);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(
-            $analyzer,
+            $cache,
             new WorkspaceAnalyzer(),
             $workspace,
         );
@@ -114,9 +119,9 @@ final class LspDispatcherFactory implements DispatcherFactory
             new ServiceHandler($serviceManager, $clientApi),
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
-            new XphpHoverHandler($workspace, $analyzer),
-            new XphpDefinitionHandler($workspace, $analyzer),
-            new XphpCompletionHandler($workspace, new WorkspaceSymbols($workspace, $analyzer)),
+            new XphpHoverHandler($workspace, $cache),
+            new XphpDefinitionHandler($workspace, $cache),
+            new XphpCompletionHandler($workspace, new WorkspaceSymbols($workspace, $cache)),
         );
 
         $runner = new HandlerMethodRunner(

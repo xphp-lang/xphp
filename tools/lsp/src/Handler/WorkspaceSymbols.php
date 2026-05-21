@@ -10,22 +10,22 @@ use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
-use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 
 /**
  * Walks every open document and collects the FQNs of every ClassLike (class,
  * interface, trait). Used by the completion handler to suggest candidates
  * inside `<…>` type-arg positions.
  *
- * Re-computed on each call for the MVP — cheap because the analyzer is fast
- * and the open workspace is typically small. Caching keyed on doc version is
- * a follow-up if profiling shows it matters.
+ * Parses via the shared `ParsedDocumentCache` so an unchanged workspace
+ * doesn't re-parse on every completion keystroke (the original MVP did,
+ * which is O(N) parses per `<`).
  */
 final readonly class WorkspaceSymbols
 {
     public function __construct(
         private PhpactorWorkspace $workspace,
-        private Analyzer $analyzer,
+        private ParsedDocumentCache $cache,
     ) {
     }
 
@@ -35,8 +35,8 @@ final readonly class WorkspaceSymbols
     public function allClassFqns(): array
     {
         $fqns = [];
-        foreach ($this->workspace as $item) {
-            $result = $this->analyzer->analyzeFile($item->text);
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
             if ($result->ast === null) {
                 continue;
             }

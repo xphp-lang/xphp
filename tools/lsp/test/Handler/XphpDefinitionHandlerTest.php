@@ -13,6 +13,7 @@ use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\PositionMap;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -184,7 +185,9 @@ final class XphpDefinitionHandlerTest extends TestCase
     {
         return new XphpDefinitionHandler(
             $workspace,
-            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+            new ParsedDocumentCache(
+                new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+            ),
         );
     }
 }

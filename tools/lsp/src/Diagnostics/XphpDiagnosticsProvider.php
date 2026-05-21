@@ -11,7 +11,7 @@ use Phpactor\LanguageServer\Core\Diagnostics\DiagnosticsProvider;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\Diagnostic as LspDiagnostic;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
-use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 
 /**
@@ -36,7 +36,7 @@ use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 final class XphpDiagnosticsProvider implements DiagnosticsProvider
 {
     public function __construct(
-        private readonly Analyzer $analyzer,
+        private readonly ParsedDocumentCache $cache,
         private readonly WorkspaceAnalyzer $workspaceAnalyzer,
         private readonly PhpactorWorkspace $workspace,
     ) {
@@ -60,8 +60,14 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
     {
         $currentUri = $textDocument->uri;
 
-        // Per-file syntax pass on the document being linted.
-        $currentResult = $this->analyzer->analyzeFile($textDocument->text);
+        // Per-file syntax pass on the document being linted. Cache-keyed by
+        // (uri, version) so subsequent hover/definition/completion calls
+        // against the same unchanged document don't reparse.
+        $currentResult = $this->cache->getOrParse(
+            $currentUri,
+            $textDocument->version,
+            $textDocument->text,
+        );
         $perFileDiagnostics = array_map(
             static fn ($d) => DiagnosticTranslator::toLsp($d),
             $currentResult->diagnostics,
@@ -83,7 +89,7 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
             if ($uri === $currentUri) {
                 continue;
             }
-            $otherResult = $this->analyzer->analyzeFile($item->text);
+            $otherResult = $this->cache->getOrParse($uri, $item->version, $item->text);
             if ($otherResult->ast === null) {
                 continue;
             }
