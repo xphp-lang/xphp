@@ -104,14 +104,35 @@ final readonly class WorkspaceAnalyzer
                         $this->sourceFile,
                     );
                 } catch (RuntimeException $e) {
-                    $this->diagnostics[] = self::buildDiagnostic($this->positionMap, $node->getStartLine(), DiagnosticCode::Definition, $e->getMessage());
+                    $this->diagnostics[] = self::buildDiagnostic(
+                        $this->positionMap,
+                        $node->name,
+                        $node->getStartLine(),
+                        DiagnosticCode::Definition,
+                        $e->getMessage(),
+                    );
                 }
                 return null;
             }
 
-            private static function buildDiagnostic(PositionMap $positionMap, int $nikicLine, DiagnosticCode $code, string $message): Diagnostic
-            {
-                [$sl, $sc, $el, $ec] = $positionMap->fullLineRangeFromNikic($nikicLine);
+            private static function buildDiagnostic(
+                PositionMap $positionMap,
+                ?\PhpParser\Node\Identifier $identifier,
+                int $fallbackNikicLine,
+                DiagnosticCode $code,
+                string $message,
+            ): Diagnostic {
+                // Prefer the identifier's actual byte span — squiggles the class
+                // name, not the whole line. Fall back to the full-line range when
+                // position info is missing (synthetic nodes etc.).
+                if ($identifier !== null && $identifier->getStartFilePos() >= 0) {
+                    [$sl, $sc, $el, $ec] = $positionMap->rangeFromOffsets(
+                        $identifier->getStartFilePos(),
+                        $identifier->getEndFilePos() + 1,
+                    );
+                } else {
+                    [$sl, $sc, $el, $ec] = $positionMap->fullLineRangeFromNikic($fallbackNikicLine);
+                }
                 return new Diagnostic($sl, $sc, $el, $ec, $message, code: $code);
             }
         };
@@ -158,7 +179,18 @@ final readonly class WorkspaceAnalyzer
                 try {
                     $this->registry->recordInstantiation($fqn, $args);
                 } catch (RuntimeException $e) {
-                    [$sl, $sc, $el, $ec] = $this->positionMap->fullLineRangeFromNikic($node->getStartLine());
+                    // Pin the range to the offending Name's byte span (squiggles
+                    // just the generic identifier, e.g. `Box` in
+                    // `new Box<int>()`) rather than the whole line. Fall back to
+                    // the full line if position info is missing.
+                    if ($node->getStartFilePos() >= 0 && $node->getEndFilePos() >= 0) {
+                        [$sl, $sc, $el, $ec] = $this->positionMap->rangeFromOffsets(
+                            $node->getStartFilePos(),
+                            $node->getEndFilePos() + 1,
+                        );
+                    } else {
+                        [$sl, $sc, $el, $ec] = $this->positionMap->fullLineRangeFromNikic($node->getStartLine());
+                    }
                     $this->diagnostics[] = new Diagnostic(
                         startLine: $sl,
                         startCharacter: $sc,

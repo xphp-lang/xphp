@@ -35,8 +35,15 @@ final class WorkspaceAnalyzerTest extends TestCase
 
         self::assertSame([], $diagnostics['/Box.xphp'], 'template file itself has no violation');
         self::assertCount(1, $diagnostics['/Use.xphp'], 'instantiation file should carry one bound-violation diagnostic');
-        self::assertStringContainsString('Generic bound violated', $diagnostics['/Use.xphp'][0]->message);
-        self::assertSame(DiagnosticCode::BoundViolation, $diagnostics['/Use.xphp'][0]->code);
+        $d = $diagnostics['/Use.xphp'][0];
+        self::assertStringContainsString('Generic bound violated', $d->message);
+        self::assertSame(DiagnosticCode::BoundViolation, $d->code);
+        // Column accuracy: the diagnostic must point at the offending `Box`
+        // Name node (3 characters wide), not span the whole line. Locks the
+        // `rangeFromOffsets` path against regression to the old
+        // full-line behaviour.
+        self::assertSame(3, $d->endCharacter - $d->startCharacter, 'range must span just the `Box` identifier');
+        self::assertGreaterThan(0, $d->startCharacter, 'must not start at column 0 (whole-line) anymore');
     }
 
     public function testBoundViolationOnUnknownClassReportsDistinctMessage(): void
@@ -188,8 +195,13 @@ final class WorkspaceAnalyzerTest extends TestCase
         // Iteration order over $files is insertion order, so BoxOne wins, BoxTwo gets the error.
         self::assertSame([], $diagnostics['/BoxOne.xphp']);
         self::assertCount(1, $diagnostics['/BoxTwo.xphp']);
-        self::assertStringContainsString('already declared', $diagnostics['/BoxTwo.xphp'][0]->message);
-        self::assertSame(DiagnosticCode::Definition, $diagnostics['/BoxTwo.xphp'][0]->code);
+        $d = $diagnostics['/BoxTwo.xphp'][0];
+        self::assertStringContainsString('already declared', $d->message);
+        self::assertSame(DiagnosticCode::Definition, $d->code);
+        // Column accuracy: the diagnostic must point at the duplicate class
+        // identifier (`Box`, 3 chars), not span the whole line. Locks the
+        // `getEndFilePos() + 1` arithmetic against off-by-one regressions.
+        self::assertSame(3, $d->endCharacter - $d->startCharacter, 'range must span just the `Box` identifier');
     }
 
     /**

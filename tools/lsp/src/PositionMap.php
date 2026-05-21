@@ -120,6 +120,25 @@ final readonly class PositionMap
     }
 
     /**
+     * Resolve a [startByte, endByte) byte-range into an LSP range tuple
+     * `[startLine, startCharacter, endLine, endCharacter]`. Convenience for
+     * the two `offsetToPosition` calls handlers need when they want to pin a
+     * diagnostic to an actual AST node's span rather than the whole line.
+     *
+     * Caller-supplied `$endByte` is treated as half-open (exclusive). If the
+     * upstream API returns an inclusive end offset (e.g. nikic's
+     * `Node::getEndFilePos()`), pass `$endFilePos + 1`.
+     *
+     * @return array{0: int, 1: int, 2: int, 3: int}
+     */
+    public function rangeFromOffsets(int $startByte, int $endByte): array
+    {
+        [$sl, $sc] = $this->offsetToPosition($startByte);
+        [$el, $ec] = $this->offsetToPosition($endByte);
+        return [$sl, $sc, $el, $ec];
+    }
+
+    /**
      * Resolve a 1-based nikic line number to the {line, character} range covering that whole line.
      *
      * Useful when a Registry RuntimeException carries only line information and we need to

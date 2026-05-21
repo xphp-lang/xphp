@@ -33,17 +33,9 @@ class Analyzer
             $ast = $this->parser->parse($source);
             return new ParseResult($ast, []);
         } catch (PhpParserError $e) {
-            // nikic/php-parser carries the start line on PhpParser\Error directly.
-            // We pin the diagnostic to the full line — column-accurate ranges are a
-            // follow-up using $e->getStartColumn($source).
             return new ParseResult(
                 ast: null,
-                diagnostics: [self::buildLineDiagnostic(
-                    $positionMap,
-                    $e->getStartLine(),
-                    DiagnosticCode::Parse,
-                    'Syntax error: ' . $e->getRawMessage(),
-                )],
+                diagnostics: [self::buildParseErrorDiagnostic($positionMap, $e, $source)],
             );
         } catch (RuntimeException $e) {
             // XphpSourceParser also throws plain RuntimeException for "parser returned null"
@@ -59,6 +51,35 @@ class Analyzer
                 )],
             );
         }
+    }
+
+    /**
+     * Map a `PhpParser\Error` to a Diagnostic with column-accurate range when
+     * the parser kept enough info (`hasColumnInfo()`), falling back to a
+     * full-line underline otherwise. nikic returns 1-based columns; we
+     * subtract 1 for LSP's 0-based shape.
+     */
+    private static function buildParseErrorDiagnostic(
+        PositionMap $positionMap,
+        PhpParserError $e,
+        string $source,
+    ): Diagnostic {
+        $message = 'Syntax error: ' . $e->getRawMessage();
+        if (!$e->hasColumnInfo()) {
+            return self::buildLineDiagnostic($positionMap, $e->getStartLine(), DiagnosticCode::Parse, $message);
+        }
+        $startLine = PositionMap::lspLineFromNikic($e->getStartLine());
+        $endLine = PositionMap::lspLineFromNikic($e->getEndLine());
+        return new Diagnostic(
+            startLine: $startLine,
+            startCharacter: $e->getStartColumn($source) - 1,
+            endLine: $endLine,
+            // endColumn from nikic is the column of the LAST character (1-based,
+            // inclusive). LSP ranges are half-open, so we don't subtract 1.
+            endCharacter: $e->getEndColumn($source),
+            message: $message,
+            code: DiagnosticCode::Parse,
+        );
     }
 
     private static function buildLineDiagnostic(

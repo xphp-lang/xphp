@@ -76,6 +76,26 @@ final class AnalyzerTest extends TestCase
         self::assertGreaterThanOrEqual($d->startLine, $d->endLine);
     }
 
+    public function testSyntaxErrorRangeIsColumnAccurateWhenColumnInfoIsAvailable(): void
+    {
+        // Locks the `$e->getStartColumn($source) - 1` / `$e->getEndColumn($source)`
+        // arithmetic. Earlier the diagnostic always spanned a whole line; now
+        // it pins to the actual offending token. nikic's columns are 1-based
+        // inclusive; the LSP range is 0-based half-open — that's the `- 1` on
+        // start and the absent `- 1` on end.
+        //
+        // Source: `<?php $x = ;` — the unexpected `;` is at column 12 (1-based).
+        // LSP equivalent: start={0, 11}, end={0, 12} (1-character span).
+        $analyzer = self::buildAnalyzer();
+        $result = $analyzer->analyzeFile('<?php $x = ;');
+
+        self::assertCount(1, $result->diagnostics);
+        $d = $result->diagnostics[0];
+        self::assertSame(0, $d->startLine);
+        self::assertSame(11, $d->startCharacter, '1-based-to-0-based shift must hold');
+        self::assertSame(12, $d->endCharacter, 'inclusive 1-based end + no shift = half-open 0-based end');
+    }
+
     private static function buildAnalyzer(): Analyzer
     {
         return new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));

@@ -124,7 +124,16 @@
         },
         "GreaterThanOrEqualTo": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect"
+                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect",
+                // WorkspaceAnalyzer column-accurate range guards:
+                // `$identifier->getStartFilePos() >= 0` and
+                // `$node->getStartFilePos() >= 0 && $node->getEndFilePos() >= 0`.
+                // nikic's default lexer always populates startFilePos /
+                // endFilePos for nodes parsed from real source; the >= 0
+                // guards exist defensively for synthetic nodes that don't
+                // appear in this LSP's input. Same pattern + rationale as
+                // the AstPositionResolver guard already in this file.
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
             ]
         },
 
@@ -164,7 +173,14 @@
         // an AST that XphpSourceParser would never produce.
         "LogicalAnd": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown"
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
+                // WorkspaceAnalyzer column-accurate range guards — see the
+                // `GreaterThanOrEqualTo` ignore above for the rationale.
+                // `($identifier !== null && $identifier->getStartFilePos() >= 0)`
+                // and the matching guard in walkInstantiations: both clauses
+                // are jointly defensive against synthetic nodes that don't
+                // appear from nikic-parsed source.
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
             ]
         },
 
@@ -211,6 +227,34 @@
         "LessThanOrEqualTo": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\AstPositionResolver"
+            ]
+        },
+
+        // WorkspaceAnalyzer column-accurate range guards (same family as the
+        // GreaterThanOrEqualTo / LogicalAnd ignores above). The
+        // `$identifier !== null` defensive null-check, plus
+        // GreaterThanOrEqualToNegotiation / LogicalAndAllSubExprNegation /
+        // LogicalAndNegation variants — each probes the same defensive
+        // guard whose alternate branch (synthetic node without position info)
+        // never fires from nikic-parsed source.
+        "NotIdentical": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+        "GreaterThanOrEqualToNegotiation": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+        "LogicalAndAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+        "LogicalAndNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
             ]
         },
 

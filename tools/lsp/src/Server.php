@@ -113,6 +113,6 @@ final class Server
         $line = $d->startLine + 1;
         $col = $d->startCharacter + 1;
         $sev = strtolower($d->severity->name);
-        fwrite(STDOUT, "{$path}:{$line}:{$col}: {$sev}: [{$d->code}] {$d->message}\n");
+        fwrite(STDOUT, "{$path}:{$line}:{$col}: {$sev}: [{$d->code->value}] {$d->message}\n");
     }
 }
