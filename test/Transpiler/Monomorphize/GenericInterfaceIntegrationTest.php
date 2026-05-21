@@ -81,9 +81,14 @@ final class GenericInterfaceIntegrationTest extends TestCase
     public function testSpecializedClassIsInstanceOfOriginalInterfaceMarker(): void
     {
         // F3 from the review: `$x instanceof App\Containers\Container` must hold for the
-        // specialized Box<Plastic>, traveling the chain
-        //   Box_<Plastic> implements Container_<Plastic> extends App\Containers\Container.
+        // specialized Box, traveling the chain
+        //   Box_<Polymer> implements Container_<Polymer> extends App\Containers\Container.
         // This is the marker-interface contract (item 5) applied to the interface case.
+        //
+        // Polymer is fixture-unique (see Models/Polymer.xphp) to avoid PHP's process-wide
+        // class-table cache returning a Box<Plastic> body loaded by an earlier integration
+        // test (multiple fixtures specialize Box<Plastic> at the same hash but only this
+        // one's body implements Container<T>).
         $this->compile();
 
         $loader = new \Composer\Autoload\ClassLoader();
@@ -92,8 +97,8 @@ final class GenericInterfaceIntegrationTest extends TestCase
         $loader->register();
 
         try {
-            $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-            $box = new $boxFqn(new \App\Models\Plastic('red'));
+            $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Polymer')]);
+            $box = new $boxFqn(new \App\Models\Polymer('PET'));
 
             self::assertInstanceOf('App\\Containers\\Container', $box, 'specialized Box must transitively satisfy the original Container interface marker');
 

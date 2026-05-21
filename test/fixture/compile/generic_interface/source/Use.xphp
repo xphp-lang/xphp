@@ -6,5 +6,7 @@ namespace App;
 
 use App\Containers\Box;
 use App\Models\Plastic;
+use App\Models\Polymer;
 
 $plasticBox = new Box<Plastic>(new Plastic('red'));
+$polymerBox = new Box<Polymer>(new Polymer('PET'));
