@@ -33,9 +33,17 @@ use RuntimeException;
  *       - Name nodes    ←  name markers  → attach `xphp:genericArgs`  (list<TypeRef>).
  *  6. Resolve TypeRef names in attached args against the file's namespace + use statements + enclosing template's type-params.
  *
+ * Also lowers the `Name[]` array-type sugar (any name, including type-params and class names,
+ * optionally chained as `Name[][]…`) into the native `array` type-hint by emitting the literal
+ * text `array` over the entire `Name[]…` range. The replacement is variable-length but never
+ * introduces or removes a newline, so line numbers — which is how markers are matched to AST
+ * nodes — stay stable.
+ *
  * MVP limitations:
  *  - Generic syntax inside strings/comments is correctly ignored (tokenizer handles it).
  *  - Generic syntax with constraints (`T: SomeInterface`) is not supported.
+ *  - `Name<Args>[]` (array of a generic) is not supported — generics-after-array-sugar would
+ *    need extra wiring; users get a native PHP parse error today.
  */
 final class XphpSourceParser
 {
@@ -80,7 +88,7 @@ final class XphpSourceParser
 
         $classMarkers = [];
         $nameMarkers = [];
-        /** @var list<array{int, int}> $replacements [byte offset, length] */
+        /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
 
         $i = 0;
@@ -108,7 +116,8 @@ final class XphpSourceParser
                             ];
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
-                            $replacements[] = [$startByte, $endByte - $startByte];
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -133,8 +142,23 @@ final class XphpSourceParser
                         ];
                         $startByte = $tokens[$j]->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
-                        $replacements[] = [$startByte, $endByte - $startByte];
+                        $length = $endByte - $startByte;
+                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
                         $i = $endIdx + 1;
+                        continue;
+                    }
+                }
+
+                // Skip the array-type sugar in member-access context (`$x->prop[]`,
+                // `$x?->prop[]`, `Foo::bar[]`) — there the trailing `[]` is array-append
+                // or array-deref syntax, never a type-hint.
+                if (!self::isMemberAccessContext($tokens, $i)) {
+                    $arraySuffixEnd = self::parseArraySuffix($tokens, $j);
+                    if ($arraySuffixEnd !== null) {
+                        $startByte = $tok->pos;
+                        $endByte = $tokens[$arraySuffixEnd]->pos + strlen($tokens[$arraySuffixEnd]->text);
+                        $replacements[] = [$startByte, $endByte - $startByte, 'array'];
+                        $i = $arraySuffixEnd + 1;
                         continue;
                     }
                 }
@@ -224,6 +248,51 @@ final class XphpSourceParser
     }
 
     /**
+     * Returns true when the Name token at `$nameIdx` is preceded by an `->`, `?->`, or `::`
+     * operator — i.e. it's a property/method/constant reference, not a type-hint.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function isMemberAccessContext(array $tokens, int $nameIdx): bool
+    {
+        $i = $nameIdx - 1;
+        while ($i >= 0 && ($tokens[$i]->id === T_WHITESPACE || $tokens[$i]->id === T_COMMENT || $tokens[$i]->id === T_DOC_COMMENT)) {
+            $i--;
+        }
+        if ($i < 0) {
+            return false;
+        }
+        return $tokens[$i]->id === T_OBJECT_OPERATOR
+            || $tokens[$i]->id === T_NULLSAFE_OBJECT_OPERATOR
+            || $tokens[$i]->id === T_DOUBLE_COLON;
+    }
+
+    /**
+     * Detect zero or more chained `[]` suffixes starting at index `$i`. Returns the index of the
+     * closing `]` of the last bracket pair, or `null` if no `[]` pair is found.
+     *
+     * Whitespace and comments between the brackets are tolerated (e.g. `T [ ]`).
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function parseArraySuffix(array $tokens, int $i): ?int
+    {
+        $n = count($tokens);
+        $lastBracketEnd = null;
+
+        while ($i < $n && $tokens[$i]->text === '[') {
+            $j = self::skipWs($tokens, $i + 1);
+            if ($j >= $n || $tokens[$j]->text !== ']') {
+                break;
+            }
+            $lastBracketEnd = $j;
+            $i = self::skipWs($tokens, $j + 1);
+        }
+
+        return $lastBracketEnd;
+    }
+
+    /**
      * @param list<PhpToken> $tokens
      */
     private static function skipWs(array $tokens, int $i): int
@@ -272,14 +341,14 @@ final class XphpSourceParser
     }
 
     /**
-     * @param list<array{int, int}> $replacements
+     * @param list<array{int, int, string}> $replacements [byte offset, original length, replacement text]
      */
     private static function applyReplacements(string $source, array $replacements): string
     {
         usort($replacements, static fn (array $a, array $b): int => $b[0] <=> $a[0]);
 
-        foreach ($replacements as [$start, $length]) {
-            $source = substr($source, 0, $start) . str_repeat(' ', $length) . substr($source, $start + $length);
+        foreach ($replacements as [$start, $length, $replacement]) {
+            $source = substr($source, 0, $start) . $replacement . substr($source, $start + $length);
         }
 
         return $source;

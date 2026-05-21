@@ -98,11 +98,13 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
             ]
         },
-        // str_repeat(' ', $length) -> ' '. Line numbers still match (generics
-        // never span multiple lines in our grammar) so marker resolution is unaffected.
+        // str_repeat(' ', $length) -> ' '. The padding only fills the byte range previously
+        // occupied by a generic clause — since generic clauses never span multiple lines in our
+        // grammar, shrinking the padding to a single space only shifts columns. Line numbers
+        // (the key used to match markers to AST nodes) stay stable.
         "UnwrapStrRepeat": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
 
@@ -134,6 +136,27 @@
         "LogicalOrAllSubExprNegation": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isNameToken"
+            ]
+        },
+
+        // parseArraySuffix's `$i < $n` loop guard and its `$j >= $n` break guard only fire
+        // when a Name token sits at end-of-token-stream — which is unreachable from any valid
+        // PHP source: nikic/php-parser would have errored on the cleaned source before our
+        // markers ever attach. The OOB-access mutations would emit warnings under
+        // failOnWarning, but only via inputs that fail upstream parsing first.
+        "LessThan": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix"
+            ]
+        },
+        "LogicalAnd": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix"
+            ]
+        },
+        "GreaterThanOrEqualTo": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix"
             ]
         }
     },

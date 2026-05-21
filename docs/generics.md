@@ -74,6 +74,27 @@ Any arity (`Box<T>`, `List<Box<T>>`, `Map<K, V>`, ...). Scalars and class names 
 Properties, parameters, return types, `new` expressions. Property `public Box<T> $b;` and return `function f(): Box<T>`
 both work.
 
+`?T` (and any other nullable type-hint of a generic param) is preserved across specialization: `function first(): ?T`
+on a `Collection<User>` instance becomes `function first(): ?User`. Reflection reports the concrete class and
+`allowsNull() === true`.
+
+### `T[]` array-type sugar
+
+The native PHP type system can't express "array of T" — only the unparameterized `array` — so `xphp` lowers the
+documentation-friendly `T[]` (and `Name[]` for any class name, plus chained `T[][]`) directly to `array` during the
+compile step.
+
+```php
+class Collection<T> {
+    private T[] $items;                  // -> private array $items;
+    public function set(T[] $items): void; // -> public function set(array $items): void;
+    public function all(): T[];          // -> public function all(): array;
+}
+```
+
+The element-type enforcement still happens wherever the type parameter appears in a position PHP can enforce —
+typically the variadic `T ...$items` constructor parameter, or any single-element `T $x` setter.
+
 ### Transitive specialization
 
 if `class Wrapper<T> { public Box<T> $b; }` is instantiated as `Wrapper<Plastic>`, the compiler discovers and

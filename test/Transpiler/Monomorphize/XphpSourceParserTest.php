@@ -504,8 +504,305 @@ PHP;
     }
 
     // ===================================================================
+    // Array-type sugar: Name[] (and chained Name[][]…) lowers to native `array`
+    // ===================================================================
+
+    public function testBareTypeParamArraySugarLowersToArray(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Collection<T> {
+    private T[] $items;
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('private array $items', $printed);
+        self::assertStringNotContainsString('T[]', $printed);
+    }
+
+    public function testArraySugarLowersInParameterAndReturnPositions(): void
+    {
+        $source = <<<'PHP'
+<?php
+class Collection<T> {
+    public function set(T[] $items): void { $this->items = $items; }
+    public function all(): T[] { return $this->items; }
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('public function set(array $items): void', $printed);
+        self::assertStringContainsString('public function all(): array', $printed);
+    }
+
+    public function testChainedBracketsAllLowerToSingleArray(): void
+    {
+        $source = <<<'PHP'
+<?php
+class C { private T[][] $matrix; private T[][][] $cube; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('private array $matrix', $printed);
+        self::assertStringContainsString('private array $cube', $printed);
+        // Whole chain must collapse to a single `array`, not e.g. `array []`.
+        self::assertStringNotContainsString('array[', $printed);
+        self::assertStringNotContainsString('array [', $printed);
+    }
+
+    public function testArraySugarAcceptsConcreteClassNames(): void
+    {
+        // Sugar isn't limited to type parameters — `User[]` in any class also lowers.
+        $source = <<<'PHP'
+<?php
+class UserList { private User[] $users; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('private array $users', $printed);
+    }
+
+    public function testArraySugarAcceptsFullyQualifiedNames(): void
+    {
+        // The Name token can be T_NAME_FULLY_QUALIFIED, which my matcher must accept.
+        $source = <<<'PHP'
+<?php
+class C { private \App\Models\Plastic[] $items; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('private array $items', $printed);
+    }
+
+    public function testArraySugarAcceptsNamespaceQualifiedNames(): void
+    {
+        // T_NAME_QUALIFIED (`Models\Plastic`) must also be eligible for the sugar.
+        $source = <<<'PHP'
+<?php
+class C { private Models\Plastic[] $items; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('private array $items', $printed);
+        self::assertStringNotContainsString('Models\\', $printed);
+    }
+
+    public function testArraySugarToleratesWhitespaceBetweenBrackets(): void
+    {
+        $source = <<<'PHP'
+<?php
+class C { private T [ ] $items; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('private array $items', $printed);
+    }
+
+    public function testArrayIndexingIsNotMistakenForArraySugar(): void
+    {
+        // `$arr[0]`: the `[` is preceded by a T_VARIABLE, not a Name. Must not match.
+        $source = <<<'PHP'
+<?php
+function f(array $arr): mixed { return $arr[0]; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        // The `[0]` indexing must survive the cleaning step intact.
+        self::assertStringContainsString('return $arr[0]', $printed);
+    }
+
+    public function testLiteralEmptyArrayIsNotMistakenForArraySugar(): void
+    {
+        // `[]` as an array literal has nothing before it, so the matcher must not fire.
+        $source = <<<'PHP'
+<?php
+$x = []; $y = [1, 2, 3];
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('$x = []', $printed);
+        self::assertStringContainsString('$y = [1, 2, 3]', $printed);
+    }
+
+    public function testNonEmptyBracketsAfterNameAreNotMistakenForArraySugar(): void
+    {
+        // `Foo::CONST_NAME` is followed by `::`, never `[`. But if a user wrote a Name
+        // followed by `[<non-empty>]` (e.g. inside an attribute argument), my matcher
+        // must reject the suffix and keep the source intact. This locks the requirement
+        // that parseArraySuffix requires the brackets to be empty.
+        $source = <<<'PHP'
+<?php
+class C { public const TYPES = [User::class => 1]; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('User::class', $printed);
+        self::assertStringContainsString('=> 1', $printed);
+    }
+
+    public function testArraySugarPreservesLineNumbersForLaterMarkers(): void
+    {
+        // A T[] on an early line must not shift the line numbers of a Box<…> marker
+        // later in the file — the variable-length replacement happens on a single line
+        // and the line counter must stay stable for marker → AST matching to work.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Wrapper<T> {
+    private T[] $items;
+    public Box<T> $b;
+}
+PHP;
+        $args = self::parseAndGetArgs($source, 'Box');
+        self::assertCount(1, $args);
+        self::assertSame('T', $args[0]->name);
+        self::assertTrue(
+            $args[0]->isTypeParam,
+            'Box<T> on the line AFTER T[] must still be picked up by the line-keyed marker resolver',
+        );
+    }
+
+    public function testArraySugarInsideAndOutsideGenericClassesCoexist(): void
+    {
+        // Two adjacent classes: the first is generic and uses T[], the second is
+        // plain and uses Foo[]. Both must lower; neither should affect the other.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class A<T> { private T[] $a; }
+class B { private Foo[] $b; }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('class A', $printed);
+        self::assertStringContainsString('class B', $printed);
+        self::assertStringContainsString('private array $a', $printed);
+        self::assertStringContainsString('private array $b', $printed);
+    }
+
+    public function testArrayAppendOnPropertyIsNotMistakenForArraySugar(): void
+    {
+        // The hairy one: `$this->keys[] = $key` is array-append. `keys` is a T_STRING that
+        // happens to be followed by `[]` — but it's a member access (preceded by `->`), not
+        // a type-hint. The sugar must NOT fire here, otherwise the source rewrites to
+        // `$this->array = $key` and the property write silently goes to the wrong slot.
+        $source = <<<'PHP'
+<?php
+class Bag {
+    private array $items = [];
+    public function add(string $x): void { $this->items[] = $x; }
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('$this->items[] = $x', $printed);
+        self::assertStringNotContainsString('$this->array', $printed);
+    }
+
+    public function testArrayAppendThroughNullsafeIsNotMistakenForArraySugar(): void
+    {
+        // Same logic for `?->`. Locks the T_NULLSAFE_OBJECT_OPERATOR branch of the
+        // member-access guard.
+        $source = <<<'PHP'
+<?php
+class Bag {
+    public function add(?self $other, string $x): void { $other?->items[] = $x; }
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('$other?->items[] = $x', $printed);
+    }
+
+    public function testStaticPropertyAppendIsNotMistakenForArraySugar(): void
+    {
+        // And `::`. Locks the T_DOUBLE_COLON branch of the member-access guard.
+        $source = <<<'PHP'
+<?php
+class Registry {
+    public static array $entries = [];
+    public static function register(string $entry): void { self::$entries[] = $entry; }
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('self::$entries[] = $entry', $printed);
+    }
+
+    public function testMemberAccessGuardWalksBackPastCommentsAndWhitespace(): void
+    {
+        // PhpToken places a comment + extra whitespace between `->` and the property
+        // name. The walk-back loop in isMemberAccessContext must keep skipping
+        // T_COMMENT/T_DOC_COMMENT/T_WHITESPACE — not just one token — to land on the
+        // operator. Locks the `while` (vs `if`) and `--` (vs `++`) mutations in the
+        // walk-back, and the inner LogicalOr chain that lists which token kinds to skip.
+        $source = <<<'PHP'
+<?php
+class Bag {
+    public function add(string $x): void {
+        $this  ->  /* note */  items[] = $x;
+    }
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('$this->items[] = $x', $printed);
+        self::assertStringNotContainsString('$this->array', $printed);
+    }
+
+    public function testUnclosedBracketAfterNameLeavesSourceUnchanged(): void
+    {
+        // Defensive: a Name followed by `[` but never `]` must not trigger the sugar,
+        // since `parseArraySuffix` requires a closing bracket. Without that guard a
+        // mutation could quietly truncate source text and the parser would explode.
+        $source = <<<'PHP'
+<?php
+function f(array $a) { return Foo::map($a, fn ($x) => $x + 1); }
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('Foo::map', $printed);
+        self::assertStringNotContainsString('array::', $printed);
+    }
+
+    // ===================================================================
+    // Nullable type-param support — `?T` in any position must specialize
+    // to `?<concrete>`. (This is already covered by the Specializer's
+    // Name-substitution loop; the tests below lock the contract.)
+    // ===================================================================
+
+    public function testNullableTypeParamInReturnPositionIsPreservedThroughParse(): void
+    {
+        // The parser must leave `?T` alone (no array-sugar / generic-clause
+        // false-match). Downstream substitution happens in the Specializer.
+        $source = <<<'PHP'
+<?php
+class C<T> {
+    public function first(): ?T { return null; }
+}
+PHP;
+        $printed = self::parseAndPrettyPrint($source);
+
+        self::assertStringContainsString('public function first(): ?T', $printed);
+    }
+
+    // ===================================================================
     // Helpers for the new tests above
     // ===================================================================
+
+    private static function parseAndPrettyPrint(string $source): string
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $printer = new \PhpParser\PrettyPrinter\Standard();
+        return $printer->prettyPrintFile($ast);
+    }
 
     /**
      * @param array<int, mixed> $ast
