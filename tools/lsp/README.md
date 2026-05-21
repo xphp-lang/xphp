@@ -152,3 +152,15 @@ finds the same caveat at the source. Highlights:
 - **Hover/jump on bound names in template headers.** XphpSourceParser strips the `<…>` clause
   so there's no AST node positioned over the bound text.
 - **Marketplace publication** of the VS Code extension.
+- **Mutation testing (Infection).** The core parser package runs Infection at a
+  93 % MSI gate (`make test/mutation`). The LSP package doesn't — `infection`
+  ^0.33 requires `psr/log` ^2.0 || ^3.0 and `symfony/console` ^8, while
+  `phpactor/language-server` (every published version, including 7.0.1 and
+  dev-master) pins `psr/log` ^1.0; older Infection lines that allow psr/log
+  ^1.0 in turn require `symfony/console` ^7, which conflicts with the parent
+  package's ^8.0. Running the root's Infection against `tools/lsp/` also fails
+  at autoload time because both vendor trees install
+  `thecodingmachine/safe` and the two copies redeclare the same global
+  functions. Mutation coverage will be added when one of the upstream
+  constraints loosens (the obvious candidate is `phpactor/language-server`
+  bumping psr/log).
