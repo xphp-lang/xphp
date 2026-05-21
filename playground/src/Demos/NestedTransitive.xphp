@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Containers\Box;
+use App\Containers\Wrapper;
+use App\Models\Plastic;
+use ReflectionProperty;
+
+echo '[NestedTransitive] Wrapper<Plastic> -> transitive Box<Plastic>', PHP_EOL;
+
+$wrapper = new Wrapper<Plastic>(new Box<Plastic>(new Plastic('green')));
+
+echo '  unwrap()->color           = ', $wrapper->unwrap()->color, PHP_EOL;
+echo '  reflected wrapper->box    = ', (new ReflectionProperty($wrapper::class, 'box'))->getType()?->getName() ?? '<none>', PHP_EOL;
+echo '  reflected box->item       = ', (new ReflectionProperty($wrapper->box::class, 'item'))->getType()?->getName() ?? '<none>', PHP_EOL;
+echo '  Box<Plastic> was transitively specialized via Wrapper<Plastic>\'s constructor signature', PHP_EOL;
+
+echo PHP_EOL;
