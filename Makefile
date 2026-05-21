@@ -8,7 +8,7 @@ test/mutation:
 
 .PHONY: test/lsp
 test/lsp:
-	cd tools/lsp && composer install --quiet && php vendor/bin/phpunit
+	cd tools/lsp && composer install --quiet && php -d error_reporting='E_ALL & ~E_DEPRECATED' vendor/bin/phpunit
 
 .PHONY: playground
 playground:

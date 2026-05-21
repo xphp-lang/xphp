@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace XPHP\Lsp;
 
 use PhpParser\ParserFactory;
+use Phpactor\LanguageServer\LanguageServerBuilder;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\Diagnostic;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
@@ -23,10 +24,10 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  * .xphp file in a PR to surface diagnostics without standing up an LSP client.
  * It also doubles as the integration-test affordance for the LSP test suite.
  *
- * The stdio mode wires phpactor/language-server's CoreServerBuilder, registers
- * the per-feature handlers, and runs until the client closes the channel. That
- * wiring is intentionally separated from the analyzer so the analyzer can be
- * tested without spinning up a transport — see test/Analyzer/*.
+ * The stdio mode wires phpactor/language-server's LanguageServerBuilder
+ * (see LspDispatcherFactory) and runs until the client closes the channel. The
+ * dispatcher factory is intentionally separated from the analyzer so the analyzer
+ * can be tested without spinning up a transport — see test/Analyzer/*.
  */
 final class Server
 {
@@ -90,11 +91,13 @@ final class Server
 
     private static function runLspMode(): int
     {
-        // The LSP server wiring on top of phpactor/language-server lands in a follow-up
-        // commit (see plan, step 3 in "Implementation order"). Until then, this mode
-        // exits cleanly with a marker so editors that probe the binary get a clean
-        // shutdown rather than a hang.
-        fwrite(STDERR, "xphp-lsp: stdio LSP mode not yet wired — use `--lint <file>` for now.\n");
+        // Build phpactor's standard LSP server over stdio. The dispatcher factory
+        // wires our XphpDiagnosticsProvider through phpactor's DiagnosticsEngine,
+        // which handles enqueue / debounce / publishDiagnostics for us. The
+        // LanguageServerBuilder defaults to stdio when no .tcpServer() is set.
+        LanguageServerBuilder::create(new LspDispatcherFactory())
+            ->build()
+            ->run();
         return 0;
     }
 

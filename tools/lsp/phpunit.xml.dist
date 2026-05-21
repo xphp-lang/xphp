@@ -17,4 +17,18 @@
       <directory>test</directory>
     </testsuite>
   </testsuites>
+
+  <!--
+    Ignore deprecations triggered indirectly by vendor code (notably
+    thecodingmachine/safe and phpactor/language-server itself under PHP 8.4) —
+    they're not ours to fix and crowd out signal in the test output.
+
+    Our own test code triggering a deprecation still surfaces because PHPUnit
+    classifies those as "direct" (triggered from the test source directory).
+  -->
+  <source ignoreIndirectDeprecations="true">
+    <include>
+      <directory>src</directory>
+    </include>
+  </source>
 </phpunit>
