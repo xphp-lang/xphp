@@ -1,0 +1,41 @@
+---
+title: "src/Containers/Map.xphp"
+layout: default
+---
+
+[← index](../../index.md) · [Source `.xphp` files](../../index.md#source)
+
+# `src/Containers/Map.xphp`
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+class Map<K, V>
+{
+    /** @var array<int, K> */
+    private array $keys = [];
+    /** @var array<int, V> */
+    private array $values = [];
+
+    public function set(K $key, V $value): void
+    {
+        $this->keys[] = $key;
+        $this->values[] = $value;
+    }
+
+    public function firstKey(): ?K
+    {
+        return $this->keys[0] ?? null;
+    }
+
+    public function firstValue(): ?V
+    {
+        return $this->values[0] ?? null;
+    }
+}
+
+```
