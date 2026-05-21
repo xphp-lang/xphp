@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Box;
+use App\Models\Plastic;
+
+$plasticBox = new Box<Plastic>(new Plastic('red'));

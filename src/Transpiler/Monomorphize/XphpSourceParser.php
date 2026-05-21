@@ -6,7 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
 use PhpParser\Node\Name;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
@@ -29,8 +29,8 @@ use RuntimeException;
  *  3. Replace each `<...>` clause in the source with spaces of equal length so byte offsets / line numbers are preserved.
  *  4. Parse the cleaned source with nikic/php-parser's standard parser.
  *  5. Walk the AST, matching markers to AST nodes by (line, name) + order:
- *       - Class_ nodes  ←  class markers → attach `xphp:genericParams` (list<string>).
- *       - Name nodes    ←  name markers  → attach `xphp:genericArgs`  (list<TypeRef>).
+ *       - ClassLike nodes (Class_/Interface_/Trait_) ← class markers → attach `xphp:genericParams` (list<string>).
+ *       - Name nodes                                  ← name markers  → attach `xphp:genericArgs`  (list<TypeRef>).
  *  6. Resolve TypeRef names in attached args against the file's namespace + use statements + enclosing template's type-params.
  *
  * Also lowers the `Name[]` array-type sugar (any name, including type-params and class names,
@@ -95,7 +95,7 @@ final class XphpSourceParser
         while ($i < $n) {
             $tok = $tokens[$i];
 
-            if ($tok->id === T_CLASS) {
+            if ($tok->id === T_CLASS || $tok->id === T_INTERFACE || $tok->id === T_TRAIT) {
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->id === T_STRING) {
                     $className = $tokens[$j]->text;
@@ -355,7 +355,7 @@ final class XphpSourceParser
     }
 
     /**
-     * Walk the AST: attach markers to Class_ and Name nodes by (line, name) + order; resolve TypeRef names.
+     * Walk the AST: attach markers to ClassLike and Name nodes by (line, name) + order; resolve TypeRef names.
      *
      * @param list<Node\Stmt> $ast
      * @param list<array{line:int, name:string, params:list<string>}> $classMarkers
@@ -400,7 +400,7 @@ final class XphpSourceParser
                     $this->indexUses($node);
                 }
 
-                if ($node instanceof Class_ && $node->name !== null) {
+                if ($node instanceof ClassLike && $node->name !== null) {
                     $shortName = $node->name->toString();
                     $params = null;
                     foreach ($this->classMarkers as $i => $marker) {
@@ -461,7 +461,7 @@ final class XphpSourceParser
 
             public function leaveNode(Node $node): null
             {
-                if ($node instanceof Class_) {
+                if ($node instanceof ClassLike) {
                     array_pop($this->typeParamStack);
                 }
                 return null;

@@ -8,7 +8,7 @@ use PhpParser\Node;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 
@@ -34,7 +34,7 @@ final class Specializer
      * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
      * is the single source of truth for the final shortname (derived from the generated FQCN).
      */
-    public function specialize(Class_ $template, array $substitution): Class_
+    public function specialize(ClassLike $template, array $substitution): ClassLike
     {
         $cloned = self::deepClone($template);
         $cloned->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, null);

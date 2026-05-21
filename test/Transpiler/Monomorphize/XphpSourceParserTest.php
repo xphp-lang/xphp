@@ -33,6 +33,48 @@ PHP;
         self::assertSame(['T'], $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
     }
 
+    public function testAttachesGenericParamsToInterfaceDefinition(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+interface Container<T>
+{
+    public function get(): T;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        self::assertNotNull($iface);
+        self::assertSame('Container', $iface->name?->toString());
+        self::assertSame(['T'], $iface->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
+        self::assertSame('App\\Container', $iface->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+    }
+
+    public function testAttachesGenericParamsToTraitDefinition(): void
+    {
+        // Traits ride the same ClassLike pathway as classes/interfaces. Locks the
+        // T_TRAIT branch of the scanner's keyword guard.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+trait HasCollection<T>
+{
+    private T $first;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $trait = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Trait_::class);
+        self::assertNotNull($trait);
+        self::assertSame(['T'], $trait->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
+    }
+
     public function testAttachesGenericArgsToNewExpressionResolvedAgainstNamespace(): void
     {
         $source = <<<'PHP'
@@ -289,6 +331,29 @@ PHP;
             if ($node instanceof Namespace_) {
                 foreach ($node->stmts ?? [] as $inner) {
                     if ($inner instanceof Class_) {
+                        return $inner;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @template TNode of \PhpParser\Node\Stmt\ClassLike
+     * @param array<int, mixed> $ast
+     * @param class-string<TNode> $kind
+     * @return TNode|null
+     */
+    private static function findFirstClassLike(array $ast, string $kind): ?\PhpParser\Node\Stmt\ClassLike
+    {
+        foreach ($ast as $node) {
+            if ($node instanceof $kind) {
+                return $node;
+            }
+            if ($node instanceof Namespace_) {
+                foreach ($node->stmts ?? [] as $inner) {
+                    if ($inner instanceof $kind) {
                         return $inner;
                     }
                 }

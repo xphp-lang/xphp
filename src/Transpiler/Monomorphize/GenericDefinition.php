@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 
 final readonly class GenericDefinition
 {
@@ -15,7 +15,7 @@ final readonly class GenericDefinition
         public string $templateFqn,
         public string $templateShortName,
         public array $typeParams,
-        public Class_ $templateAst,
+        public ClassLike $templateAst,
         public string $sourceFile,
     ) {
     }

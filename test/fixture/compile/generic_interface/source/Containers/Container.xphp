@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+interface Container<T>
+{
+    public function get(): T;
+}

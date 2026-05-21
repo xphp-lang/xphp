@@ -7,7 +7,7 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor;
 use PhpParser\NodeVisitorAbstract;
@@ -17,8 +17,9 @@ use PhpParser\NodeVisitorAbstract;
  *  1. Every Name node carrying `xphp:genericArgs` (with all args fully concrete) is replaced
  *     with the registry's generated FQCN. Works regardless of where the Name appears
  *     (new expressions, property types, parameter types, return types).
- *  2. Every generic class definition (Class_ with `xphp:genericParams`) is removed from the
- *     output — the specialized classes carry the actual implementation.
+ *  2. Every generic template definition (ClassLike with `xphp:genericParams` — i.e. a generic
+ *     class, interface, or trait) is removed from the output — the specialized declarations
+ *     carry the actual implementation/signature.
  */
 final class CallSiteRewriter
 {
@@ -49,7 +50,7 @@ final class CallSiteRewriter
                     }
                 }
 
-                if ($node instanceof Class_ && $node->name !== null) {
+                if ($node instanceof ClassLike && $node->name !== null) {
                     $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
                     if (is_array($params) && $params !== []) {
                         return NodeVisitor::REMOVE_NODE;

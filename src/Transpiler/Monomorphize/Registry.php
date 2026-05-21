@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use InvalidArgumentException;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use RuntimeException;
 
 final class Registry
@@ -44,7 +44,7 @@ final class Registry
         string $templateFqn,
         string $templateShortName,
         array $typeParams,
-        Class_ $templateAst,
+        ClassLike $templateAst,
         string $sourceFile,
     ): void {
         if (isset($this->definitions[$templateFqn])) {

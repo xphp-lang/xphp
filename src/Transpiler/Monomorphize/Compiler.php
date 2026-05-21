@@ -17,10 +17,10 @@ use XPHP\FileSystem\FilepathArray;
  *  1. Parse + initial collect — read each .xphp file, parse into an AST with generic metadata,
  *     and collect every concrete top-level instantiation (and its transitive nested instantiations).
  *  2. Specialize loop — for each instantiation in the registry, run the Specializer to produce a
- *     concrete Class_ AST. Walk that AST with the RegistryCollector to discover any *new* generic
- *     instantiations that surface only after substitution (e.g. `class Wrapper<T> { public Box<T> $b; }`
- *     produces a `Box<Plastic>` instantiation when specialized as `Wrapper<Plastic>`). Loop until no
- *     new entries appear or the depth cap is reached.
+ *     concrete ClassLike AST (Class_/Interface_/Trait_). Walk that AST with the RegistryCollector
+ *     to discover any *new* generic instantiations that surface only after substitution
+ *     (e.g. `class Wrapper<T> { public Box<T> $b; }` produces a `Box<Plastic>` instantiation when
+ *     specialized as `Wrapper<Plastic>`). Loop until no new entries appear or the depth cap is reached.
  *  3. Emit specialized classes — rewrite each specialized AST (replace remaining Name nodes carrying
  *     genericArgs with FullyQualified XPHP\Generated references) and write to .xphp-cache/Generated/.
  *  4. Emit rewritten user code — rewrite each original source AST (strip generic class defs,
@@ -61,7 +61,7 @@ final readonly class Compiler
         }
 
         // Phase 2: fixed-point specialization loop.
-        /** @var array<string, \PhpParser\Node\Stmt\Class_> $specializedAsts keyed by generated FQCN */
+        /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
         $specializedAsts = [];
         $depth = 0;
         while (true) {
