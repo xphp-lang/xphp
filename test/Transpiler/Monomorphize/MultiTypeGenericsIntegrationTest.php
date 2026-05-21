@@ -181,6 +181,7 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         declare(strict_types=1);
         require '{$this->targetDir}/Models/User.php';
         require '{$this->targetDir}/Models/Plastic.php';
+        require '{$this->targetDir}/Containers/Pair.php';
         require '{$pairFile}';
         \$pair = '{$pairUserPlasticFqn}';
 

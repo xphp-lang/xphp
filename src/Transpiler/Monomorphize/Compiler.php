@@ -17,10 +17,10 @@ use XPHP\FileSystem\FilepathArray;
  *  1. Parse + initial collect — read each .xphp file, parse into an AST with generic metadata,
  *     and collect every concrete top-level instantiation (and its transitive nested instantiations).
  *  2. Specialize loop — for each instantiation in the registry, run the Specializer to produce a
- *     concrete Class_ AST. Walk that AST with the RegistryCollector to discover any *new* generic
- *     instantiations that surface only after substitution (e.g. `class Wrapper<T> { public Box<T> $b; }`
- *     produces a `Box<Plastic>` instantiation when specialized as `Wrapper<Plastic>`). Loop until no
- *     new entries appear or the depth cap is reached.
+ *     concrete ClassLike AST (Class_/Interface_/Trait_). Walk that AST with the RegistryCollector
+ *     to discover any *new* generic instantiations that surface only after substitution
+ *     (e.g. `class Wrapper<T> { public Box<T> $b; }` produces a `Box<Plastic>` instantiation when
+ *     specialized as `Wrapper<Plastic>`). Loop until no new entries appear or the depth cap is reached.
  *  3. Emit specialized classes — rewrite each specialized AST (replace remaining Name nodes carrying
  *     genericArgs with FullyQualified XPHP\Generated references) and write to .xphp-cache/Generated/.
  *  4. Emit rewritten user code — rewrite each original source AST (strip generic class defs,
@@ -48,20 +48,38 @@ final readonly class Compiler
         string $targetDir,
         string $cacheDir,
     ): CompileResult {
-        $registry = new Registry($this->hashLength);
-        $collector = new RegistryCollector($registry);
-
-        // Phase 1: parse + initial collect.
+        // Phase 0: parse every source up front. The TypeHierarchy (used to validate generic
+        // bounds at recordInstantiation time) needs to see every class/interface/trait
+        // declaration *before* any instantiation is recorded, so parsing has to finish first.
         $astPerFile = [];
         foreach ($sources->filepaths as $filepath) {
             $content = $this->fileReader->read($filepath);
-            $ast = $this->sourceParser->parse($content);
-            $astPerFile[$filepath] = $ast;
+            $astPerFile[$filepath] = $this->sourceParser->parse($content);
+        }
+
+        $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
+        $registry = new Registry($this->hashLength, $hierarchy);
+        $collector = new RegistryCollector($registry);
+
+        // Phase 1a: method/function-level specialization runs FIRST, against the raw user-file
+        // ASTs. The substitution visitor recursively rewrites ATTR_GENERIC_ARGS, so a body like
+        // `function wrap<T>(T): Box<T> { return new Box<T>(...); }` produces a specialized
+        // `wrap_T_<hash>(int): Box<int> { return new Box<int>(...); }` AFTER substitution. By
+        // running this before the class collector + fixed-point loop, the newly-introduced
+        // concrete `Box<int>` reference gets collected and specialized through the usual
+        // class-level path. The hierarchy is passed through so method/function-level
+        // `T: Bound` is validated at compile time too (same shape as the class-level path).
+        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
+        $methodCompiler->process($astPerFile);
+
+        // Phase 1b: collect class definitions + instantiations (now including any concrete
+        // references introduced by Phase 1a).
+        foreach ($astPerFile as $filepath => $ast) {
             $collector->collect($ast, $filepath);
         }
 
         // Phase 2: fixed-point specialization loop.
-        /** @var array<string, \PhpParser\Node\Stmt\Class_> $specializedAsts keyed by generated FQCN */
+        /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
         $specializedAsts = [];
         $depth = 0;
         while (true) {
@@ -83,7 +101,7 @@ final readonly class Compiler
                     ));
                 }
 
-                $substitution = array_combine($definition->typeParams, $instantiation->concreteTypes);
+                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
                 $specialized = $this->specializer->specialize(
                     $definition->templateAst,
                     $substitution,
@@ -116,7 +134,17 @@ final readonly class Compiler
         $rewriter = new CallSiteRewriter($registry);
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             $rewritten = $rewriter->rewrite([$classAst]);
-            $this->specializedClassGenerator->emit($rewritten[0], $generatedFqn, $cacheDir);
+            $specializedAsts[$generatedFqn] = $rewritten[0];
+        }
+
+        // Note for future-proofing (review F9): method-level specialization runs in Phase 1a
+        // against the raw user-file ASTs, NOT against the specialized cache classes. That's
+        // safe under the current MVP limit ("generic methods on non-generic classes only" —
+        // see GenericMethodCompiler's docblock). If that limit ever relaxes, the specialized
+        // class ASTs would need to be fed back through the method compiler with their
+        // enclosing namespace preserved so FQN keying still works.
+        foreach ($specializedAsts as $generatedFqn => $classAst) {
+            $this->specializedClassGenerator->emit($classAst, $generatedFqn, $cacheDir);
         }
 
         // Phase 4: rewrite + emit user source files.

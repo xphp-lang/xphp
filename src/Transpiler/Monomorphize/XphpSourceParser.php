@@ -6,7 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
 use PhpParser\Node\Name;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
@@ -29,8 +29,8 @@ use RuntimeException;
  *  3. Replace each `<...>` clause in the source with spaces of equal length so byte offsets / line numbers are preserved.
  *  4. Parse the cleaned source with nikic/php-parser's standard parser.
  *  5. Walk the AST, matching markers to AST nodes by (line, name) + order:
- *       - Class_ nodes  ←  class markers → attach `xphp:genericParams` (list<string>).
- *       - Name nodes    ←  name markers  → attach `xphp:genericArgs`  (list<TypeRef>).
+ *       - ClassLike nodes (Class_/Interface_/Trait_) ← class markers → attach `xphp:genericParams` (list<string>).
+ *       - Name nodes                                  ← name markers  → attach `xphp:genericArgs`  (list<TypeRef>).
  *  6. Resolve TypeRef names in attached args against the file's namespace + use statements + enclosing template's type-params.
  *
  * Also lowers the `Name[]` array-type sugar (any name, including type-params and class names,
@@ -51,6 +51,10 @@ final class XphpSourceParser
     public const ATTR_GENERIC_ARGS = 'xphp:genericArgs';
     public const ATTR_TEMPLATE_FQN = 'xphp:templateFqn';
 
+    // Method-scoped generics (one type-param set per method, distinct from any class-level set).
+    public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
+    public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
+
     public const SCALAR_TYPES = [
         'int', 'integer', 'string', 'bool', 'boolean', 'float', 'double',
         'void', 'mixed', 'never', 'null', 'false', 'true',
@@ -66,20 +70,20 @@ final class XphpSourceParser
      */
     public function parse(string $source): array
     {
-        [$classMarkers, $nameMarkers, $cleanedSource] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource] = $this->scanAndStrip($source);
 
         $ast = $this->parser->parse($cleanedSource);
         if ($ast === null) {
             throw new RuntimeException('Parser returned null AST.');
         }
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
         return $ast;
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, params:list<string>}>, 1: list<array{line:int, name:string, args:list<TypeRef>}>, 2: string}
+     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string}
      */
     private function scanAndStrip(string $source): array
     {
@@ -88,6 +92,7 @@ final class XphpSourceParser
 
         $classMarkers = [];
         $nameMarkers = [];
+        $methodMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
 
@@ -95,24 +100,48 @@ final class XphpSourceParser
         while ($i < $n) {
             $tok = $tokens[$i];
 
-            if ($tok->id === T_CLASS) {
+            if ($tok->id === T_FUNCTION) {
+                $j = self::skipWs($tokens, $i + 1);
+                if ($j < $n && $tokens[$j]->id === T_STRING) {
+                    $methodName = $tokens[$j]->text;
+                    $methodLine = $tokens[$j]->line;
+                    $k = self::skipWs($tokens, $j + 1);
+                    if ($k < $n && $tokens[$k]->text === '<') {
+                        $parsed = self::parseTypeParamList($tokens, $k);
+                        if ($parsed !== null) {
+                            [$paramEntries, $endIdx] = $parsed;
+                            $methodMarkers[] = [
+                                'line' => $methodLine,
+                                'name' => $methodName,
+                                'params' => $paramEntries,
+                            ];
+                            $startByte = $tokens[$k]->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
+                    }
+                }
+                $i++;
+                continue;
+            }
+
+            if ($tok->id === T_CLASS || $tok->id === T_INTERFACE || $tok->id === T_TRAIT) {
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->id === T_STRING) {
                     $className = $tokens[$j]->text;
                     $classLine = $tokens[$j]->line;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
-                        $parsed = self::parseTypeArgList($tokens, $k);
+                        $parsed = self::parseTypeParamList($tokens, $k);
                         if ($parsed !== null) {
-                            [$args, $endIdx] = $parsed;
-                            $params = [];
-                            foreach ($args as $arg) {
-                                $params[] = $arg->name;
-                            }
+                            [$paramEntries, $endIdx] = $parsed;
                             $classMarkers[] = [
                                 'line' => $classLine,
                                 'name' => $className,
-                                'params' => $params,
+                                'params' => $paramEntries,
                             ];
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
@@ -130,6 +159,14 @@ final class XphpSourceParser
             if (self::isNameToken($tok)) {
                 $nameText = $tok->text;
                 $nameLine = $tok->line;
+                // For member-access call sites (`Foo::method<…>`, `$x->method<…>`,
+                // `$x?->method<…>`), walk back past the operator to the receiver and
+                // record its line as the marker's anchor. nikic sets a MethodCall /
+                // StaticCall's getStartLine() to the leftmost token in the chain — so
+                // matching against just the identifier's line breaks the moment the
+                // operator+name are split across lines, e.g. `Foo::\n    method<int>`.
+                // The resolver matches if startLine ∈ [anchorLine, line].
+                $anchorLine = self::memberAccessReceiverLine($tokens, $i) ?? $nameLine;
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->text === '<') {
                     $parsed = self::parseTypeArgList($tokens, $j);
@@ -137,6 +174,7 @@ final class XphpSourceParser
                         [$args, $endIdx] = $parsed;
                         $nameMarkers[] = [
                             'line' => $nameLine,
+                            'anchorLine' => $anchorLine,
                             'name' => ltrim($nameText, '\\'),
                             'args' => $args,
                         ];
@@ -171,7 +209,74 @@ final class XphpSourceParser
 
         $cleaned = self::applyReplacements($source, $replacements);
 
-        return [$classMarkers, $nameMarkers, $cleaned];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned];
+    }
+
+    /**
+     * Parse a class-header type-param list: `< Name(: Bound)? (, Name(: Bound)?)* >`.
+     *
+     * Unlike `parseTypeArgList` (which is for *instantiation* sites and only handles
+     * concrete + nested-generic args), this variant only fires on the class/interface/trait
+     * header — so the `:` after a name is unambiguous and signals a bound.
+     *
+     * Returns `[entries, endIdx]` where each entry is a `{name: string, boundName: ?string,
+     * boundIsFq: bool}` record; later resolved to a TypeParam(name, ?boundFqn) inside the
+     * AST traversal step (which has access to the namespace + use map).
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: list<array{name: string, boundName: ?string, boundIsFq: bool}>, 1: int}|null
+     */
+    private static function parseTypeParamList(array $tokens, int $openIdx): ?array
+    {
+        $n = count($tokens);
+        if ($openIdx >= $n || $tokens[$openIdx]->text !== '<') {
+            return null;
+        }
+
+        $entries = [];
+        $i = self::skipWs($tokens, $openIdx + 1);
+        while ($i < $n) {
+            if (!self::isNameToken($tokens[$i])) {
+                return null;
+            }
+            $paramName = ltrim($tokens[$i]->text, '\\');
+            $i++;
+
+            $boundName = null;
+            $boundIsFq = false;
+            $afterName = self::skipWs($tokens, $i);
+            if ($afterName < $n && $tokens[$afterName]->text === ':') {
+                $afterColon = self::skipWs($tokens, $afterName + 1);
+                if ($afterColon >= $n || !self::isNameToken($tokens[$afterColon])) {
+                    return null;
+                }
+                $boundText = $tokens[$afterColon]->text;
+                $boundName = ltrim($boundText, '\\');
+                $boundIsFq = str_starts_with($boundText, '\\');
+                $i = $afterColon + 1;
+            }
+
+            $entries[] = [
+                'name' => $paramName,
+                'boundName' => $boundName,
+                'boundIsFq' => $boundIsFq,
+            ];
+
+            $i = self::skipWs($tokens, $i);
+            if ($i >= $n) {
+                return null;
+            }
+            if ($tokens[$i]->text === '>') {
+                return [$entries, $i];
+            }
+            if ($tokens[$i]->text === ',') {
+                $i = self::skipWs($tokens, $i + 1);
+                continue;
+            }
+            return null;
+        }
+
+        return null;
     }
 
     /**
@@ -245,6 +350,58 @@ final class XphpSourceParser
 
         $resolvedName = $isFq ? '\\' . $name : $name;
         return [new TypeRef($resolvedName), $i];
+    }
+
+    /**
+     * If the Name at `$nameIdx` is preceded by `->` / `?->` / `::`, walk back past the
+     * operator and skippable tokens and return the receiver's source line. Otherwise
+     * return null.
+     *
+     * Used to anchor name-markers (for `Foo::method<int>` style call sites) to the
+     * receiver's line — which is what `StaticCall::getStartLine()` /
+     * `MethodCall::getStartLine()` return. Without this, splitting the operator and
+     * the method name across lines would desync the marker line from the AST line
+     * and the marker would never attach. See the F2 finding for the failure mode.
+     *
+     * Note: doesn't try to traverse arbitrary chained expressions
+     * (`$a->b()->method<int>` etc.) — those would need balanced-paren backtracking.
+     * For the common single-receiver case (variable or class name) this is enough
+     * and any chained-receiver shape would already not have matched under the old
+     * line-equality check.
+     *
+     * @infection-ignore-all — the body is a flat token walk: skippable-token boundary
+     * mutations either OOB-error (suppressed because nikic would have failed to
+     * parse the wider invalid input first) or toggle the operator-id triple-or
+     * (T_OBJECT_OPERATOR || T_NULLSAFE_OBJECT_OPERATOR || T_DOUBLE_COLON), which
+     * shifts a defensive guard whose alternate branch is unreachable from any
+     * valid call-site syntax. Same shape and rationale as `isMemberAccessContext`.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function memberAccessReceiverLine(array $tokens, int $nameIdx): ?int
+    {
+        $i = $nameIdx - 1;
+        while ($i >= 0 && ($tokens[$i]->id === T_WHITESPACE || $tokens[$i]->id === T_COMMENT || $tokens[$i]->id === T_DOC_COMMENT)) {
+            $i--;
+        }
+        if ($i < 0) {
+            return null;
+        }
+        $operatorId = $tokens[$i]->id;
+        if ($operatorId !== T_OBJECT_OPERATOR
+            && $operatorId !== T_NULLSAFE_OBJECT_OPERATOR
+            && $operatorId !== T_DOUBLE_COLON
+        ) {
+            return null;
+        }
+        $i--;
+        while ($i >= 0 && ($tokens[$i]->id === T_WHITESPACE || $tokens[$i]->id === T_COMMENT || $tokens[$i]->id === T_DOC_COMMENT)) {
+            $i--;
+        }
+        if ($i < 0) {
+            return null;
+        }
+        return $tokens[$i]->line;
     }
 
     /**
@@ -355,16 +512,17 @@ final class XphpSourceParser
     }
 
     /**
-     * Walk the AST: attach markers to Class_ and Name nodes by (line, name) + order; resolve TypeRef names.
+     * Walk the AST: attach markers to ClassLike and Name nodes by (line, name) + order; resolve TypeRef names.
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{line:int, name:string, params:list<string>}> $classMarkers
-     * @param list<array{line:int, name:string, args:list<TypeRef>}> $nameMarkers
+     * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $classMarkers
+     * @param list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}> $nameMarkers
+     * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $methodMarkers
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers): void
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
     {
         $traverser = new NodeTraverser();
-        $traverser->addVisitor(new class($classMarkers, $nameMarkers) extends NodeVisitorAbstract {
+        $traverser->addVisitor(new class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             /** @var array<string, string> alias → FQN */
             private array $useMap = [];
@@ -372,12 +530,14 @@ final class XphpSourceParser
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, params:list<string>}> $classMarkers
-             * @param list<array{line:int, name:string, args:list<TypeRef>}> $nameMarkers
+             * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $classMarkers
+             * @param list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}> $nameMarkers
+             * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,
                 private array $nameMarkers,
+                private array $methodMarkers,
             ) {
             }
 
@@ -400,26 +560,108 @@ final class XphpSourceParser
                     $this->indexUses($node);
                 }
 
-                if ($node instanceof Class_ && $node->name !== null) {
+                if ($node instanceof ClassLike && $node->name !== null) {
                     $shortName = $node->name->toString();
-                    $params = null;
+                    $paramEntries = null;
                     foreach ($this->classMarkers as $i => $marker) {
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $shortName) {
-                            $params = $marker['params'];
+                            $paramEntries = $marker['params'];
                             unset($this->classMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
                             break;
                         }
                     }
-                    if ($params !== null && $params !== []) {
-                        $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $params);
+                    if ($paramEntries !== null && $paramEntries !== []) {
+                        $typeParams = [];
+                        $paramNames = [];
+                        foreach ($paramEntries as $entry) {
+                            $boundFqn = null;
+                            if ($entry['boundName'] !== null) {
+                                $boundFqn = $entry['boundIsFq']
+                                    ? $entry['boundName']
+                                    : $this->resolveNameOnly($entry['boundName']);
+                            }
+                            $typeParams[] = new TypeParam($entry['name'], $boundFqn);
+                            $paramNames[] = $entry['name'];
+                        }
+                        $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $typeParams);
                         $fqn = $this->currentNamespace !== ''
                             ? $this->currentNamespace . '\\' . $shortName
                             : $shortName;
                         $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
-                        $this->typeParamStack[] = $params;
+                        $this->typeParamStack[] = $paramNames;
                     } else {
                         $this->typeParamStack[] = [];
+                    }
+                }
+
+                if ($node instanceof Node\Stmt\ClassMethod || $node instanceof Node\Stmt\Function_) {
+                    $declName = $node->name->toString();
+                    $matchedParamNames = [];
+                    foreach ($this->methodMarkers as $i => $marker) {
+                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $declName) {
+                            $typeParams = [];
+                            foreach ($marker['params'] as $entry) {
+                                $boundFqn = null;
+                                if ($entry['boundName'] !== null) {
+                                    $boundFqn = $entry['boundIsFq']
+                                        ? $entry['boundName']
+                                        : $this->resolveNameOnly($entry['boundName']);
+                                }
+                                $typeParams[] = new TypeParam($entry['name'], $boundFqn);
+                                $matchedParamNames[] = $entry['name'];
+                            }
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $typeParams);
+                            unset($this->methodMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
+                    }
+                    // Push method/function type-params (possibly empty) onto the resolution
+                    // scope so that bare `T` inside the body resolves to an isTypeParam
+                    // TypeRef instead of being qualified to `App\T`. Always push so the
+                    // leaveNode pop has a 1:1 counterpart, matching the ClassLike shape.
+                    $this->typeParamStack[] = $matchedParamNames;
+                }
+
+                if ($node instanceof Node\Expr\StaticCall && $node->name instanceof Node\Identifier) {
+                    $callMethodName = $node->name->toString();
+                    $startLine = $node->getStartLine();
+                    foreach ($this->nameMarkers as $i => $marker) {
+                        // Match by name + line-range overlap. StaticCall::getStartLine() is the
+                        // receiver's line; the marker's anchorLine is the same, and its
+                        // (later) line is the identifier's line. Both can differ on multi-line
+                        // `Foo::\n    method<int>` constructs.
+                        if ($marker['name'] === $callMethodName
+                            && $startLine >= $marker['anchorLine']
+                            && $startLine <= $marker['line']
+                        ) {
+                            $resolvedArgs = $this->resolveTypeRefList($marker['args']);
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
+                            unset($this->nameMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
+                    }
+                }
+
+                if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Name) {
+                    // Claim the marker on FuncCall enter (parent fires before children) so the
+                    // inner Name doesn't pick it up and trigger the class-rewrite path.
+                    $funcName = $node->name->toString();
+                    $startLine = $node->getStartLine();
+                    foreach ($this->nameMarkers as $i => $marker) {
+                        if ($marker['name'] === $funcName
+                            && $startLine >= $marker['anchorLine']
+                            && $startLine <= $marker['line']
+                        ) {
+                            $resolvedArgs = $this->resolveTypeRefList($marker['args']);
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
+                            $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $this->resolveNameOnly($funcName));
+                            unset($this->nameMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
                     }
                 }
 
@@ -461,7 +703,10 @@ final class XphpSourceParser
 
             public function leaveNode(Node $node): null
             {
-                if ($node instanceof Class_) {
+                if ($node instanceof ClassLike
+                    || $node instanceof Node\Stmt\ClassMethod
+                    || $node instanceof Node\Stmt\Function_
+                ) {
                     array_pop($this->typeParamStack);
                 }
                 return null;

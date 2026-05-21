@@ -199,6 +199,8 @@ features are on the [roadmap](docs/roadmap.md): type aliases, literal types, map
 `xphp` doesn't wait for `php` internals to ship these features. It delivers them today, on top of the runtime the
 community and ecosystem already trust.
 
-Full generics reference at [docs/generics.md](docs/generics.md).
+- Full generics reference: [docs/generics.md](docs/generics.md)
+- Side-by-side comparison against TypeScript, Kotlin, and Rust (what's there, what's missing, what's uniquely possible
+  with monomorphization): [docs/generics-comparison.md](docs/generics-comparison.md)
 
 ---

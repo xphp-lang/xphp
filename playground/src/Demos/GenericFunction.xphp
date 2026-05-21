@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Models\User;
+
+// Free generic function (not inside a class). The compiler generates a separate
+// specialized function per unique call-site arg list and rewrites each call site
+// to point at the matching mangled FQN.
+function identity<T>(T $x): T
+{
+    return $x;
+}
+
+echo '[GenericFunction] identity<T>(T $x): T (free function)', PHP_EOL;
+
+$asInt = identity<int>(42);
+$asString = identity<string>('greetings');
+$asUser = identity<User>(new User('bob'));
+
+echo '  identity<int>(42)         = ', $asInt, ' (', gettype($asInt), ')', PHP_EOL;
+echo '  identity<string>("...")   = ', $asString, ' (', gettype($asString), ')', PHP_EOL;
+echo '  identity<User>(bob)->name = ', $asUser->name, ' (', $asUser::class, ')', PHP_EOL;
+
+echo PHP_EOL;

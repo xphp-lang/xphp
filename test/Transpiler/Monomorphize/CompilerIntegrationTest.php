@@ -140,6 +140,43 @@ final class CompilerIntegrationTest extends TestCase
         }
     }
 
+    public function testInstanceofAgainstOriginalTemplateMatchesAllSpecializations(): void
+    {
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())
+            ->find($this->sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
+
+        $loader = new \Composer\Autoload\ClassLoader();
+        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
+        $loader->register();
+
+        try {
+            $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+            $boxMetalFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
+
+            // Use reflection rather than `new $fqn()` to avoid coupling this test to whether
+            // the box_generic Box<T> template happens to declare a constructor at any given
+            // moment — the marker-interface contract is what we're locking, not the
+            // specialized class's signature.
+            $plasticRefl = new \ReflectionClass($boxPlasticFqn);
+            $metalRefl = new \ReflectionClass($boxMetalFqn);
+
+            // Both specializations satisfy `instanceof OriginalTemplate` via the
+            // marker interface emitted at the original FQN.
+            self::assertTrue($plasticRefl->implementsInterface('App\\Containers\\Box'));
+            self::assertTrue($metalRefl->implementsInterface('App\\Containers\\Box'));
+
+            // And reflection sees the marker as an interface, not the old class.
+            $r = new \ReflectionClass('App\\Containers\\Box');
+            self::assertTrue($r->isInterface(), 'original generic class FQN must now be the marker interface');
+        } finally {
+            $loader->unregister();
+        }
+    }
+
     public function testGeneratedAndRewrittenFilesAreSyntacticallyValid(): void
     {
         $compiler = $this->buildCompiler();

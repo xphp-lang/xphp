@@ -343,7 +343,7 @@ final class RegistryTest extends TestCase
         $registry->recordDefinition(
             'App\\Containers\\Box',
             'Box',
-            ['T'],
+            [new TypeParam('T')],
             $templateAst,
             '/some/source/Box.xphp',
         );

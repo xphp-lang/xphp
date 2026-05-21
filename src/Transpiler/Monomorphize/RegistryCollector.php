@@ -6,14 +6,14 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
 use PhpParser\Node\Name;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 
 /**
  * Walks an AST and feeds generic definitions and instantiations into a Registry.
  *
- * Definitions come from `Class_` nodes carrying `xphp:genericParams` + `xphp:templateFqn`.
+ * Definitions come from `ClassLike` nodes (Class_/Interface_/Trait_) carrying `xphp:genericParams` + `xphp:templateFqn`.
  * Instantiations come from `Name` nodes carrying `xphp:genericArgs` + `xphp:templateFqn`,
  * regardless of the surrounding expression (works for `new`, type hints, return types, etc).
  */
@@ -39,7 +39,7 @@ final class RegistryCollector extends NodeVisitorAbstract
 
     public function enterNode(Node $node): null
     {
-        if ($node instanceof Class_ && $node->name !== null) {
+        if ($node instanceof ClassLike && $node->name !== null) {
             $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
             $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
             if (is_array($params) && $params !== [] && is_string($fqn) && !$this->isAlreadyRecorded($fqn)) {

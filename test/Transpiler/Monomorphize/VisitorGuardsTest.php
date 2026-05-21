@@ -128,7 +128,7 @@ final class VisitorGuardsTest extends TestCase
     {
         $registry = new Registry();
         $class = new Class_(new Identifier('Box'));
-        $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, ['T']);
+        $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, [new TypeParam('T')]);
         // templateFqn deliberately not set
 
         (new RegistryCollector($registry))->collect([$class], '/x.xphp');
@@ -140,7 +140,7 @@ final class VisitorGuardsTest extends TestCase
     {
         $registry = new Registry();
         $class = new Class_(new Identifier('Box'));
-        $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, ['T']);
+        $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, [new TypeParam('T')]);
         $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'App\\Containers\\Box');
 
         $collector = new RegistryCollector($registry);

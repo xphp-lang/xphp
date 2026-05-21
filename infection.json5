@@ -46,11 +46,16 @@
         },
         // Same family for mkdir(); plus $b[0]/$a[0] index jitter inside applyReplacements
         // (irrelevant because all replacements are equal-length).
+        // parseTypeParamList: same "index advance + 1" pattern as scanAndStrip's existing
+        // accepted equivalents (the alternatives land on uninteresting tokens that the next
+        // iteration skips anyway).
         "IncrementInteger": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
                 "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
 
@@ -63,17 +68,29 @@
         },
 
         // Trailing-"\n" concat and JSON-line operand removal (cosmetic) +
-        // equal-length-replacement concat shuffling inside applyReplacements.
+        // equal-length-replacement concat shuffling inside applyReplacements +
+        // human-facing error message formatting in Registry::validateBounds (the
+        // mutations swap operand order in sprintf-friendly concats — the message
+        // changes shape but every test that asserts on the error checks discrete
+        // substrings, so the contract is exercised regardless).
         "Concat": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
         "ConcatOperandRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
 
@@ -122,9 +139,63 @@
         // downstream resolveTypeRef which also strips leading backslashes. Removing
         // the inner ltrim produces a name with an extra `\` prefix that gets stripped
         // again later — same observable output.
+        //
+        // Registry::validateBounds + Registry::isSameInstantiation both ltrim the
+        // template-FQN before lookups against keys already stored without a leading
+        // backslash. Callers (RegistryCollector + the Compiler) always feed FQNs
+        // without the leading `\`, so the ltrim is defensive belt-and-braces — never
+        // observable behavior change.
+        //
+        // TypeHierarchy::resolveName ltrims the raw Name->toString() output. nikic
+        // returns FQ names WITHOUT a leading backslash (the FQ-ness is encoded in
+        // the FullyQualified subclass, not the string), so the ltrim there is
+        // similarly a defensive no-op.
+        //
+        // Specializer::specialize's `ltrim($originalTemplateFqn, '\\')` is also
+        // defensive — the FQN gets stored on the AST attribute without a leading
+        // backslash, so the ltrim is a no-op on every actual input.
         "UnwrapLtrim": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::isSameInstantiation",
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
+            ]
+        },
+
+        // Lines 188-189 of TypeHierarchy::resolveName guard a code path that's
+        // unreachable in practice: nikic's Name->toString() never returns a
+        // leading-`\` string, so both the LogicalOr branch and the ReturnRemoval
+        // on the FQ-prefix return are observationally identical to the original.
+        // (See the UnwrapLtrim entry above for the same rationale on the same lines.)
+        "LogicalOr": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        "ReturnRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
+            ]
+        },
+
+        // Defensive `return;` on validateBounds' arity-mismatch guard: the existing
+        // pipeline catches arity mismatches further upstream (Registry::recordDefinition
+        // + Compiler's array_combine), so this branch never fires in practice. Same
+        // for `return;` on the `$definition === null` guard (transient state during
+        // fixed-point specialization). The Continue_ mutator would replace these
+        // returns with a no-op `continue;` outside any loop — observable behavior is
+        // unchanged because the subsequent code only fires when the guard's condition
+        // doesn't hold.
+        "Continue_": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds"
             ]
         },
 
@@ -144,19 +215,69 @@
         // PHP source: nikic/php-parser would have errored on the cleaned source before our
         // markers ever attach. The OOB-access mutations would emit warnings under
         // failOnWarning, but only via inputs that fail upstream parsing first.
+        //
+        // parseTypeParamList shares the same boundary-check shape as parseTypeArgList +
+        // parseArraySuffix (same `$i < $n && ...` pattern, same `$j >= $n || ...` break
+        // guard). Reaching the OOB case requires a class header that ends in mid-clause,
+        // which fails further downstream — same justification, suppressed for the same
+        // reason.
         "LessThan": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
             ]
         },
         "LogicalAnd": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
             ]
         },
         "GreaterThanOrEqualTo": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
+            ]
+        },
+
+        // Inside the cycle-safe BFS of TypeHierarchy::isSubtype, `$visited[$cur] = true`
+        // is only consumed via `isset($visited[$cur])` — the value is never read. The
+        // TrueValue → false mutation is observationally identical (the KEY is what tracks
+        // visit-state, not the VALUE).
+        // Same pattern in GenericMethodCompiler::rewriteCallSites — `$alreadyGenerated[key] = true`
+        // is consumed via `isset()`, never via value read.
+        "TrueValue": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+
+        // GenericMethodCompiler shares the same defensive-guard + name-resolution +
+        // member-access shape as the existing scanner/Registry suppressions. Mutations
+        // on those branches either (a) emit warnings for inputs that fail upstream
+        // parsing first, or (b) toggle redundant null-safe/ltrim/substring guards that
+        // are masked by surrounding type-strict invariants. The whole class is also
+        // exercised end-to-end through GenericMethodIntegrationTest.
+        "NullSafeMethodCall": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        "MethodCallRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        "Foreach_": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         }
     },

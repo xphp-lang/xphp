@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+$asInt = Util::identity<int>(42);
+$asString = Util::identity<string>('hello');
+$asIntAgain = Util::identity<int>(7);

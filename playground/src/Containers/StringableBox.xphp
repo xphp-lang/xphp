@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+class StringableBox<T: \Stringable>
+{
+    public function __construct(public T $item)
+    {
+    }
+
+    public function describe(): string
+    {
+        return 'StringableBox<' . (string) $this->item . '>';
+    }
+}

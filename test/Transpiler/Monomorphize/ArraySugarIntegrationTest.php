@@ -95,6 +95,7 @@ final class ArraySugarIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         require '{$this->targetDir}/Models/User.php';
+        require '{$this->targetDir}/Containers/Collection.php';
         require '{$collectionFile}';
 
         \$c = new \\{$fqn}(new \\App\\Models\\User('alice'), new \\App\\Models\\User('bob'));

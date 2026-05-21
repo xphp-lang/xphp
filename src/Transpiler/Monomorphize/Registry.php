@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use InvalidArgumentException;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use RuntimeException;
 
 final class Registry
@@ -32,19 +32,21 @@ final class Registry
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
-    public function __construct(private readonly int $hashLength = self::DEFAULT_HASH_HEX_LENGTH)
-    {
+    public function __construct(
+        private readonly int $hashLength = self::DEFAULT_HASH_HEX_LENGTH,
+        private readonly ?TypeHierarchy $hierarchy = null,
+    ) {
         self::validateHashLength($this->hashLength);
     }
 
     /**
-     * @param list<string> $typeParams
+     * @param list<TypeParam> $typeParams
      */
     public function recordDefinition(
         string $templateFqn,
         string $templateShortName,
         array $typeParams,
-        Class_ $templateAst,
+        ClassLike $templateAst,
         string $sourceFile,
     ): void {
         if (isset($this->definitions[$templateFqn])) {
@@ -81,6 +83,8 @@ final class Registry
             }
         }
 
+        $this->validateBounds($templateFqn, $args);
+
         $generatedFqn = self::generatedFqn($templateFqn, $args, $this->hashLength);
         $template = ltrim($templateFqn, '\\');
 
@@ -99,6 +103,96 @@ final class Registry
         );
 
         return $this->instantiations[$generatedFqn];
+    }
+
+    /**
+     * Enforce per-param bounds on a concrete instantiation. Fires before the FQCN is hashed
+     * so the error message points at the SOURCE-level violation, not the obfuscated `T_<hash>`.
+     *
+     * Strategy: for each (TypeParam with bound, concrete TypeRef) pair, ask the hierarchy
+     * whether the concrete arg satisfies the bound. The hierarchy returns:
+     *   - true:  proven subtype — accept.
+     *   - false: proven non-subtype (also the answer for scalars vs class bounds) — reject.
+     *   - null:  unknown — reject too, with a different message, so users can either widen
+     *            the bound or add the type into the source set the hierarchy was built from.
+     *
+     * The whole validation is skipped if no hierarchy was attached (e.g., bare-Registry tests
+     * that don't care about bounds) or if no definition is on file for the template yet —
+     * the latter happens transiently during fixed-point specialization; the next pass picks
+     * the definition up.
+     *
+     * @param list<TypeRef> $args
+     */
+    private function validateBounds(string $templateFqn, array $args): void
+    {
+        if ($this->hierarchy === null) {
+            return;
+        }
+        $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
+        if ($definition === null) {
+            return;
+        }
+        self::checkBounds(
+            $definition->typeParams,
+            $args,
+            $this->hierarchy,
+            self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+        );
+    }
+
+    /**
+     * Reusable bound check for any (typeParams, concreteArgs) pair against a hierarchy.
+     *
+     * Used both by `validateBounds` (class/interface instantiation) and by
+     * `GenericMethodCompiler` (method/function-level type-param bounds at call-site time).
+     * Single home for the verdict-formatting + error-shape contract so the user-facing
+     * error message looks the same regardless of where the violation surfaces.
+     *
+     * `$instantiationLabel` is the human-readable context string that opens the error
+     * (e.g. `"App\Box<int>"` or `"App\Util::identity<int>"`).
+     *
+     * @param list<TypeParam> $typeParams
+     * @param list<TypeRef> $args
+     */
+    public static function checkBounds(
+        array $typeParams,
+        array $args,
+        TypeHierarchy $hierarchy,
+        string $instantiationLabel,
+    ): void {
+        // Arity mismatch is a different error class (caught upstream); skip silently here
+        // so that the existing pipeline can produce the more specific message.
+        if (count($typeParams) !== count($args)) {
+            return;
+        }
+        foreach ($typeParams as $i => $param) {
+            if ($param->boundFqn === null) {
+                continue;
+            }
+            $concrete = $args[$i];
+            $verdict = $hierarchy->isSubtype($concrete->name, $param->boundFqn);
+            if ($verdict === true) {
+                continue;
+            }
+            $detail = $verdict === false
+                ? sprintf('"%s" does not extend/implement "%s".', $concrete->toDisplayString(), $param->boundFqn)
+                : sprintf(
+                    '"%s" is not in the source set the hierarchy was built from (and is not a recognized PHP built-in, or its bound satisfaction comes via a trait the compiler does not yet follow), so the compiler cannot prove it satisfies "%s".',
+                    $concrete->toDisplayString(),
+                    $param->boundFqn,
+                );
+            throw new RuntimeException(sprintf(
+                "Generic bound violated while instantiating %s.\n"
+                . "  type parameter %s is bounded by %s\n"
+                . "  but the supplied concrete type is %s\n\n"
+                . "  %s",
+                $instantiationLabel,
+                $param->name,
+                $param->boundFqn,
+                $concrete->toDisplayString(),
+                $detail,
+            ));
+        }
     }
 
     /**
@@ -197,7 +291,7 @@ final class Registry
         foreach ($this->definitions as $def) {
             $defs[] = [
                 'name'       => $def->templateFqn,
-                'typeParams' => $def->typeParams,
+                'typeParams' => $def->typeParamNames(),
                 'sourceFile' => $def->sourceFile,
             ];
         }
@@ -232,13 +326,23 @@ final class Registry
         array $args,
         int $hashLength = self::DEFAULT_HASH_HEX_LENGTH,
     ): string {
-        self::validateHashLength($hashLength);
-
         $template = ltrim($templateFqn, '\\');
-        $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
-        $hash = substr(hash('sha256', $canonical), 0, $hashLength);
 
-        return self::GENERATED_NAMESPACE_PREFIX . '\\' . $template . '\\T_' . $hash;
+        return self::GENERATED_NAMESPACE_PREFIX . '\\' . $template . '\\T_' . self::canonicalHash($args, $hashLength);
+    }
+
+    /**
+     * Canonical-argument-list hex hash, used to name both specialized classes (FQCN suffix)
+     * and specialized methods/functions (mangled-name suffix). Single home for the hashing
+     * logic so future tweaks (e.g. shorter hash for methods) live in one place.
+     *
+     * @param list<TypeRef> $args
+     */
+    public static function canonicalHash(array $args, int $hashLength = self::DEFAULT_HASH_HEX_LENGTH): string
+    {
+        self::validateHashLength($hashLength);
+        $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
+        return substr(hash('sha256', $canonical), 0, $hashLength);
     }
 
     /**

@@ -31,6 +31,11 @@ $demos = [
     'var/dist/Demos/MultiType.php',
     'var/dist/Demos/ArraySugar.php',
     'var/dist/Demos/NestedTransitive.php',
+    'var/dist/Demos/GenericInterface.php',
+    'var/dist/Demos/Bounds.php',
+    'var/dist/Demos/GenericMethod.php',
+    'var/dist/Demos/GenericFunction.php',
+    'var/dist/Demos/InstanceofTemplate.php',
 ];
 
 fwrite(STDOUT, "==> Running demos\n\n");

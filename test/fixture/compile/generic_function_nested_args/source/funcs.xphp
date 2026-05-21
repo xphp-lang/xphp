@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Box;
+
+function wrap<T>(T $x): Box<T>
+{
+    return new Box<T>($x);
+}

@@ -30,7 +30,152 @@ PHP;
         $class = self::findFirstClass($ast);
         self::assertNotNull($class);
         self::assertSame('Box', $class->name?->toString());
-        self::assertSame(['T'], $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS));
+        self::assertSame(['T'], self::paramNames($class));
+    }
+
+    public function testAttachesGenericParamsToInterfaceDefinition(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+interface Container<T>
+{
+    public function get(): T;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        self::assertNotNull($iface);
+        self::assertSame('Container', $iface->name?->toString());
+        self::assertSame(['T'], self::paramNames($iface));
+        self::assertSame('App\\Container', $iface->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+    }
+
+    public function testGenericTraitTemplateIsDroppedFromOutputWithoutBecomingAMarker(): void
+    {
+        // Locks the `instanceof Class_ || instanceof Interface_` guard in CallSiteRewriter:
+        // traits don't get a marker interface (PHP can't instanceof a trait), so the
+        // generic trait template must be stripped entirely. A mutation that loosens the
+        // guard (e.g., LogicalOrAllSubExprNegation -> true-for-all-ClassLike) would
+        // smuggle the trait through as an empty marker interface, which would corrupt
+        // any class that `use`s it.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+trait HasTimestamps<T>
+{
+    private T $first;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $rewriter = new CallSiteRewriter(new Registry());
+        $rewritten = $rewriter->rewrite($ast);
+
+        $printer = new \PhpParser\PrettyPrinter\Standard();
+        $printed = $printer->prettyPrintFile($rewritten);
+
+        self::assertStringNotContainsString('HasTimestamps', $printed, 'generic trait must be removed, not replaced with an interface marker');
+        self::assertStringNotContainsString('interface HasTimestamps', $printed);
+        self::assertStringNotContainsString('trait HasTimestamps', $printed);
+    }
+
+    public function testAttachesGenericParamsToTraitDefinition(): void
+    {
+        // Traits ride the same ClassLike pathway as classes/interfaces. Locks the
+        // T_TRAIT branch of the scanner's keyword guard.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+trait HasCollection<T>
+{
+    private T $first;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $trait = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Trait_::class);
+        self::assertNotNull($trait);
+        self::assertSame(['T'], self::paramNames($trait));
+    }
+
+    public function testAttachesBoundedTypeParamToClassDefinition(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Box<T: \Stringable>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertCount(1, $params);
+        self::assertSame('T', $params[0]->name);
+        self::assertSame('Stringable', $params[0]->boundFqn, 'leading-\\ marks bound as fully qualified — must NOT get the App\\ prefix');
+    }
+
+    public function testBoundedTypeParamResolvesAgainstUseAlias(): void
+    {
+        // Locks the alias-resolution path on bounds — exactly the same logic the rest of the
+        // scanner uses for type args, but reached via the new parseTypeParamList code path.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use App\Contracts\HasName as NamedThing;
+
+class Repo<T: NamedThing>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame('App\\Contracts\\HasName', $params[0]->boundFqn);
+    }
+
+    public function testMixesBoundedAndUnboundedTypeParams(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Pair<K: \Stringable, V>
+{
+    public K $key;
+    public V $value;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertCount(2, $params);
+        self::assertSame('K', $params[0]->name);
+        self::assertSame('Stringable', $params[0]->boundFqn);
+        self::assertSame('V', $params[1]->name);
+        self::assertNull($params[1]->boundFqn, 'V has no bound — boundFqn must stay null');
     }
 
     public function testAttachesGenericArgsToNewExpressionResolvedAgainstNamespace(): void
@@ -279,6 +424,18 @@ PHP;
         return $found ?? [];
     }
 
+    /**
+     * @return list<string>
+     */
+    private static function paramNames(\PhpParser\Node\Stmt\ClassLike $node): array
+    {
+        $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        if (!is_array($params)) {
+            return [];
+        }
+        return array_map(static fn (TypeParam $p): string => $p->name, $params);
+    }
+
     /** @param array<int, mixed> $ast */
     private static function findFirstClass(array $ast): ?Class_
     {
@@ -289,6 +446,29 @@ PHP;
             if ($node instanceof Namespace_) {
                 foreach ($node->stmts ?? [] as $inner) {
                     if ($inner instanceof Class_) {
+                        return $inner;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @template TNode of \PhpParser\Node\Stmt\ClassLike
+     * @param array<int, mixed> $ast
+     * @param class-string<TNode> $kind
+     * @return TNode|null
+     */
+    private static function findFirstClassLike(array $ast, string $kind): ?\PhpParser\Node\Stmt\ClassLike
+    {
+        foreach ($ast as $node) {
+            if ($node instanceof $kind) {
+                return $node;
+            }
+            if ($node instanceof Namespace_) {
+                foreach ($node->stmts ?? [] as $inner) {
+                    if ($inner instanceof $kind) {
                         return $inner;
                     }
                 }
@@ -329,10 +509,7 @@ PHP;
             $byName['Helper']->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS),
             'Helper must not steal Box\'s marker via line-only OR matching',
         );
-        self::assertSame(
-            ['T'],
-            $byName['Box']->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS),
-        );
+        self::assertSame(['T'], self::paramNames($byName['Box']));
     }
 
     public function testNameMarkerRequiresBothLineAndNameMatch(): void

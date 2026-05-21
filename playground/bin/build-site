@@ -81,12 +81,25 @@ fwrite(STDOUT, sprintf(
 
 function resetSiteDir(string $siteSrc): void
 {
+    // Preserve a hand-maintained .gitignore (the markdown tree is committed; the
+    // generated _config.yml inside it isn't, and lives in .gitignore). Anything
+    // else under _site_src/ gets wiped so stale pages don't survive renames.
+    $preservedGitignore = null;
+    $gitignorePath = $siteSrc . '/.gitignore';
+    if (is_file($gitignorePath)) {
+        $preservedGitignore = file_get_contents($gitignorePath);
+    }
+
     if (is_dir($siteSrc)) {
         rrmdir($siteSrc);
     }
     if (!mkdir($siteSrc, 0o755, true) && !is_dir($siteSrc)) {
         fwrite(STDERR, "could not create {$siteSrc}\n");
         exit(1);
+    }
+
+    if ($preservedGitignore !== null) {
+        file_put_contents($gitignorePath, $preservedGitignore);
     }
 }
 

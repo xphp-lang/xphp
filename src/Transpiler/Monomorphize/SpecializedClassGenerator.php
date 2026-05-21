@@ -8,7 +8,7 @@ use PhpParser\Node\DeclareItem;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Scalar\Int_;
-use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Declare_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
@@ -28,7 +28,7 @@ final class SpecializedClassGenerator
     ) {
     }
 
-    public function emit(Class_ $specialized, string $generatedFqn, string $cacheDir): string
+    public function emit(ClassLike $specialized, string $generatedFqn, string $cacheDir): string
     {
         $pos = strrpos($generatedFqn, '\\');
         $namespace = $pos === false ? '' : substr($generatedFqn, 0, $pos);
