@@ -34,7 +34,7 @@ jobs:
           working-directory: tools/lsp
 
       - name: Run PHPUnit (LSP)
-        run: make test/lsp
+        run: make -C tools/lsp test
 
   infection-lsp:
     name: Mutation testing (LSP)
@@ -57,11 +57,11 @@ jobs:
           working-directory: tools/lsp
 
       - name: Run Infection (LSP)
-        # `make test/lsp/mutation` lazily downloads infection.phar 0.33.1
-        # into tools/lsp/var/ (PHAR sidesteps the composer dep conflict with
-        # phpactor/language-server documented in tools/lsp/README.md). Runs
-        # with --min-covered-msi=93; current baseline is 94%.
-        run: make test/lsp/mutation
+        # `make -C tools/lsp test/mutation` lazily downloads infection.phar
+        # 0.33.1 into tools/lsp/var/ (PHAR sidesteps the composer dep conflict
+        # with phpactor/language-server documented in tools/lsp/README.md).
+        # Runs with --min-covered-msi=93; current baseline is 94%.
+        run: make -C tools/lsp test/mutation
 
       - name: Upload Infection report (LSP)
         if: always()

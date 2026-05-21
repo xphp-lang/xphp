@@ -18,7 +18,7 @@ xphp-lang/
 +-- .github/workflows/
 |   +-- ci-core.yml                      # phpunit + infection for the core
 |   `-- ci-<package>.yml                 # one file per package under tools/
-`-- Makefile                             # top-level orchestrator (delegates to per-package recipes)
+`-- Makefile                             # core-only commands; each tool ships its own Makefile
 ```
 
 ### What goes where
@@ -58,16 +58,19 @@ sibling (e.g. a JetBrains plugin under `tools/phpstorm-plugin/`):
    "../../"}]`. Other languages need their own analog (a JetBrains plugin
    invokes `bin/xphp` as a subprocess; no compile-time dep needed).
 
-4. **Top-level Makefile target(s)**: every package adds two targets to the
-   root `Makefile`, prefixed with the package name:
+4. **Per-package Makefile**: each package ships its own `Makefile` at
+   `tools/<name>/Makefile` with short, package-relative target names:
 
    ```make
-   test/<name>:           # phpunit / gradle test / cargo test / ...
-   test/<name>/mutation:  # if the package has a mutation surface
+   test:           # phpunit / gradle test / cargo test / ...
+   test/mutation:  # if the package has a mutation surface
    ```
 
-   The targets `cd` into the package and delegate. The root never special-
-   cases the package internals — it just dispatches.
+   Invoke from the repo root with `make -C tools/<name> <target>` or
+   directly from inside the package with `make <target>`. The root
+   `Makefile` does NOT have pass-through targets — each Makefile is the
+   single source of truth for its package's recipes, no delegation
+   layer to drift.
 
 5. **Per-package CI workflow** at `.github/workflows/ci-<name>.yml`. Mirror
    the existing `ci-lsp.yml` shape: one workflow per package, each with its

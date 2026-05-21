@@ -19,7 +19,7 @@ core parser.
 | `textDocument/completion` (inside `<…>` type-arg positions) | ✅ shipped |
 | VS Code extension client at `vscode-extension/` | ✅ shipped |
 
-121 PHPUnit cases, 276 assertions — `make test/lsp`.
+131 PHPUnit cases, 299 assertions — `make -C tools/lsp test` (or `make test` from this directory).
 
 See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
 
@@ -100,8 +100,14 @@ Capabilities advertised at `initialize`:
 ## Test
 
 ```bash
-make test/lsp           # PHPUnit, 121 cases / 276 assertions
-make test/lsp/mutation  # Infection, 95 % MSI under a 93 % gate
+# From the repo root:
+make -C tools/lsp test            # PHPUnit, 131 cases / 299 assertions
+make -C tools/lsp test/mutation   # Infection, 94 % MSI under a 93 % gate
+
+# Or from this directory:
+cd tools/lsp
+make test
+make test/mutation
 ```
 
 `test/lsp` runs `composer install --quiet` then PHPUnit with
@@ -117,7 +123,7 @@ vendor/bin/phpunit
 
 ### Mutation testing
 
-`test/lsp/mutation` downloads `infection.phar` lazily into `tools/lsp/var/` and runs against
+`test/mutation` downloads `infection.phar` lazily into `tools/lsp/var/` and runs against
 the same source + test set. The PHAR distribution ships its internal deps under PHP-Scoper
 prefixes, so it sidesteps the `thecodingmachine/safe` / `psr/log` conflicts that prevent
 composer-installed Infection from coexisting with `phpactor/language-server` (`phpactor` pins
@@ -133,7 +139,7 @@ Curated equivalent-mutation ignores live in `infection.json5` with per-mutator
 See `vscode-extension/README.md` for the client-side setup. Quick start:
 
 ```bash
-make build/lsp-extension      # npm install + tsc
+make -C tools/lsp build-extension     # npm install + tsc
 # then open tools/lsp/vscode-extension/ in VS Code and hit F5
 ```
 
