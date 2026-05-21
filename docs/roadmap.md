@@ -31,7 +31,9 @@ timeline
                 : XPHP_HASH_LENGTH configurable (16..64)
         Developer experience
                 : PSR-4 fixtures
-    section Next (generics depth)
+    section Next
+        Tooling
+                : LSP / IDE integration (hover through generics, type errors before compile)
         Type system depth
                 : default type parameters
                 : multiple bounds (T must satisfy A and B)
@@ -58,7 +60,6 @@ timeline
                 : Variadic type parameters
                 : Per-arg specialization (different body when T = int)
         Tooling
-                : LSP / IDE integration (hover through generics, type errors before compile)
                 : Source maps (stack traces back to .xphp lines)
                 : phpstan / psalm bridge
                 : REPL / playground
