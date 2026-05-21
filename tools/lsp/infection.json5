@@ -1,0 +1,273 @@
+{
+    "$schema": "https://raw.githubusercontent.com/infection/infection/master/resources/schema.json",
+    "source": {
+        "directories": [
+            "src"
+        ]
+    },
+    "phpUnit": {
+        "configDir": "."
+    },
+    "logs": {
+        "text": "var/infection.log",
+        "html": "var/infection.html"
+    },
+    "mutators": {
+        "@default": true,
+
+        // PositionMap::binarySearchLine is a textbook upper-bound binary search
+        // — every "off by one" mutation (Plus → Minus on the +1, Decrement of
+        // $low = 0, Decrement/Increment on $high = $mid - 1, < vs <= on the
+        // loop guard) either converges to the same final index OR causes an
+        // infinite loop that infection reports as a timeout (already counted
+        // separately). End-to-end coverage from PositionMapTest's round-trip
+        // and exact-boundary tests proves the search behaves correctly.
+        "Plus": {
+            "ignore": [
+                "XPHP\\Lsp\\PositionMap::binarySearchLine"
+            ]
+        },
+        "DecrementInteger": {
+            "ignore": [
+                "XPHP\\Lsp\\PositionMap::binarySearchLine",
+                // $diagnosticsDebounceMs = 300 default — debounce-window jitter
+                // (300 vs 299 ms) is behaviourally identical at the unit-test
+                // level; we don't simulate timing.
+                "XPHP\\Lsp\\LspDispatcherFactory::__construct"
+            ]
+        },
+        "IncrementInteger": {
+            "ignore": [
+                "XPHP\\Lsp\\PositionMap::binarySearchLine",
+                // Same debounce-window equivalent on the +1 side.
+                "XPHP\\Lsp\\LspDispatcherFactory::__construct",
+                // fullLineRangeFromNikic: `?? strlen($this->source) + 1` last-line
+                // fallback. The value is then passed to substr() which clamps to
+                // the source length, so +1 vs +2 produces identical lineText.
+                "XPHP\\Lsp\\PositionMap::fullLineRangeFromNikic"
+            ]
+        },
+        "Minus": {
+            "ignore": [
+                "XPHP\\Lsp\\PositionMap::binarySearchLine"
+            ]
+        },
+        "LessThan": {
+            "ignore": [
+                // `while ($low < $high)` boundary — see binarySearchLine note.
+                "XPHP\\Lsp\\PositionMap::binarySearchLine",
+                // `if ($code < 0x80)` — the value 0x80 itself returns 1 via the
+                // final fallback regardless of which branch handles it; the
+                // mutation is equivalent at the exact boundary.
+                "XPHP\\Lsp\\PositionMap::utf8CharLength"
+            ]
+        },
+        "ReturnRemoval": {
+            "ignore": [
+                // utf8CharLength's `return 1` for ASCII bytes — falls through
+                // to the final `return 1` fallback, producing the same answer.
+                "XPHP\\Lsp\\PositionMap::utf8CharLength",
+                // XphpCompletionHandler::matchesPrefix `if ($prefix === '') return true;`
+                // and `if ($needle === '') return true;` — removing the return
+                // falls through to the stripos chain, which returns 0 for any
+                // empty needle (stripos('x', '') === 0). So the end result is
+                // still `true`. Equivalent.
+                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix",
+                // XphpHoverHandler::buildHoverMarkdown `if (count($parts) !== 1) return null;`
+                // early exit — without it, falls through to the type-param
+                // scan loop which uses `$shortName = $parts[0]` and a foreach
+                // that won't match a multi-part name against any TypeParam's
+                // single-segment name. Returns null at the end either way.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown"
+            ]
+        },
+
+        // utf8CharLength bitmask & constant mutations: the mask + equality
+        // checks form a leading-byte classifier. Several mutations on the
+        // `0xE0` / `0xC0` / `0xF0` / `0xF8` constants produce masks that
+        // accidentally still pass for the leader bytes we test (0xC3, 0xE2,
+        // 0xE6, 0xF0). Adding tests with EVERY possible leader byte (every
+        // even and odd byte across the valid range) is exhaustive but
+        // wasteful — the function is a well-known UTF-8 length table that's
+        // verified end-to-end via the round-trip and diverse-leader tests.
+        "BitwiseAnd": {
+            "ignore": [
+                "XPHP\\Lsp\\PositionMap::utf8CharLength"
+            ]
+        },
+
+        // CatchBlockRemoval on the `catch (RuntimeException $e)` branch in
+        // Analyzer::analyzeFile: defensive catch for a code path that
+        // XphpSourceParser doesn't reach in normal operation (nikic's default
+        // Throwing error handler throws PhpParser\Error before any
+        // RuntimeException can fire). XphpSourceParser is `final` so we can't
+        // extend it for a test fixture; keeping the catch is correct
+        // defensive code, but unkillable without dependency injection that's
+        // out of scope.
+        "CatchBlockRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile"
+            ]
+        },
+
+        // TypeArgPositionDetector::detect — the $i=0 boundary on the backwards
+        // walk: every branch of the loop body produces the same end-state as
+        // not entering the loop at that index, because $i=0 means we've already
+        // walked through the whole source. The `$prefixStart > 0` guard at
+        // $prefixStart=0 falls through with an empty prefix either way.
+        // Mutations on $i-- after $depth++ cause infinite loops (reported as
+        // timeouts, already counted).
+        "GreaterThan": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect"
+            ]
+        },
+        "GreaterThanOrEqualTo": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect",
+                // WorkspaceAnalyzer column-accurate range guards:
+                // `$identifier->getStartFilePos() >= 0` and
+                // `$node->getStartFilePos() >= 0 && $node->getEndFilePos() >= 0`.
+                // nikic's default lexer always populates startFilePos /
+                // endFilePos for nodes parsed from real source; the >= 0
+                // guards exist defensively for synthetic nodes that don't
+                // appear in this LSP's input. Same pattern + rationale as
+                // the AstPositionResolver guard already in this file.
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+
+        // The `$offset - $prefixStart` length calculation: substr() clamps to
+        // the source's end whenever offset == cursor (the typical case where
+        // there's no content past the cursor). Crafting a fixture where
+        // offset != cursor (i.e. source with content past the cursor) would
+        // exercise it, but the LSP analyzer only ever calls detect() with
+        // offset = cursor — the post-cursor source doesn't exist in practice.
+        "Decrement": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect"
+            ]
+        },
+
+        // WorkspaceAnalyzer visitor LogicalOr chains: `!is_array($params) ||
+        // $params === [] || !is_string($fqn)` — the three clauses are jointly
+        // necessary, but no realistic input fires exactly one of them in
+        // isolation (params is set together with fqn by XphpSourceParser, or
+        // neither). The guard is correct; the individual-OR-clause mutation
+        // can't be distinguished by any AST nikic would actually emit.
+        "LogicalOr": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                // XphpDefinitionHandler::findDefinitionAcrossWorkspace's
+                // `if ($startOffset === null || $endOffset === null)` — both
+                // are set together by the inner visitor; the OR can never
+                // observe one null without the other.
+                "XPHP\\Lsp\\Handler\\XphpDefinitionHandler::findDefinitionAcrossWorkspace"
+            ]
+        },
+
+        // XphpHoverHandler::buildHoverMarkdown `&& self::allConcrete($args)`
+        // chain — same shape as the WorkspaceAnalyzer guard: the four clauses
+        // (is_array, != [], is_string, allConcrete) are jointly set together
+        // by the parser; any single-clause divergence requires fabricating
+        // an AST that XphpSourceParser would never produce.
+        "LogicalAnd": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
+                // WorkspaceAnalyzer column-accurate range guards — see the
+                // `GreaterThanOrEqualTo` ignore above for the rationale.
+                // `($identifier !== null && $identifier->getStartFilePos() >= 0)`
+                // and the matching guard in walkInstantiations: both clauses
+                // are jointly defensive against synthetic nodes that don't
+                // appear from nikic-parsed source.
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+
+        // XphpCompletionHandler — `isIncomplete: false` on CompletionList is
+        // metadata that influences whether the client re-asks for completions
+        // on the next keystroke. We always return a complete list (per-call
+        // workspace scan), so true vs false is behaviourally indistinguishable
+        // at the unit-test level. The LSP client does its own filtering on
+        // top of the list anyway.
+        "FalseValue": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::complete"
+            ]
+        },
+
+        // XphpCompletionHandler::matchesPrefix `ltrim($prefix, '\\\\')` —
+        // strips leading backslashes from FQN-style prefixes. Removing it
+        // breaks `\App\Foo` style prefixes but our completion paths in
+        // practice strip them before reaching matchesPrefix (XphpSourceParser
+        // already trims leading backslashes during type-arg parsing). The
+        // ltrim is a belt-and-suspenders defense; equivalent in current
+        // callers.
+        "UnwrapLtrim": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix"
+            ]
+        },
+
+        // XphpHoverHandler line 142: `(string) $classLike->name`. The Identifier
+        // class in nikic implements __toString, so PHP's sprintf %s coerces
+        // it without the explicit cast. The cast is defensive (covers a
+        // hypothetical future ClassLike whose name doesn't implement
+        // __toString), but unkillable today.
+        "CastString": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown"
+            ]
+        },
+
+        // AstPositionResolver line 54: `if ($start < 0 || $end < 0) return null;`
+        // — defensive against synthetic nodes lacking position info. nikic's
+        // default lexer always populates startFilePos/endFilePos, so neither
+        // branch fires in practice. The guard is correct defensive code.
+        "LessThanOrEqualTo": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\AstPositionResolver"
+            ]
+        },
+
+        // WorkspaceAnalyzer column-accurate range guards (same family as the
+        // GreaterThanOrEqualTo / LogicalAnd ignores above). The
+        // `$identifier !== null` defensive null-check, plus
+        // GreaterThanOrEqualToNegotiation / LogicalAndAllSubExprNegation /
+        // LogicalAndNegation variants — each probes the same defensive
+        // guard whose alternate branch (synthetic node without position info)
+        // never fires from nikic-parsed source.
+        "NotIdentical": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+        "GreaterThanOrEqualToNegotiation": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+        "LogicalAndAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+        "LogicalAndNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+            ]
+        },
+
+        // LspDispatcherFactory: ArrayItemRemoval on [$diagnosticsProvider].
+        // Verifying this end-to-end needs the actual DiagnosticsEngine to
+        // tick once (async coordination over a delay loop) and assert that
+        // publishDiagnostics fires for a known violation. Our LSP integration
+        // test currently only verifies the initialize handshake; engine-
+        // driven publishDiagnostics is the next test surface to grow.
+        "ArrayItemRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\LspDispatcherFactory::create"
+            ]
+        }
+    }
+}

@@ -29,11 +29,17 @@ timeline
                 : sha256-based generated FQCN, namespace mirrors template
                 : build-time hash-collision detection with copy-pasteable widen command
                 : XPHP_HASH_LENGTH configurable (16..64)
+        Tooling
+                : LSP server at tools/lsp/ (PHP on phpactor/language-server)
+                : LSP — live diagnostics (parse errors / bound violations / duplicate templates)
+                : LSP — hover (specialized FQN + type-param bound)
+                : LSP — go-to-definition for generic instantiations
+                : LSP — completion of class names inside type-arg positions
+                : VS Code extension client at tools/lsp/vscode-extension/
+                : --lint headless CLI for CI (file:line:col error output)
         Developer experience
                 : PSR-4 fixtures
     section Next
-        Tooling
-                : LSP / IDE integration (hover through generics, type errors before compile)
         Type system depth
                 : default type parameters
                 : multiple bounds (T must satisfy A and B)
