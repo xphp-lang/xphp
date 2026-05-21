@@ -1,0 +1,250 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Walks playground/src, playground/var/dist, playground/var/cache; emits a
+// Jekyll-ready Markdown tree under playground/_site_src/. One index.md plus
+// one .md per source/compiled file (each file embeds its contents in a ```php
+// fenced block). The GitHub Actions `actions/jekyll-build-pages` step converts
+// the tree to HTML — no hand-rolled templates or stylesheets in this repo.
+
+$root = dirname(__DIR__);
+$siteSrc = $root . '/_site_src';
+
+$ref = getenv('GITHUB_REF_NAME') ?: trim(@shell_exec('git -C ' . escapeshellarg($root) . ' rev-parse --abbrev-ref HEAD 2>/dev/null') ?? '');
+$sha = getenv('GITHUB_SHA') ?: trim(@shell_exec('git -C ' . escapeshellarg($root) . ' rev-parse HEAD 2>/dev/null') ?? '');
+$shaShort = $sha !== '' ? substr($sha, 0, 7) : 'unknown';
+$buildIso = gmdate('Y-m-d\TH:i:s\Z');
+
+$repository = getenv('GITHUB_REPOSITORY') ?: 'xphp-lang/xphp-parser';
+$server = getenv('GITHUB_SERVER_URL') ?: 'https://github.com';
+$repoUrl = $server . '/' . $repository;
+$commitUrl = $sha !== '' ? $repoUrl . '/commit/' . $sha : $repoUrl;
+
+$sections = [
+    [
+        'id' => 'source',
+        'heading' => 'Source `.xphp` files',
+        'lead' => 'Authored input that the xphp compiler consumes. Generic templates live under `Containers/`; the demo scripts under `Demos/` instantiate them.',
+        'baseAbs' => $root . '/src',
+        'urlPrefix' => 'src',
+        'glob' => '*.xphp',
+    ],
+    [
+        'id' => 'dist',
+        'heading' => 'Rewritten user code (`var/dist/`)',
+        'lead' => 'Each `.xphp` source rewritten to native PHP — generic call sites get pointed at the matching specialized class.',
+        'baseAbs' => $root . '/var/dist',
+        'urlPrefix' => 'var/dist',
+        'glob' => '*.php',
+    ],
+    [
+        'id' => 'cache',
+        'heading' => 'Specialized classes (`var/cache/`)',
+        'lead' => 'Monomorphized class per unique generic instantiation. Loaded via the `XPHP\\Generated\\` PSR-4 prefix. Class shortnames are SHA-256-derived hashes of the canonical argument list.',
+        'baseAbs' => $root . '/var/cache',
+        'urlPrefix' => 'var/cache',
+        'glob' => '*.php',
+    ],
+];
+
+resetSiteDir($siteSrc);
+writeJekyllConfig($siteSrc, $shaShort);
+
+$counts = [];
+foreach ($sections as $section) {
+    $files = collectFiles($section['baseAbs'], $section['glob']);
+    $counts[$section['id']] = count($files);
+    foreach ($files as $absPath) {
+        $rel = substr($absPath, strlen($section['baseAbs']) + 1);
+        $mdPath = $section['urlPrefix'] . '/' . $rel . '.md';
+        emitFilePage($siteSrc, $mdPath, $rel, $section, $absPath);
+    }
+}
+
+emitIndex($siteSrc, $sections, $counts, [
+    'ref' => $ref !== '' ? $ref : 'unknown',
+    'shaShort' => $shaShort,
+    'commitUrl' => $commitUrl,
+    'repoUrl' => $repoUrl,
+    'buildIso' => $buildIso,
+]);
+
+fwrite(STDOUT, sprintf(
+    "Built %d source / %d rewritten / %d specialized markdown page(s) under %s\n",
+    $counts['source'] ?? 0,
+    $counts['dist'] ?? 0,
+    $counts['cache'] ?? 0,
+    $siteSrc,
+));
+
+function resetSiteDir(string $siteSrc): void
+{
+    if (is_dir($siteSrc)) {
+        rrmdir($siteSrc);
+    }
+    if (!mkdir($siteSrc, 0o755, true) && !is_dir($siteSrc)) {
+        fwrite(STDERR, "could not create {$siteSrc}\n");
+        exit(1);
+    }
+}
+
+function writeJekyllConfig(string $siteSrc, string $shaShort): void
+{
+    // jekyll-theme-cayman gives a clean header + readable typography out of
+    // the box. permalink: /:path/:basename:output_ext keeps Box.xphp.md ->
+    // Box.xphp.md instead of Jekyll's default basename-stripping behavior.
+    $title = 'xphp playground — ' . $shaShort;
+    $config = <<<YAML
+title: "{$title}"
+description: "Source and compiled artifacts from the xphp playground."
+theme: jekyll-theme-cayman
+permalink: /:path/:basename:output_ext
+exclude:
+  - vendor
+  - Gemfile
+  - Gemfile.lock
+YAML;
+    file_put_contents($siteSrc . '/_config.yml', $config . "\n");
+}
+
+/**
+ * @return list<string>
+ */
+function collectFiles(string $base, string $pattern): array
+{
+    if (!is_dir($base)) {
+        return [];
+    }
+    $out = [];
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
+    );
+    foreach ($it as $entry) {
+        if (!$entry->isFile()) {
+            continue;
+        }
+        if (fnmatch($pattern, $entry->getFilename())) {
+            $out[] = $entry->getPathname();
+        }
+    }
+    sort($out);
+    return $out;
+}
+
+/**
+ * @param array{id:string,heading:string,lead:string,baseAbs:string,urlPrefix:string,glob:string} $section
+ */
+function emitFilePage(string $siteSrc, string $mdPath, string $rel, array $section, string $absPath): void
+{
+    $target = $siteSrc . '/' . $mdPath;
+    $targetDir = dirname($target);
+    if (!is_dir($targetDir) && !mkdir($targetDir, 0o755, true) && !is_dir($targetDir)) {
+        fwrite(STDERR, "could not create {$targetDir}\n");
+        exit(1);
+    }
+
+    $depth = substr_count($mdPath, '/');
+    $rootRel = $depth > 0 ? str_repeat('../', $depth) : './';
+
+    $contents = (string) file_get_contents($absPath);
+    $title = $section['urlPrefix'] . '/' . $rel;
+    $sectionHref = $rootRel . 'index.md#' . $section['id'];
+
+    // Use ```php for both .xphp and .php — xphp is a superset, GitHub Pages'
+    // Rouge highlighter doesn't know "xphp" as a language. Pick a fence longer
+    // than any consecutive backtick run in the file contents to keep the fence
+    // unambiguous even if the source has its own code-block markup.
+    $fence = pickFence($contents);
+
+    $body = <<<MD
+---
+title: "{$title}"
+layout: default
+---
+
+[← index]({$rootRel}index.md) · [{$section['heading']}]({$sectionHref})
+
+# `{$title}`
+
+{$fence}php
+{$contents}
+{$fence}
+
+MD;
+
+    file_put_contents($target, $body);
+}
+
+/**
+ * Choose a fence string longer than any consecutive backtick run in $contents.
+ */
+function pickFence(string $contents): string
+{
+    $longest = 0;
+    if (preg_match_all('/`+/', $contents, $matches) !== false) {
+        foreach ($matches[0] as $run) {
+            $longest = max($longest, strlen($run));
+        }
+    }
+    return str_repeat('`', max(3, $longest + 1));
+}
+
+/**
+ * @param list<array{id:string,heading:string,lead:string,baseAbs:string,urlPrefix:string,glob:string}> $sections
+ * @param array<string,int> $counts
+ * @param array{ref:string,shaShort:string,commitUrl:string,repoUrl:string,buildIso:string} $meta
+ */
+function emitIndex(string $siteSrc, array $sections, array $counts, array $meta): void
+{
+    $body = "---\n";
+    $body .= "title: \"xphp playground — {$meta['shaShort']}\"\n";
+    $body .= "layout: default\n";
+    $body .= "---\n\n";
+    $body .= "# xphp playground\n\n";
+    $body .= "Browse the `.xphp` sources and the compiled artifacts from a recent run.\n\n";
+    $body .= "| | |\n";
+    $body .= "|---|---|\n";
+    $body .= "| Branch | `{$meta['ref']}` |\n";
+    $body .= "| Commit | [`{$meta['shaShort']}`]({$meta['commitUrl']}) |\n";
+    $body .= "| Built | `{$meta['buildIso']}` |\n";
+    $body .= "| Source | [{$meta['repoUrl']}]({$meta['repoUrl']}) |\n\n";
+
+    foreach ($sections as $section) {
+        $count = $counts[$section['id']] ?? 0;
+        $body .= "## {$section['heading']} ({$count})\n";
+        $body .= '{: id="' . $section['id'] . '"}' . "\n\n";
+        $body .= $section['lead'] . "\n\n";
+
+        $files = collectFiles($section['baseAbs'], $section['glob']);
+        if ($files === []) {
+            $body .= "_no files_\n\n";
+            continue;
+        }
+
+        foreach ($files as $absPath) {
+            $rel = substr($absPath, strlen($section['baseAbs']) + 1);
+            $href = $section['urlPrefix'] . '/' . $rel . '.md';
+            $body .= "- [`{$rel}`]({$href})\n";
+        }
+        $body .= "\n";
+    }
+
+    file_put_contents($siteSrc . '/index.md', $body);
+}
+
+function rrmdir(string $dir): void
+{
+    if (!is_dir($dir)) {
+        return;
+    }
+    foreach (scandir($dir) as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+        $path = $dir . '/' . $entry;
+        is_dir($path) ? rrmdir($path) : unlink($path);
+    }
+    rmdir($dir);
+}

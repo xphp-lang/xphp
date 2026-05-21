@@ -1,0 +1,31 @@
+---
+title: "src/Containers/Wrapper.xphp"
+layout: default
+---
+
+[← index](../../index.md) · [Source `.xphp` files](../../index.md#source)
+
+# `src/Containers/Wrapper.xphp`
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+use App\Containers\Box;
+
+class Wrapper<T>
+{
+    public function __construct(public Box<T> $box)
+    {
+    }
+
+    public function unwrap(): T
+    {
+        return $this->box->get();
+    }
+}
+
+```
