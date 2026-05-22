@@ -134,6 +134,34 @@ The PHAR avoids all of that.
 Curated equivalent-mutation ignores live in `infection.json5` with per-mutator
 `ignore` rules and inline rationale — mirrors the pattern at the repo root.
 
+## Build a self-contained PHAR
+
+```bash
+make -C tools/lsp build/phar     # produces tools/lsp/var/xphp-lsp.phar
+```
+
+The PHAR is the distribution format the JetBrains plugin under `tools/phpstorm-plugin/`
+bundles -- zero-config install for editors that can't reasonably depend on a Composer-managed
+working tree. Same lazy-download pattern as `infection.phar`: the build downloads
+`box.phar` 4.6.6 into `tools/lsp/var/` on first run, then runs Humbug Box against a
+`--no-dev` install.
+
+One quirk worth knowing: the path-repo entry in `composer.json` pins
+`"symlink": true` for the live dev workflow (edits to the parent `xphp-parser` are
+picked up immediately). PHARs can't traverse symlinks, so the `build/phar` target
+swaps the symlinked `vendor/xphp-lang/xphp-parser` for a real copy of its `src/` +
+`composer.json`, regenerates the classmap, and restores the symlinked install at the
+end so subsequent `make test` runs keep the live behavior. Net: building the PHAR
+does not disturb your dev install.
+
+Smoke test:
+
+```bash
+php tools/lsp/var/xphp-lsp.phar --lint playground/src/Demos/Bounds.xphp
+# byte-for-byte identical output to:
+tools/lsp/bin/xphp-lsp --lint playground/src/Demos/Bounds.xphp
+```
+
 ## VS Code extension
 
 See `vscode-extension/README.md` for the client-side setup. Quick start:

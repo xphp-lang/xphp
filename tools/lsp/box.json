@@ -1,0 +1,14 @@
+{
+    "main": "bin/xphp-lsp",
+    "output": "var/xphp-lsp.phar",
+    "base-path": ".",
+    "directories": [
+        "src",
+        "vendor"
+    ],
+    "files": [
+        "bin/xphp-lsp"
+    ],
+    "compression": "GZ",
+    "compactors": []
+}
