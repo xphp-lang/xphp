@@ -46,6 +46,18 @@
     <depends>com.intellij.modules.platform</depends>
 
     <!--
+      IntelliJ Platform LSP API module.  Required (per
+      https://plugins.jetbrains.com/docs/intellij/language-server-protocol.html
+      #basic-implementation): without this depends, our
+      `<platform.lsp.serverSupportProvider>` extension is silently
+      dropped during plugin load and the file-open path triggers
+      partial wire-ups that crash editor construction
+      (user-visible: "Cannot focus editor ... preferredFocusedComponent
+      is null" followed by an immediate fileClosed).
+    -->
+    <depends>com.intellij.modules.lsp</depends>
+
+    <!--
       The PhpStorm bundled PHP plugin gives us PSI hooks for the PHP language
       family.  We hard-depend on it so an enterprising user can't install the
       xphp plugin into IntelliJ IDEA without PHP support and end up with a
