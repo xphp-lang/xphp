@@ -1,64 +1,56 @@
 package com.xphp.lsp.settings
 
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-import com.intellij.openapi.options.Configurable
-import com.intellij.openapi.ui.TextFieldWithBrowseButton
+import com.intellij.openapi.options.BoundConfigurable
+import com.intellij.openapi.ui.DialogPanel
+import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
-import javax.swing.JComponent
 
 /**
- * Settings UI entry under Preferences -> Tools -> xPHP.
+ * Settings UI under Preferences -> Tools -> xPHP.
  *
- * One field today: an absolute path to the xphp LSP server binary.  Empty
- * means "use the default" -- which in chunk 4 still throws a startup error
- * (the bundled-PHAR fallback ships in chunk 5).  Wired through plugin.xml's
- * `applicationConfigurable` extension point so it lives at the IDE level,
- * not per-project.
+ * Extends [BoundConfigurable] (not the bare [com.intellij.openapi.options.Configurable]):
+ * the base class captures the [DialogPanel] returned by [createPanel] and wires
+ * `apply()` / `reset()` / `isModified()` / `disposeUIResources()` to the panel's
+ * matching methods, so the Kotlin UI DSL bindings declared inside the panel
+ * actually run during the platform's save / cancel / dirty-check lifecycle.
+ *
+ * The earlier hand-rolled `Configurable` overrode those methods directly and
+ * never delegated to the panel, which silently broke persistence: the
+ * textfield's typed value never reached the bound property, so [apply]
+ * stored a stale empty string back into `xphp.xml` every time the user
+ * hit OK.
+ *
+ * Bind the textfield directly to `XphpSettings.state::lspPath` -- the mutable
+ * property reference on the State data class.  No intermediate field, no
+ * manual sync.  `PersistentStateComponent` flushes mutations to
+ * `<config>/options/xphp.xml` on the platform's normal cadence.
  */
-class XphpSettingsConfigurable : Configurable {
+class XphpSettingsConfigurable : BoundConfigurable("xPHP") {
 
     private val settings = XphpSettings.getInstance()
-    private var lspPathField: TextFieldWithBrowseButton? = null
-    private var workingPath: String = settings.state.lspPath
 
-    override fun getDisplayName(): String = "xPHP"
-
-    override fun getHelpTopic(): String? = null
-
-    override fun createComponent(): JComponent = panel {
+    override fun createPanel(): DialogPanel = panel {
         row("xphp LSP binary:") {
-            cell(
-                TextFieldWithBrowseButton().apply {
-                    addBrowseFolderListener(
-                        // Title + description shown in the JetBrains file chooser.
-                        "Select xphp LSP binary",
-                        "Absolute path to xphp-lsp.phar (or the xphp-lsp shell script).",
-                        null,
-                        FileChooserDescriptorFactory.createSingleFileDescriptor(),
-                    )
-                }
+            // The current non-deprecated `textFieldWithBrowseButton` overload
+            // takes a `FileChooserDescriptor` (with the title baked in via
+            // `.withTitle(...)`); the older `browseDialogTitle = ...` named
+            // argument is deprecated -- and on this build the Kotlin compiler
+            // promotes that deprecation to an error.
+            textFieldWithBrowseButton(
+                FileChooserDescriptorFactory.createSingleFileDescriptor()
+                    .withTitle("Select xphp LSP binary"),
             )
-                .bindText(::workingPath)
+                .bindText(settings.state::lspPath)
+                .align(AlignX.FILL)
                 .comment(
                     "Absolute path to <code>xphp-lsp.phar</code> built via " +
-                        "<code>make -C tools/lsp build/phar</code>, or to the live " +
-                        "<code>tools/lsp/bin/xphp-lsp</code> script.  Leave empty " +
-                        "to use the plugin's bundled server (chunk 5 onwards)."
+                        "<code>make -C tools/lsp build/phar</code>, or to the " +
+                        "live <code>tools/lsp/bin/xphp-lsp</code> script.  Leave " +
+                        "empty to use the plugin's bundled server (auto-extracted " +
+                        "to PhpStorm's system dir on first plugin load)."
                 )
-                .also { lspPathField = it.component as TextFieldWithBrowseButton }
         }
-    }
-
-    override fun isModified(): Boolean = workingPath != settings.state.lspPath
-
-    override fun apply() {
-        settings.lspPath = workingPath
-    }
-
-    override fun reset() {
-        workingPath = settings.state.lspPath
-        // Re-bind the field so the UI reflects the rolled-back value.
-        lspPathField?.text = workingPath
     }
 }
