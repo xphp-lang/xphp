@@ -58,11 +58,32 @@
             extensions="xphp"
             implementationClass="com.xphp.lsp.XphpFileType"
             fieldName="INSTANCE"/>
-    </extensions>
 
-    <!--
-      Future extension-point additions:
-        chunk 4 ; com.intellij.platform.lsp.serverSupportProvider
-        chunk 4 ; com.intellij.applicationConfigurable, applicationService
-    -->
+        <!--
+          Application-level settings service for the xphp LSP binary path.
+          Single instance across all open projects; a developer wants the
+          same binary across every xphp project on their machine.
+        -->
+        <applicationService
+            serviceImplementation="com.xphp.lsp.settings.XphpSettings"/>
+
+        <!--
+          Settings UI lives under Preferences -> Tools -> xPHP.
+          `parentId="tools"` is the platform's stable id for the Tools group.
+        -->
+        <applicationConfigurable
+            parentId="tools"
+            id="com.xphp.lsp.settings.XphpSettingsConfigurable"
+            displayName="xPHP"
+            instance="com.xphp.lsp.settings.XphpSettingsConfigurable"/>
+
+        <!--
+          LSP server provider, registered against the IntelliJ Platform LSP
+          API (available across all editions since 2025.2; 2026.1 brought the
+          rest of the surface we lean on).  The provider's `fileOpened`
+          method routes any .xphp file open into our descriptor.
+        -->
+        <platform.lsp.serverSupportProvider
+            implementation="com.xphp.lsp.XphpLspServerSupportProvider"/>
+    </extensions>
 </idea-plugin>
