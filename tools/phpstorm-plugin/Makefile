@@ -51,9 +51,14 @@ run-ide: x11-grant
 # `xhost +local:docker` is idempotent (re-adding an existing rule is a
 # no-op), so we can call it before every `run-ide` without leaking ACL
 # entries.  Pre-req only for `run-ide`; headless targets don't need it.
+# Guarded with `command -v` so contributors on macOS / Windows / WSL
+# (where xhost may be absent or unnecessary) don't hit a confusing
+# error before `runIde` even gets a chance.  Linux+X11 is the
+# documented build host; this just degrades gracefully off it.
 .PHONY: x11-grant
 x11-grant:
-	xhost +local:docker
+	@command -v xhost >/dev/null 2>&1 && xhost +local:docker || \
+	  echo "(skipping xhost: not on X11 or xhost not installed)"
 
 .PHONY: dist
 dist:

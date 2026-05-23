@@ -127,6 +127,16 @@ val xphpLspPhar = file("../lsp/var/xphp-lsp.phar")
 
 tasks {
     processResources {
+        // Declare both upstream artifacts as optional inputs so Gradle's
+        // incremental-build / configuration-cache machinery re-evaluates
+        // the `if (...exists())` checks per build instead of pinning the
+        // answer at configuration time.  Without this, a build that
+        // configures BEFORE `make -C tools/lsp build/phar` finishes
+        // would silently ship without the PHAR even if a parallel make
+        // dropped it mid-configure.
+        inputs.file(tmLanguageSource).withPropertyName("tmLanguageSource").optional(true)
+        inputs.file(xphpLspPhar).withPropertyName("xphpLspPhar").optional(true)
+
         if (tmLanguageSource.exists()) {
             from(tmLanguageSource) {
                 into("textmate")
