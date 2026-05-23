@@ -1,10 +1,15 @@
 package com.xphp.lsp
 
 import com.intellij.execution.configurations.GeneralCommandLine
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import com.xphp.lsp.settings.XphpSettings
+import com.xphp.lsp.settings.XphpSettingsConfigurable
 import java.io.File
 
 /**
@@ -22,8 +27,11 @@ import java.io.File
  *   2. The bundled PHAR extracted by [PharExtractor] from the plugin jar
  *      into PhpStorm's system directory.  This is the zero-config path
  *      a typical user gets on plugin install.
- *   3. If neither is available, fail loudly with a message that points at
- *      the settings pane.
+ *   3. If neither is available, fire a balloon notification with an
+ *      "Open Settings..." action that takes the user straight to the
+ *      Tools -> xPHP pane, and abort the start.  The notification is
+ *      the user-facing channel; the thrown exception is just the LSP
+ *      framework's signal to mark start as failed.
  *
  * Transport: stdio.  Matches `tools/lsp/bin/xphp-lsp` (no `--lint` arg).
  */
@@ -34,19 +42,13 @@ class XphpLspServerDescriptor(project: Project) :
         file.fileType is XphpFileType
 
     override fun createCommandLine(): GeneralCommandLine {
-        val configured = XphpSettings.getInstance().lspPath
-        val binary = when {
-            configured != null -> File(configured).also {
-                if (!it.isFile) error("Configured xphp LSP binary does not exist: $configured")
-            }
-            else -> PharExtractor.getInstance().extract()?.toFile()
-                ?: error(
-                    "xphp LSP binary path is not configured and no bundled " +
-                        "PHAR is available inside this plugin build.  Open " +
-                        "Preferences -> Tools -> xPHP and set the absolute " +
-                        "path to a built `xphp-lsp.phar` or the live " +
-                        "`tools/lsp/bin/xphp-lsp` script."
-                )
+        val binary = resolveBinary() ?: run {
+            notifyMissingBinary()
+            // The LSP framework catches whatever createCommandLine throws and
+            // logs it.  The detailed message lives in the balloon the user
+            // actually sees; the exception just needs to abort the start
+            // without shouting in idea.log.
+            throw RuntimeException("xphp LSP binary not available (see notification balloon)")
         }
 
         val cmd = GeneralCommandLine()
@@ -65,5 +67,49 @@ class XphpLspServerDescriptor(project: Project) :
         }
 
         return cmd
+    }
+
+    /**
+     * Returns the LSP binary path or null if neither the explicit setting
+     * nor the bundled-PHAR fallback resolves to a real file.  Null is the
+     * trigger for [notifyMissingBinary].
+     */
+    private fun resolveBinary(): File? {
+        val configured = XphpSettings.getInstance().lspPath
+        if (configured != null) {
+            val asFile = File(configured)
+            return if (asFile.isFile) asFile else null
+        }
+        return PharExtractor.getInstance().extract()?.toFile()
+    }
+
+    private fun notifyMissingBinary() {
+        val configured = XphpSettings.getInstance().lspPath
+        val (title, content) = if (configured != null) {
+            "xphp LSP binary not found" to (
+                "The path configured under Settings -> Tools -> xPHP doesn't " +
+                    "point at a real file: <code>$configured</code>.  Update the " +
+                    "setting or rebuild the plugin with a bundled PHAR."
+                )
+        } else {
+            "xphp LSP is not configured" to (
+                "Set the path to <code>xphp-lsp.phar</code> in Settings -> Tools -> " +
+                    "xPHP, or rebuild the plugin (`make -C tools/lsp build/phar` " +
+                    "before `make -C tools/phpstorm-plugin dist`) so a bundled " +
+                    "server ships inside the plugin jar."
+                )
+        }
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("xphp")
+            .createNotification(title, content, NotificationType.WARNING)
+            .addAction(
+                NotificationAction.createSimpleExpiring("Open Settings...") {
+                    ShowSettingsUtil.getInstance().showSettingsDialog(
+                        project,
+                        XphpSettingsConfigurable::class.java,
+                    )
+                }
+            )
+            .notify(project)
     }
 }

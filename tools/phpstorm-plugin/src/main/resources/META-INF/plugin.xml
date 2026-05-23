@@ -86,6 +86,19 @@
             serviceImplementation="com.xphp.lsp.settings.XphpSettings"/>
 
         <!--
+          Notification group for user-facing plugin messages.  Currently
+          only used by XphpLspServerDescriptor to surface a balloon when
+          the LSP can't start (no binary configured, no bundled PHAR
+          available, or the configured path doesn't exist).  Registered
+          as `BALLOON` so the message appears where the user is looking
+          instead of getting buried in idea.log, and carries an
+          "Open Settings..." action that jumps straight to Tools -> xPHP.
+        -->
+        <notificationGroup
+            id="xphp"
+            displayType="BALLOON"/>
+
+        <!--
           Settings UI lives under Preferences -> Tools -> xPHP.
           `parentId="tools"` is the platform's stable id for the Tools group.
         -->
