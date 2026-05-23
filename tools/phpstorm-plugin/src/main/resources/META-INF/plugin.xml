@@ -53,6 +53,14 @@
     -->
     <depends>com.jetbrains.php</depends>
 
+    <!--
+      Bundled TextMate plugin: provides the `com.intellij.textmate.bundleProvider`
+      extension point that XphpTextMateBundleProvider implements.  Without this
+      depends, the extension-point id doesn't resolve at plugin load time and
+      `.xphp` files open as plain text.
+    -->
+    <depends>org.jetbrains.plugins.textmate</depends>
+
     <extensions defaultExtensionNs="com.intellij">
         <!--
           File type for *.xphp.  language="xphp" binds to XphpLanguage, the
@@ -95,5 +103,40 @@
         -->
         <platform.lsp.serverSupportProvider
             implementation="com.xphp.lsp.XphpLspServerSupportProvider"/>
+
+        <!--
+          TextMate grammar registration for .xphp files.  The provider
+          extracts the bundled xphp.tmLanguage.json to PathManager's system
+          dir at first call (the IntelliJ TextMate plugin reads grammars
+          from real filesystem paths only; no classpath URL support),
+          and returns the resulting bundle directory.  The grammar itself
+          includes `source.php` for PHP base highlighting and adds an
+          `xphp-extras` block for the generic-clause syntax PhpStorm's
+          PHP grammar doesn't know about.
+        -->
+        <textmate.bundleProvider
+            implementation="com.xphp.lsp.textmate.XphpTextMateBundleProvider"/>
+
+        <!--
+          Bind TextMate's own SyntaxHighlighterFactory to our XphpLanguage.
+          When the platform asks "how should I highlight an xphp file?", it
+          dispatches here; TextMate's factory then looks up the grammar by
+          filename via `TextMateService.getLanguageDescriptorByFileName()`.
+          That lookup succeeds because:
+            (a) XphpTextMateBundleProvider registered our grammar at startup,
+            (b) xphp.tmLanguage.json's `fileTypes: ["xphp"]` array tells the
+                TextMate plugin to associate `.xphp` files with the
+                `source.xphp` scope.
+          Result: PHP base highlighting (the grammar `include`s `source.php`)
+          plus the xphp-extras patterns for generic-clause colouring.
+
+          This OVERRIDES the PHP-language-inheritance fallback declared in
+          XphpLanguage's constructor; inheritance only fires when no
+          factory is registered for the dialect, and this registration is
+          the dialect's own factory.
+        -->
+        <lang.syntaxHighlighterFactory
+            language="xphp"
+            implementationClass="org.jetbrains.plugins.textmate.language.syntax.highlighting.TextMateSyntaxHighlighterFactory"/>
     </extensions>
 </idea-plugin>
