@@ -63,6 +63,16 @@ dependencies {
         // recognised as a sibling.
         bundledPlugins(providers.gradleProperty("platformBundledPlugins").map { it.split(",") })
 
+        // v2 plugin model: extension points declared inside a plugin's
+        // `<content><module ...>` sub-module aren't reachable through a
+        // plain `<depends>` on the parent plugin id.  The TextMate plugin
+        // declares `com.intellij.textmate.bundleProvider` and the supporting
+        // classes under its `intellij.textmate` sub-module, so we need it
+        // on the compile classpath (mirroring the
+        // `<dependencies><module name="intellij.textmate"/></dependencies>`
+        // entry in plugin.xml).
+        bundledModule("intellij.textmate")
+
         // Toolchain components used by the build / verify pipeline.
         pluginVerifier()
         zipSigner()

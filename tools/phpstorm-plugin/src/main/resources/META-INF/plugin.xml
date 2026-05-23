@@ -54,12 +54,27 @@
     <depends>com.jetbrains.php</depends>
 
     <!--
-      Bundled TextMate plugin: provides the `com.intellij.textmate.bundleProvider`
-      extension point that XphpTextMateBundleProvider implements.  Without this
-      depends, the extension-point id doesn't resolve at plugin load time and
-      `.xphp` files open as plain text.
+      Bundled TextMate plugin.  Two layers of dependency:
+
+      1. Legacy `<depends>` on the top-level plugin id.  Without it,
+         IntelliJ would let our plugin load even if the user is on an
+         IDE distribution that doesn't ship TextMate, and our extension
+         registrations below would silently no-op.
+
+      2. v2 `<dependencies><module .../></dependencies>` on the
+         `intellij.textmate` sub-module.  PhpStorm 2026.1's TextMate
+         plugin declares the `com.intellij.textmate.bundleProvider`
+         extension point INSIDE a `<content><module name="intellij.textmate">`
+         block, not in its top-level descriptor.  Plain `<depends>` on
+         the parent plugin id no longer pulls in those sub-module EPs;
+         our `<textmate.bundleProvider>` registration would be ignored
+         at plugin load and `.xphp` files would open as plain text.
+         This is the load-bearing dependency.
     -->
     <depends>org.jetbrains.plugins.textmate</depends>
+    <dependencies>
+        <module name="intellij.textmate"/>
+    </dependencies>
 
     <extensions defaultExtensionNs="com.intellij">
         <!--
