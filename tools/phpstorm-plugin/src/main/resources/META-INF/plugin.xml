@@ -1,0 +1,53 @@
+<!--
+  Plugin descriptor for the xphp PhpStorm plugin.
+
+  Chunk 2/7 of the phpstorm-plugin track: this descriptor is intentionally
+  bare bones.  No file-type registration, no LSP wiring; those come in
+  chunks 3 and 4 respectively.  Goal here is `./gradlew build` produces a
+  valid (but feature-less) plugin zip the verifier accepts against PhpStorm
+  2026.1, so subsequent chunks add behaviour against a known-good baseline.
+
+  The `since-build` / `until-build` window is populated from gradle.properties
+  by the IntelliJ Platform Gradle Plugin's pluginConfiguration block; that's
+  why this file leaves the `idea-version` element off entirely.
+-->
+<idea-plugin>
+    <id>com.xphp.lsp</id>
+    <name>xphp</name>
+    <vendor email="math3usmartins@github.com" url="https://github.com/xphp-lang/xphp">xphp-lang</vendor>
+
+    <description><![CDATA[
+        Language support for <a href="https://github.com/xphp-lang/xphp">xphp</a>, a PHP
+        superset with monomorphized generics that compiles to vanilla PHP.<br/><br/>
+
+        Editing intelligence (diagnostics, hover, go-to-definition, completion) is delivered
+        by the bundled xphp Language Server over the IntelliJ Platform LSP API.  The same
+        server powers the VS Code extension at <code>tools/lsp/vscode-extension/</code>;
+        single source of truth, no per-editor duplication.<br/><br/>
+
+        Requires PhpStorm 2026.1 or later.
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>0.1.0</h3>
+        <ul>
+            <li>Initial scaffold.  No editor functionality yet.</li>
+        </ul>
+    ]]></change-notes>
+
+    <!--
+      The PhpStorm bundled PHP plugin gives us PSI hooks for the PHP language
+      family.  We hard-depend on it so an enterprising user can't install the
+      xphp plugin into IntelliJ IDEA without PHP support and end up with a
+      half-broken file-type registration in chunk 3.
+    -->
+    <depends>com.jetbrains.php</depends>
+
+    <!--
+      Extension points populate as later chunks land:
+        chunk 3 ; com.intellij.fileType, textmate.bundleProvider
+        chunk 4 ; com.intellij.platform.lsp.serverSupportProvider
+        chunk 4 ; com.intellij.applicationConfigurable, applicationService
+    -->
+    <extensions defaultExtensionNs="com.intellij"/>
+</idea-plugin>
