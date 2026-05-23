@@ -133,17 +133,18 @@
             implementation="com.xphp.lsp.XphpLspServerSupportProvider"/>
 
         <!--
-          TextMate grammar registration for .xphp files.  The provider
-          extracts the bundled xphp.tmLanguage.json to PathManager's system
-          dir at first call (the IntelliJ TextMate plugin reads grammars
-          from real filesystem paths only; no classpath URL support),
-          and returns the resulting bundle directory.  The grammar itself
-          includes `source.php` for PHP base highlighting and adds an
-          `xphp-extras` block for the generic-clause syntax PhpStorm's
-          PHP grammar doesn't know about.
+          xphp TextMate grammar bootstrap.  Runs once per project open
+          to extract our bundled tmLanguage.json onto disk and register
+          it with the IDE's user-bundles registry
+          (`TextMateUserBundlesSettings.addBundle`).  See the KDoc on
+          [XphpBundleRegistrar] for why we go through user-bundles
+          instead of the `com.intellij.textmate.bundleProvider`
+          extension point you'd expect: that EP is declared but
+          unwired in PhpStorm 2026.1.2; registering against it is a
+          silent no-op.
         -->
-        <textmate.bundleProvider
-            implementation="com.xphp.lsp.textmate.XphpTextMateBundleProvider"/>
+        <postStartupActivity
+            implementation="com.xphp.lsp.textmate.XphpBundleRegistrar"/>
 
         <!--
           Bind TextMate's own SyntaxHighlighterFactory to our XphpLanguage.

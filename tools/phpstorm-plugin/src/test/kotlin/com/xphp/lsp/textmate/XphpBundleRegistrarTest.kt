@@ -13,18 +13,18 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Tests for [XphpTextMateBundleProvider.Extractor]'s file-IO contract.
+ * Tests for [XphpBundleRegistrar.Extractor]'s file-IO contract.
  *
  * Mirrors [com.xphp.lsp.PharExtractorTest]'s shape: we instantiate the
- * production [XphpTextMateBundleProvider.Extractor] with caller-controlled
+ * production [XphpBundleRegistrar.Extractor] with caller-controlled
  * bundled bytes (via the `streamLoader` constructor parameter) and a
  * `@TempDir` standing in for `PathManager.getSystemDir()`.  Same code paths
  * run, just without IntelliJ's `Application` in scope.
  */
-class XphpTextMateBundleProviderTest {
+class XphpBundleRegistrarTest {
 
     private fun newExtractor(bytes: ByteArray?, baseDir: Path) =
-        XphpTextMateBundleProvider.Extractor(
+        XphpBundleRegistrar.Extractor(
             bundleRoot = baseDir.resolve("xphp"),
             streamLoader = { bytes?.inputStream() as InputStream? },
         )
