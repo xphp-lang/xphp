@@ -48,6 +48,40 @@ class XphpBundleRegistrarTest {
     }
 
     @Test
+    fun `first run writes info_plist with bundle name`(@TempDir tmp: Path) {
+        val bytes = """{"scopeName":"source.xphp"}""".toByteArray()
+
+        val bundleRoot = newExtractor(bytes, tmp).extract()!!
+        val infoPlist = bundleRoot.resolve("info.plist")
+
+        assertTrue(Files.isRegularFile(infoPlist), "info.plist must exist for the platform's bundle reader to recognize the format")
+        val contents = Files.readString(infoPlist)
+        // Smoke checks; full plist correctness is the platform's concern.
+        assertTrue(contents.contains("<?xml"), "info.plist looks like XML")
+        assertTrue(contents.contains("<key>name</key>"), "info.plist has the `name` key")
+        assertTrue(contents.contains("<string>xphp</string>"), "info.plist names the bundle 'xphp'")
+    }
+
+    @Test
+    fun `second extract restores info_plist when missing (heals legacy installs)`(@TempDir tmp: Path) {
+        val bytes = """{"scopeName":"source.xphp"}""".toByteArray()
+        val extractor = newExtractor(bytes, tmp)
+        extractor.extract()!!
+
+        // Simulate the broken-legacy state: someone deletes info.plist
+        // out from under us (or an earlier plugin version never wrote one).
+        val infoPlist = tmp.resolve("xphp/info.plist")
+        Files.delete(infoPlist)
+        assertFalse(Files.exists(infoPlist))
+
+        // Re-running extract() must restore info.plist even though the
+        // grammar's sha256 hasn't changed -- otherwise users on the
+        // legacy plugin can't be healed on upgrade.
+        extractor.extract()
+        assertTrue(Files.isRegularFile(infoPlist))
+    }
+
+    @Test
     fun `second run with unchanged bytes is a no-op (mtime preserved)`(@TempDir tmp: Path) {
         val bytes = """{"scopeName":"source.xphp"}""".toByteArray()
 

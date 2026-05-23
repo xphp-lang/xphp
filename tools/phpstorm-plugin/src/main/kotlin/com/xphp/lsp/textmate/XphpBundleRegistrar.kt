@@ -72,17 +72,18 @@ class XphpBundleRegistrar : ProjectActivity {
             return
         }
 
-        if (settings.hasEnabledBundle(path)) {
-            log.debug("xphp TextMate bundle already registered at $path")
-            return
+        if (!settings.hasEnabledBundle(path)) {
+            settings.addBundle(path, "xphp")
+            log.info("Registered xphp TextMate bundle at $path")
         }
 
-        settings.addBundle(path, "xphp")
-        log.info("Registered xphp TextMate bundle at $path")
-
-        // Force the TextMate service to pick the new bundle up immediately
-        // instead of waiting for the next event-driven reload (which may
-        // not happen before the user opens their first .xphp file).
+        // ALWAYS reload, even when the bundle was already registered.
+        // Users upgrading from an earlier plugin version may have a
+        // bundle entry pointing at an extracted directory that was
+        // missing `info.plist` (the platform reported it as "unknown
+        // format" and skipped it).  The Extractor on this run has just
+        // written the info.plist; the reload below is what gives the
+        // service a chance to retry the previously-failed load.
         TextMateService.getInstance().reloadEnabledBundles()
     }
 
@@ -104,6 +105,7 @@ class XphpBundleRegistrar : ProjectActivity {
         private val log = Logger.getInstance(XphpBundleRegistrar::class.java)
         private val grammarPath: Path = bundleRoot.resolve("Syntaxes").resolve(grammarFileName)
         private val checksumPath: Path = bundleRoot.resolve("xphp.sha256")
+        private val infoPlistPath: Path = bundleRoot.resolve("info.plist")
 
         /**
          * Extract the grammar to disk if needed.  Returns the bundle
@@ -121,6 +123,17 @@ class XphpBundleRegistrar : ProjectActivity {
                 return null
             }
 
+            Files.createDirectories(grammarPath.parent)
+
+            // info.plist tells IntelliJ's bundle reader this is a
+            // classic-TextMate-format bundle.  Without it the reader
+            // logs "bundle has an unknown format" and refuses to load
+            // grammars.  Written unconditionally (and idempotently) so
+            // users who installed an earlier plugin version that
+            // shipped the bundle without info.plist get the fix on
+            // the very next IDE start.
+            ensureInfoPlist()
+
             val bundledBytes = stream.use(InputStream::readAllBytes)
             val bundledSha = sha256Hex(bundledBytes)
 
@@ -129,8 +142,6 @@ class XphpBundleRegistrar : ProjectActivity {
                 log.debug("Bundled xphp grammar already extracted to $grammarPath ($bundledSha)")
                 return bundleRoot
             }
-
-            Files.createDirectories(grammarPath.parent)
 
             // Per-process unique temp -- two PhpStorm instances starting
             // simultaneously won't race on a shared sibling temp file.
@@ -150,6 +161,15 @@ class XphpBundleRegistrar : ProjectActivity {
                 log.warn("Failed to extract xphp.tmLanguage.json to $grammarPath", e)
                 Files.deleteIfExists(tmp)
                 return null
+            }
+        }
+
+        private fun ensureInfoPlist() {
+            if (Files.isRegularFile(infoPlistPath)) return
+            try {
+                Files.writeString(infoPlistPath, INFO_PLIST)
+            } catch (e: IOException) {
+                log.warn("Failed to write $infoPlistPath", e)
             }
         }
 
@@ -174,5 +194,25 @@ class XphpBundleRegistrar : ProjectActivity {
 
     companion object {
         private val HEX = "0123456789abcdef".toCharArray()
+
+        /**
+         * Minimal TextMate bundle metadata.  IntelliJ's bundle reader
+         * uses the presence of `info.plist` (or `package.json`, for VS
+         * Code-style bundles) at the bundle root to detect the bundle
+         * format.  The only field it requires is `name`; we don't ship
+         * a UUID because TextMate-spec UUIDs are bundle-discovery keys
+         * that the platform doesn't dedupe against (our bundle path
+         * is the dedup key).
+         */
+        private val INFO_PLIST: String = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>name</key>
+                <string>xphp</string>
+            </dict>
+            </plist>
+        """.trimIndent()
     }
 }
