@@ -204,3 +204,16 @@ community and ecosystem already trust.
   with monomorphization): [docs/generics-comparison.md](docs/generics-comparison.md)
 
 ---
+
+## Editor tooling
+
+Diagnostics, hover, go-to-definition, and completion for `.xphp` files are delivered by a Language Server Protocol
+implementation under [tools/lsp/](tools/lsp/) -- the same server powers two editor integrations:
+
+- **VS Code**: extension client at [tools/lsp/vscode-extension/](tools/lsp/vscode-extension/).
+- **PhpStorm**: plugin at [tools/phpstorm-plugin/](tools/phpstorm-plugin/) targeting PhpStorm 2026.1+ (uses the
+  IntelliJ Platform LSP API, free for all editions since 2025.2).
+
+Both bind to the same TextMate grammar and the same LSP semantics, so editing experience is consistent across editors.
+
+---

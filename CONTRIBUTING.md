@@ -40,23 +40,32 @@ itself never depends on tools.
 
 ### Adding a new package
 
-The current shape was settled when we added `tools/lsp/`. To add a third
-sibling (e.g. a JetBrains plugin under `tools/phpstorm-plugin/`):
+The current shape was settled when we added `tools/lsp/` and validated when
+we added `tools/phpstorm-plugin/` (Kotlin + Gradle, an entirely different
+toolchain than the LSP's PHP + Composer -- both fit the same per-package
+shape, which is the proof the convention generalises). To add a fourth
+sibling:
 
 1. **Create the directory** under `tools/<name>/`. Pick a name that names the
    thing concretely (`lsp`, `phpstorm-plugin`) rather than abstractly
    (`server`, `editor-integration`).
 
 2. **Self-contained build**: each package owns its build system. The LSP has
-   `tools/lsp/composer.json`; a JetBrains plugin would have
-   `tools/phpstorm-plugin/build.gradle.kts`. The root never collects per-
-   package dependencies.
+   `tools/lsp/composer.json`; the JetBrains plugin has
+   `tools/phpstorm-plugin/build.gradle.kts` + `gradle.properties` (every
+   version pin lives there so a single edit propagates to since-build,
+   IDE target, Kotlin runtime, JVM toolchain). The root never collects
+   per-package dependencies.
 
 3. **Cross-package dependency on the core**: PHP packages do this via a
    path-repo back to the root, the way `tools/lsp/composer.json` declares
    `"xphp-lang/xphp-parser": "@dev"` with `repositories: [{type: path, url:
-   "../../"}]`. Other languages need their own analog (a JetBrains plugin
-   invokes `bin/xphp` as a subprocess; no compile-time dep needed).
+   "../../"}]`. Other languages need their own analog. The PhpStorm plugin
+   takes a different route: it doesn't compile against xphp at all -- it
+   spawns the LSP as a subprocess and bundles the LSP's pre-built PHAR
+   (via `processResources` copying `../lsp/var/xphp-lsp.phar`) into the
+   plugin jar at build time. That's the cleanest cross-package dependency
+   when the consumer doesn't actually need symbols from the dependency.
 
 4. **Per-package Makefile**: each package ships its own `Makefile` at
    `tools/<name>/Makefile` with short, package-relative target names:
@@ -73,9 +82,12 @@ sibling (e.g. a JetBrains plugin under `tools/phpstorm-plugin/`):
    layer to drift.
 
 5. **Per-package CI workflow** at `.github/workflows/ci-<name>.yml`. Mirror
-   the existing `ci-lsp.yml` shape: one workflow per package, each with its
-   own concurrency group, each running unconditionally (no path filters —
-   see the next section).
+   the existing `ci-lsp.yml` or `ci-phpstorm-plugin.yml` shape: one
+   workflow per package, each with its own concurrency group, each
+   running unconditionally (no path filters — see the next section).
+   `ci-phpstorm-plugin.yml` doubles as the worked example for a package
+   whose CI needs **both** ecosystems (PHP to build the bundled PHAR,
+   then JDK + Gradle to build the plugin around it).
 
 6. **Add the package to the roadmap** (`docs/roadmap.md` Shipped → Tooling
    once it ships) and consider a one-line entry in the README pointing at
@@ -83,9 +95,9 @@ sibling (e.g. a JetBrains plugin under `tools/phpstorm-plugin/`):
 
 ### CI: one workflow file per package, no path filters
 
-`.github/workflows/ci-core.yml` and `.github/workflows/ci-lsp.yml` are
-parallel, independent workflows. Each runs on every PR and every push to
-`main`. A new package gets a third file in the same shape.
+`.github/workflows/ci-core.yml`, `ci-lsp.yml`, and `ci-phpstorm-plugin.yml`
+are parallel, independent workflows. Each runs on every PR and every push
+to `main`. A new package gets a fourth file in the same shape.
 
 We deliberately **do not** path-filter workflows at the `on:` level. GitHub's
 branch protection requires named status checks to actually run — a

@@ -36,6 +36,7 @@ timeline
                 : LSP — go-to-definition for generic instantiations
                 : LSP — completion of class names inside type-arg positions
                 : VS Code extension client at tools/lsp/vscode-extension/
+                : PhpStorm plugin at tools/phpstorm-plugin/ (Kotlin + Gradle, IntelliJ Platform LSP API)
                 : --lint headless CLI for CI (file:line:col error output)
         Developer experience
                 : PSR-4 fixtures
