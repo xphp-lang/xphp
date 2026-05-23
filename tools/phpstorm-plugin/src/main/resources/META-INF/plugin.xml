@@ -36,6 +36,16 @@
     ]]></change-notes>
 
     <!--
+      Universal IntelliJ Platform module.  Required (since IntelliJ Platform
+      2024.2+) for the plugin to be recognised as targeting any IntelliJ-
+      based IDE rather than IDEA-only by default.  Without this, install
+      logs warn:
+        "Plugin 'xphp' is compatible with IntelliJ IDEA only because it
+         doesn't define any explicit module dependencies"
+    -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!--
       The PhpStorm bundled PHP plugin gives us PSI hooks for the PHP language
       family.  We hard-depend on it so an enterprising user can't install the
       xphp plugin into IntelliJ IDEA without PHP support and end up with a
