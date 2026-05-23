@@ -10,7 +10,6 @@
 // `project.findProperty(...)` so Gradle's configuration cache stays happy.
 
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
-import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
     id("java")
@@ -67,14 +66,18 @@ dependencies {
         // Toolchain components used by the build / verify pipeline.
         pluginVerifier()
         zipSigner()
-
-        // Test fixtures distributed with the IntelliJ Platform -- gives us
-        // BasePlatformTestCase and friends for unit tests in chunk 3+.
-        testFramework(TestFrameworkType.Platform)
     }
 
+    // Plain JUnit 5 for unit-level tests against pure-data classes
+    // (XphpLanguage, XphpFileType).  We deliberately do NOT pull in
+    // `intellijPlatform { testFramework(TestFrameworkType.Platform) }`
+    // here -- that injects IntelliJ's `PathClassLoader` over the test
+    // runtime, which breaks plain JUnit 5 dispatch.  Anything that
+    // genuinely needs `BasePlatformTestCase` should live in a separate
+    // source set with its own test task; the build verifier already
+    // covers structural plugin validation without booting the IDE.
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    testImplementation("org.opentest4j:opentest4j:1.3.0")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
 }
 
 intellijPlatform {
@@ -96,7 +99,38 @@ intellijPlatform {
     }
 }
 
+// Bring the TextMate grammar from tools/lsp/vscode-extension/syntaxes/ into
+// the plugin resources at build time -- single source of truth across the
+// VS Code extension and this plugin.  The grammar isn't wired to a TextMate
+// bundle yet (chunk 3 registers the file type only; LSP semantic tokens from
+// chunk 4 cover highlighting), but bundling it now means the resource exists
+// when a later chunk plugs it in.
+//
+// Wired straight into `processResources` via `from(...)` rather than as a
+// finalised separate Copy task -- Gradle 9's strict input/output validation
+// flags any indirect path from copy output to the `jar` task's input
+// directory, and adding the source here makes the dependency explicit by
+// construction.
+val tmLanguageSource = file("../lsp/vscode-extension/syntaxes/xphp.tmLanguage.json")
+
 tasks {
+    processResources {
+        if (tmLanguageSource.exists()) {
+            from(tmLanguageSource) {
+                into("textmate")
+            }
+        } else {
+            doFirst {
+                logger.warn(
+                    "TextMate grammar missing at ${tmLanguageSource.path} -- " +
+                        "shipping plugin without it.  The VS Code extension's " +
+                        "syntaxes/xphp.tmLanguage.json is the source of truth; " +
+                        "regenerate / restore it there if you need this in the jar."
+                )
+            }
+        }
+    }
+
     test {
         useJUnitPlatform()
     }

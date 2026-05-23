@@ -13,8 +13,8 @@ branch. Where each chunk lands:
 | Chunk | Status | What it adds |
 |-------|--------|--------------|
 | 1. PHAR build for the LSP server | shipped | `make -C tools/lsp build/phar` produces a self-contained `xphp-lsp.phar` |
-| 2. Plugin scaffold (this commit)  | shipped | Gradle + Kotlin skeleton, plugin descriptor, wrapper, Makefile |
-| 3. File type + TextMate grammar   | pending | Recognises `.xphp`, applies syntax highlighting from the shared `tmLanguage.json` |
+| 2. Plugin scaffold                | shipped | Gradle + Kotlin skeleton, plugin descriptor, wrapper, Makefile |
+| 3. File type + TextMate grammar   | shipped | Recognises `.xphp`, bundles the shared `tmLanguage.json`; LSP semantic tokens (chunk 4) carry the highlighting |
 | 4. LSP wiring                     | pending | Implements `LspServerSupportProvider`, settings UI, manual LSP path |
 | 5. Bundle PHAR + auto-extract     | pending | Zero-config install: bundled PHAR extracted at first run |
 | 6. CI                             | pending | `.github/workflows/ci-phpstorm-plugin.yml` matching the per-package convention |

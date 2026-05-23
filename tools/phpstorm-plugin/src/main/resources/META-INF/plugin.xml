@@ -43,11 +43,26 @@
     -->
     <depends>com.jetbrains.php</depends>
 
+    <extensions defaultExtensionNs="com.intellij">
+        <!--
+          File type for *.xphp.  language="xphp" binds to XphpLanguage, the
+          singleton that downstream pieces (LSP server descriptor, structure
+          view, inspections) dispatch on.  No syntax-highlighter or parser
+          definition yet: chunk 4's LSP wiring brings semantic tokens, which
+          is the better source of xphp-aware highlighting than a hand-rolled
+          IntelliJ SyntaxHighlighter.
+        -->
+        <fileType
+            name="xphp"
+            language="xphp"
+            extensions="xphp"
+            implementationClass="com.xphp.lsp.XphpFileType"
+            fieldName="INSTANCE"/>
+    </extensions>
+
     <!--
-      Extension points populate as later chunks land:
-        chunk 3 ; com.intellij.fileType, textmate.bundleProvider
+      Future extension-point additions:
         chunk 4 ; com.intellij.platform.lsp.serverSupportProvider
         chunk 4 ; com.intellij.applicationConfigurable, applicationService
     -->
-    <extensions defaultExtensionNs="com.intellij"/>
 </idea-plugin>
