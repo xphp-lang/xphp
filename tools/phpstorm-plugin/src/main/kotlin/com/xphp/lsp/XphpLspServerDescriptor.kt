@@ -16,12 +16,14 @@ import java.io.File
  * every open, defeating the in-memory `Registry` cache the server already
  * maintains.
  *
- * Binary resolution:
- *   * Chunk 4 (this commit): use [XphpSettings.lspPath].  If unset, the
- *     LSP can't start and the user sees an error pointing at the settings
- *     pane.  This is deliberate -- chunk 5 adds the bundled-PHAR fallback,
- *     and we want chunk 4 to surface plumbing problems crisply rather than
- *     silently falling through to an unrelated default.
+ * Binary resolution order:
+ *   1. [XphpSettings.lspPath] if the user set it explicitly (overrides
+ *      everything else -- useful when iterating on the LSP locally).
+ *   2. The bundled PHAR extracted by [PharExtractor] from the plugin jar
+ *      into PhpStorm's system directory.  This is the zero-config path
+ *      a typical user gets on plugin install.
+ *   3. If neither is available, fail loudly with a message that points at
+ *      the settings pane.
  *
  * Transport: stdio.  Matches `tools/lsp/bin/xphp-lsp` (no `--lint` arg).
  */
@@ -32,18 +34,19 @@ class XphpLspServerDescriptor(project: Project) :
         file.fileType is XphpFileType
 
     override fun createCommandLine(): GeneralCommandLine {
-        val binaryPath = XphpSettings.getInstance().lspPath
-            ?: error(
-                "xphp LSP binary path is not configured.  Open " +
-                    "Preferences -> Tools -> xPHP and set the absolute path to " +
-                    "your xphp-lsp.phar (or the live `tools/lsp/bin/xphp-lsp` " +
-                    "script).  Chunk 5 will add a bundled-PHAR fallback so this " +
-                    "becomes optional."
-            )
-
-        val binary = File(binaryPath)
-        if (!binary.isFile) {
-            error("Configured xphp LSP binary does not exist: $binaryPath")
+        val configured = XphpSettings.getInstance().lspPath
+        val binary = when {
+            configured != null -> File(configured).also {
+                if (!it.isFile) error("Configured xphp LSP binary does not exist: $configured")
+            }
+            else -> PharExtractor.getInstance().extract()?.toFile()
+                ?: error(
+                    "xphp LSP binary path is not configured and no bundled " +
+                        "PHAR is available inside this plugin build.  Open " +
+                        "Preferences -> Tools -> xPHP and set the absolute " +
+                        "path to a built `xphp-lsp.phar` or the live " +
+                        "`tools/lsp/bin/xphp-lsp` script."
+                )
         }
 
         val cmd = GeneralCommandLine()

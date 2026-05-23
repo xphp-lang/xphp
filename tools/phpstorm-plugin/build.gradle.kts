@@ -113,6 +113,18 @@ intellijPlatform {
 // construction.
 val tmLanguageSource = file("../lsp/vscode-extension/syntaxes/xphp.tmLanguage.json")
 
+// PHAR built by `make -C tools/lsp build/phar`.  Bundled into the plugin jar
+// at `bin/xphp-lsp.phar`; PharExtractor reads it from the classpath on
+// first plugin load and copies it into PhpStorm's system directory.
+//
+// Same shape as the tmLanguage copy above: upstream artifact, build it
+// out-of-band and we pick it up.  CI runs both makes before assembling the
+// plugin (chunk 6).  A missing PHAR doesn't fail the build -- it ships an
+// LSP-less plugin where the user must point Settings -> Tools -> xPHP at
+// an external binary.  That's the right behaviour for a dev iterating on
+// the plugin without rebuilding the LSP on every change.
+val xphpLspPhar = file("../lsp/var/xphp-lsp.phar")
+
 tasks {
     processResources {
         if (tmLanguageSource.exists()) {
@@ -126,6 +138,24 @@ tasks {
                         "shipping plugin without it.  The VS Code extension's " +
                         "syntaxes/xphp.tmLanguage.json is the source of truth; " +
                         "regenerate / restore it there if you need this in the jar."
+                )
+            }
+        }
+
+        if (xphpLspPhar.exists()) {
+            from(xphpLspPhar) {
+                into("bin")
+            }
+        } else {
+            doFirst {
+                logger.warn(
+                    "Bundled xphp-lsp.phar missing at ${xphpLspPhar.path} -- " +
+                        "shipping plugin WITHOUT a bundled LSP binary.  Users " +
+                        "will need to set Preferences -> Tools -> xPHP -> 'xphp " +
+                        "LSP binary' to an external path before .xphp editing " +
+                        "intelligence is available.  Run `make -C tools/lsp " +
+                        "build/phar` before `./gradlew build` to produce a " +
+                        "self-contained plugin."
                 )
             }
         }
