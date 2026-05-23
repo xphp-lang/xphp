@@ -39,7 +39,7 @@ class XphpLspServerDescriptor(project: Project) :
     ProjectWideLspServerDescriptor(project, "xphp") {
 
     override fun isSupportedFile(file: VirtualFile): Boolean =
-        file.fileType is XphpFileType
+        file.extension == "xphp"
 
     override fun createCommandLine(): GeneralCommandLine {
         val binary = resolveBinary() ?: run {

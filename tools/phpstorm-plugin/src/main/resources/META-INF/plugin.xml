@@ -90,19 +90,29 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <!--
-          File type for *.xphp.  language="xphp" binds to XphpLanguage, the
-          singleton that downstream pieces (LSP server descriptor, structure
-          view, inspections) dispatch on.  No syntax-highlighter or parser
-          definition yet: chunk 4's LSP wiring brings semantic tokens, which
-          is the better source of xphp-aware highlighting than a hand-rolled
-          IntelliJ SyntaxHighlighter.
+          NOTE: we deliberately do NOT register a `<fileType>` for *.xphp.
+          An earlier iteration shipped a `LanguageFileType(XphpLanguage)`
+          plus a top-level `XphpLanguage`, but `LanguageFileType` makes
+          the platform assume the bound `Language` has a `ParserDefinition`
+          available; it walks the language hierarchy looking for one to
+          build PSI when the editor opens.  We don't have a parser
+          (parsing is delegated to the LSP), so editor construction failed
+          and `.xphp` files refused to open at all
+          ("Cannot focus editor ... preferredFocusedComponent is null" in
+          idea.log, immediately followed by `fileClosed`).
+
+          With no `<fileType>` from us, PhpStorm's file-type detector
+          falls through to the TextMate plugin, which claims `.xphp` via
+          our bundle's `fileTypes: ["xphp"]` declaration once
+          XphpBundleRegistrar has registered the bundle.  Result: the
+          file opens as a TextMate-handled file with our grammar applied
+          for highlighting, and our `XphpLspServerSupportProvider`
+          routes the LSP by extension (`file.extension == "xphp"`), the
+          docs-recommended pattern.
+
+          See https://plugins.jetbrains.com/docs/intellij/language-server-protocol.html
+          #basic-implementation for the canonical filter shape.
         -->
-        <fileType
-            name="xphp"
-            language="xphp"
-            extensions="xphp"
-            implementationClass="com.xphp.lsp.XphpFileType"
-            fieldName="INSTANCE"/>
 
         <!--
           Application-level settings service for the xphp LSP binary path.
@@ -159,25 +169,16 @@
             implementation="com.xphp.lsp.textmate.XphpBundleRegistrar"/>
 
         <!--
-          Bind TextMate's own SyntaxHighlighterFactory to our XphpLanguage.
-          When the platform asks "how should I highlight an xphp file?", it
-          dispatches here; TextMate's factory then looks up the grammar by
-          filename via `TextMateService.getLanguageDescriptorByFileName()`.
-          That lookup succeeds because:
-            (a) XphpTextMateBundleProvider registered our grammar at startup,
-            (b) xphp.tmLanguage.json's `fileTypes: ["xphp"]` array tells the
-                TextMate plugin to associate `.xphp` files with the
-                `source.xphp` scope.
-          Result: PHP base highlighting (the grammar `include`s `source.php`)
-          plus the xphp-extras patterns for generic-clause colouring.
-
-          This OVERRIDES the PHP-language-inheritance fallback declared in
-          XphpLanguage's constructor; inheritance only fires when no
-          factory is registered for the dialect, and this registration is
-          the dialect's own factory.
+          NOTE: we deliberately do NOT register a
+          `<lang.syntaxHighlighterFactory language="xphp" ...>`.  Without
+          an `XphpLanguage` for the LSP-only model (see the longer
+          rationale above on the missing `<fileType>`), there's nothing
+          to bind the factory to.  Highlighting goes through the
+          TextMate plugin's own file-recognition path; the bundle
+          registered by XphpBundleRegistrar declares `fileTypes: ["xphp"]`,
+          so the platform classifies `.xphp` files as `TextMateFileType`
+          and the TextMate-provided highlighter (registered for
+          `TextMateLanguage` by the platform) handles them automatically.
         -->
-        <lang.syntaxHighlighterFactory
-            language="xphp"
-            implementationClass="org.jetbrains.plugins.textmate.language.syntax.highlighting.TextMateSyntaxHighlighterFactory"/>
     </extensions>
 </idea-plugin>
