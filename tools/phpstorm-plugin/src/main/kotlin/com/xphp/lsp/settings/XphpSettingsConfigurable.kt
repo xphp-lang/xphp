@@ -32,12 +32,12 @@ class XphpSettingsConfigurable : BoundConfigurable("xPHP") {
     private val settings = XphpSettings.getInstance()
 
     override fun createPanel(): DialogPanel = panel {
+        // The current non-deprecated `textFieldWithBrowseButton` overload
+        // takes a `FileChooserDescriptor` (with the title baked in via
+        // `.withTitle(...)`); the older `browseDialogTitle = ...` named
+        // argument is deprecated -- and on this build the Kotlin compiler
+        // promotes that deprecation to an error.
         row("xphp LSP binary:") {
-            // The current non-deprecated `textFieldWithBrowseButton` overload
-            // takes a `FileChooserDescriptor` (with the title baked in via
-            // `.withTitle(...)`); the older `browseDialogTitle = ...` named
-            // argument is deprecated -- and on this build the Kotlin compiler
-            // promotes that deprecation to an error.
             textFieldWithBrowseButton(
                 FileChooserDescriptorFactory.createSingleFileDescriptor()
                     .withTitle("Select xphp LSP binary"),
@@ -50,6 +50,25 @@ class XphpSettingsConfigurable : BoundConfigurable("xPHP") {
                         "live <code>tools/lsp/bin/xphp-lsp</code> script.  Leave " +
                         "empty to use the plugin's bundled server (auto-extracted " +
                         "to PhpStorm's system dir on first plugin load)."
+                )
+        }
+
+        // PHP interpreter override -- mirrors the VS Code extension's
+        // `xphp.phpPath` setting so multi-PHP-version dev machines and
+        // non-PATH installs work the same across editors.
+        row("PHP interpreter:") {
+            textFieldWithBrowseButton(
+                FileChooserDescriptorFactory.createSingleFileDescriptor()
+                    .withTitle("Select PHP interpreter"),
+            )
+                .bindText(settings.state::phpPath)
+                .align(AlignX.FILL)
+                .comment(
+                    "Absolute path to the <code>php</code> binary used to launch " +
+                        "the xphp LSP PHAR.  Leave empty to use whatever <code>php</code> " +
+                        "is on PATH.  Only affects PHAR launches; if the LSP " +
+                        "binary above is a shell script it runs directly through " +
+                        "its own shebang."
                 )
         }
     }

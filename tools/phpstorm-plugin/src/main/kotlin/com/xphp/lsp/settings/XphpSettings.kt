@@ -10,16 +10,23 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 /**
  * Persistent application-level settings for the xphp plugin.
  *
- * Currently exposes a single knob: the absolute path to a custom
- * `xphp-lsp.phar` (or `xphp-lsp` script) that overrides the bundled
- * server.  Chunk 4 makes this knob the *only* way to point the plugin at
- * a server; chunk 5 adds the bundled-PHAR fallback so unset means "use
- * the one extracted from the plugin jar".
+ * Two knobs today:
+ *
+ *   * `lspPath`: absolute path to a custom `xphp-lsp.phar` (or
+ *     `xphp-lsp` script).  Empty means "use the bundled PHAR that
+ *     [com.xphp.lsp.PharExtractor] extracts on first plugin load".
+ *
+ *   * `phpPath`: absolute path to the PHP interpreter that should
+ *     launch the PHAR.  Empty means "use whatever `php` is on the
+ *     IDE's PATH".  Matches the `xphp.phpPath` setting the VS Code
+ *     extension already exposes, so multi-PHP-version dev machines
+ *     and non-PATH installs work the same way across editors.
  *
  * State persists to `<config>/options/xphp.xml` in PhpStorm's config
  * directory.  Per-project overrides aren't supported -- a developer
  * working across multiple xphp projects on a single PhpStorm install
- * almost certainly wants the same LSP binary for all of them.
+ * almost certainly wants the same LSP binary + PHP interpreter for
+ * all of them.
  */
 @Service(Service.Level.APP)
 @State(
@@ -29,17 +36,34 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class XphpSettings : PersistentStateComponent<XphpSettings.State> {
 
     /**
-     * State container -- a plain data class so JetBrains' XmlSerializer can
-     * round-trip it without bespoke serializer registration.
+     * State container.  Must be `public` because `PersistentStateComponent`
+     * exposes it through the public `getState()` / `loadState()` methods --
+     * Kotlin won't let a public function return / accept an `internal`
+     * type.
+     *
+     * The only sanctioned mutator is the Kotlin UI DSL binding in
+     * [XphpSettingsConfigurable], which writes raw textfield content
+     * directly to `state.lspPath` / `state.phpPath`.  External callers
+     * MUST read through the trimmed accessors ([lspPath], [phpPath]) so
+     * a stray space in the user's input doesn't propagate to the
+     * descriptor's `cmd.exePath`.
      */
     data class State(
         /**
-         * Absolute path to a user-supplied `xphp-lsp` server.  Empty string
-         * means "no override"; chunk 5 will interpret that as "use the
-         * bundled PHAR".  Until chunk 5 lands, an unset path is a runtime
-         * error surfaced through the settings UI.
+         * Absolute path to a user-supplied `xphp-lsp` server.  Empty
+         * means "no override"; [com.xphp.lsp.XphpLspServerDescriptor]
+         * falls through to the bundled PHAR.  Stored raw (not trimmed)
+         * because the Kotlin UI DSL binding writes verbatim from the
+         * textfield -- normalization happens at read time below.
          */
         var lspPath: String = "",
+
+        /**
+         * Absolute path to the PHP interpreter used to launch a PHAR
+         * LSP.  Empty means "use whatever `php` is on PATH".  Same
+         * normalization rule as `lspPath`.
+         */
+        var phpPath: String = "",
     )
 
     private var state = State()
@@ -51,16 +75,20 @@ class XphpSettings : PersistentStateComponent<XphpSettings.State> {
     }
 
     /**
-     * Convenience accessor mirroring the trimmed runtime view of [State.lspPath].
-     * Returns null when the user hasn't configured a path -- callers use
-     * `null` to mean "fall through to the bundled binary" once chunk 5
-     * lands.
+     * Trimmed view of [State.lspPath].  Null when no override is
+     * configured -- callers use null as the signal to fall through to
+     * the bundled PHAR.
      */
-    var lspPath: String?
+    val lspPath: String?
         get() = state.lspPath.trim().takeIf { it.isNotEmpty() }
-        set(value) {
-            state.lspPath = value?.trim().orEmpty()
-        }
+
+    /**
+     * Trimmed view of [State.phpPath].  Null when no override is
+     * configured -- callers default to "php" and let the OS resolve it
+     * against PATH.
+     */
+    val phpPath: String?
+        get() = state.phpPath.trim().takeIf { it.isNotEmpty() }
 
     companion object {
         fun getInstance(): XphpSettings =

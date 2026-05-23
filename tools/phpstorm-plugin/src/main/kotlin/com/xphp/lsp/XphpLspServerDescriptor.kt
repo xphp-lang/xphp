@@ -58,9 +58,12 @@ class XphpLspServerDescriptor(project: Project) :
         // PHAR needs `php` as the launcher; the script (tools/lsp/bin/xphp-lsp)
         // has its own shebang and runs directly.  We pick by extension rather
         // than file inspection -- the user explicitly typed this path in
-        // settings, no need to second-guess.
+        // settings, no need to second-guess.  For PHAR launches, honour
+        // `settings.phpPath` if set (parity with the VS Code extension's
+        // `xphp.phpPath`); otherwise fall back to bare `php` and let the OS
+        // resolve it against PATH.
         if (binary.extension.equals("phar", ignoreCase = true)) {
-            cmd.exePath = "php"
+            cmd.exePath = XphpSettings.getInstance().phpPath ?: "php"
             cmd.addParameter(binary.absolutePath)
         } else {
             cmd.exePath = binary.absolutePath
