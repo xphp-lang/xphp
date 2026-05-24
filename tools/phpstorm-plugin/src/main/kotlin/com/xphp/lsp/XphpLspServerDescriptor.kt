@@ -78,32 +78,33 @@ class XphpLspServerDescriptor(project: Project) :
      * nor the bundled-PHAR fallback resolves to a real file.  Null is the
      * trigger for [notifyMissingBinary].
      *
-     * If the configured `lspPath` is set but the file is missing on disk,
-     * we **fall through** to the bundled-PHAR extractor instead of failing.
-     * The trap this guards against: a user types the path the bundled
-     * PHAR gets extracted to (e.g.
-     * `<systemDir>/xphp/xphp-lsp.phar`) into Settings -> Tools -> xPHP as
-     * documentation, then waits for the file to appear there -- except
-     * the very act of "setting" the field is what suppresses the
-     * extractor (the configured-path branch wins outright).  Falling
-     * through self-heals that case: the bundled PHAR runs and lands at
-     * the same path the user typed, so the next call resolves cleanly.
-     * One warn-level log so the discrepancy is visible to anyone
-     * grepping idea.log.
+     * **Always** runs [PharExtractor.extract] first, regardless of
+     * whether `lspPath` is set.  Reason: a user who set `lspPath` to the
+     * exact path PharExtractor writes to (`<systemDir>/xphp/xphp-lsp.phar`)
+     * was effectively pinning their LSP to whatever bytes happened to be
+     * on disk at the time they configured the setting.  Plugin upgrades
+     * couldn't refresh the bundled PHAR -- the configured-path branch
+     * short-circuited before the extractor ran, so a stale on-disk PHAR
+     * stayed in use forever.  PharExtractor's sha-check is cheap on the
+     * no-change path (read bundled bytes, sha compare, return), so always
+     * running it is the right default; the explicit `lspPath` is then a
+     * pure override that points wherever (could be the bundle target,
+     * could be an external binary).
      */
     private fun resolveBinary(): File? {
+        val bundled = PharExtractor.getInstance().extract()?.toFile()
         val configured = XphpSettings.getInstance().lspPath
         if (configured != null) {
             val asFile = File(configured)
             if (asFile.isFile) return asFile
             LOG.warn(
                 "Configured xphp LSP binary does not exist on disk: " +
-                    "$configured.  Falling back to the bundled PHAR extractor.  " +
-                    "Clear the path in Settings -> Tools -> xPHP, or update it " +
-                    "to a real binary, to silence this warning."
+                    "$configured.  Using the bundled PHAR instead.  Clear " +
+                    "the path in Settings -> Tools -> xPHP, or update it to " +
+                    "a real binary, to silence this warning."
             )
         }
-        return PharExtractor.getInstance().extract()?.toFile()
+        return bundled
     }
 
     private fun notifyMissingBinary() {
