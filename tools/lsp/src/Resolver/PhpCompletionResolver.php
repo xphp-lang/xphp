@@ -75,7 +75,12 @@ final class PhpCompletionResolver
         // poisons the LSP transport via stdout.
         try {
             return $this->completeInner($uri, $line, $character);
-        } catch (Throwable) {
+        } catch (Throwable $t) {
+            self::trace(sprintf(
+                'top-level catch %s: %s',
+                $t::class,
+                self::oneLine($t->getMessage()),
+            ));
             return [];
         }
     }
@@ -85,7 +90,10 @@ final class PhpCompletionResolver
      */
     private function completeInner(string $uri, int $line, int $character): array
     {
+        self::trace(sprintf('request uri=%s line=%d char=%d', $uri, $line, $character));
+
         if (!$this->workspace->has($uri)) {
+            self::trace('workspace miss; no document');
             return [];
         }
         $document = $this->workspace->get($uri);
@@ -93,10 +101,18 @@ final class PhpCompletionResolver
 
         $hit = PhpCompletionContext::detect($document->text, $cursorOffset);
         if ($hit === null) {
+            self::trace(sprintf('context detect=null offset=%d', $cursorOffset));
             return [];
         }
+        self::trace(sprintf(
+            'context kind=%s prefix=%s%s offset=%d',
+            $hit['kind'],
+            json_encode($hit['prefix']),
+            isset($hit['receiverEnd']) ? sprintf(' receiverEnd=%d', $hit['receiverEnd']) : '',
+            $cursorOffset,
+        ));
 
-        return match ($hit['kind']) {
+        $items = match ($hit['kind']) {
             'member', 'static' => $this->completeMembers($uri, $document->text, $hit),
             'variable'         => $this->completeVariables($uri, $hit['prefix']),
             'new'              => $this->completeClassesByPrefix($hit['prefix']),
@@ -105,6 +121,8 @@ final class PhpCompletionResolver
                 $this->completeFunctionsByPrefix($hit['prefix']),
             ),
         };
+        self::trace(sprintf('returned items=%d', count($items)));
+        return $items;
     }
 
     /**
@@ -124,7 +142,12 @@ final class PhpCompletionResolver
         $receiverProbe = max(0, $hit['receiverEnd'] - 1);
         try {
             $offsetReflection = $this->reflector->reflectOffset($source, ByteOffset::fromInt($receiverProbe));
-        } catch (Throwable) {
+        } catch (Throwable $t) {
+            self::trace(sprintf(
+                'reflectOffset threw %s: %s',
+                $t::class,
+                self::oneLine($t->getMessage()),
+            ));
             return [];
         }
 
@@ -133,30 +156,61 @@ final class PhpCompletionResolver
         // PrimitiveType, ClassType, ...); calling `name()` directly blows
         // up on MissingType.  MissingType stringifies to `<missing>`.
         $typeName = (string) $context->type();
+        self::trace(sprintf(
+            'reflectOffset type=%s symbolKind=%s name=%s',
+            $typeName,
+            $context->symbol()->symbolType(),
+            $context->symbol()->name(),
+        ));
         if ($typeName === '' || $typeName === '<missing>') {
             return [];
         }
 
         try {
             $class = $this->reflector->reflectClassLike($typeName);
-        } catch (Throwable) {
+        } catch (Throwable $t) {
+            self::trace(sprintf(
+                'reflectClassLike(%s) threw %s: %s',
+                $typeName,
+                $t::class,
+                self::oneLine($t->getMessage()),
+            ));
             return [];
         }
 
+        $methodsAll = count($class->methods());
+        $propsAll = count($class->properties());
+        $constsAll = count($class->constants());
+        self::trace(sprintf(
+            'reflectClassLike(%s) ok methods=%d props=%d consts=%d',
+            $typeName,
+            $methodsAll,
+            $propsAll,
+            $constsAll,
+        ));
+
         $items = [];
         $isStatic = $hit['kind'] === 'static';
+        $droppedMagic = 0;
+        $droppedStatic = 0;
+        $droppedVis = 0;
+        $droppedPrefix = 0;
 
         foreach ($class->methods() as $method) {
             if (str_starts_with($method->name(), '__')) {
+                $droppedMagic++;
                 continue;
             }
             if ($isStatic xor $method->isStatic()) {
+                $droppedStatic++;
                 continue;
             }
             if (!self::isVisibleFromCaller($method->visibility())) {
+                $droppedVis++;
                 continue;
             }
             if (!self::matchesPrefix($method->name(), $hit['prefix'])) {
+                $droppedPrefix++;
                 continue;
             }
             $items[] = self::methodItem($method);
@@ -193,6 +247,15 @@ final class PhpCompletionResolver
                 );
             }
         }
+
+        self::trace(sprintf(
+            'member filter kept=%d dropped magic=%d static=%d vis=%d prefix=%d',
+            count($items),
+            $droppedMagic,
+            $droppedStatic,
+            $droppedVis,
+            $droppedPrefix,
+        ));
 
         /** @var list<CompletionItem> $items */
         return $items;
@@ -396,5 +459,22 @@ final class PhpCompletionResolver
             return true;
         }
         return stripos($candidate, $prefix) === 0;
+    }
+
+    /**
+     * Write a tagged diagnostic line to stderr.  PhpStorm captures the LSP
+     * server's stderr into idea.log; the `[xphp-lsp completion]` prefix
+     * lets users grep one round trip out of a noisy log.  Failures here
+     * are themselves silenced (stderr could close in tests) so we never
+     * mask a real error with a logging error.
+     */
+    private static function trace(string $message): void
+    {
+        @fwrite(STDERR, '[xphp-lsp completion] ' . $message . "\n");
+    }
+
+    private static function oneLine(string $message): string
+    {
+        return str_replace(["\r", "\n"], ' ', $message);
     }
 }

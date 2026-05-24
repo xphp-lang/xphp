@@ -260,6 +260,51 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertContains('strlen', $labels);
     }
 
+    public function testCompletesMembersOnReceiverFromGenericInstantiation(): void
+    {
+        // Mirrors the user-reported failing case in
+        // xphp-20260524-150655-167.log:  `$users = new Collection<User>(...)`
+        // followed by `$users->|` on the next line.  The xphp strip turns
+        // `<User>` into whitespace; worse-reflection should still infer
+        // `$users: App\Containers\Collection` from the ctor and surface
+        // Collection's methods.  Production returned empty here; if this
+        // test passes locally, the gap is environmental rather than logic.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T>
+        {
+            private T[] $items;
+            public function __construct(T ...$items)
+            {
+                $this->items = $items;
+            }
+            public function first(): ?T
+            {
+                return $this->items[0] ?? null;
+            }
+            public function count(): int
+            {
+                return count($this->items);
+            }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User { public function __construct(public string \$name) {} }\n");
+
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\n\$users = new Collection<User>(new User('a'));\n\$users->\necho 'done';\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$users->', strlen('$users->'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // Methods of Collection
+        self::assertContains('first', $labels);
+        self::assertContains('count', $labels);
+        // __construct is suppressed by the magic-method filter
+        self::assertNotContains('__construct', $labels);
+    }
+
     public function testExpressionPositionEmptyPrefixReturnsEmpty(): void
     {
         // Same guard as `new` -- no completion without a prefix at

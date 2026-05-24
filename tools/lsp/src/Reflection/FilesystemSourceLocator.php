@@ -78,6 +78,12 @@ final class FilesystemSourceLocator implements SourceCodeLocator
         $map = $this->map();
 
         if (!isset($map[$needle])) {
+            @fwrite(STDERR, sprintf(
+                "[xphp-lsp locator] miss %s (index size %d under %s)\n",
+                $needle,
+                count($map),
+                $this->rootPath,
+            ));
             throw new SourceNotFound(sprintf(
                 'No file under "%s" declares "%s"',
                 $this->rootPath,
@@ -117,16 +123,22 @@ final class FilesystemSourceLocator implements SourceCodeLocator
 
         $map = [];
         if (!is_dir($this->rootPath)) {
+            @fwrite(STDERR, sprintf(
+                "[xphp-lsp locator] rootPath %s not a directory; FQN index empty\n",
+                $this->rootPath,
+            ));
             $this->map = $map;
             return $map;
         }
 
+        $filesScanned = 0;
         foreach ($this->iterator() as $file) {
             /** @var SplFileInfo $file */
             $ext = $file->getExtension();
             if ($ext !== 'php' && $ext !== 'xphp') {
                 continue;
             }
+            $filesScanned++;
 
             $source = @file_get_contents($file->getPathname());
             if ($source === false) {
@@ -148,6 +160,14 @@ final class FilesystemSourceLocator implements SourceCodeLocator
                 $map[$fqn] = $file->getPathname();
             }
         }
+
+        @fwrite(STDERR, sprintf(
+            "[xphp-lsp locator] indexed %d FQNs from %d files under %s (skipped dirs: %s)\n",
+            count($map),
+            $filesScanned,
+            $this->rootPath,
+            implode(', ', self::SKIP_DIRS),
+        ));
 
         $this->map = $map;
         return $map;

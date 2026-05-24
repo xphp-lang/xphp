@@ -39,7 +39,7 @@ final class LspDispatcherFactoryTest extends TestCase
         self::assertSame(
             TextDocumentSyncKind::FULL,
             $result->capabilities->textDocumentSync,
-            'textDocumentSync must be FULL — phpactor TextDocumentHandler registers this and the client needs it to know how to push updates',
+            'textDocumentSync must be FULL — XphpTextDocumentHandler registers this and the client needs it to know how to push updates',
         );
     }
 

@@ -25,7 +25,7 @@ use Phpactor\LanguageServer\Core\Service\ServiceProviders;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServer\Handler\System\ExitHandler;
 use Phpactor\LanguageServer\Handler\System\ServiceHandler;
-use Phpactor\LanguageServer\Handler\TextDocument\TextDocumentHandler;
+use XPHP\Lsp\Handler\XphpTextDocumentHandler;
 use Phpactor\LanguageServer\Handler\Workspace\CommandHandler;
 use Phpactor\LanguageServer\Listener\ServiceListener;
 use Phpactor\LanguageServer\Listener\WorkspaceListener;
@@ -156,7 +156,7 @@ final class LspDispatcherFactory implements DispatcherFactory
         );
 
         $handlers = new Handlers(
-            new TextDocumentHandler($eventDispatcher),
+            new XphpTextDocumentHandler($eventDispatcher),
             new ServiceHandler($serviceManager, $clientApi),
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
