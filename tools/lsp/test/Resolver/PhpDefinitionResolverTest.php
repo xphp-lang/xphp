@@ -328,6 +328,7 @@ final class PhpDefinitionResolverTest extends TestCase
             rootPath: '',
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
         ))->build();
         return new PhpDefinitionResolver($workspace, $parser, $reflector, $cache);
     }

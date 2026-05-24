@@ -145,6 +145,7 @@ final class ReflectorFactoryTest extends TestCase
             $rootPath,
             ReflectorFactory::defaultStubPath(),
             ReflectorFactory::defaultCacheDir(),
+            new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, $rootPath),
         );
     }
 

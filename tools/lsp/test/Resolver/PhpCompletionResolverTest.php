@@ -479,6 +479,7 @@ final class PhpCompletionResolverTest extends TestCase
             rootPath: '',
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
         ))->build();
         $classLikeLookup = new \XPHP\Lsp\Resolver\WorkspaceClassLikeLookup($workspace, $cache);
         return new PhpCompletionResolver(

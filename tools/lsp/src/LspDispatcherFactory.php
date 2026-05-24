@@ -48,7 +48,10 @@ use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
+use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Lsp\Resolver\CompletionIndex;
+use XPHP\Lsp\Resolver\CompositeClassLikeLookup;
+use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
 use XPHP\Lsp\Resolver\GenericParamRegistry;
 use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
@@ -102,6 +105,11 @@ final class LspDispatcherFactory implements DispatcherFactory
         // hands us as the project workspace root; an empty string => no
         // filesystem walking (workspace + stubs only).
         $rootPath = $initializeParams->rootPath ?? '';
+        // FqnIndex is the single workspace-wide FQN -> declaration map.
+        // Replaces three parallel walks (FilesystemSourceLocator's private
+        // map, WorkspaceSymbols' open-doc walk, WorkspaceClassLikeLookup's
+        // open-doc walk).  Phase-0 of the LSP follow-up roadmap.
+        $fqnIndex = new FqnIndex($workspace, $cache, $xphpParser, $rootPath);
         $reflector = (new ReflectorFactory(
             $workspace,
             $cache,
@@ -109,6 +117,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             $rootPath,
             ReflectorFactory::defaultStubPath(),
             ReflectorFactory::defaultCacheDir(),
+            $fqnIndex,
         ))->build();
         $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector, $cache);
         // Per-session registry of (namespace, paramName) pairs harvested from
@@ -122,7 +131,16 @@ final class LspDispatcherFactory implements DispatcherFactory
         // Collection<User>(...)` resolves to `?App\Models\User` rather than
         // the unresolved `?T` the prettify path can produce.  Consulted
         // first in renderVariable; falls back to prettify on misses.
-        $classLikeLookup = new WorkspaceClassLikeLookup($workspace, $cache);
+        // Composite chain: workspace (live) -> filesystem (on-disk).  Open-doc
+        // declarations win; closed-file declarations fall through to the
+        // filesystem-backed FilesystemClassLikeLookup, which re-parses on
+        // demand via FqnIndex and returns the ClassLike with xphp attributes
+        // intact -- exactly what GenericResolver needs to substitute type-args
+        // when Collection.xphp isn't open in the editor.
+        $classLikeLookup = new CompositeClassLikeLookup(
+            new WorkspaceClassLikeLookup($workspace, $cache),
+            new FilesystemClassLikeLookup($fqnIndex),
+        );
         $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $xphpParser);
         $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector, $genericParams, $genericResolver);
 

@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace XPHP\Lsp\Test\Reflection;
 
 use PhpParser\ParserFactory;
+use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\WorseReflection\Core\Exception\SourceNotFound;
 use Phpactor\WorseReflection\Core\Name;
 use PHPUnit\Framework\TestCase;
+use XPHP\Lsp\Analyzer\Analyzer;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Reflection\FilesystemSourceLocator;
+use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 final class FilesystemSourceLocatorTest extends TestCase
@@ -94,9 +98,14 @@ final class FilesystemSourceLocatorTest extends TestCase
 
     public function testReturnsEmptyMapWhenRootMissing(): void
     {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $workspace = new PhpactorWorkspace();
+        $root = '/path/that/definitely/does/not/exist';
         $locator = new FilesystemSourceLocator(
-            '/path/that/definitely/does/not/exist',
-            new XphpSourceParser((new ParserFactory())->createForHostVersion()),
+            new FqnIndex($workspace, $cache, $parser, $root),
+            $parser,
+            $root,
         );
 
         $this->expectException(SourceNotFound::class);
@@ -105,9 +114,13 @@ final class FilesystemSourceLocatorTest extends TestCase
 
     private function newLocator(): FilesystemSourceLocator
     {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $workspace = new PhpactorWorkspace();
         return new FilesystemSourceLocator(
+            new FqnIndex($workspace, $cache, $parser, $this->root),
+            $parser,
             $this->root,
-            new XphpSourceParser((new ParserFactory())->createForHostVersion()),
         );
     }
 

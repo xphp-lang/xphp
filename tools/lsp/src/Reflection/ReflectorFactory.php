@@ -69,13 +69,14 @@ final class ReflectorFactory
         private readonly string $rootPath,
         private readonly string $stubPath,
         private readonly string $cacheDir,
+        private readonly FqnIndex $fqnIndex,
     ) {
     }
 
     public function build(): Reflector
     {
         $workspaceLocator = new WorkspaceSourceLocator($this->workspace, $this->cache, $this->parser);
-        $filesystemLocator = new FilesystemSourceLocator($this->rootPath, $this->parser);
+        $filesystemLocator = new FilesystemSourceLocator($this->fqnIndex, $this->parser, $this->rootPath);
 
         $stubsAvailable = $this->stubPath !== '' && is_dir($this->stubPath);
 

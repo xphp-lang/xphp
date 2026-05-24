@@ -298,6 +298,7 @@ final class PhpHoverResolverTest extends TestCase
             rootPath: '',
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
         ))->build();
         $classLikeLookup = new WorkspaceClassLikeLookup($workspace, $cache);
         $generic = new GenericResolver($workspace, $cache, $classLikeLookup, $parser);

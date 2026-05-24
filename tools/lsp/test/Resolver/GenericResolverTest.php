@@ -11,6 +11,9 @@ use PhpParser\ParserFactory;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Lsp\Resolver\CompositeClassLikeLookup;
+use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
 use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\WorkspaceClassLikeLookup;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -191,6 +194,46 @@ final class GenericResolverTest extends TestCase
         self::assertNull($resolver->resolveVariable('/Use.xphp', 'u'));
     }
 
+    public function testSubstitutesTypeArgsWhenClassDeclarationIsFilesystemOnly(): void
+    {
+        // Phase-0 payoff: Collection.xphp is NOT open in the workspace --
+        // it lives only on disk.  The new FilesystemClassLikeLookup +
+        // FqnIndex pair should still resolve `$users->first()` to
+        // `?App\Models\User` via on-demand parsing.
+        $root = sys_get_temp_dir() . '/xphp-fs-gen-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Collection.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            class Collection<T> {
+                public function first(): ?T { return null; }
+            }
+            XPHP);
+
+            $workspace = $this->workspace();
+            // User.xphp + Use.xphp open in editor; Collection.xphp NOT open.
+            $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+            $this->open($workspace, '/Use.xphp', <<<'XPHP'
+            <?php
+            use App\Containers\Collection;
+            use App\Models\User;
+            $users = new Collection<User>();
+            $user = $users->first();
+            XPHP);
+
+            $resolver = $this->resolverWithFilesystem($workspace, $root);
+
+            self::assertSame(
+                '?App\\Models\\User',
+                $resolver->resolveVariable('/Use.xphp', 'user'),
+                'GenericResolver must resolve via filesystem when Collection.xphp is closed',
+            );
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
     public function testRebuildsBindingsOnDocumentVersionBump(): void
     {
         // Cache is version-keyed -- a `didChange` on the file declaring
@@ -240,6 +283,34 @@ final class GenericResolverTest extends TestCase
         $cache = new ParsedDocumentCache(new Analyzer($parser));
         $lookup = new WorkspaceClassLikeLookup($workspace, $cache);
         return new GenericResolver($workspace, $cache, $lookup, $parser);
+    }
+
+    private function resolverWithFilesystem(PhpactorWorkspace $workspace, string $rootPath): GenericResolver
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $index = new FqnIndex($workspace, $cache, $parser, $rootPath);
+        $lookup = new CompositeClassLikeLookup(
+            new WorkspaceClassLikeLookup($workspace, $cache),
+            new FilesystemClassLikeLookup($index),
+        );
+        return new GenericResolver($workspace, $cache, $lookup, $parser);
+    }
+
+    private function rmrf(string $dir): void
+    {
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $p = $dir . '/' . $entry;
+            if (is_dir($p)) {
+                $this->rmrf($p);
+            } else {
+                unlink($p);
+            }
+        }
+        rmdir($dir);
     }
 
     private function workspace(): PhpactorWorkspace
