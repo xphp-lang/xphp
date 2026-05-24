@@ -205,7 +205,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
             new XphpHoverHandler($workspace, $cache, $phpHoverResolver),
-            new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols, $phpDefinitionResolver),
+            new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols, $fqnIndex, $phpDefinitionResolver),
             new XphpCompletionHandler($workspace, $workspaceSymbols, $phpCompletionResolver),
             new XphpDocumentSymbolHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),

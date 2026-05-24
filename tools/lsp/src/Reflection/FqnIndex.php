@@ -285,6 +285,107 @@ final class FqnIndex
     }
 
     /**
+     * Locate the declaration of `$fqn` and return its identifier-token
+     * position.  Open-doc declarations win; filesystem-only declarations
+     * fall through using the pre-built filesystem-symbols map.  Returns
+     * null when no declaration is known.
+     *
+     * Used by the definition handler's Path 1 (generic-instantiation
+     * Name with ATTR_TEMPLATE_FQN) so GTD on `new Box<...>()` jumps to
+     * the `Box` template whether it's open or on disk.
+     *
+     * @return array{uri: string, line: int, char: int, short: string}|null
+     */
+    public function locationForFqn(string $fqn): ?array
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return null;
+        }
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            $offsets = $result->byteOffsetMap;
+            foreach (self::collectSymbolHits($result->ast) as $hit) {
+                if ($hit['fqn'] !== $needle) {
+                    continue;
+                }
+                $origByte = $offsets->toOriginal($hit['startByte']);
+                [$line, $char] = self::byteToLineChar($item->text, $origByte);
+                return [
+                    'uri' => (string) $uri,
+                    'line' => $line,
+                    'char' => $char,
+                    'short' => self::shortOf($hit['fqn']),
+                ];
+            }
+        }
+        $symbols = $this->filesystemSymbols();
+        if (!isset($symbols[$needle])) {
+            return null;
+        }
+        $path = $this->filesystemMap()[$needle] ?? null;
+        if ($path === null) {
+            return null;
+        }
+        return [
+            'uri' => 'file://' . $path,
+            'line' => $symbols[$needle]['line'],
+            'char' => $symbols[$needle]['char'],
+            'short' => self::shortOf($needle),
+        ];
+    }
+
+    /**
+     * Locate ANY declaration whose short name matches `$shortName`, first
+     * across open docs then across filesystem.  First match wins -- short-
+     * name collisions across namespaces (e.g. App\Models\User vs
+     * App\Fixtures\User) resolve in iteration order with no preference.
+     *
+     * Cross-namespace tie-breaking (preferring non-fixture paths, prox-
+     * imity to current file, etc.) is parked as Phase 3 polish.
+     *
+     * Used by the definition handler's Path 2 (type-arg identifier inside
+     * a generic clause -- the `User` of `identity<User>(...)`) which the
+     * parser strips before the post-strip parser ever sees it, so we only
+     * have the short identifier source-text and need to resolve it via
+     * workspace+filesystem lookup.
+     *
+     * @return array{uri: string, line: int, char: int, short: string}|null
+     */
+    public function locationByShortName(string $shortName): ?array
+    {
+        if ($shortName === '') {
+            return null;
+        }
+        $tailSuffix = '\\' . $shortName;
+        $tailLen = strlen($tailSuffix);
+        foreach ($this->allDeclarations() as $hit) {
+            if ($hit['fqn'] === $shortName) {
+                return [
+                    'uri' => $hit['uri'],
+                    'line' => $hit['line'],
+                    'char' => $hit['char'],
+                    'short' => $shortName,
+                ];
+            }
+            if (strlen($hit['fqn']) > $tailLen
+                && substr($hit['fqn'], -$tailLen) === $tailSuffix
+            ) {
+                return [
+                    'uri' => $hit['uri'],
+                    'line' => $hit['line'],
+                    'char' => $hit['char'],
+                    'short' => $shortName,
+                ];
+            }
+        }
+        return null;
+    }
+
+    /**
      * Every top-level function FQN known to the index, both sources.
      *
      * @return list<string>
@@ -720,6 +821,12 @@ final class FqnIndex
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
         return $visitor->hits;
+    }
+
+    private static function shortOf(string $fqn): string
+    {
+        $idx = strrpos($fqn, '\\');
+        return $idx === false ? $fqn : substr($fqn, $idx + 1);
     }
 
     /**

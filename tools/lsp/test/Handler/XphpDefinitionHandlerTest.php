@@ -17,6 +17,7 @@ use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 use function Amp\Promise\wait;
 
@@ -206,6 +207,129 @@ final class XphpDefinitionHandlerTest extends TestCase
         self::assertNull($location);
     }
 
+    public function testGtdOnGenericInstantiationJumpsToTemplateInUnopenedFile(): void
+    {
+        // Phase 2.3: template lives in an .xphp file on disk that the user
+        // hasn't opened.  GTD must still resolve via the filesystem half of
+        // FqnIndex; without it the jump returns null and PhpStorm shows
+        // "Cannot find declaration to go to."
+        $root = sys_get_temp_dir() . '/xphp-def-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Box.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            class Box<T>
+            {
+                public T $item;
+            }
+            XPHP);
+
+            $workspace = new PhpactorWorkspace();
+            $useSource = "<?php\nuse App\\Containers\\Box;\n\$b = new Box<int>();\n";
+            $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+            // Cursor on `Box` of `new Box<int>()`.
+            $byte = strpos($useSource, 'new Box') + strlen('new ');
+            $location = $this->definitionAtOffset($this->newHandler($workspace, $root), '/Use.xphp', $useSource, $byte);
+
+            self::assertInstanceOf(Location::class, $location);
+            self::assertSame('file://' . $root . '/Box.xphp', $location->uri);
+            // `class Box<T>` is on line 2 (0-indexed); `Box` starts at char 6
+            // (after `class `).
+            self::assertSame(2, $location->range->start->line);
+            self::assertSame(6, $location->range->start->character);
+            self::assertSame(2, $location->range->end->line);
+            self::assertSame(6 + strlen('Box'), $location->range->end->character);
+        } finally {
+            $this->rmrfPath($root);
+        }
+    }
+
+    public function testGtdOnTypeArgIdentifierJumpsToUnopenedFile(): void
+    {
+        // Phase 2.3: the short-name (Path 2) lookup also gets the
+        // filesystem fallback.  `User` declaration lives on disk only.
+        $root = sys_get_temp_dir() . '/xphp-def-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/User.xphp', <<<'XPHP'
+            <?php
+            namespace App\Models;
+            class User {}
+            XPHP);
+
+            $workspace = new PhpactorWorkspace();
+            // identity<User>(...) -- the `User` identifier is INSIDE the
+            // generic clause, only reachable via TypeArgPositionDetector.
+            $useSource = "<?php\nfunction identity<T>(T \$x): T { return \$x; }\n\$x = identity<User>(null);\n";
+            $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+            // Cursor on `User`.
+            $byte = strpos($useSource, '<User>') + 1;
+            $location = $this->definitionAtOffset($this->newHandler($workspace, $root), '/Use.xphp', $useSource, $byte);
+
+            self::assertInstanceOf(Location::class, $location);
+            self::assertSame('file://' . $root . '/User.xphp', $location->uri);
+            // `class User {}` is on line 2 (0-indexed); `User` is at char 6.
+            self::assertSame(2, $location->range->start->line);
+            self::assertSame(6, $location->range->start->character);
+        } finally {
+            $this->rmrfPath($root);
+        }
+    }
+
+    public function testGtdPrefersOpenDocOverFilesystemOnCollision(): void
+    {
+        // Open-doc wins when the same FQN is declared in both places --
+        // the editor's unsaved buffer beats the on-disk copy.  Matches
+        // the cross-cutting precedence rule baked into FqnIndex.
+        $root = sys_get_temp_dir() . '/xphp-def-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Box.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            class Box<T> {}
+            XPHP);
+
+            $workspace = new PhpactorWorkspace();
+            $editedSource = "<?php\nnamespace App\\Containers;\n\nclass Box<T> {}\n";
+            $workspace->open(new TextDocumentItem('/edit/Box.xphp', 'xphp', 1, $editedSource));
+
+            $useSource = "<?php\nuse App\\Containers\\Box;\n\$b = new Box<int>();\n";
+            $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+            $byte = strpos($useSource, 'new Box') + strlen('new ');
+            $location = $this->definitionAtOffset($this->newHandler($workspace, $root), '/Use.xphp', $useSource, $byte);
+
+            self::assertInstanceOf(Location::class, $location);
+            // Must jump to the open-doc URI, not the file:// path.
+            self::assertSame('/edit/Box.xphp', $location->uri);
+        } finally {
+            $this->rmrfPath($root);
+        }
+    }
+
+    private function rmrfPath(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $p = $dir . '/' . $entry;
+            if (is_dir($p)) {
+                $this->rmrfPath($p);
+            } else {
+                unlink($p);
+            }
+        }
+        rmdir($dir);
+    }
+
     private function definitionAtOffset(
         XphpDefinitionHandler $handler,
         string $uri,
@@ -238,15 +362,16 @@ final class XphpDefinitionHandlerTest extends TestCase
         return wait($handler->definition($params));
     }
 
-    private function newHandler(PhpactorWorkspace $workspace): XphpDefinitionHandler
+    private function newHandler(PhpactorWorkspace $workspace, ?string $rootPath = null): XphpDefinitionHandler
     {
-        $cache = new ParsedDocumentCache(
-            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
-        );
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $fqnIndex = new FqnIndex($workspace, $cache, $parser, $rootPath ?? '');
         return new XphpDefinitionHandler(
             $workspace,
             $cache,
             new WorkspaceSymbols($workspace, $cache),
+            $fqnIndex,
         );
     }
 }

@@ -182,6 +182,80 @@ final class FqnIndexTest extends TestCase
         self::assertNotContains('NodeClass', $index->allClassFqns());
     }
 
+    public function testLocationForFqnPointsAtIdentifierInOpenDoc(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem(
+            '/User.xphp',
+            'xphp',
+            1,
+            "<?php\nnamespace App\\Models;\n\nclass User {}\n",
+        ));
+        $index = $this->index($workspace);
+
+        $hit = $index->locationForFqn('App\\Models\\User');
+
+        self::assertNotNull($hit);
+        self::assertSame('/User.xphp', $hit['uri']);
+        self::assertSame(3, $hit['line']);
+        self::assertSame(6, $hit['char']);
+        self::assertSame('User', $hit['short']);
+    }
+
+    public function testLocationForFqnFallsThroughToFilesystem(): void
+    {
+        $this->writeFile('Box.xphp', "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        $hit = $index->locationForFqn('App\\Containers\\Box');
+
+        self::assertNotNull($hit);
+        self::assertSame('file://' . $this->root . '/Box.xphp', $hit['uri']);
+        // class Box<T> is on line 2 (0-indexed); `Box` is at char 6.
+        self::assertSame(2, $hit['line']);
+        self::assertSame(6, $hit['char']);
+    }
+
+    public function testLocationByShortNameFallsThroughToFilesystem(): void
+    {
+        $this->writeFile('User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        $hit = $index->locationByShortName('User');
+
+        self::assertNotNull($hit);
+        self::assertSame('User', $hit['short']);
+        self::assertSame('file://' . $this->root . '/User.xphp', $hit['uri']);
+    }
+
+    public function testLocationByShortNameMatchesUnnamespacedClass(): void
+    {
+        // A class declared outside any namespace: FQN == short name.  The
+        // tail-suffix matcher would skip this since there's no `\<short>`
+        // suffix to find; the explicit equality branch covers it.
+        $this->writeFile('Bare.xphp', "<?php\nclass Bare {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        $hit = $index->locationByShortName('Bare');
+
+        self::assertNotNull($hit);
+        self::assertSame('Bare', $hit['short']);
+    }
+
+    public function testLocationByShortNameReturnsNullForUnknown(): void
+    {
+        $index = $this->index(new PhpactorWorkspace());
+        self::assertNull($index->locationByShortName('NeverDeclared'));
+    }
+
+    public function testLocationForFqnReturnsNullForEmptyOrUnknown(): void
+    {
+        $index = $this->index(new PhpactorWorkspace());
+        self::assertNull($index->locationForFqn(''));
+        self::assertNull($index->locationForFqn('\\'));
+        self::assertNull($index->locationForFqn('Nope\\Mystery'));
+    }
+
     public function testHandlesUnparseableFilesGracefully(): void
     {
         // A garbage file shouldn't blow up the whole index build.
