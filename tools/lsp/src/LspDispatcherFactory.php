@@ -27,6 +27,7 @@ use Phpactor\LanguageServer\Handler\System\ExitHandler;
 use Phpactor\LanguageServer\Handler\System\ServiceHandler;
 use XPHP\Lsp\Handler\XphpTextDocumentHandler;
 use Phpactor\LanguageServer\Handler\Workspace\CommandHandler;
+use Phpactor\LanguageServer\Listener\DidChangeWatchedFilesListener;
 use Phpactor\LanguageServer\Listener\ServiceListener;
 use Phpactor\LanguageServer\Listener\WorkspaceListener;
 use Phpactor\LanguageServer\Middleware\CancellationMiddleware;
@@ -47,6 +48,7 @@ use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
+use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Handler\XphpWorkspaceSymbolHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
@@ -173,9 +175,22 @@ final class LspDispatcherFactory implements DispatcherFactory
         // DiagnosticsService is both a ServiceProvider AND a ListenerProviderInterface —
         // registering it directly on the event dispatcher is what subscribes
         // provideDiagnostics() to didOpen / didChange / didSave events.
+        //
+        // Phase 2.4: DidChangeWatchedFilesListener (phpactor-shipped) listens
+        // for the `initialized` event and sends `client/registerCapability`
+        // back to the client to subscribe to fs-watch notifications for
+        // **/*.xphp and **/*.php.  PhpStorm + VS Code both advertise
+        // `dynamicRegistration: true` for this; on clients that don't, the
+        // listener silently no-ops and the filesystem index stays
+        // one-shot-at-first-query (the pre-2.4 behaviour).
         $eventDispatcher = new AggregateEventDispatcher(
             new ServiceListener($serviceManager),
             new WorkspaceListener($workspace),
+            new DidChangeWatchedFilesListener(
+                $clientApi,
+                ['**/*.xphp', '**/*.php'],
+                $initializeParams->capabilities,
+            ),
             $diagnosticsService,
         );
 
@@ -209,6 +224,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpCompletionHandler($workspace, $workspaceSymbols, $phpCompletionResolver),
             new XphpDocumentSymbolHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),
+            new XphpFileWatcherHandler($fqnIndex),
         );
 
         $runner = new HandlerMethodRunner(

@@ -226,6 +226,25 @@ final class FqnIndex
     }
 
     /**
+     * Discard the cached filesystem index so the next query rebuilds it
+     * from a fresh walk under rootPath.  Open-doc state is unaffected
+     * (it's already version-keyed through `ParsedDocumentCache`).
+     *
+     * Called by the file-watcher handler (Phase 2.4) on
+     * `workspace/didChangeWatchedFiles` events -- bulk invalidation is
+     * cheaper than surgical per-file updates given how fast the walk is
+     * (~100ms across the playground), and the next FqnIndex query is
+     * usually one keystroke away anyway.
+     */
+    public function invalidateFilesystem(): void
+    {
+        $this->filesystemMap = null;
+        $this->filesystemKinds = null;
+        $this->filesystemGenericParams = null;
+        $this->filesystemSymbols = null;
+    }
+
+    /**
      * Yield every declaration the index knows about, from both open docs and
      * the filesystem.  Used by `workspace/symbol` to filter and emit
      * SymbolInformation across the workspace without each handler doing its

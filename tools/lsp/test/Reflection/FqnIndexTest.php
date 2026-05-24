@@ -256,6 +256,26 @@ final class FqnIndexTest extends TestCase
         self::assertNull($index->locationForFqn('Nope\\Mystery'));
     }
 
+    public function testInvalidateFilesystemForcesRebuildOnNextQuery(): void
+    {
+        $this->writeFile('Alpha.xphp', "<?php\nnamespace App;\nclass Alpha {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        // Warm the cache.
+        $first = $index->allClassFqns();
+        self::assertContains('App\\Alpha', $first);
+
+        // Add a file post-warming.  The cached map doesn't know about it.
+        $this->writeFile('Beta.xphp', "<?php\nnamespace App;\nclass Beta {}\n");
+        self::assertNotContains('App\\Beta', $index->allClassFqns());
+
+        // Invalidate -- next query re-walks.
+        $index->invalidateFilesystem();
+        $after = $index->allClassFqns();
+        self::assertContains('App\\Beta', $after);
+        self::assertContains('App\\Alpha', $after);
+    }
+
     public function testHandlesUnparseableFilesGracefully(): void
     {
         // A garbage file shouldn't blow up the whole index build.
