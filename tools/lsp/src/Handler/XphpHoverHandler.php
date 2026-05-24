@@ -11,7 +11,6 @@ use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
 use Phpactor\LanguageServer\Core\Handler\Handler;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\Hover;
-use Phpactor\LanguageServerProtocol\HoverOptions;
 use Phpactor\LanguageServerProtocol\HoverParams;
 use Phpactor\LanguageServerProtocol\MarkupContent;
 use Phpactor\LanguageServerProtocol\MarkupKind;
@@ -62,7 +61,22 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
     // We match the typo deliberately — overriding requires the same name.
     public function registerCapabiltiies(ServerCapabilities $capabilities): void
     {
-        $capabilities->hoverProvider = new HoverOptions();
+        // Use the bool form of `hoverProvider`, NOT `new HoverOptions()`.
+        //
+        // `hoverProvider` is `Either<Boolean, HoverOptions>` in the LSP spec.
+        // PHP's json_encode + phpactor's null-stripping serializer turns a
+        // default-constructed `HoverOptions` (workDoneProgress=null, the
+        // class's only field) into `[]` -- because an empty associative
+        // array is indistinguishable from an empty indexed array in PHP,
+        // and json_encode picks the array form.  IntelliJ's LSP4J client
+        // then rejects the response with:
+        //
+        //   Unexpected token BEGIN_ARRAY: expected BOOLEAN | BEGIN_OBJECT
+        //
+        // ...and kills the server before the handshake completes.
+        // `true` is a valid Either value, encodes unambiguously, and matches
+        // the shape we already use for definitionProvider just below.
+        $capabilities->hoverProvider = true;
     }
 
     /**
