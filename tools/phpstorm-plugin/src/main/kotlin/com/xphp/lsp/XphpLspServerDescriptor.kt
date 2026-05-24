@@ -9,6 +9,7 @@ import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
+import com.intellij.platform.lsp.api.customization.LspCustomization
 import com.xphp.lsp.settings.XphpSettings
 import com.xphp.lsp.settings.XphpSettingsConfigurable
 import java.io.File
@@ -41,6 +42,27 @@ class XphpLspServerDescriptor(project: Project) :
 
     override fun isSupportedFile(file: VirtualFile): Boolean =
         file.extension == "xphp"
+
+    // Opt in to LSP-routed editor actions.  Server-side capability advertisement
+    // (`definitionProvider: true`, `hoverProvider: true` in our `initialize`
+    // response) tells the platform the server CAN do each thing; the
+    // customization here tells the platform to actually ASK.  Both sides are
+    // required -- with only server capabilities, PhpStorm never dispatches a
+    // `textDocument/definition` on Ctrl+click, even though the server is
+    // running and would happily answer.  Confirmed via captured idea.log
+    // showing zero `textDocument/definition` traffic before this opt-in.
+    //
+    // The no-arg `LspCustomization()` constructor instantiates the
+    // `Lsp*Support` (enabled) version of every customizer -- go-to-def,
+    // hover, completion, semantic tokens, the lot.  This is fine: each
+    // customizer also consults the server's advertised `ServerCapabilities`
+    // before dispatching, so handlers our LSP doesn't implement (rename,
+    // formatting, etc.) won't be routed regardless of the customizer state.
+    // The deprecated per-feature boolean overrides (`lspGoToDefinitionSupport`,
+    // `lspHoverSupport`, ...) feed an older opt-in path that wraps customizers
+    // in `*Disabled` defaults; overriding this single property bypasses that
+    // logic and gives the modern, lint-clean opt-in.
+    override val lspCustomization: LspCustomization = LspCustomization()
 
     // IntelliJ's LSP framework dedupes "is this server already running?"
     // by descriptor equality.  Our `XphpLspServerSupportProvider.fileOpened`
