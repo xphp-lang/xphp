@@ -10,12 +10,17 @@ use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
+use Phpactor\LanguageServerProtocol\Location;
+use Phpactor\LanguageServerProtocol\Position;
+use Phpactor\LanguageServerProtocol\Range;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\PositionMap;
 
 /**
  * Walks every open document and collects the FQNs of every ClassLike (class,
  * interface, trait). Used by the completion handler to suggest candidates
- * inside `<…>` type-arg positions.
+ * inside `<…>` type-arg positions, and by the definition handler to resolve
+ * Ctrl+click on a type-arg short name.
  *
  * Parses via the shared `ParsedDocumentCache` so an unchanged workspace
  * doesn't re-parse on every completion keystroke (the original MVP did,
@@ -45,6 +50,51 @@ final readonly class WorkspaceSymbols
             }
         }
         return array_keys($fqns);
+    }
+
+    /**
+     * Find the declaration site of a ClassLike (class, interface, trait)
+     * across the open workspace and return its source location.  Matching is
+     * by **short name** -- the last `\`-segment of each candidate's FQN.
+     * First hit wins; cross-namespace collisions on the same short name
+     * resolve to the first document the workspace iterator hands us, which
+     * is good-enough for an MVP and trackable as a follow-up.
+     *
+     * Used by the definition handler for the type-arg Ctrl+click case:
+     * `identity<User>(...)` -> click `User` -> resolve to the `class User`
+     * declaration whatever namespace it lives in.
+     *
+     * Returns null when no open document defines a matching ClassLike.  Note
+     * that we only see open documents; an unopened on-disk declaration won't
+     * resolve until the user opens that file, same constraint
+     * `XphpDefinitionHandler` already documents.
+     */
+    public function findClassByName(string $shortName): ?Location
+    {
+        if ($shortName === '') {
+            return null;
+        }
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            $found = self::findClassDeclaration($result->ast, $shortName);
+            if ($found === null) {
+                continue;
+            }
+            $positionMap = new PositionMap($item->text);
+            [$startLine, $startChar] = $positionMap->offsetToPosition($found['startOffset']);
+            [$endLine, $endChar] = $positionMap->offsetToPosition($found['endOffset']);
+            return new Location(
+                $uri,
+                new Range(
+                    new Position($startLine, $startChar),
+                    new Position($endLine, $endChar),
+                ),
+            );
+        }
+        return null;
     }
 
     /**
@@ -78,5 +128,50 @@ final readonly class WorkspaceSymbols
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
         return $visitor->fqns;
+    }
+
+    /**
+     * @param list<Node\Stmt> $ast
+     * @return array{startOffset: int, endOffset: int}|null
+     */
+    private static function findClassDeclaration(array $ast, string $shortName): ?array
+    {
+        $visitor = new class($shortName) extends NodeVisitorAbstract {
+            public ?int $startOffset = null;
+            public ?int $endOffset = null;
+
+            public function __construct(private readonly string $shortName)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->startOffset !== null) {
+                    return null;
+                }
+                if (!$node instanceof ClassLike || $node->name === null) {
+                    return null;
+                }
+                if ($node->name->toString() !== $this->shortName) {
+                    return null;
+                }
+                // Range targets the class NAME token -- same convention as
+                // `XphpDefinitionHandler::findTemplateInAst` so navigation
+                // jumps land on the identifier, not the modifier-laden
+                // opening line.
+                $this->startOffset = $node->name->getStartFilePos();
+                $this->endOffset = $node->name->getEndFilePos() + 1;
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+
+        if ($visitor->startOffset === null || $visitor->endOffset === null) {
+            return null;
+        }
+        return ['startOffset' => $visitor->startOffset, 'endOffset' => $visitor->endOffset];
     }
 }

@@ -177,4 +177,37 @@ final class TypeArgPositionDetectorTest extends TestCase
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
         self::assertSame(['prefix' => ''], $hit);
     }
+
+    public function testIdentifierAtReturnsFullNameAtCursorInsideGenericClause(): void
+    {
+        // Cursor sits in the middle of `User` -- prefix `Us`, suffix `er`.
+        $source = 'identity<User>(new User())';
+        $offset = strpos($source, 'User') + 2; // mid-identifier
+        self::assertSame('User', TypeArgPositionDetector::identifierAt($source, $offset));
+    }
+
+    public function testIdentifierAtReturnsNullOutsideGenericClause(): void
+    {
+        $source = '$x = new User();';
+        $offset = strpos($source, 'User') + 1;
+        self::assertNull(TypeArgPositionDetector::identifierAt($source, $offset));
+    }
+
+    public function testIdentifierAtReturnsNullOnWhitespaceInsideGenericClause(): void
+    {
+        // Cursor on the space between `<` and `User`.  No prefix to the
+        // left, no identifier byte at the cursor -> null.
+        $source = 'identity< User>(...)';
+        $offset = strpos($source, '< ') + 1; // on the space
+        self::assertNull(TypeArgPositionDetector::identifierAt($source, $offset));
+    }
+
+    public function testIdentifierAtReturnsFqnStyleNameWithBackslashes(): void
+    {
+        // Backslashes are identifier bytes per the detector's rule, so a
+        // namespace-qualified type-arg comes through intact.
+        $source = 'identity<App\\Models\\User>(...)';
+        $offset = strpos($source, 'User') + 1;
+        self::assertSame('App\\Models\\User', TypeArgPositionDetector::identifierAt($source, $offset));
+    }
 }

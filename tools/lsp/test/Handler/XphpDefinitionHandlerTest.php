@@ -14,6 +14,7 @@ use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\PositionMap;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -163,6 +164,62 @@ final class XphpDefinitionHandlerTest extends TestCase
         self::assertSame('/Container.xphp', $location->uri);
     }
 
+    public function testJumpsFromTypeArgInsideGenericClauseToClassDeclaration(): void
+    {
+        // The xphp-specific case: Ctrl+click on `User` inside the `<>` of
+        // `identity<User>(...)` should land on `class User`.  This relies on
+        // the second code path in `definition()` -- the inner `User` doesn't
+        // survive as a Name node in the AST (XphpSourceParser strips it into
+        // a marker entry on the outer FuncCall), so the ATTR_TEMPLATE_FQN
+        // lookup misses; the fall-through uses TypeArgPositionDetector +
+        // WorkspaceSymbols to resolve.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class User { public function __construct(public string $name) {} }
+        XPHP));
+        $useSource = "<?php\nnamespace App;\n\$asUser = identity<User>(new User('bob'));";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        // Cursor points at the `User` INSIDE the angle brackets, not the
+        // `User` in the `new User(...)` ctor.
+        $genericClauseStart = strpos($useSource, 'identity<') + strlen('identity<');
+        $location = $this->definitionAtOffset($this->newHandler($workspace), '/Use.xphp', $useSource, $genericClauseStart + 1);
+
+        self::assertNotNull($location);
+        self::assertSame('/User.xphp', $location->uri);
+    }
+
+    public function testTypeArgFallthroughReturnsNullWhenClassNotInWorkspace(): void
+    {
+        // No `class Unknown` declared anywhere in the workspace -> null.
+        // Distinguishes "we tried Path 2 and didn't find anything" from a
+        // wiring bug.
+        $workspace = new PhpactorWorkspace();
+        $useSource = "<?php\n\$x = identity<Unknown>(null);";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $offset = strpos($useSource, 'Unknown') + 1;
+        $location = $this->definitionAtOffset($this->newHandler($workspace), '/Use.xphp', $useSource, $offset);
+
+        self::assertNull($location);
+    }
+
+    private function definitionAtOffset(
+        XphpDefinitionHandler $handler,
+        string $uri,
+        string $source,
+        int $byte,
+    ): ?Location {
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $params = new DefinitionParams(
+            new TextDocumentIdentifier($uri),
+            new Position($line, $character),
+        );
+        return wait($handler->definition($params));
+    }
+
     private function definitionAt(
         XphpDefinitionHandler $handler,
         string $uri,
@@ -183,11 +240,13 @@ final class XphpDefinitionHandlerTest extends TestCase
 
     private function newHandler(PhpactorWorkspace $workspace): XphpDefinitionHandler
     {
+        $cache = new ParsedDocumentCache(
+            new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
+        );
         return new XphpDefinitionHandler(
             $workspace,
-            new ParsedDocumentCache(
-                new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion())),
-            ),
+            $cache,
+            new WorkspaceSymbols($workspace, $cache),
         );
     }
 }

@@ -100,6 +100,52 @@ final class WorkspaceSymbolsTest extends TestCase
         self::assertContains('Loose', $fqns);
     }
 
+    public function testFindClassByNameLocatesNamespaceQualifiedClass(): void
+    {
+        $userSource = "<?php\nnamespace App\\Models;\nclass User {}";
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, $userSource));
+
+        $location = $this->newSymbols($workspace)->findClassByName('User');
+
+        self::assertNotNull($location);
+        self::assertSame('/User.xphp', $location->uri);
+        // Range targets the `User` identifier token, not the whole class
+        // body.  In `class User {}`, `User` starts at column 6 (`strlen('class ')`).
+        self::assertSame(2, $location->range->start->line);
+        self::assertSame(strlen('class '), $location->range->start->character);
+    }
+
+    public function testFindClassByNameReturnsNullForUnknown(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Other.xphp', 'xphp', 1, "<?php\nclass Other {}"));
+
+        self::assertNull($this->newSymbols($workspace)->findClassByName('User'));
+    }
+
+    public function testFindClassByNameReturnsNullForEmptyName(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Any.xphp', 'xphp', 1, "<?php\nclass Any {}"));
+
+        self::assertNull($this->newSymbols($workspace)->findClassByName(''));
+    }
+
+    public function testFindClassByNameMatchesShortNameAcrossDocuments(): void
+    {
+        // Two documents declaring different classes; the lookup walks
+        // documents in workspace insertion order and returns the first hit.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Unrelated.xphp', 'xphp', 1, "<?php\nclass Helper {}"));
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}"));
+
+        $location = $this->newSymbols($workspace)->findClassByName('User');
+
+        self::assertNotNull($location);
+        self::assertSame('/User.xphp', $location->uri);
+    }
+
     private function newSymbols(PhpactorWorkspace $workspace): WorkspaceSymbols
     {
         $cache = new ParsedDocumentCache(

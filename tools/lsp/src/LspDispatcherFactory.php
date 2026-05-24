@@ -114,14 +114,19 @@ final class LspDispatcherFactory implements DispatcherFactory
             $diagnosticsService,
         );
 
+        // Single WorkspaceSymbols shared across the two handlers that need it
+        // (completion + definition).  Both call the same in-memory AST cache,
+        // so reusing the helper avoids constructing parallel collectors.
+        $workspaceSymbols = new WorkspaceSymbols($workspace, $cache);
+
         $handlers = new Handlers(
             new TextDocumentHandler($eventDispatcher),
             new ServiceHandler($serviceManager, $clientApi),
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
             new XphpHoverHandler($workspace, $cache),
-            new XphpDefinitionHandler($workspace, $cache),
-            new XphpCompletionHandler($workspace, new WorkspaceSymbols($workspace, $cache)),
+            new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols),
+            new XphpCompletionHandler($workspace, $workspaceSymbols),
         );
 
         $runner = new HandlerMethodRunner(

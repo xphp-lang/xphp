@@ -46,6 +46,7 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
+        private readonly WorkspaceSymbols $workspaceSymbols,
     ) {
     }
 
@@ -85,17 +86,42 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
             $params->position->line,
             $params->position->character,
         );
+
+        // Path 1: cursor on a Name carrying ATTR_TEMPLATE_FQN -- the
+        // outer site of a generic instantiation (`Box` in
+        // `new Box<Plastic>()`) or a generic function call (`identity` in
+        // `identity<User>(...)`).  Navigate to the matching ClassLike
+        // template declaration.
         $hit = AstPositionResolver::nameAtOffset($currentResult->ast, $offset);
-        if ($hit === null) {
-            return new Success(null);
+        if ($hit !== null) {
+            $templateFqn = $hit['name']->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+            if (is_string($templateFqn) && $templateFqn !== '') {
+                $location = $this->findDefinitionAcrossWorkspace($templateFqn);
+                if ($location !== null) {
+                    return new Success($location);
+                }
+            }
         }
 
-        $templateFqn = $hit['name']->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-        if (!is_string($templateFqn) || $templateFqn === '') {
+        // Path 2: cursor on a type-arg identifier INSIDE a generic clause
+        // (`User` in `identity<User>(...)`).  These don't survive into the
+        // AST as Name nodes -- XphpSourceParser strips them into TypeRef
+        // marker entries on the surrounding call -- so AstPositionResolver
+        // never lands a hit on them.  Use the source-level
+        // TypeArgPositionDetector to extract the identifier under the
+        // cursor and resolve it via WorkspaceSymbols (short-name match).
+        $identifier = TypeArgPositionDetector::identifierAt($currentItem->text, $offset);
+        if ($identifier === null) {
             return new Success(null);
         }
+        $shortName = self::lastSegment($identifier);
+        return new Success($this->workspaceSymbols->findClassByName($shortName));
+    }
 
-        return new Success($this->findDefinitionAcrossWorkspace($templateFqn));
+    private static function lastSegment(string $identifier): string
+    {
+        $idx = strrpos($identifier, '\\');
+        return $idx === false ? $identifier : substr($identifier, $idx + 1);
     }
 
     private function findDefinitionAcrossWorkspace(string $templateFqn): ?Location

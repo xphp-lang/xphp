@@ -85,6 +85,47 @@ final readonly class TypeArgPositionDetector
         return null;
     }
 
+    /**
+     * Full identifier under the cursor, only when the cursor is inside a
+     * generic `<…>` clause AND on (or adjacent to) identifier bytes.
+     *
+     * Built on top of [[detect]]: that method returns the prefix to the LEFT
+     * of the cursor; here we additionally scan FORWARD from the cursor and
+     * concatenate the trailing identifier bytes, yielding the full identifier
+     * span the user is actually pointing at.
+     *
+     * Returns null when:
+     *  - the cursor isn't in a type-arg position (whatever [[detect]]
+     *    decides), or
+     *  - there's no identifier byte at the cursor and no prefix to the left
+     *    (e.g. cursor on whitespace inside `<…>`).
+     *
+     * Used by the definition handler for Ctrl+click on a type-arg class name
+     * like `User` in `identity<User>(...)`.  The completion handler uses the
+     * `detect`-only prefix because completion needs the typed-so-far stem,
+     * not the full identifier including the suffix the user hasn't typed.
+     */
+    public static function identifierAt(string $source, int $offset): ?string
+    {
+        $context = self::detect($source, $offset);
+        if ($context === null) {
+            return null;
+        }
+
+        // Walk forward from the cursor capturing the trailing identifier
+        // bytes -- the part of the name to the RIGHT of the cursor that the
+        // user has already typed.
+        $length = strlen($source);
+        $end = $offset;
+        while ($end < $length && self::isIdentifierByte($source[$end])) {
+            $end++;
+        }
+        $suffix = substr($source, $offset, $end - $offset);
+
+        $full = $context['prefix'] . $suffix;
+        return $full === '' ? null : $full;
+    }
+
     private static function isIdentifierByte(string $byte): bool
     {
         return ctype_alnum($byte) || $byte === '_' || $byte === '\\';
