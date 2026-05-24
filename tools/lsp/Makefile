@@ -5,9 +5,15 @@
 # delegator — the per-package Makefile is the single source of truth.
 
 .PHONY: test
+# 512M memory_limit covers the one-time worse-reflection stub-map build
+# (phpactor's tolerant-php-parser walks every jetbrains/phpstorm-stubs
+# .php file to discover FQNs and serializes a map to /tmp on first
+# invocation). Once the map is cached, steady-state memory stays well
+# under the default 128M -- but a fresh checkout (or a /tmp cleanup)
+# would OOM at the default.
 test:
 	composer install --quiet && \
-	  php -d error_reporting='E_ALL & ~E_DEPRECATED' vendor/bin/phpunit
+	  php -d error_reporting='E_ALL & ~E_DEPRECATED' -d memory_limit=512M vendor/bin/phpunit
 
 # Infection runs against this package via its PHAR distribution rather than a
 # composer require: phpactor/language-server pins psr/log ^1.0 which composer

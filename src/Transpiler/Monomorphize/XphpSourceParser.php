@@ -83,6 +83,25 @@ final class XphpSourceParser
     }
 
     /**
+     * Return the xphp source with every `<…>` generic clause (template
+     * params on class/interface/trait/method headers AND type-args on
+     * generic-call sites) replaced by equal-length whitespace.  The result
+     * is valid PHP that nikic/php-parser or any other PHP-only tool
+     * (e.g. phpactor/tolerant-php-parser via worse-reflection) can ingest
+     * without choking.  Byte offsets in the cleaned source are identical
+     * to the original xphp source, so locations round-trip back to the
+     * editor cleanly.
+     *
+     * Infallible -- the underlying tokenizer never throws on malformed
+     * PHP; pathological inputs simply produce a stripped source with no
+     * generic clauses recognised.
+     */
+    public function strip(string $source): string
+    {
+        return $this->scanAndStrip($source)[3];
+    }
+
+    /**
      * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string}
      */
     private function scanAndStrip(string $source): array
