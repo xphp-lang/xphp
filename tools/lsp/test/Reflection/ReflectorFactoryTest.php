@@ -50,6 +50,35 @@ final class ReflectorFactoryTest extends TestCase
         }
     }
 
+    public function testExtractStubsCacheCopiesFromRegularDirectory(): void
+    {
+        // We can't easily build a real PHAR fixture for the test, but the
+        // extractor handles a regular source directory identically to a
+        // phar:// source (PHP's stream wrapper transparency).  Cover the
+        // recursive copy + sentinel + idempotency contract with an
+        // on-disk fixture.
+        $source = sys_get_temp_dir() . '/xphp-rf-stub-src-' . bin2hex(random_bytes(6));
+        mkdir($source . '/Reflection', 0o755, true);
+        mkdir($source . '/standard', 0o755, true);
+        file_put_contents($source . '/Reflection/Class.php', "<?php\nclass ReflectionClass {}");
+        file_put_contents($source . '/standard/_types.php', "<?php\nfunction strlen(string \$s): int {}");
+
+        try {
+            $cache = ReflectorFactory::extractStubsCache($source);
+
+            self::assertFileExists($cache . '/Reflection/Class.php');
+            self::assertFileExists($cache . '/standard/_types.php');
+            self::assertFileExists($cache . '/.complete', 'sentinel must be written after a successful extraction');
+
+            // Idempotent: second call must short-circuit (returns same path,
+            // no error from re-writing into existing dirs/files).
+            $cache2 = ReflectorFactory::extractStubsCache($source);
+            self::assertSame($cache, $cache2);
+        } finally {
+            $this->rmrf($source);
+        }
+    }
+
     public function testReflectsNativeFunctionFromStubs(): void
     {
         $stubPath = ReflectorFactory::defaultStubPath();

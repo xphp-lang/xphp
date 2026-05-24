@@ -4,6 +4,14 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
+use PhpParser\Node;
+use PhpParser\Node\ClosureUse;
+use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\Param;
+use PhpParser\Node\Stmt\Foreach_;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\Location;
 use Phpactor\LanguageServerProtocol\Position;
@@ -17,6 +25,7 @@ use Phpactor\WorseReflection\Core\Reflection\ReflectionClassLike;
 use Phpactor\WorseReflection\Core\Reflection\ReflectionFunction;
 use Phpactor\WorseReflection\Reflector;
 use Throwable;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -55,6 +64,7 @@ final class PhpDefinitionResolver
         private readonly PhpactorWorkspace $workspace,
         private readonly XphpSourceParser $parser,
         private readonly Reflector $reflector,
+        private readonly ParsedDocumentCache $cache,
     ) {
     }
 
@@ -123,6 +133,7 @@ final class PhpDefinitionResolver
             Symbol::CASE       => ($c = self::containerOrNull($context)) !== null
                                     ? $this->locateEnumCase($c, $symbol->name())
                                     : null,
+            Symbol::VARIABLE   => $this->locateVariable($uri, $symbol->name()),
             default            => null,
         };
     }
@@ -154,6 +165,111 @@ final class PhpDefinitionResolver
     {
         $name = (string) $context->containerType();
         return ($name === '' || $name === '<missing>') ? null : $name;
+    }
+
+    /**
+     * Resolve a variable cursor to its first definition site in the
+     * document.  PhpStorm's native PHP GTD navigates `$x` to wherever
+     * `$x` was introduced; we replicate that by walking the cached
+     * nikic AST for the document and picking the first node that
+     * INTRODUCES the variable (param, assignment target, foreach var,
+     * closure-use), ignoring later reads of the same name.
+     *
+     * Scope caveat: this resolver looks at the whole file, not just
+     * the smallest enclosing function/method/closure.  Shadowed
+     * variables (same name in two different functions) all resolve
+     * to the first one in document order.  Good enough for the
+     * common case; revisit with a scope-aware walker when shadowing
+     * shows up in user reports.
+     */
+    private function locateVariable(string $uri, string $varName): ?Location
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+        if ($result->ast === null) {
+            return null;
+        }
+
+        $finder = new class($varName) extends NodeVisitorAbstract {
+            public ?Variable $hit = null;
+
+            public function __construct(private readonly string $varName)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->hit !== null) {
+                    return null;
+                }
+
+                // Function / method / closure parameters: `function f($x)` introduces $x.
+                if ($node instanceof Param
+                    && $node->var instanceof Variable
+                    && $node->var->name === $this->varName
+                ) {
+                    $this->hit = $node->var;
+                    return null;
+                }
+
+                // Assignment LHS: `$x = ...` introduces (or re-introduces) $x.
+                if ($node instanceof Assign
+                    && $node->var instanceof Variable
+                    && $node->var->name === $this->varName
+                ) {
+                    $this->hit = $node->var;
+                    return null;
+                }
+
+                // `foreach ($arr as $k => $v)` -- both $k (if present) and $v are introductions.
+                if ($node instanceof Foreach_) {
+                    if ($node->keyVar instanceof Variable && $node->keyVar->name === $this->varName) {
+                        $this->hit = $node->keyVar;
+                        return null;
+                    }
+                    if ($node->valueVar instanceof Variable && $node->valueVar->name === $this->varName) {
+                        $this->hit = $node->valueVar;
+                    }
+                    return null;
+                }
+
+                // `function () use ($x)` brings $x into the closure body.
+                if ($node instanceof ClosureUse
+                    && $node->var instanceof Variable
+                    && $node->var->name === $this->varName
+                ) {
+                    $this->hit = $node->var;
+                }
+
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($finder);
+        $traverser->traverse($result->ast);
+
+        if ($finder->hit === null) {
+            return null;
+        }
+
+        $start = $finder->hit->getStartFilePos();
+        $end = $finder->hit->getEndFilePos() + 1;
+
+        $positionMap = new PositionMap($item->text);
+        [$startLine, $startChar] = $positionMap->offsetToPosition($start);
+        [$endLine, $endChar] = $positionMap->offsetToPosition($end);
+
+        return new Location(
+            $uri,
+            new Range(
+                new Position($startLine, $startChar),
+                new Position($endLine, $endChar),
+            ),
+        );
     }
 
     private function locateClass(string $fqn): ?Location

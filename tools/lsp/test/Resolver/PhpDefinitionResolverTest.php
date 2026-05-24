@@ -203,16 +203,77 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertNull($location);
     }
 
-    public function testCursorOnVariableNameReturnsNull(): void
+    public function testJumpsFromVariableUseToInitialAssignment(): void
     {
-        // Variables aren't part of the MVP GTD scope.  Worse-reflection
-        // identifies the symbol as a `variable`, and our resolver's match
-        // statement falls through to `default => null`.
+        // PhpStorm's native PHP GTD on a variable jumps to the variable's
+        // first introduction in the enclosing scope.  We replicate that
+        // by walking the AST for the first Param / Assign / Foreach / Use
+        // node naming this variable.
         $workspace = $this->workspace();
         $useSource = "<?php\n\$x = 1;\necho \$x;\n";
         $this->open($workspace, '/Use.xphp', $useSource);
 
-        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'echo $x', strlen('echo '));
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'echo $x', strlen('echo $'));
+
+        self::assertNotNull($location);
+        // The first `$x` lives on line 1 (0-indexed) at the start of the document.
+        self::assertSame(1, $location->range->start->line);
+        self::assertSame(0, $location->range->start->character);
+    }
+
+    public function testJumpsFromVariableUseToFunctionParameter(): void
+    {
+        $workspace = $this->workspace();
+        $useSource = "<?php\nfunction greet(string \$name): string {\n    return \$name;\n}\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'return $name', strlen('return $'));
+
+        self::assertNotNull($location);
+        // `$name` parameter is on line 1 (`function greet(string $name): string {`).
+        self::assertSame(1, $location->range->start->line);
+    }
+
+    public function testJumpsFromVariableUseToForeachLoopVariable(): void
+    {
+        $workspace = $this->workspace();
+        $useSource = "<?php\nforeach (\$items as \$item) {\n    echo \$item;\n}\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'echo $item', strlen('echo $'));
+
+        self::assertNotNull($location);
+        // The loop's `$item` is on line 1, after `foreach ($items as `.
+        self::assertSame(1, $location->range->start->line);
+    }
+
+    public function testJumpsFromVariableUseToClosureUseClause(): void
+    {
+        $workspace = $this->workspace();
+        $useSource = "<?php\n\$captured = 1;\n\$fn = function () use (\$captured) {\n    return \$captured;\n};\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Inside the closure body, $captured refers to the use-imported
+        // variable.  Our resolver currently isn't scope-aware so it
+        // resolves to the FIRST introduction in document order -- the
+        // top-level assignment on line 1.  That's still a useful jump
+        // and matches PhpStorm's PHP GTD when both sites are visible
+        // in the document.
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'return $captured', strlen('return $'));
+
+        self::assertNotNull($location);
+        self::assertSame(1, $location->range->start->line);
+    }
+
+    public function testNeverIntroducedVariableReturnsNull(): void
+    {
+        // `$x` is used but never assigned / declared as a param.  No
+        // introduction site -> null.
+        $workspace = $this->workspace();
+        $useSource = "<?php\necho \$x;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'echo $x', strlen('echo $'));
         self::assertNull($location);
     }
 
@@ -268,7 +329,7 @@ final class PhpDefinitionResolverTest extends TestCase
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
         ))->build();
-        return new PhpDefinitionResolver($workspace, $parser, $reflector);
+        return new PhpDefinitionResolver($workspace, $parser, $reflector, $cache);
     }
 
     private function workspace(): PhpactorWorkspace

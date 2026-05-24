@@ -8,7 +8,10 @@ use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\WorseReflection\Reflector;
 use Phpactor\WorseReflection\ReflectorBuilder;
 use Phpactor\WorseReflection\Core\SourceCodeLocator\StubSourceLocator;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use RuntimeException;
+use SplFileInfo;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -122,12 +125,111 @@ final class ReflectorFactory
      * Default stubs path: `vendor/jetbrains/phpstorm-stubs/` relative to
      * this file's location, which resolves correctly both in dev (file
      * tree) and inside the built PHAR (composer's vendor dir is bundled).
+     *
+     * PHAR awareness: when running from a PHAR (the typical PhpStorm
+     * plugin install), `__DIR__` resolves to `phar://.../src/Reflection`
+     * and the stub directory beneath it is reachable via PHP's
+     * phar:// stream wrapper -- but Locations the LSP returns to the
+     * client carry that same phar:// URI, and PhpStorm's LSP framework
+     * warns `Unexpected URI scheme: phar://...` and refuses to open
+     * the file (no client-side navigation).  To make native-function
+     * GTD usable, we extract the stub tree to a stable on-disk cache
+     * the first time we're called from inside a PHAR and return that
+     * file:// path instead.
      */
     public static function defaultStubPath(): string
     {
         $candidate = __DIR__ . '/../../vendor/jetbrains/phpstorm-stubs';
+
+        // PHP's __DIR__ inside a PHAR begins with `phar://`.  Detect that
+        // and route through the extractor so worse-reflection sees a real
+        // filesystem path.
+        if (str_starts_with($candidate, 'phar://')) {
+            return self::extractStubsCache($candidate);
+        }
+
         $real = realpath($candidate);
         return $real !== false ? $real : $candidate;
+    }
+
+    /**
+     * Recursively copy a source directory (typically a `phar://` URI)
+     * to a stable on-disk cache and return the cache path.  Idempotent:
+     * once the extraction completes successfully, subsequent calls
+     * detect the sentinel marker and short-circuit.
+     *
+     * Cache layout: `<sys_temp>/xphp-lsp-extracted-stubs/<sha-of-source>/`.
+     * Keying by `sha-of-source` means a plugin upgrade (different PHAR
+     * path) gets a fresh cache without stepping on the prior install's
+     * extraction; orphaned caches from older installs are harmless.
+     *
+     * Extracted file count: phpstorm-stubs is ~3000 .php files, ~30 MB.
+     * Copy time on a warm SSD is sub-second.  We accept the disk cost
+     * once per install because the alternative -- teaching IntelliJ's
+     * LSP client to read phar:// URIs -- requires either custom plugin
+     * code we can't unit-test or a JarFileSystem mount that doesn't
+     * work on PHARs (PHARs aren't ZIPs at the byte level despite the
+     * superficial format similarity).
+     */
+    public static function extractStubsCache(string $sourceDir): string
+    {
+        $cacheRoot = sys_get_temp_dir() . '/xphp-lsp-extracted-stubs';
+        $sourceHash = substr(sha1($sourceDir), 0, 16);
+        $cacheDir = $cacheRoot . '/' . $sourceHash;
+
+        // Sentinel file marks a complete extraction.  If interrupted
+        // mid-copy (process killed, disk full, ...) the sentinel won't
+        // be written and the next invocation re-extracts.
+        $sentinel = $cacheDir . '/.complete';
+        if (is_file($sentinel)) {
+            return $cacheDir;
+        }
+
+        if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0o755, true) && !is_dir($cacheDir)) {
+            throw new RuntimeException(sprintf(
+                'Could not create stub-extraction directory at "%s"',
+                $cacheDir,
+            ));
+        }
+
+        self::copyDirRecursive($sourceDir, $cacheDir);
+        file_put_contents($sentinel, (string) time());
+
+        return $cacheDir;
+    }
+
+    /**
+     * Recursive copy.  Source MAY be a `phar://` URI -- PHP's stream
+     * wrapper handles iteration and read transparently.
+     */
+    private static function copyDirRecursive(string $source, string $dest): void
+    {
+        if (!is_dir($source)) {
+            return;
+        }
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($source, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST,
+        );
+        $sourceLen = strlen($source);
+        foreach ($iterator as $item) {
+            /** @var SplFileInfo $item */
+            $relative = substr($item->getPathname(), $sourceLen);
+            $target = $dest . $relative;
+            if ($item->isDir()) {
+                if (!is_dir($target) && !@mkdir($target, 0o755, true) && !is_dir($target)) {
+                    throw new RuntimeException("Could not create directory: $target");
+                }
+                continue;
+            }
+            if (@copy($item->getPathname(), $target) === false) {
+                throw new RuntimeException(sprintf(
+                    'Could not copy "%s" -> "%s"',
+                    $item->getPathname(),
+                    $target,
+                ));
+            }
+        }
     }
 
     /**

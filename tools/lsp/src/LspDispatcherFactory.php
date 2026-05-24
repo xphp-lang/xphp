@@ -106,7 +106,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             ReflectorFactory::defaultStubPath(),
             ReflectorFactory::defaultCacheDir(),
         ))->build();
-        $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector);
+        $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector, $cache);
         $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector);
         $phpCompletionResolver = new PhpCompletionResolver($workspace, $xphpParser, $reflector);
 
