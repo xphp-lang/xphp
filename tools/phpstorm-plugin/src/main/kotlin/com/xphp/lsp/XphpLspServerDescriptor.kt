@@ -42,6 +42,23 @@ class XphpLspServerDescriptor(project: Project) :
     override fun isSupportedFile(file: VirtualFile): Boolean =
         file.extension == "xphp"
 
+    // IntelliJ's LSP framework dedupes "is this server already running?"
+    // by descriptor equality.  Our `XphpLspServerSupportProvider.fileOpened`
+    // calls `ensureServerStarted(XphpLspServerDescriptor(project))` on every
+    // open -- a brand-new instance each time.  Without these overrides,
+    // every new instance != the previous one, and the framework treats
+    // each call as "different server, restart needed."  In practice that
+    // shut down the running server immediately after init -- visible in
+    // idea.log as `(Running;0) -> ShutdownNormally;0` followed by exit 137
+    // when SIGTERM didn't complete in time.
+    //
+    // Same project + same descriptor class = same logical LSP server.
+    // `project` is inherited from `ProjectWideLspServerDescriptor`.
+    override fun equals(other: Any?): Boolean =
+        other is XphpLspServerDescriptor && other.project === project
+
+    override fun hashCode(): Int = project.hashCode()
+
     override fun createCommandLine(): GeneralCommandLine {
         val binary = resolveBinary() ?: run {
             notifyMissingBinary()

@@ -72,18 +72,29 @@ class XphpBundleRegistrar : ProjectActivity {
             return
         }
 
-        if (!settings.hasEnabledBundle(path)) {
-            settings.addBundle(path, "xphp")
-            log.info("Registered xphp TextMate bundle at $path")
+        if (settings.hasEnabledBundle(path)) {
+            log.debug("xphp TextMate bundle already registered at $path")
+            return
         }
 
-        // ALWAYS reload, even when the bundle was already registered.
-        // Users upgrading from an earlier plugin version may have a
-        // bundle entry pointing at an extracted directory that was
-        // missing `info.plist` (the platform reported it as "unknown
-        // format" and skipped it).  The Extractor on this run has just
-        // written the info.plist; the reload below is what gives the
-        // service a chance to retry the previously-failed load.
+        settings.addBundle(path, "xphp")
+        log.info("Registered xphp TextMate bundle at $path")
+
+        // Reload bundles only when we actually changed the user-bundles
+        // list.  An earlier iteration of this code called reload
+        // unconditionally to heal legacy installs whose on-disk bundles
+        // were missing info.plist -- but reloadEnabledBundles() fires
+        // `fileTypesChanged`, which cascades into PhpStorm's LSP framework
+        // bouncing every registered LSP server (idea.log:
+        // `Stopping LSP server normally` followed by exit 137 a moment
+        // after init succeeded).  The bounce killed our LSP server on
+        // every IDE start, leaving the user with a "stopped" LSP
+        // indicator and no completion / GTD.
+        //
+        // First-install path (this branch): reload once so the platform
+        // picks up the newly-registered bundle.  After that, the entry
+        // is persisted; subsequent IDE starts hit the early-return above
+        // and don't touch the file-types graph.
         TextMateService.getInstance().reloadEnabledBundles()
     }
 
