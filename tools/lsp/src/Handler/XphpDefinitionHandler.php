@@ -20,6 +20,7 @@ use Phpactor\LanguageServerProtocol\Range;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Resolver\PhpDefinitionResolver;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -47,6 +48,7 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
         private readonly WorkspaceSymbols $workspaceSymbols,
+        private readonly ?PhpDefinitionResolver $phpResolver = null,
     ) {
     }
 
@@ -111,11 +113,30 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
         // TypeArgPositionDetector to extract the identifier under the
         // cursor and resolve it via WorkspaceSymbols (short-name match).
         $identifier = TypeArgPositionDetector::identifierAt($currentItem->text, $offset);
-        if ($identifier === null) {
-            return new Success(null);
+        if ($identifier !== null) {
+            $shortName = self::lastSegment($identifier);
+            $location = $this->workspaceSymbols->findClassByName($shortName);
+            if ($location !== null) {
+                return new Success($location);
+            }
         }
-        $shortName = self::lastSegment($identifier);
-        return new Success($this->workspaceSymbols->findClassByName($shortName));
+
+        // Path 3: PHP-semantic GTD via worse-reflection.  Handles everything
+        // the xphp-specific paths above don't: `use App\Models\User;`,
+        // `new User(...)`, `$obj->method()`, `Cls::method()`, `strlen(...)`
+        // (resolves to phpstorm-stubs), etc.  The resolver returns null
+        // gracefully on unknown / unresolvable symbols, matching the LSP
+        // expectation of "no answer" => no "Cannot find declaration"
+        // noise from us.
+        if ($this->phpResolver !== null) {
+            return new Success($this->phpResolver->resolve(
+                $params->textDocument->uri,
+                $params->position->line,
+                $params->position->character,
+            ));
+        }
+
+        return new Success(null);
     }
 
     private static function lastSegment(string $identifier): string

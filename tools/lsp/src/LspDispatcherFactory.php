@@ -47,6 +47,8 @@ use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
+use XPHP\Lsp\Reflection\ReflectorFactory;
+use XPHP\Lsp\Resolver\PhpDefinitionResolver;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -84,8 +86,25 @@ final class LspDispatcherFactory implements DispatcherFactory
         // Every handler (hover, definition, completion, diagnostics) reads
         // through the cache so a workspace pass costs O(unchanged docs serves
         // from cache) rather than O(N parses per keystroke).
-        $analyzer = new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));
+        $xphpParser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $analyzer = new Analyzer($xphpParser);
         $cache = new ParsedDocumentCache($analyzer);
+
+        // Worse-reflection-backed engine for PHP-semantic GTD/hover/completion
+        // -- everything beyond xphp generics.  Built once per LSP session and
+        // shared across resolvers.  `rootPath` is what `InitializeParams`
+        // hands us as the project workspace root; an empty string => no
+        // filesystem walking (workspace + stubs only).
+        $rootPath = $initializeParams->rootPath ?? '';
+        $reflector = (new ReflectorFactory(
+            $workspace,
+            $cache,
+            $xphpParser,
+            $rootPath,
+            ReflectorFactory::defaultStubPath(),
+            ReflectorFactory::defaultCacheDir(),
+        ))->build();
+        $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(
             $cache,
@@ -125,7 +144,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
             new XphpHoverHandler($workspace, $cache),
-            new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols),
+            new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols, $phpDefinitionResolver),
             new XphpCompletionHandler($workspace, $workspaceSymbols),
         );
 
