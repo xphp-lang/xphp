@@ -121,6 +121,29 @@ final class PhpHoverResolverTest extends TestCase
         self::assertNull($resolver->resolve('/never-opened.xphp', 0, 0));
     }
 
+    public function testPropertyHoverOnInferenceFailureReturnsNullNotCrash(): void
+    {
+        // Parallel to PhpDefinitionResolverTest::testPropertyAccessOnInferenceFailureReturnsNullNotCrash --
+        // hovering `$asUser->name` after `$asUser = Util::identity<User>(...)`
+        // sees containerType=MissingType.  Pre-hotfix would have called
+        // `MissingType::name()` on the dispatch line and crashed.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Util.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Util {
+            public static function identity<T>(T $x): T { return $x; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App;\nclass User { public string \$name = ''; }\n");
+        $useSource = "<?php\nuse App\\Util;\nuse App\\User;\n\$asUser = Util::identity<User>(new User());\necho \$asUser->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Must not throw.
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$asUser->name', strlen('$asUser->'));
+        self::assertNull($hover);
+    }
+
     private function hoverAt(
         PhpactorWorkspace $workspace,
         string $uri,

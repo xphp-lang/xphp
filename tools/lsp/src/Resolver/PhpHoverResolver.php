@@ -49,6 +49,20 @@ final class PhpHoverResolver
 
     public function resolve(string $uri, int $line, int $character): ?Hover
     {
+        // Top-level safety net -- see the matching pattern in
+        // PhpDefinitionResolver::resolve().  An unexpected `Error` from
+        // worse-reflection (e.g. MissingType::name()) here would write
+        // to stdout and kill the LSP transport.  Always return null
+        // instead.
+        try {
+            return $this->resolveInner($uri, $line, $character);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function resolveInner(string $uri, int $line, int $character): ?Hover
+    {
         if (!$this->workspace->has($uri)) {
             return null;
         }
@@ -66,11 +80,19 @@ final class PhpHoverResolver
         $context = $reflectionOffset->nodeContext();
         $symbol = $context->symbol();
 
+        // METHOD / PROPERTY / CONSTANT dispatch go through `containerOrNull`
+        // so a MissingType container (when worse-reflection can't infer
+        // the receiver -- e.g. result of an xphp generic method call)
+        // returns "no hover" instead of crashing on the absent `name()`.
         $markdown = match ($symbol->symbolType()) {
             Symbol::CLASS_    => $this->renderClass(self::preferType($context, $symbol->name())),
             Symbol::FUNCTION  => $this->renderFunction($symbol->name()),
-            Symbol::METHOD    => $this->renderMethod($context->containerType()->name()->__toString(), $symbol->name()),
-            Symbol::PROPERTY  => $this->renderProperty($context->containerType()->name()->__toString(), $symbol->name()),
+            Symbol::METHOD    => ($c = self::containerOrNull($context)) !== null
+                                    ? $this->renderMethod($c, $symbol->name())
+                                    : null,
+            Symbol::PROPERTY  => ($c = self::containerOrNull($context)) !== null
+                                    ? $this->renderProperty($c, $symbol->name())
+                                    : null,
             Symbol::CONSTANT  => $this->renderConstant($context, $symbol->name()),
             default           => null,
         };
@@ -168,8 +190,8 @@ final class PhpHoverResolver
 
     private function renderConstant(NodeContext $context, string $name): ?string
     {
-        $container = $context->containerType()->name()->__toString();
-        if ($container !== '') {
+        $container = self::containerOrNull($context);
+        if ($container !== null) {
             try {
                 $class = $this->reflector->reflectClassLike($container);
                 $constant = $class->constants()->get($name);
@@ -195,6 +217,18 @@ final class PhpHoverResolver
         // expose `name()`.
         $typeName = (string) $context->type();
         return $typeName !== '' && $typeName !== '<missing>' ? $typeName : $fallback;
+    }
+
+    /**
+     * Return the resolved FQN of the symbol's containing class/interface
+     * for METHOD/PROPERTY/CONSTANT access, or null if worse-reflection
+     * couldn't infer it (MissingType).  Same rationale as the matching
+     * helper on PhpDefinitionResolver.
+     */
+    private static function containerOrNull(NodeContext $context): ?string
+    {
+        $name = (string) $context->containerType();
+        return ($name === '' || $name === '<missing>') ? null : $name;
     }
 
     private static function format(string $signature, string $docblockText): string

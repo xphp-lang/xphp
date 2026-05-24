@@ -168,6 +168,41 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertNull($resolver->resolve('/never-opened.xphp', 0, 0));
     }
 
+    public function testPropertyAccessOnInferenceFailureReturnsNullNotCrash(): void
+    {
+        // Reproduces the user-reported LSP crash captured in
+        // xphp-20260524-125122-098.log (request id=7).  Worse-reflection
+        // sees the xphp-stripped form of `Util::identity<User>(...)` as
+        // `Util::identity(...)` returning `T` (an undefined class), so
+        // it infers `$asUser`'s type as MissingType.  Clicking on
+        // `$asUser->name` then dispatches with `containerType=MissingType`.
+        // The pre-hotfix code called `MissingType::name()` which is
+        // undefined -- a fatal Error that wrote to stdout and killed
+        // the entire LSP session.  Post-hotfix: `containerOrNull` and
+        // the top-level try/catch in resolve() both turn this into a
+        // graceful "no result".
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Util.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Util {
+            public static function identity<T>(T $x): T { return $x; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App;\nclass User { public string \$name = ''; }\n");
+        $useSource = "<?php\nuse App\\Util;\nuse App\\User;\n\$asUser = Util::identity<User>(new User());\necho \$asUser->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Must not throw -- the pre-hotfix code crashed here with
+        // `Error: Call to undefined method MissingType::name()`.
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, '$asUser->name', strlen('$asUser->'));
+        // Returning null is fine; what we're locking in is "no crash".
+        // A follow-up that teaches worse-reflection about generic-method
+        // return-type inference would turn this into a real resolution;
+        // for now MissingType correctly signals "I don't know."
+        self::assertNull($location);
+    }
+
     public function testCursorOnVariableNameReturnsNull(): void
     {
         // Variables aren't part of the MVP GTD scope.  Worse-reflection

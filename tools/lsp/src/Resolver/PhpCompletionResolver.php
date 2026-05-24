@@ -58,6 +58,22 @@ final class PhpCompletionResolver
      */
     public function complete(string $uri, int $line, int $character): array
     {
+        // Top-level safety net for parity with PhpDefinitionResolver and
+        // PhpHoverResolver -- any unexpected `Error` from worse-reflection
+        // becomes "no completion" instead of an uncaught fatal that
+        // poisons the LSP transport via stdout.
+        try {
+            return $this->completeInner($uri, $line, $character);
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @return list<CompletionItem>
+     */
+    private function completeInner(string $uri, int $line, int $character): array
+    {
         if (!$this->workspace->has($uri)) {
             return [];
         }

@@ -60,6 +60,22 @@ final class PhpDefinitionResolver
 
     public function resolve(string $uri, int $line, int $character): ?Location
     {
+        // Belt-and-braces: the resolver calls into third-party
+        // worse-reflection which has its own surprises on edge cases
+        // (e.g. `MissingType::name()` -- the original cause of the LSP
+        // crash captured in xphp-20260524-125122-098.log).  A single
+        // top-level catch makes any unexpected internal failure surface
+        // as "no result" instead of a fatal that poisons the LSP
+        // transport via stdout.
+        try {
+            return $this->resolveInner($uri, $line, $character);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function resolveInner(string $uri, int $line, int $character): ?Location
+    {
         $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
         if ($document === null) {
             return null;
@@ -87,17 +103,28 @@ final class PhpDefinitionResolver
         // symbol name is "User" but the type name is "App\User" -- which
         // is what we need to feed to reflectClassLike().  When the cursor
         // is on a use statement itself, both happen to be the FQN.
-        $resolution = match ($symbol->symbolType()) {
+        //
+        // For method/property/case dispatch, containerType() may be a
+        // MissingType when worse-reflection couldn't infer the receiver
+        // (e.g. xphp generic-method return values stripped to bare `T`,
+        // dynamic property access on unknown variables, etc.).  We funnel
+        // through `containerOrNull()` so MissingType means "give up
+        // gracefully" instead of "crash on undefined method name()".
+        return match ($symbol->symbolType()) {
             Symbol::CLASS_     => $this->locateClass(self::preferType($context, $symbol->name())),
             Symbol::FUNCTION   => $this->locateFunction($symbol->name()),
-            Symbol::METHOD     => $this->locateMethod($context->containerType()->name()->__toString(), $symbol->name()),
-            Symbol::PROPERTY   => $this->locateProperty($context->containerType()->name()->__toString(), $symbol->name()),
+            Symbol::METHOD     => ($c = self::containerOrNull($context)) !== null
+                                    ? $this->locateMethod($c, $symbol->name())
+                                    : null,
+            Symbol::PROPERTY   => ($c = self::containerOrNull($context)) !== null
+                                    ? $this->locateProperty($c, $symbol->name())
+                                    : null,
             Symbol::CONSTANT   => $this->locateConstant($context, $symbol->name()),
-            Symbol::CASE       => $this->locateEnumCase($context->containerType()->name()->__toString(), $symbol->name()),
+            Symbol::CASE       => ($c = self::containerOrNull($context)) !== null
+                                    ? $this->locateEnumCase($c, $symbol->name())
+                                    : null,
             default            => null,
         };
-
-        return $resolution;
     }
 
     /**
@@ -114,6 +141,19 @@ final class PhpDefinitionResolver
         // expose `name()`.
         $typeName = (string) $context->type();
         return $typeName !== '' && $typeName !== '<missing>' ? $typeName : $fallback;
+    }
+
+    /**
+     * Return the resolved FQN of the symbol's containing class/interface
+     * (for METHOD/PROPERTY/CASE access), or null when worse-reflection
+     * couldn't infer it.  Centralises the MissingType safety check so
+     * the dispatch site doesn't crash when an upstream inference
+     * failure makes containerType a `MissingType` (which lacks `name()`).
+     */
+    private static function containerOrNull(\Phpactor\WorseReflection\Core\Inference\NodeContext $context): ?string
+    {
+        $name = (string) $context->containerType();
+        return ($name === '' || $name === '<missing>') ? null : $name;
     }
 
     private function locateClass(string $fqn): ?Location
@@ -164,9 +204,10 @@ final class PhpDefinitionResolver
     private function locateConstant(\Phpactor\WorseReflection\Core\Inference\NodeContext $context, string $name): ?Location
     {
         // Two shapes: class constants `Foo::BAR` (containerType resolves)
-        // OR global constants `BAR` (top-level reflectConstant).
-        $containerName = $context->containerType()->name()->__toString();
-        if ($containerName !== '') {
+        // OR global constants `BAR` (containerType is missing/empty -- fall
+        // through to top-level reflectConstant).
+        $containerName = self::containerOrNull($context);
+        if ($containerName !== null) {
             try {
                 $class = $this->reflector->reflectClassLike($containerName);
                 $constant = $class->constants()->get($name);

@@ -25,6 +25,17 @@ declare(strict_types=1);
 // to versions that have caught up with PHP 8.4.
 error_reporting(E_ALL & ~E_DEPRECATED);
 
+// LSP transport hygiene: PHP's default `display_errors=stdout` would
+// write warnings / notices / uncaught-error messages straight into the
+// LSP framed message stream and the client would reject the next read
+// with "Missing header Content-Length", then kill the server.  Confirmed
+// in xphp-20260524-125122-098.log -- a single `MissingType::name()`
+// fatal Error wiped out the entire session.  Send errors to stderr
+// instead; PhpStorm's LSP framework captures stderr into the
+// per-session language-services log without touching the transport.
+ini_set('display_errors', 'stderr');
+ini_set('log_errors', '1');
+
 $autoload = null;
 foreach ([
     __DIR__ . '/../vendor/autoload.php',          // standalone install (composer install in tools/lsp/)
