@@ -53,6 +53,23 @@ final class LspDispatcherFactoryTest extends TestCase
         self::assertSame('xphp-lsp', $result->serverInfo['name'] ?? null);
     }
 
+    public function testDocumentSymbolProviderAdvertised(): void
+    {
+        // Without this capability, clients won't issue
+        // textDocument/documentSymbol and the Structure / "Go to Symbol in
+        // File" UIs stay empty.  Phase 2.1 wires XphpDocumentSymbolHandler --
+        // this assertion guards against a regression where the handler is
+        // present but un-announced.
+        $tester = $this->buildTester();
+
+        $result = $tester->initialize();
+
+        self::assertTrue(
+            $result->capabilities->documentSymbolProvider,
+            'documentSymbolProvider must be announced as bool true (NOT a DocumentSymbolOptions object -- IntelliJ rejects the empty-object encoding)',
+        );
+    }
+
     private function buildTester(): LanguageServerTester
     {
         return new LanguageServerTester(

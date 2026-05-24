@@ -46,6 +46,7 @@ use XPHP\Lsp\Diagnostics\XphpDiagnosticsProvider;
 use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
+use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Reflection\FqnIndex;
@@ -205,6 +206,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpHoverHandler($workspace, $cache, $phpHoverResolver),
             new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols, $phpDefinitionResolver),
             new XphpCompletionHandler($workspace, $workspaceSymbols, $phpCompletionResolver),
+            new XphpDocumentSymbolHandler($workspace, $cache),
         );
 
         $runner = new HandlerMethodRunner(
