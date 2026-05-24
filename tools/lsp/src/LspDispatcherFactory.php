@@ -49,6 +49,7 @@ use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Resolver\PhpDefinitionResolver;
+use XPHP\Lsp\Resolver\PhpHoverResolver;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -105,6 +106,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             ReflectorFactory::defaultCacheDir(),
         ))->build();
         $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector);
+        $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(
             $cache,
@@ -143,7 +145,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new ServiceHandler($serviceManager, $clientApi),
             new CommandHandler(new CommandDispatcher([])),
             new ExitHandler(),
-            new XphpHoverHandler($workspace, $cache),
+            new XphpHoverHandler($workspace, $cache, $phpHoverResolver),
             new XphpDefinitionHandler($workspace, $cache, $workspaceSymbols, $phpDefinitionResolver),
             new XphpCompletionHandler($workspace, $workspaceSymbols),
         );

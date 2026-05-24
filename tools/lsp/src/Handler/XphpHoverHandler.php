@@ -17,6 +17,7 @@ use Phpactor\LanguageServerProtocol\MarkupKind;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Resolver\PhpHoverResolver;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\TypeParam;
 use XPHP\Transpiler\Monomorphize\TypeRef;
@@ -47,6 +48,7 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
+        private readonly ?PhpHoverResolver $phpResolver = null,
     ) {
     }
 
@@ -100,16 +102,29 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
         );
 
         $hit = AstPositionResolver::nameAtOffset($result->ast, $offset);
-        if ($hit === null) {
-            return new Success(null);
+        if ($hit !== null) {
+            $markdown = $this->buildHoverMarkdown($hit['name'], $hit['classScope']);
+            if ($markdown !== null) {
+                return new Success(new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown)));
+            }
         }
 
-        $markdown = $this->buildHoverMarkdown($hit['name'], $hit['classScope']);
-        if ($markdown === null) {
-            return new Success(null);
+        // Fall through to PHP-semantic hover via worse-reflection.  Handles
+        // everything the xphp-specific paths above don't: class names,
+        // function calls, method/property access, native functions
+        // (from phpstorm-stubs), etc.
+        if ($this->phpResolver !== null) {
+            $hover = $this->phpResolver->resolve(
+                $params->textDocument->uri,
+                $params->position->line,
+                $params->position->character,
+            );
+            if ($hover !== null) {
+                return new Success($hover);
+            }
         }
 
-        return new Success(new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown)));
+        return new Success(null);
     }
 
     /**
