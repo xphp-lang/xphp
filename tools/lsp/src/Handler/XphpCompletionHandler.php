@@ -16,6 +16,7 @@ use Phpactor\LanguageServerProtocol\CompletionOptions;
 use Phpactor\LanguageServerProtocol\CompletionParams;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Resolver\PhpCompletionResolver;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -47,6 +48,7 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly WorkspaceSymbols $symbols,
+        private readonly ?PhpCompletionResolver $phpResolver = null,
     ) {
     }
 
@@ -61,10 +63,16 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
     // We match the typo deliberately — overriding requires the same name.
     public function registerCapabiltiies(ServerCapabilities $capabilities): void
     {
-        // `<` is the canonical trigger; `,` lets the next-arg case fire without
-        // the user typing an extra letter first.
+        // Trigger characters cover both completion paths:
+        //   - `<`, `,`  -- type-arg position (`Box<|`, `Pair<Foo,|`)
+        //   - `>`       -- the second char of `->` (member access)
+        //   - `:`       -- the second char of `::` (static access)
+        // Note that LSP fires once per trigger char insertion, so typing
+        // `->` results in two completion requests: one after `-` (no
+        // context detected, empty list) and one after `>` (member-access
+        // context detected).  Including `-` would just produce noise.
         $capabilities->completionProvider = new CompletionOptions(
-            triggerCharacters: ['<', ','],
+            triggerCharacters: ['<', ',', '>', ':'],
         );
     }
 
@@ -84,12 +92,25 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
         );
 
         $hit = TypeArgPositionDetector::detect($item->text, $offset);
-        if ($hit === null) {
-            return new Success($emptyList);
+        if ($hit !== null) {
+            $candidates = $this->buildCandidates($hit['prefix']);
+            return new Success(new CompletionList(isIncomplete: false, items: $candidates));
         }
 
-        $candidates = $this->buildCandidates($hit['prefix']);
-        return new Success(new CompletionList(isIncomplete: false, items: $candidates));
+        // Fall through to PHP-semantic completion (member / static access).
+        // Returns an empty list when the cursor isn't in a recognised
+        // context, which matches the old "empty list, no fallback" behaviour
+        // for non-type-arg cursors.
+        if ($this->phpResolver !== null) {
+            $phpItems = $this->phpResolver->complete(
+                $params->textDocument->uri,
+                $params->position->line,
+                $params->position->character,
+            );
+            return new Success(new CompletionList(isIncomplete: false, items: $phpItems));
+        }
+
+        return new Success($emptyList);
     }
 
     /**

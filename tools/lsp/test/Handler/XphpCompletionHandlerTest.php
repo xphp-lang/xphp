@@ -214,7 +214,7 @@ final class XphpCompletionHandlerTest extends TestCase
 
         self::assertNotNull($capabilities->completionProvider);
         self::assertSame(
-            ['<', ','],
+            ['<', ',', '>', ':'],
             $capabilities->completionProvider->triggerCharacters,
         );
     }
