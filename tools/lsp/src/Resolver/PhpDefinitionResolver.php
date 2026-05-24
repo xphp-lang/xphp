@@ -65,6 +65,7 @@ final class PhpDefinitionResolver
         private readonly XphpSourceParser $parser,
         private readonly Reflector $reflector,
         private readonly ParsedDocumentCache $cache,
+        private readonly GenericResolver $genericResolver,
     ) {
     }
 
@@ -126,9 +127,15 @@ final class PhpDefinitionResolver
             Symbol::METHOD     => ($c = self::containerOrNull($context)) !== null
                                     ? $this->locateMethod($c, $symbol->name())
                                     : null,
-            Symbol::PROPERTY   => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->locateProperty($c, $symbol->name())
-                                    : null,
+            Symbol::PROPERTY   => $this->locateProperty(
+                                    // Resolver-first: substituted receiver wins
+                                    // when GenericResolver has a binding for
+                                    // `$x->method()?->prop` (Phase 0.7).  Falls
+                                    // back to worse-reflection's containerType.
+                                    $this->genericResolver->resolvePropertyReceiverClassAt($uri, $offset)
+                                        ?? self::containerOrNull($context),
+                                    $symbol->name(),
+                                ),
             Symbol::CONSTANT   => $this->locateConstant($context, $symbol->name()),
             Symbol::CASE       => ($c = self::containerOrNull($context)) !== null
                                     ? $this->locateEnumCase($c, $symbol->name())
@@ -303,8 +310,11 @@ final class PhpDefinitionResolver
         return $this->memberNameRange($method->declaringClass()->sourceCode(), $method->nameRange());
     }
 
-    private function locateProperty(string $classFqn, string $propertyName): ?Location
+    private function locateProperty(?string $classFqn, string $propertyName): ?Location
     {
+        if ($classFqn === null) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             if (!$class->isClass() && !$class->isInterface() && !$class->isTrait()) {

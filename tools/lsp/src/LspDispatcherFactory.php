@@ -119,7 +119,6 @@ final class LspDispatcherFactory implements DispatcherFactory
             ReflectorFactory::defaultCacheDir(),
             $fqnIndex,
         ))->build();
-        $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector, $cache);
         // Per-session registry of (namespace, paramName) pairs harvested from
         // generic ClassLike declarations in open documents.  Resolvers query
         // this when formatting type names so a post-strip placeholder
@@ -145,6 +144,10 @@ final class LspDispatcherFactory implements DispatcherFactory
             new FilesystemClassLikeLookup($fqnIndex),
         );
         $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $xphpParser, $fqnIndex);
+        // PhpDefinitionResolver takes GenericResolver too (Phase 0.7) so GTD
+        // on property access through a generic method's return type can
+        // resolve via the substituted receiver class.
+        $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector, $cache, $genericResolver);
         $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector, $genericParams, $genericResolver);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(

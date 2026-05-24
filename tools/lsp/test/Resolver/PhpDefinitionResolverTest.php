@@ -168,19 +168,19 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertNull($resolver->resolve('/never-opened.xphp', 0, 0));
     }
 
-    public function testPropertyAccessOnInferenceFailureReturnsNullNotCrash(): void
+    public function testPropertyAccessOnSubstitutedReceiverFromStaticCall(): void
     {
-        // Reproduces the user-reported LSP crash captured in
-        // xphp-20260524-125122-098.log (request id=7).  Worse-reflection
-        // sees the xphp-stripped form of `Util::identity<User>(...)` as
-        // `Util::identity(...)` returning `T` (an undefined class), so
-        // it infers `$asUser`'s type as MissingType.  Clicking on
-        // `$asUser->name` then dispatches with `containerType=MissingType`.
-        // The pre-hotfix code called `MissingType::name()` which is
-        // undefined -- a fatal Error that wrote to stdout and killed
-        // the entire LSP session.  Post-hotfix: `containerOrNull` and
-        // the top-level try/catch in resolve() both turn this into a
-        // graceful "no result".
+        // Originally a crash-safety test: pre-hotfix code crashed when
+        // dispatching with `containerType=MissingType` (from
+        // `$asUser = Util::identity<User>(...)` whose return-type
+        // resolved to a bare `T` worse-reflection couldn't find).
+        // After Phase 1.2 (static-call substitution) + Phase 0.7
+        // (property-receiver substitution), the chain now resolves
+        // correctly and GTD jumps to User::$name.
+        //
+        // No-crash guarantee is still in place (resolveInner has a
+        // top-level try/catch); this test now also asserts the
+        // positive resolution.
         $workspace = $this->workspace();
         $this->open($workspace, '/Util.xphp', <<<'XPHP'
         <?php
@@ -193,14 +193,10 @@ final class PhpDefinitionResolverTest extends TestCase
         $useSource = "<?php\nuse App\\Util;\nuse App\\User;\n\$asUser = Util::identity<User>(new User());\necho \$asUser->name;\n";
         $this->open($workspace, '/Use.xphp', $useSource);
 
-        // Must not throw -- the pre-hotfix code crashed here with
-        // `Error: Call to undefined method MissingType::name()`.
         $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, '$asUser->name', strlen('$asUser->'));
-        // Returning null is fine; what we're locking in is "no crash".
-        // A follow-up that teaches worse-reflection about generic-method
-        // return-type inference would turn this into a real resolution;
-        // for now MissingType correctly signals "I don't know."
-        self::assertNull($location);
+
+        self::assertNotNull($location, 'GTD must resolve to User::$name through Phase 1.2 + 0.7');
+        self::assertStringEndsWith('/User.xphp', $location->uri);
     }
 
     public function testJumpsFromVariableUseToInitialAssignment(): void
@@ -291,6 +287,50 @@ final class PhpDefinitionResolverTest extends TestCase
         $this->assertResolves($location, '/User.xphp', 'User');
     }
 
+    public function testGotoDefinitionOnPropertyThroughChainedMethodCall(): void
+    {
+        // Phase 0.7: GTD on `$repo->first()?->name` jumps to User::$name
+        // by way of substituting `?T` -> `?User` on the receiver.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repository.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Repository<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User { public string \$name = ''; }\n");
+        $useSource = "<?php\nuse App\\Containers\\Repository;\nuse App\\Models\\User;\n\$repo = new Repository<User>();\necho \$repo->first()?->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, '?->name', strlen('?->'));
+
+        self::assertNotNull($location);
+        self::assertStringEndsWith('/User.xphp', $location->uri);
+    }
+
+    public function testGotoDefinitionOnPropertyThroughTrackedVariable(): void
+    {
+        // GTD on `$user?->name` where `$user` came from a chained
+        // method call.  Hits the Variable branch of inferType.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repository.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Repository<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User { public string \$name = ''; }\n");
+        $useSource = "<?php\nuse App\\Containers\\Repository;\nuse App\\Models\\User;\n\$repo = new Repository<User>();\n\$user = \$repo->first();\necho \$user?->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, '?->name', strlen('?->'));
+
+        self::assertNotNull($location);
+        self::assertStringEndsWith('/User.xphp', $location->uri);
+    }
+
     private function resolveAt(
         PhpactorWorkspace $workspace,
         string $uri,
@@ -321,6 +361,7 @@ final class PhpDefinitionResolverTest extends TestCase
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, '');
         $reflector = (new ReflectorFactory(
             $workspace,
             $cache,
@@ -328,9 +369,11 @@ final class PhpDefinitionResolverTest extends TestCase
             rootPath: '',
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
-            fqnIndex: new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
+            fqnIndex: $fqnIndex,
         ))->build();
-        return new PhpDefinitionResolver($workspace, $parser, $reflector, $cache);
+        $classLikeLookup = new \XPHP\Lsp\Resolver\WorkspaceClassLikeLookup($workspace, $cache);
+        $generic = new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
+        return new PhpDefinitionResolver($workspace, $parser, $reflector, $cache, $generic);
     }
 
     private function workspace(): PhpactorWorkspace

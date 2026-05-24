@@ -174,6 +174,87 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringNotContainsString('App\\Containers\\T', $markdown);
     }
 
+    public function testPropertyHoverThroughChainedMethodCall(): void
+    {
+        // Phase 0.7 headline: `$repo->first()?->name` where
+        // `Repository<T>::first(): ?T` and `$repo: Repository<User>`.
+        // Property hover at `name` should resolve to User's `$name`
+        // (not return null as it did before this phase).
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repository.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Repository<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class User {
+            /** The displayed name. */
+            public string $name = '';
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Containers\\Repository;\nuse App\\Models\\User;\n\$repo = new Repository<User>();\necho \$repo->first()?->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '?->name', strlen('?->'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('$name', $markdown);
+        self::assertStringContainsString('App\\Models\\User', $markdown);
+        self::assertStringContainsString('The displayed name.', $markdown);
+    }
+
+    public function testPropertyHoverThroughDirectVariableReceiver(): void
+    {
+        // Variant: `$user->name` where `$user` is a tracked variable
+        // assigned from a chained method call.  The receiver is a
+        // Variable, not a chained call -- ensures inferType handles
+        // both shapes.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repository.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Repository<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User { public string \$name = ''; }\n");
+        $useSource = "<?php\nuse App\\Containers\\Repository;\nuse App\\Models\\User;\n\$repo = new Repository<User>();\n\$user = \$repo->first();\necho \$user?->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '?->name', strlen('?->'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('$name', $markdown);
+        self::assertStringContainsString('App\\Models\\User', $markdown);
+    }
+
+    public function testPropertyHoverFallsBackToWorseReflectionWhenNoBinding(): void
+    {
+        // Boundary lock: when no binding is in scope, the resolver
+        // returns null and worse-reflection's containerType takes over.
+        // For non-generic receivers worse-reflection already works, so
+        // this should still render the property.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class User {
+            public string $name = '';
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\User;\n\$u = new User();\necho \$u->name;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '->name', 2);
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('$name', $markdown);
+    }
+
     public function testHoversNativeFunctionFromStubs(): void
     {
         if (!is_dir(ReflectorFactory::defaultStubPath())) {
@@ -392,12 +473,18 @@ final class PhpHoverResolverTest extends TestCase
         self::assertNull($resolver->resolve('/never-opened.xphp', 0, 0));
     }
 
-    public function testPropertyHoverOnInferenceFailureReturnsNullNotCrash(): void
+    public function testPropertyHoverOnSubstitutedReceiverFromStaticCall(): void
     {
-        // Parallel to PhpDefinitionResolverTest::testPropertyAccessOnInferenceFailureReturnsNullNotCrash --
-        // hovering `$asUser->name` after `$asUser = Util::identity<User>(...)`
-        // sees containerType=MissingType.  Pre-hotfix would have called
-        // `MissingType::name()` on the dispatch line and crashed.
+        // This test originally asserted null because pre-Phase-1.2 the
+        // static call `Util::identity<User>(...)` couldn't substitute,
+        // and pre-Phase-0.7 the property hover couldn't find User.  Now
+        // both work in combination: the static call binds `$asUser` to
+        // `App\User`, and the property hover at `$asUser->name`
+        // consults GenericResolver to find User's `$name` property.
+        //
+        // The hover still doesn't crash on MissingType -- that
+        // robustness check is now covered by the per-symbol catch in
+        // resolveInner and the null-check in renderProperty.
         $workspace = $this->workspace();
         $this->open($workspace, '/Util.xphp', <<<'XPHP'
         <?php
@@ -410,9 +497,11 @@ final class PhpHoverResolverTest extends TestCase
         $useSource = "<?php\nuse App\\Util;\nuse App\\User;\n\$asUser = Util::identity<User>(new User());\necho \$asUser->name;\n";
         $this->open($workspace, '/Use.xphp', $useSource);
 
-        // Must not throw.
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$asUser->name', strlen('$asUser->'));
-        self::assertNull($hover);
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('$name', $markdown);
+        self::assertStringContainsString('App\\User', $markdown);
     }
 
     private function hoverAt(

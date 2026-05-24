@@ -12,6 +12,8 @@ use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\New_;
+use PhpParser\Node\Expr\NullsafePropertyFetch;
+use PhpParser\Node\Expr\PropertyFetch;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
@@ -236,6 +238,111 @@ final class GenericResolver
         }
 
         return new MethodCallSubstitution($returnTypeRendered, $paramTypes);
+    }
+
+    /**
+     * Resolve the FQN of the class hosting a property access at
+     * `$byteOffset`.  For `$users->first()?->name` (where
+     * `$users: Collection<User>` and `Collection<T>::first(): ?T`), the
+     * receiver of `?->name` is the substituted method-call result
+     * `?User`; this method returns `App\Models\User` so the caller
+     * (hover / GTD) can look up the `name` property on the right class.
+     *
+     * Returns null when the cursor isn't on a property name token, when
+     * the receiver expression can't be typed, or when substitution
+     * doesn't yield a class (e.g. scalar receiver, or the receiver
+     * still resolves to a bare placeholder with no in-scope binding).
+     *
+     * Used by `PhpHoverResolver::renderProperty` and
+     * `PhpDefinitionResolver::locateProperty` to override
+     * worse-reflection's view of the receiver class when the resolver
+     * has more accurate information.
+     */
+    public function resolvePropertyReceiverClassAt(string $uri, int $byteOffset): ?string
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $scopes = $this->scopesFor($uri, $item->version, $item->text);
+        $bindings = self::bindingsAt($scopes, $byteOffset);
+
+        $result = $this->documents->getOrParse($uri, $item->version, $item->text);
+        if ($result->ast === null) {
+            return null;
+        }
+        $fetch = self::findEnclosingPropertyFetchNameAt($result->ast, $byteOffset);
+        if ($fetch === null) {
+            return null;
+        }
+        $receiverType = self::inferType(
+            $fetch->var,
+            $bindings,
+            $this->classes,
+            $this->fqnIndex,
+            [],
+            '',
+        );
+        if ($receiverType === null) {
+            return null;
+        }
+        // The class FQN is in `ref->name`; nullability and args don't
+        // affect the property's host class (a nullable receiver still
+        // accesses the same class's properties).  Scalars and
+        // type-params with no concrete binding don't yield a usable
+        // FQN -- skip those.
+        $fqn = $receiverType->ref->name;
+        if ($fqn === '' || $receiverType->ref->isScalar || $receiverType->ref->isTypeParam) {
+            return null;
+        }
+        return $fqn;
+    }
+
+    /**
+     * Walk the AST looking for a `PropertyFetch` or `NullsafePropertyFetch`
+     * whose property-name identifier covers `$byteOffset`.  The cursor
+     * must land ON the name token; landing on the receiver expression
+     * returns null.  Mirrors `findEnclosingMethodCallNameAt`'s shape.
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function findEnclosingPropertyFetchNameAt(array $ast, int $byteOffset): PropertyFetch|NullsafePropertyFetch|null
+    {
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public PropertyFetch|NullsafePropertyFetch|null $hit = null;
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->hit !== null) {
+                    return null;
+                }
+                if (!$node instanceof PropertyFetch && !$node instanceof NullsafePropertyFetch) {
+                    return null;
+                }
+                $name = $node->name;
+                if (!$name instanceof Identifier) {
+                    return null;
+                }
+                $start = $name->getStartFilePos();
+                $end = $name->getEndFilePos();
+                if ($start < 0 || $end < 0) {
+                    return null;
+                }
+                if ($this->offset >= $start && $this->offset <= $end + 1) {
+                    $this->hit = $node;
+                }
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->hit;
     }
 
     /**

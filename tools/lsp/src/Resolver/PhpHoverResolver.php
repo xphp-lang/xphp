@@ -92,9 +92,15 @@ final class PhpHoverResolver
             Symbol::METHOD    => ($c = self::containerOrNull($context)) !== null
                                     ? $this->renderMethod($c, $symbol->name(), $this->genericResolver->resolveMethodCallSubstitutionAt($uri, $offset))
                                     : null,
-            Symbol::PROPERTY  => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->renderProperty($c, $symbol->name())
-                                    : null,
+            Symbol::PROPERTY  => $this->renderProperty(
+                                    // Resolver-first: substituted receiver wins
+                                    // when GenericResolver has a binding for
+                                    // `$x->method()?->prop` (Phase 0.7).  Falls
+                                    // back to worse-reflection's containerType.
+                                    $this->genericResolver->resolvePropertyReceiverClassAt($uri, $offset)
+                                        ?? self::containerOrNull($context),
+                                    $symbol->name(),
+                                ),
             Symbol::CONSTANT  => $this->renderConstant($context, $symbol->name()),
             Symbol::VARIABLE  => $this->renderVariable($uri, $offset, $context, $symbol->name()),
             default           => null,
@@ -183,8 +189,11 @@ final class PhpHoverResolver
         return self::format($signature, $docblock);
     }
 
-    private function renderProperty(string $classFqn, string $propertyName): ?string
+    private function renderProperty(?string $classFqn, string $propertyName): ?string
     {
+        if ($classFqn === null) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             $property = $class->properties()->get($propertyName);
