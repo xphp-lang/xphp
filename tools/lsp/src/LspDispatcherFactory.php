@@ -49,7 +49,10 @@ use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Resolver\CompletionIndex;
+use XPHP\Lsp\Resolver\GenericParamRegistry;
+use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
+use XPHP\Lsp\Resolver\WorkspaceClassLikeLookup;
 use XPHP\Lsp\Resolver\PhpDefinitionResolver;
 use XPHP\Lsp\Resolver\PhpHoverResolver;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -108,7 +111,20 @@ final class LspDispatcherFactory implements DispatcherFactory
             ReflectorFactory::defaultCacheDir(),
         ))->build();
         $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector, $cache);
-        $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector);
+        // Per-session registry of (namespace, paramName) pairs harvested from
+        // generic ClassLike declarations in open documents.  Resolvers query
+        // this when formatting type names so a post-strip placeholder
+        // reference like `App\Containers\T` renders as `T` in hover/completion
+        // detail, matching what the user wrote in the original `<T>` source.
+        $genericParams = new GenericParamRegistry($workspace, $cache);
+        // GenericResolver is a stronger pass that does actual type-arg
+        // substitution: `$user = $users->first()` where `$users = new
+        // Collection<User>(...)` resolves to `?App\Models\User` rather than
+        // the unresolved `?T` the prettify path can produce.  Consulted
+        // first in renderVariable; falls back to prettify on misses.
+        $classLikeLookup = new WorkspaceClassLikeLookup($workspace, $cache);
+        $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $xphpParser);
+        $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector, $genericParams, $genericResolver);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(
             $cache,
@@ -153,6 +169,8 @@ final class LspDispatcherFactory implements DispatcherFactory
             $reflector,
             $completionIndex,
             $cache,
+            $genericParams,
+            $genericResolver,
         );
 
         $handlers = new Handlers(

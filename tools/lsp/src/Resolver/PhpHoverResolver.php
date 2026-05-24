@@ -44,6 +44,8 @@ final class PhpHoverResolver
         private readonly PhpactorWorkspace $workspace,
         private readonly XphpSourceParser $parser,
         private readonly Reflector $reflector,
+        private readonly GenericParamRegistry $genericParams,
+        private readonly GenericResolver $genericResolver,
     ) {
     }
 
@@ -88,13 +90,13 @@ final class PhpHoverResolver
             Symbol::CLASS_    => $this->renderClass(self::preferType($context, $symbol->name())),
             Symbol::FUNCTION  => $this->renderFunction($symbol->name()),
             Symbol::METHOD    => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->renderMethod($c, $symbol->name())
+                                    ? $this->renderMethod($c, $symbol->name(), $this->genericResolver->resolveMethodReturnTypeAt($uri, $offset))
                                     : null,
             Symbol::PROPERTY  => ($c = self::containerOrNull($context)) !== null
                                     ? $this->renderProperty($c, $symbol->name())
                                     : null,
             Symbol::CONSTANT  => $this->renderConstant($context, $symbol->name()),
-            Symbol::VARIABLE  => self::renderVariable($context, $symbol->name()),
+            Symbol::VARIABLE  => $this->renderVariable($uri, $context, $symbol->name()),
             default           => null,
         };
 
@@ -125,10 +127,10 @@ final class PhpHoverResolver
         }
         $params = [];
         foreach ($function->parameters() as $param) {
-            $type = (string) $param->inferredType();
+            $type = $this->genericParams->prettify((string) $param->inferredType());
             $params[] = trim(($type !== '' && $type !== '<missing>' ? $type . ' ' : '') . '$' . $param->name());
         }
-        $return = (string) $function->inferredType();
+        $return = $this->genericParams->prettify((string) $function->inferredType());
         $signature = sprintf(
             'function %s(%s)%s',
             (string) $function->name(),
@@ -139,7 +141,7 @@ final class PhpHoverResolver
         return self::format($signature, $docblock);
     }
 
-    private function renderMethod(string $classFqn, string $methodName): ?string
+    private function renderMethod(string $classFqn, string $methodName, ?string $substitutedReturnType = null): ?string
     {
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
@@ -151,10 +153,17 @@ final class PhpHoverResolver
         $static = $method->isStatic() ? 'static ' : '';
         $params = [];
         foreach ($method->parameters() as $param) {
-            $type = (string) $param->inferredType();
+            $type = $this->genericParams->prettify((string) $param->inferredType());
             $params[] = trim(($type !== '' && $type !== '<missing>' ? $type . ' ' : '') . '$' . $param->name());
         }
-        $return = (string) $method->returnType();
+        // When the cursor is on a method call whose receiver is a tracked
+        // generic-instantiated variable (e.g. `$users->first()` where
+        // `$users = new Collection<User>(...)`), GenericResolver has already
+        // substituted the type-params in the return type for us; use that
+        // instead of worse-reflection's unsubstituted view.  Otherwise
+        // fall back to prettify (drops the namespace from placeholder names).
+        $return = $substitutedReturnType
+            ?? $this->genericParams->prettify((string) $method->returnType());
         $signature = sprintf(
             '%s %sfunction %s(%s)%s',
             $visibility,
@@ -177,7 +186,7 @@ final class PhpHoverResolver
             return null;
         }
         $visibility = (string) $property->visibility();
-        $type = (string) $property->inferredType();
+        $type = $this->genericParams->prettify((string) $property->inferredType());
         $signature = sprintf(
             "// %s\n%s %s\$%s",
             $classFqn,
@@ -223,12 +232,28 @@ final class PhpHoverResolver
      * `$x = 1` shows `int $x` rather than `1 $x`.  Class types are
      * left unchanged (their `generalize()` returns the same FQN).
      */
-    private static function renderVariable(NodeContext $context, string $name): ?string
+    private function renderVariable(string $uri, NodeContext $context, string $name): ?string
     {
+        // Resolver-first: when we can monomorphize the variable's source
+        // (a `$x = new Generic<...>(...)` followed by `$y = $x->method()`
+        // in the same file), the resolver returns the substituted concrete
+        // type and we render that directly.  When it can't model the
+        // shape, fall through to worse-reflection + prettify -- this
+        // resolver is purely additive, never regresses the fallback.
+        $resolved = $this->genericResolver->resolveVariable($uri, $name);
+        if ($resolved !== null) {
+            return self::format(sprintf('%s $%s', $resolved, $name), '');
+        }
+
         $type = (string) $context->type()->generalize();
         if ($type === '' || $type === '<missing>') {
             return null;
         }
+        // Strip namespace prefix from generic-placeholder references so the
+        // user sees `?T $user` rather than `?App\Containers\T $user` when
+        // hovering a variable assigned from a `Collection<T>::first(): ?T`
+        // call.  See GenericParamRegistry for the recognition logic.
+        $type = $this->genericParams->prettify($type);
         // No docblock for variables -- worse-reflection's NodeContext
         // doesn't carry one for locals.  Type + name is the useful bit.
         return self::format(sprintf('%s $%s', $type, $name), '');

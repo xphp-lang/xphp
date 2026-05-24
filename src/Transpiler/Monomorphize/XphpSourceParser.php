@@ -83,6 +83,35 @@ final class XphpSourceParser
     }
 
     /**
+     * Same as `parse()` but with error recovery -- returns the best-effort
+     * partial AST when the source has trailing syntax errors (typical
+     * during interactive editing, e.g. cursor on `$x->|` with no
+     * terminator).  Never throws.  Returns null only when the parser
+     * couldn't produce any AST at all.
+     *
+     * xphp attributes (`ATTR_GENERIC_PARAMS`, `ATTR_GENERIC_ARGS`, etc.)
+     * are attached to whatever subtrees did parse cleanly -- exactly what
+     * the LSP needs to keep substituting type-args when the user is
+     * mid-statement.
+     *
+     * @return list<Node\Stmt>|null
+     */
+    public function parseTolerant(string $source): ?array
+    {
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource] = $this->scanAndStrip($source);
+
+        $errorHandler = new \PhpParser\ErrorHandler\Collecting();
+        $ast = $this->parser->parse($cleanedSource, $errorHandler);
+        if ($ast === null) {
+            return null;
+        }
+
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
+
+        return $ast;
+    }
+
+    /**
      * Return the xphp source with every `<…>` generic clause (template
      * params on class/interface/trait/method headers AND type-args on
      * generic-call sites) replaced by equal-length whitespace.  The result

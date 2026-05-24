@@ -366,6 +366,76 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('$other', $labels);
     }
 
+    public function testMemberCompletionSubstitutesGenericReceiverViaResolver(): void
+    {
+        // Mirrors the user-reported gap in xphp-20260524-214251-685.log:
+        //     $users = new Collection<User>();
+        //     $u = $users->first();      // $u is ?T -> ?App\Models\User
+        //     $u->|                      // member completion here returned 0
+        // worse-reflection sees `?App\Containers\T` for the receiver, so
+        // reflectClassLike fails.  The completion path now consults
+        // GenericResolver to swap the placeholder for the substituted
+        // concrete -- the user gets User's members instead of empty.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class User {
+            public string $name = '';
+            public function shout(): string { return ''; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\n\$users = new Collection<User>();\n\$u = \$users->first();\n\$u->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$u->', strlen('$u->'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('shout', $labels, 'User::shout must surface via resolver-substituted receiver');
+        self::assertContains('name', $labels, 'User::$name must surface');
+        self::assertNotContains('first', $labels, 'Collection::first must NOT leak through (receiver was swapped)');
+    }
+
+    public function testMemberCompletionDetailRendersGenericPlaceholderAsBareName(): void
+    {
+        // The user reported -- xphp-20260524-204801-302.log id=9 -- that the
+        // `first` completion entry's `detail` read `(): ?App\Containers\T`,
+        // exposing the post-strip placeholder qualification.  Wiring the
+        // GenericParamRegistry through CompletionItem assembly should
+        // collapse that to `?T`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+            public function count(): int { return 0; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\n\$users = new Collection<User>();\n\$users->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$users->', strlen('$users->'));
+        $byLabel = [];
+        foreach ($items as $i) {
+            $byLabel[$i->label] = $i;
+        }
+
+        self::assertArrayHasKey('first', $byLabel);
+        self::assertSame('(): ?T', $byLabel['first']->detail);
+        // Non-placeholder returns are left untouched.
+        self::assertArrayHasKey('count', $byLabel);
+        self::assertSame('(): int', $byLabel['count']->detail);
+    }
+
     public function testExpressionPositionEmptyPrefixReturnsEmpty(): void
     {
         // Same guard as `new` -- no completion without a prefix at
@@ -410,7 +480,16 @@ final class PhpCompletionResolverTest extends TestCase
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
         ))->build();
-        return new PhpCompletionResolver($workspace, $parser, $reflector, $completionIndex, $cache);
+        $classLikeLookup = new \XPHP\Lsp\Resolver\WorkspaceClassLikeLookup($workspace, $cache);
+        return new PhpCompletionResolver(
+            $workspace,
+            $parser,
+            $reflector,
+            $completionIndex,
+            $cache,
+            new \XPHP\Lsp\Resolver\GenericParamRegistry($workspace, $cache),
+            new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser),
+        );
     }
 
     private function workspace(): PhpactorWorkspace

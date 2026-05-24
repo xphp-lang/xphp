@@ -14,7 +14,10 @@ use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Lsp\Reflection\ReflectorFactory;
+use XPHP\Lsp\Resolver\GenericParamRegistry;
+use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\PhpHoverResolver;
+use XPHP\Lsp\Resolver\WorkspaceClassLikeLookup;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 final class PhpHoverResolverTest extends TestCase
@@ -133,6 +136,93 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('$u', $markdown);
     }
 
+    public function testVariableHoverSubstitutesGenericReturnType(): void
+    {
+        // The user's exact production case: `$user` is assigned from a
+        // generic method whose return type involves the type-param `T`,
+        // and the receiver was instantiated as `Collection<User>` --
+        // so hovering `$user` must show `?App\Models\User $user`, NOT
+        // `?T $user` (the unresolved placeholder).
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\n\$users = new Collection<User>();\n\$user = \$users->first();\necho \$user;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo $user', strlen('echo '));
+        $markdown = $this->markdown($hover);
+
+        // Substituted form is present.
+        self::assertStringContainsString('?App\\Models\\User $user', $markdown);
+        // Neither the placeholder nor its qualified form leaked through.
+        self::assertStringNotContainsString('?T $user', $markdown);
+        self::assertStringNotContainsString('App\\Containers\\T', $markdown);
+    }
+
+    public function testMethodHoverSubstitutesReturnTypeAtCallSite(): void
+    {
+        // Cursor on the `first` token in `$users->first()` -- the method
+        // hover signature should reflect `Collection<User>`'s binding and
+        // show `?App\Models\User` rather than `?T`.  Parallel to the
+        // variable-hover fix but applied one statement earlier in the chain.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\n\$users = new Collection<User>();\n\$user = \$users->first();\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$users->first', strlen('$users->first'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('): ?App\\Models\\User', $markdown);
+        self::assertStringNotContainsString('): ?T', $markdown);
+        self::assertStringNotContainsString('App\\Containers\\T', $markdown);
+    }
+
+    public function testVariableHoverFallsBackToPrettifyForUnmodeledShapes(): void
+    {
+        // GenericResolver only handles same-file `new Generic<...>()` +
+        // `$var = $other->method()` chains.  For shapes it doesn't
+        // model (here: a bare variable whose worse-reflection-inferred
+        // type still carries a generic placeholder, with NO `new`
+        // assignment in scope to bind against), the fallback path
+        // through GenericParamRegistry::prettify continues to strip the
+        // namespace and produce `?T`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+            public function getMaybeFirst(?T $fallback): ?T { return $fallback; }
+        }
+        XPHP);
+        // No `new Collection<User>(...)` in this snippet: `$x` is a
+        // closure parameter we can't trace.  GenericResolver returns null,
+        // worse-reflection surfaces `?App\Containers\T`, prettify strips
+        // the namespace.
+        $useSource = "<?php\nuse App\\Containers\\Collection;\n\$fn = function (Collection \$c) { \$x = \$c->first(); echo \$x; };\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo $x', strlen('echo '));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringNotContainsString('App\\Containers\\T', $markdown);
+        self::assertStringContainsString('?T $x', $markdown);
+    }
+
     public function testReturnsNullOnVariableWithNoInferableType(): void
     {
         // Undeclared variable referenced bare -- worse-reflection has
@@ -209,7 +299,15 @@ final class PhpHoverResolverTest extends TestCase
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
         ))->build();
-        return new PhpHoverResolver($workspace, $parser, $reflector);
+        $classLikeLookup = new WorkspaceClassLikeLookup($workspace, $cache);
+        $generic = new GenericResolver($workspace, $cache, $classLikeLookup, $parser);
+        return new PhpHoverResolver(
+            $workspace,
+            $parser,
+            $reflector,
+            new GenericParamRegistry($workspace, $cache),
+            $generic,
+        );
     }
 
     private function workspace(): PhpactorWorkspace

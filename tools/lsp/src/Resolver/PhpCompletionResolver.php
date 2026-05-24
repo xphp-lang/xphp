@@ -64,6 +64,8 @@ final class PhpCompletionResolver
         private readonly Reflector $reflector,
         private readonly CompletionIndex $completionIndex,
         private readonly ParsedDocumentCache $cache,
+        private readonly GenericParamRegistry $genericParams,
+        private readonly GenericResolver $genericResolver,
     ) {
     }
 
@@ -175,6 +177,27 @@ final class PhpCompletionResolver
         // FQN and throws SourceNotFound -- so strip it before lookup.  The
         // members of `?User` are the same as the members of `User`.
         $lookupName = ltrim($typeName, '?');
+
+        // Monomorphization rescue: when the receiver is a variable bound
+        // by a `new Generic<...>(...)` upstream, worse-reflection sees
+        // only the post-strip placeholder (`?App\Containers\T`) and the
+        // lookup above would fail.  GenericResolver has tracked the
+        // type-arg binding and can hand back the substituted concrete
+        // class -- use that instead so the user gets `User`'s methods
+        // rather than an empty list.
+        if ($context->symbol()->symbolType() === 'variable') {
+            $varName = $context->symbol()->name();
+            $resolved = $this->genericResolver->resolveVariableTypeRef($uri, $varName);
+            if ($resolved !== null && $resolved->ref->name !== '' && $resolved->ref->name !== $lookupName) {
+                self::trace(sprintf(
+                    'receiver swap via GenericResolver: $%s %s -> %s',
+                    $varName,
+                    $lookupName,
+                    $resolved->ref->name,
+                ));
+                $lookupName = $resolved->ref->name;
+            }
+        }
 
         try {
             $class = $this->reflector->reflectClassLike($lookupName);
@@ -438,14 +461,14 @@ final class PhpCompletionResolver
         return stripos($varName, $prefix) === 0;
     }
 
-    private static function methodItem($method): CompletionItem
+    private function methodItem($method): CompletionItem
     {
         $params = [];
         foreach ($method->parameters() as $p) {
-            $type = (string) $p->inferredType();
+            $type = $this->genericParams->prettify((string) $p->inferredType());
             $params[] = trim(($type !== '' && $type !== '<missing>' ? $type . ' ' : '') . '$' . $p->name());
         }
-        $return = (string) $method->returnType();
+        $return = $this->genericParams->prettify((string) $method->returnType());
         $signature = sprintf(
             '(%s)%s',
             implode(', ', $params),
@@ -459,9 +482,9 @@ final class PhpCompletionResolver
         );
     }
 
-    private static function propertyItem($property): CompletionItem
+    private function propertyItem($property): CompletionItem
     {
-        $type = (string) $property->inferredType();
+        $type = $this->genericParams->prettify((string) $property->inferredType());
         return new CompletionItem(
             label: $property->name(),
             kind: CompletionItemKind::PROPERTY,
