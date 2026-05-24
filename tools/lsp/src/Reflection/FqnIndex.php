@@ -16,6 +16,7 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Transpiler\Monomorphize\TypeParam;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -59,6 +60,13 @@ final class FqnIndex
      * @var array<string, string>|null  FQN -> "class" or "function" kind for the filesystem entries.
      */
     private ?array $filesystemKinds = null;
+
+    /**
+     * @var array<string, list<string>>|null  FQN -> ordered list of generic-param names; null until first build.
+     * Populated alongside the filesystem walk so consumers like `GenericParamRegistry::prettify`
+     * don't trigger N additional parses to read `ATTR_GENERIC_PARAMS` per class.
+     */
+    private ?array $filesystemGenericParams = null;
 
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
@@ -160,6 +168,47 @@ final class FqnIndex
             }
         }
         return array_keys($fqns);
+    }
+
+    /**
+     * Yield every generic ClassLike's `(fqn, paramNames)` pair across both
+     * sources.  Used by `GenericParamRegistry` to populate its
+     * placeholder lookup without doing its own workspace walk.
+     *
+     * Open-doc declarations are walked through `ParsedDocumentCache` so
+     * unsaved edits reflect immediately; filesystem-only declarations
+     * come from the pre-built generic-params map populated during
+     * `buildFilesystemIndex` (no extra parses).
+     *
+     * Open-doc wins on FQN collisions: a class declared both on disk and
+     * in an open buffer yields once with the open-doc's param list.
+     *
+     * @return iterable<string, list<string>>  yields `fqn => paramNames`
+     */
+    public function iterGenericClasses(): iterable
+    {
+        $seen = [];
+        // Open docs first so their data wins on collision.
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            foreach (self::collectGenericClasses($result->ast) as $fqn => $paramNames) {
+                if (isset($seen[$fqn])) {
+                    continue;
+                }
+                $seen[$fqn] = true;
+                yield $fqn => $paramNames;
+            }
+        }
+        foreach ($this->filesystemGenericParams() as $fqn => $paramNames) {
+            if (isset($seen[$fqn])) {
+                continue;
+            }
+            $seen[$fqn] = true;
+            yield $fqn => $paramNames;
+        }
     }
 
     /**
@@ -352,10 +401,22 @@ final class FqnIndex
         return $this->filesystemKinds ?? [];
     }
 
+    /**
+     * @return array<string, list<string>>  FQN -> ordered generic param names
+     */
+    private function filesystemGenericParams(): array
+    {
+        if ($this->filesystemGenericParams === null) {
+            $this->buildFilesystemIndex();
+        }
+        return $this->filesystemGenericParams ?? [];
+    }
+
     private function buildFilesystemIndex(): void
     {
         $map = [];
         $kinds = [];
+        $genericParams = [];
         if (!is_dir($this->rootPath)) {
             @fwrite(STDERR, sprintf(
                 "[xphp-lsp fqn-index] rootPath %s not a directory; filesystem index empty\n",
@@ -363,6 +424,7 @@ final class FqnIndex
             ));
             $this->filesystemMap = $map;
             $this->filesystemKinds = $kinds;
+            $this->filesystemGenericParams = $genericParams;
             return;
         }
 
@@ -393,6 +455,9 @@ final class FqnIndex
                 $map[$fqn] = $file->getPathname();
                 $kinds[$fqn] = $kind;
             }
+            foreach (self::collectGenericClasses($ast) as $fqn => $paramNames) {
+                $genericParams[$fqn] = $paramNames;
+            }
         }
 
         @fwrite(STDERR, sprintf(
@@ -405,6 +470,7 @@ final class FqnIndex
 
         $this->filesystemMap = $map;
         $this->filesystemKinds = $kinds;
+        $this->filesystemGenericParams = $genericParams;
     }
 
     private function classLikeFromFile(string $path, string $needle): ?ClassLike
@@ -483,6 +549,67 @@ final class FqnIndex
                         : $short;
                     $this->fqns[$fqn] = $kind;
                 }
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->fqns;
+    }
+
+    /**
+     * Walk an AST collecting `FQN => paramNames` for every generic ClassLike.
+     * Non-generic classes are skipped.  Methods on generic classes don't
+     * count (method-scoped generics use a separate attribute path that this
+     * index doesn't surface).
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array<string, list<string>>
+     */
+    private static function collectGenericClasses(array $ast): array
+    {
+        $visitor = new class extends NodeVisitorAbstract {
+            /** @var array<string, list<string>> */
+            public array $fqns = [];
+
+            private string $currentNamespace = '';
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if (!$node instanceof ClassLike || $node->name === null) {
+                    return null;
+                }
+                $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                if (!is_array($params) || $params === []) {
+                    return null;
+                }
+                $paramNames = [];
+                foreach ($params as $p) {
+                    if ($p instanceof TypeParam) {
+                        $paramNames[] = $p->name;
+                    }
+                }
+                if ($paramNames === []) {
+                    return null;
+                }
+                $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                if (!is_string($fqn)) {
+                    // Generic classes always have ATTR_TEMPLATE_FQN stamped
+                    // (set alongside ATTR_GENERIC_PARAMS), but fall back to
+                    // namespace + short name just in case the parser ever
+                    // diverges.
+                    $short = $node->name->toString();
+                    $fqn = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $short
+                        : $short;
+                }
+                $this->fqns[$fqn] = $paramNames;
                 return null;
             }
         };

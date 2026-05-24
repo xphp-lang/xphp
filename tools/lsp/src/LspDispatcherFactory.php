@@ -125,7 +125,10 @@ final class LspDispatcherFactory implements DispatcherFactory
         // this when formatting type names so a post-strip placeholder
         // reference like `App\Containers\T` renders as `T` in hover/completion
         // detail, matching what the user wrote in the original `<T>` source.
-        $genericParams = new GenericParamRegistry($workspace, $cache);
+        // Phase 0.5: GenericParamRegistry now consumes FqnIndex (open + filesystem)
+        // so the prettify pass sees placeholder names from filesystem-only
+        // classes too -- not just open-doc declarations.
+        $genericParams = new GenericParamRegistry($fqnIndex);
         // GenericResolver is a stronger pass that does actual type-arg
         // substitution: `$user = $users->first()` where `$users = new
         // Collection<User>(...)` resolves to `?App\Models\User` rather than

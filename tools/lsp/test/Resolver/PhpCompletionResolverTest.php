@@ -489,7 +489,7 @@ final class PhpCompletionResolverTest extends TestCase
             $reflector,
             $completionIndex,
             $cache,
-            new \XPHP\Lsp\Resolver\GenericParamRegistry($workspace, $cache),
+            new \XPHP\Lsp\Resolver\GenericParamRegistry($fqnIndex),
             new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex),
         );
     }

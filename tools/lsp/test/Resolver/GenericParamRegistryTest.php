@@ -94,11 +94,99 @@ final class GenericParamRegistryTest extends TestCase
         self::assertSame('App\\Containers\\T', $registry->prettify('App\\Containers\\T'));
     }
 
-    private function registry(PhpactorWorkspace $workspace): GenericParamRegistry
+    public function testStripsPlaceholderFromFilesystemOnlyGenericClass(): void
+    {
+        // Phase 0.5: the registry now pulls placeholder names from BOTH
+        // open documents and filesystem-indexed classes via FqnIndex.
+        // Before this migration, hovering a variable whose type traced to
+        // a closed generic-class file showed the unstripped form
+        // (`?App\Containers\T`).  Now it strips correctly even with
+        // Collection.xphp closed -- matching the user's real-world
+        // scenario from xphp-20260524-231944-855.log.
+        $root = sys_get_temp_dir() . '/xphp-fs-reg-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Collection.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            class Collection<T> {
+                public function first(): ?T { return null; }
+            }
+            XPHP);
+
+            $workspace = new PhpactorWorkspace();
+            $registry = $this->registry($workspace, $root);
+
+            self::assertSame('T', $registry->prettify('App\\Containers\\T'));
+            self::assertSame('?T', $registry->prettify('?App\\Containers\\T'));
+            self::assertSame(
+                'array<T, App\\Models\\User>',
+                $registry->prettify('array<App\\Containers\\T, App\\Models\\User>'),
+            );
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
+    public function testOpenDocWinsOverFilesystemPlaceholders(): void
+    {
+        // If the same generic class is declared both on disk and open in
+        // the editor (e.g. unsaved edits adding a second type-param),
+        // the open-doc params take precedence.
+        $root = sys_get_temp_dir() . '/xphp-fs-reg-collision-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            // Disk: Collection<T>
+            file_put_contents($root . '/Collection.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            class Collection<T> { }
+            XPHP);
+
+            $workspace = new PhpactorWorkspace();
+            $registry = $this->registry($workspace, $root);
+            // Editor: Collection<K, V> (mid-edit adding a second param)
+            $workspace->open(new TextDocumentItem(
+                '/Collection.xphp',
+                'xphp',
+                1,
+                "<?php\nnamespace App\\Containers;\nclass Collection<K, V> { }\n",
+            ));
+
+            // Both K and V (open-doc shape) are placeholders; T (disk
+            // shape) is also still recognised because filesystem entries
+            // that DON'T collide on FQN still contribute.  But for this
+            // single FQN, open-doc wins -- the prior T placeholder
+            // doesn't leak through.  K and V are recognised.
+            self::assertSame('K', $registry->prettify('App\\Containers\\K'));
+            self::assertSame('V', $registry->prettify('App\\Containers\\V'));
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
+    private function rmrf(string $dir): void
+    {
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $p = $dir . '/' . $entry;
+            if (is_dir($p)) {
+                $this->rmrf($p);
+            } else {
+                unlink($p);
+            }
+        }
+        rmdir($dir);
+    }
+
+    private function registry(PhpactorWorkspace $workspace, string $rootPath = ''): GenericParamRegistry
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
-        return new GenericParamRegistry($workspace, $cache);
+        $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, $rootPath);
+        return new GenericParamRegistry($fqnIndex);
     }
 
     private function openCollection(PhpactorWorkspace $workspace): void

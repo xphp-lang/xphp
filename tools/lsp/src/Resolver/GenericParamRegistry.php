@@ -4,14 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
-use PhpParser\Node;
-use PhpParser\Node\Stmt\ClassLike;
-use PhpParser\NodeTraverser;
-use PhpParser\NodeVisitorAbstract;
-use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
-use XPHP\Lsp\Analyzer\ParsedDocumentCache;
-use XPHP\Transpiler\Monomorphize\TypeParam;
-use XPHP\Transpiler\Monomorphize\XphpSourceParser;
+use XPHP\Lsp\Reflection\FqnIndex;
 
 /**
  * Recognises type references like `App\Containers\T` as the generic placeholder
@@ -25,16 +18,17 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  * For the compiler that's fine -- monomorphization replaces these references
  * at instantiation time -- but the LSP shows the unresolved form to the user.
  *
- * This registry collects, for every generic ClassLike declaration in the open
- * workspace, the set of (namespace, paramName) pairs.  When a type string's
- * leaf segment matches a known param and its namespace is the param's host
- * namespace (or any ancestor), we know it's a placeholder and not a real class.
+ * Phase 0.5: the registry now consumes `FqnIndex` so it sees both open-doc
+ * AND filesystem-only generic classes.  Before this migration the registry
+ * walked the workspace itself and missed any class whose declaration wasn't
+ * currently open in the editor -- a real-world hit recorded in
+ * xphp-20260524-231944-855.log where `?App\Containers\T` leaked into hover
+ * because Collection.xphp wasn't open.
  *
- * Scope: workspace open documents only.  Generic classes declared in files the
- * user hasn't opened won't be recognised; the trade-off avoids a filesystem
- * walk on every hover, and in practice the file declaring `<T>` is usually
- * open in the editor when the user is reading code that uses it.  Extending
- * to filesystem indexing is a follow-up.
+ * The pair set ((namespace, paramName) tuples) is built once per (workspace
+ * state, filesystem state) and cached.  Filesystem-side data persists for
+ * the LSP session (the index doesn't watch for new files); open-doc data
+ * picks up changes through `ParsedDocumentCache`'s version keying.
  */
 final class GenericParamRegistry
 {
@@ -44,8 +38,7 @@ final class GenericParamRegistry
     private ?array $pairs = null;
 
     public function __construct(
-        private readonly PhpactorWorkspace $workspace,
-        private readonly ParsedDocumentCache $cache,
+        private readonly FqnIndex $fqnIndex,
     ) {
     }
 
@@ -101,12 +94,10 @@ final class GenericParamRegistry
             return $this->pairs;
         }
         $pairs = [];
-        foreach ($this->workspace as $uri => $item) {
-            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
-            if ($result->ast === null) {
-                continue;
-            }
-            foreach (self::collectPairs($result->ast) as [$namespace, $paramName]) {
+        foreach ($this->fqnIndex->iterGenericClasses() as $fqn => $paramNames) {
+            $sep = strrpos($fqn, '\\');
+            $namespace = $sep === false ? '' : substr($fqn, 0, $sep);
+            foreach ($paramNames as $paramName) {
                 $pairs[$namespace . '|' . $paramName] = true;
             }
         }
@@ -115,45 +106,11 @@ final class GenericParamRegistry
     }
 
     /**
-     * @param list<Node\Stmt> $ast
-     * @return list<array{0: string, 1: string}>
-     */
-    private static function collectPairs(array $ast): array
-    {
-        $visitor = new class extends NodeVisitorAbstract {
-            /** @var list<array{0: string, 1: string}> */
-            public array $pairs = [];
-
-            public function enterNode(Node $node): null
-            {
-                if (!$node instanceof ClassLike) {
-                    return null;
-                }
-                $templateFqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-                $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-                if (!is_string($templateFqn) || !is_array($params)) {
-                    return null;
-                }
-                $sep = strrpos($templateFqn, '\\');
-                $namespace = $sep === false ? '' : substr($templateFqn, 0, $sep);
-                foreach ($params as $param) {
-                    if ($param instanceof TypeParam) {
-                        $this->pairs[] = [$namespace, $param->name];
-                    }
-                }
-                return null;
-            }
-        };
-
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor($visitor);
-        $traverser->traverse($ast);
-        return $visitor->pairs;
-    }
-
-    /**
-     * Drop the cached pair set so the next call re-walks the workspace.
+     * Drop the cached pair set so the next call re-walks the index.
      * Useful when tests want to add a new generic class after construction.
+     * In production the cache is rebuilt naturally because FqnIndex's
+     * open-doc walk uses version-keyed `ParsedDocumentCache`, and
+     * filesystem-side data is session-scoped.
      */
     public function invalidate(): void
     {

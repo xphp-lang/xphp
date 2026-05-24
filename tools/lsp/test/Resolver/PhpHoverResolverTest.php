@@ -215,6 +215,51 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringNotContainsString('?T $first', $markdown);
     }
 
+    public function testVariableHoverPrettifyWorksWithFilesystemOnlyGenericClass(): void
+    {
+        // Phase 0.5 e2e: Collection.xphp is closed (only on disk).
+        // GenericResolver can't substitute the chain (no binding in scope),
+        // so the fallback path goes through worse-reflection + prettify.
+        // Before Phase 0.5, prettify saw no `Collection<T>` in open docs
+        // and left `?App\Containers\T` un-stripped.  Now FqnIndex's
+        // filesystem index contributes the placeholder pair.
+        $root = sys_get_temp_dir() . '/xphp-hover-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Collection.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            class Collection<T> {
+                public function first(): ?T { return null; }
+            }
+            XPHP);
+
+            $workspace = $this->workspace();
+            // Closure-captured variable so GenericResolver doesn't model
+            // it (closure body sees an isolated scope without the outer
+            // binding flowing through here -- mimicking the production
+            // scenario where the resolver returned null and prettify
+            // had to handle rendering).
+            $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Containers\\Collection;\nfunction example(Collection \$c): void {\n    \$x = \$c->first();\n    echo \$x;\n}\n";
+            $this->open($workspace, '/Use.xphp', $useSource);
+
+            $hover = $this->hoverAtWithRoot($workspace, '/Use.xphp', $useSource, 'echo $x', strlen('echo '), $root);
+            $markdown = $this->markdown($hover);
+
+            // The placeholder must be stripped to `?T`, not surface as
+            // `?App\Containers\T` -- which is the un-prettified form that
+            // production showed before Phase 0.5.
+            self::assertStringNotContainsString(
+                '?App\\Containers\\T',
+                $markdown,
+                'Phase 0.5 must strip placeholder namespace even when Collection.xphp is closed',
+            );
+            self::assertStringContainsString('?T $x', $markdown);
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
     public function testVariableHoverFallsBackToPrettifyForUnmodeledShapes(): void
     {
         // GenericResolver only handles same-file `new Generic<...>()` +
@@ -303,6 +348,37 @@ final class PhpHoverResolverTest extends TestCase
         return $this->resolver($workspace)->resolve($uri, $line, $character);
     }
 
+    private function hoverAtWithRoot(
+        PhpactorWorkspace $workspace,
+        string $uri,
+        string $source,
+        string $needle,
+        int $offsetInNeedle,
+        string $rootPath,
+    ): ?Hover {
+        $byte = strpos($source, $needle);
+        self::assertNotFalse($byte, "fixture needle '$needle' must exist");
+        $byte += $offsetInNeedle;
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        return $this->resolverWithRoot($workspace, $rootPath)->resolve($uri, $line, $character);
+    }
+
+    private function rmrf(string $dir): void
+    {
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $p = $dir . '/' . $entry;
+            if (is_dir($p)) {
+                $this->rmrf($p);
+            } else {
+                unlink($p);
+            }
+        }
+        rmdir($dir);
+    }
+
     private function markdown(?Hover $hover): string
     {
         self::assertNotNull($hover);
@@ -313,24 +389,32 @@ final class PhpHoverResolverTest extends TestCase
 
     private function resolver(PhpactorWorkspace $workspace): PhpHoverResolver
     {
+        return $this->resolverWithRoot($workspace, '');
+    }
+
+    private function resolverWithRoot(PhpactorWorkspace $workspace, string $rootPath): PhpHoverResolver
+    {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
         $reflector = (new ReflectorFactory(
             $workspace,
             $cache,
             $parser,
-            rootPath: '',
+            rootPath: $rootPath,
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
-            fqnIndex: $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
+            fqnIndex: $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, $rootPath),
         ))->build();
-        $classLikeLookup = new WorkspaceClassLikeLookup($workspace, $cache);
+        $classLikeLookup = new \XPHP\Lsp\Resolver\CompositeClassLikeLookup(
+            new WorkspaceClassLikeLookup($workspace, $cache),
+            new \XPHP\Lsp\Resolver\FilesystemClassLikeLookup($fqnIndex),
+        );
         $generic = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
         return new PhpHoverResolver(
             $workspace,
             $parser,
             $reflector,
-            new GenericParamRegistry($workspace, $cache),
+            new GenericParamRegistry($fqnIndex),
             $generic,
         );
     }
