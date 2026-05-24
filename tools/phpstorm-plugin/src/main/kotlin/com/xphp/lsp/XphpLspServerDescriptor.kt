@@ -4,6 +4,7 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -76,12 +77,31 @@ class XphpLspServerDescriptor(project: Project) :
      * Returns the LSP binary path or null if neither the explicit setting
      * nor the bundled-PHAR fallback resolves to a real file.  Null is the
      * trigger for [notifyMissingBinary].
+     *
+     * If the configured `lspPath` is set but the file is missing on disk,
+     * we **fall through** to the bundled-PHAR extractor instead of failing.
+     * The trap this guards against: a user types the path the bundled
+     * PHAR gets extracted to (e.g.
+     * `<systemDir>/xphp/xphp-lsp.phar`) into Settings -> Tools -> xPHP as
+     * documentation, then waits for the file to appear there -- except
+     * the very act of "setting" the field is what suppresses the
+     * extractor (the configured-path branch wins outright).  Falling
+     * through self-heals that case: the bundled PHAR runs and lands at
+     * the same path the user typed, so the next call resolves cleanly.
+     * One warn-level log so the discrepancy is visible to anyone
+     * grepping idea.log.
      */
     private fun resolveBinary(): File? {
         val configured = XphpSettings.getInstance().lspPath
         if (configured != null) {
             val asFile = File(configured)
-            return if (asFile.isFile) asFile else null
+            if (asFile.isFile) return asFile
+            LOG.warn(
+                "Configured xphp LSP binary does not exist on disk: " +
+                    "$configured.  Falling back to the bundled PHAR extractor.  " +
+                    "Clear the path in Settings -> Tools -> xPHP, or update it " +
+                    "to a real binary, to silence this warning."
+            )
         }
         return PharExtractor.getInstance().extract()?.toFile()
     }
@@ -114,5 +134,9 @@ class XphpLspServerDescriptor(project: Project) :
                 }
             )
             .notify(project)
+    }
+
+    private companion object {
+        private val LOG = Logger.getInstance(XphpLspServerDescriptor::class.java)
     }
 }
