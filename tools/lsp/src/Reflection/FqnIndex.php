@@ -7,6 +7,7 @@ namespace XPHP\Lsp\Reflection;
 use PhpParser\Node;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
@@ -83,6 +84,33 @@ final class FqnIndex
         }
         $filesystemMap = $this->filesystemMap();
         return $filesystemMap[$needle] ?? null;
+    }
+
+    /**
+     * Locate the `Function_` AST for `$fqn` (free function, not method).
+     * Open-doc declarations win.  Filesystem-only declarations parse on
+     * demand via `XphpSourceParser::parseTolerant()` so the function's
+     * `ATTR_METHOD_GENERIC_PARAMS` survives even for mid-edit sources.
+     *
+     * Used by `GenericResolver` to substitute type-args on generic-
+     * function call sites (`identity<User>(...)`).  Methods reuse
+     * `classLikeFor()` -> `findMethod` instead.
+     */
+    public function functionFor(string $fqn): ?Function_
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return null;
+        }
+        $hit = $this->openDocFunction($needle);
+        if ($hit !== null) {
+            return $hit;
+        }
+        $filesystemMap = $this->filesystemMap();
+        if (!isset($filesystemMap[$needle])) {
+            return null;
+        }
+        return $this->functionFromFile($filesystemMap[$needle], $needle);
     }
 
     /**
@@ -169,6 +197,80 @@ final class FqnIndex
             }
         }
         return null;
+    }
+
+    private function openDocFunction(string $fqn): ?Function_
+    {
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            $hit = self::findFunctionInAst($result->ast, $fqn);
+            if ($hit !== null) {
+                return $hit;
+            }
+        }
+        return null;
+    }
+
+    private function functionFromFile(string $path, string $needle): ?Function_
+    {
+        $source = @file_get_contents($path);
+        if ($source === false) {
+            return null;
+        }
+        try {
+            $ast = $this->parser->parseTolerant($source);
+        } catch (\Throwable) {
+            return null;
+        }
+        if ($ast === null) {
+            return null;
+        }
+        return self::findFunctionInAst($ast, $needle);
+    }
+
+    /**
+     * @param list<Node\Stmt> $ast
+     */
+    private static function findFunctionInAst(array $ast, string $needle): ?Function_
+    {
+        $visitor = new class($needle) extends NodeVisitorAbstract {
+            public ?Function_ $found = null;
+            private string $currentNamespace = '';
+
+            public function __construct(private readonly string $needle)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->found !== null) {
+                    return null;
+                }
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if (!$node instanceof Function_) {
+                    return null;
+                }
+                $short = $node->name->toString();
+                $fqn = $this->currentNamespace !== ''
+                    ? $this->currentNamespace . '\\' . $short
+                    : $short;
+                if ($fqn === $this->needle) {
+                    $this->found = $node;
+                }
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->found;
     }
 
     private function openDocClassLike(string $fqn): ?ClassLike

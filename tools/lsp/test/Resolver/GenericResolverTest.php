@@ -37,7 +37,7 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertSame('?App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'user'));
+        self::assertSame('?App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'user', PHP_INT_MAX));
     }
 
     public function testRendersReceiverVariableWithTypeArgList(): void
@@ -60,7 +60,7 @@ final class GenericResolverTest extends TestCase
 
         self::assertSame(
             'App\\Containers\\Collection<App\\Models\\User>',
-            $resolver->resolveVariable('/Use.xphp', 'users'),
+            $resolver->resolveVariable('/Use.xphp', 'users', PHP_INT_MAX),
         );
     }
 
@@ -84,7 +84,7 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertSame('int', $resolver->resolveVariable('/Use.xphp', 'v'));
+        self::assertSame('int', $resolver->resolveVariable('/Use.xphp', 'v', PHP_INT_MAX));
     }
 
     public function testSubstitutesMultiParamBinding(): void
@@ -111,8 +111,8 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertSame('string', $resolver->resolveVariable('/Use.xphp', 'k'));
-        self::assertSame('App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'v'));
+        self::assertSame('string', $resolver->resolveVariable('/Use.xphp', 'k', PHP_INT_MAX));
+        self::assertSame('App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'v', PHP_INT_MAX));
     }
 
     public function testNonGenericInstantiationReturnsNull(): void
@@ -128,7 +128,7 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertNull($resolver->resolveVariable('/Use.xphp', 'x'));
+        self::assertNull($resolver->resolveVariable('/Use.xphp', 'x', PHP_INT_MAX));
     }
 
     public function testUnknownReceiverClassReturnsNull(): void
@@ -143,13 +143,15 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertNull($resolver->resolveVariable('/Use.xphp', 'x'));
+        self::assertNull($resolver->resolveVariable('/Use.xphp', 'x', PHP_INT_MAX));
     }
 
-    public function testStaticMethodCallIsOutOfScopeAndReturnsNull(): void
+    public function testStaticMethodCallSubstitutesReturnTypeAtCallSite(): void
     {
-        // `Util::identity<T>(...)` is the method-scoped-generic call shape;
-        // resolver explicitly doesn't model it.
+        // Phase 1.2: `Util::identity<User>(new User())` -- the method's
+        // type-param T is bound to User at the call site, so the
+        // substituted return type is User.  The resolver previously
+        // returned null for this shape; this test pins the new behavior.
         $workspace = $this->workspace();
         $this->open($workspace, '/Util.xphp', <<<'XPHP'
         <?php
@@ -168,13 +170,66 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertNull($resolver->resolveVariable('/Use.xphp', 'u'));
+        self::assertSame(
+            'App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'u', PHP_INT_MAX),
+        );
     }
 
-    public function testGenericFunctionCallIsOutOfScopeAndReturnsNull(): void
+    public function testStaticMethodCallWithQualifiedClassName(): void
     {
-        // Free-function generic `identity<T>(...)` -- not a MethodCall on
-        // a tracked variable; not a `new`.  Resolver yields.
+        // `\App\Util::identity<User>(...)` -- already-qualified class
+        // names bypass the use map.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Util.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Util {
+            public static function identity<T>(T $x): T { return $x; }
+        }
+        XPHP);
+        $this->openUser($workspace);
+        $this->open($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        $u = \App\Util::identity<\App\Models\User>(new \App\Models\User());
+        XPHP);
+
+        $resolver = $this->resolver($workspace);
+
+        self::assertSame(
+            'App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'u', PHP_INT_MAX),
+        );
+    }
+
+    public function testStaticMethodCallWithoutGenericArgsReturnsNull(): void
+    {
+        // A static call without `<...>` (regular static method) is NOT
+        // tracked -- the resolver only fires when type-args are present.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Util.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Util {
+            public static function greet(): string { return ''; }
+        }
+        XPHP);
+        $this->open($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        use App\Util;
+        $g = Util::greet();
+        XPHP);
+
+        $resolver = $this->resolver($workspace);
+
+        self::assertNull($resolver->resolveVariable('/Use.xphp', 'g', PHP_INT_MAX));
+    }
+
+    public function testGenericFunctionCallSubstitutesReturnType(): void
+    {
+        // Phase 1.3: free-function generic `identity<User>(new User())`.
+        // The FuncCall carries ATTR_TEMPLATE_FQN + ATTR_METHOD_GENERIC_ARGS;
+        // resolver locates the function via FqnIndex and substitutes T -> User.
         $workspace = $this->workspace();
         $this->open($workspace, '/fn.xphp', <<<'XPHP'
         <?php
@@ -191,7 +246,63 @@ final class GenericResolverTest extends TestCase
 
         $resolver = $this->resolver($workspace);
 
-        self::assertNull($resolver->resolveVariable('/Use.xphp', 'u'));
+        self::assertSame(
+            'App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'u', PHP_INT_MAX),
+        );
+    }
+
+    public function testGenericFunctionCallWithFilesystemOnlyDeclaration(): void
+    {
+        // Phase 1.3 + Phase 0: the generic function lives on disk, not in
+        // the editor.  FqnIndex's filesystem fallback parses it on demand.
+        $root = sys_get_temp_dir() . '/xphp-fn-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/identity.xphp', <<<'XPHP'
+            <?php
+            namespace App;
+            function identity<T>(T $x): T { return $x; }
+            XPHP);
+            $workspace = $this->workspace();
+            $this->openUser($workspace);
+            $this->open($workspace, '/Use.xphp', <<<'XPHP'
+            <?php
+            use App\Models\User;
+            $u = \App\identity<User>(new User());
+            XPHP);
+
+            $resolver = $this->resolverWithFilesystem($workspace, $root);
+
+            self::assertSame(
+                'App\\Models\\User',
+                $resolver->resolveVariable('/Use.xphp', 'u', PHP_INT_MAX),
+            );
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
+    public function testNonGenericFunctionCallReturnsNull(): void
+    {
+        // A regular function call (no `<...>` args) is NOT a generic-call
+        // site -- the resolver yields and lets worse-reflection's own
+        // inference handle it.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/fn.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        function greet(string $name): string { return $name; }
+        XPHP);
+        $this->open($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        use function App\greet;
+        $g = greet('a');
+        XPHP);
+
+        $resolver = $this->resolver($workspace);
+
+        self::assertNull($resolver->resolveVariable('/Use.xphp', 'g', PHP_INT_MAX));
     }
 
     public function testSubstitutesTypeArgsWhenClassDeclarationIsFilesystemOnly(): void
@@ -226,12 +337,360 @@ final class GenericResolverTest extends TestCase
 
             self::assertSame(
                 '?App\\Models\\User',
-                $resolver->resolveVariable('/Use.xphp', 'user'),
+                $resolver->resolveVariable('/Use.xphp', 'user', PHP_INT_MAX),
                 'GenericResolver must resolve via filesystem when Collection.xphp is closed',
             );
         } finally {
             $this->rmrf($root);
         }
+    }
+
+    public function testParamTypedScopeEntrySeedsBinding(): void
+    {
+        // Phase 1.1: `function f(Collection<User> $users) { ... }` --
+        // inside the body, `$users` is bound to Collection<User>, and
+        // `$users->first()` substitutes to ?App\Models\User.  No `new`
+        // expression in scope: the binding comes from the parameter type.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        function f(Collection<User> $users) {
+            $first = $users->first();
+        }
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $offset = strpos($source, '$first = $users->first();') + 1;
+        self::assertIsInt($offset);
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'first', $offset),
+        );
+        self::assertSame(
+            'App\\Containers\\Collection<App\\Models\\User>',
+            $resolver->resolveVariable('/Use.xphp', 'users', $offset),
+        );
+    }
+
+    public function testParamTypedScopeEntryDoesNotLeakAcrossFunctions(): void
+    {
+        // Two functions with conflicting `$x` param types -- each scope
+        // wins on lookup at its own offset.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $this->open($workspace, '/Other.xphp', <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Post {}
+        XPHP);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        use App\Models\Post;
+        function withUsers(Collection<User> $items) {
+            $a = $items->first();
+        }
+        function withPosts(Collection<Post> $items) {
+            $b = $items->first();
+        }
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $aOffset = strpos($source, '$a = $items') + 1;
+        $bOffset = strpos($source, '$b = $items') + 1;
+
+        // Inside withUsers, $items is Collection<User> -> $a: ?User.
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'a', $aOffset),
+        );
+        // Inside withPosts, $items is Collection<Post> -> $b: ?Post.
+        self::assertSame(
+            '?App\\Models\\Post',
+            $resolver->resolveVariable('/Use.xphp', 'b', $bOffset),
+        );
+    }
+
+    public function testParamTypedScopeEntryOnClassMethod(): void
+    {
+        // Methods inside a class get the same Param treatment as free
+        // functions.  Covers the constructor / method shape that real
+        // user code hits more often than free functions.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        class Service {
+            public function handle(Collection<User> $users): void
+            {
+                $first = $users->first();
+            }
+        }
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $offset = strpos($source, '$first = $users') + 1;
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'first', $offset),
+        );
+    }
+
+    public function testNullableParamTypeStillSeedsBinding(): void
+    {
+        // `?Collection<User> $users` -- the leading `?` doesn't change
+        // the receiver class.  The seed should still establish the
+        // Collection<User> binding for method calls inside the body.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        function f(?Collection<User> $users) {
+            $first = $users->first();
+        }
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $offset = strpos($source, '$first = $users') + 1;
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'first', $offset),
+        );
+    }
+
+    public function testNonGenericParamSeedsNothing(): void
+    {
+        // `function f(User $u)` -- User isn't a generic class, so the
+        // resolver has nothing to seed.  worse-reflection covers this
+        // through its own inference path; the resolver yields.
+        $workspace = $this->workspace();
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Models\User;
+        function f(User $u) {
+            $x = $u;
+        }
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $offset = strpos($source, '$x = $u') + 1;
+
+        self::assertNull($resolver->resolveVariable('/Use.xphp', 'u', $offset));
+        self::assertNull($resolver->resolveVariable('/Use.xphp', 'x', $offset));
+    }
+
+    public function testParamScopeDoesNotLeakIntoTopLevel(): void
+    {
+        // A `$users` parameter inside a function MUST NOT shadow a
+        // top-level usage of the same variable name.  Cursor outside the
+        // function body resolves only against the top-level scope (which
+        // here has nothing for `$users`).
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        function f(Collection<User> $users) {
+            $a = $users->first();
+        }
+        echo $users;
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $topLevelOffset = strpos($source, 'echo $users') + strlen('echo ');
+
+        self::assertNull(
+            $resolver->resolveVariable('/Use.xphp', 'users', $topLevelOffset),
+            'top-level cursor must not see the inner function param',
+        );
+    }
+
+    public function testTwoStepChainSubstitutesThroughIntermediate(): void
+    {
+        // Phase 1.4: `$repo->items()->first()` where Repository<User>::items()
+        // returns Collection<T> and Collection<T>::first() returns ?T.
+        // The intermediate `items()` produces Collection<User>; the outer
+        // `first()` then substitutes T -> User against that.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/Repository.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Repository<T> {
+            public function items(): Collection<T> { return new Collection<T>(); }
+        }
+        XPHP);
+        $this->openUser($workspace);
+        $this->open($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        use App\Containers\Repository;
+        use App\Models\User;
+        $repo = new Repository<User>();
+        $user = $repo->items()->first();
+        XPHP);
+
+        $resolver = $this->resolver($workspace);
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'user', PHP_INT_MAX),
+        );
+    }
+
+    public function testThreeStepChainStillSubstitutes(): void
+    {
+        // Phase 1.4 stress test: three method calls in one statement.
+        // n-step recursion through inferType should compose cleanly.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Wrap.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Wrap<T> {
+            public function inner(): Inner<T> { return new Inner<T>(); }
+        }
+        class Inner<T> {
+            public function items(): Collection<T> { return new Collection<T>(); }
+        }
+        class Collection<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->openUser($workspace);
+        $this->open($workspace, '/Use.xphp', <<<'XPHP'
+        <?php
+        use App\Containers\Wrap;
+        use App\Models\User;
+        $w = new Wrap<User>();
+        $u = $w->inner()->items()->first();
+        XPHP);
+
+        $resolver = $this->resolver($workspace);
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'u', PHP_INT_MAX),
+        );
+    }
+
+    public function testClosureCapturesOuterBinding(): void
+    {
+        // Phase 1.5: `function () use ($users) { $first = $users->first(); }`
+        // -- the closure's `use ($users)` propagates the outer binding
+        // into the closure's own scope.  Without this propagation the
+        // closure body would see an empty scope.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        $users = new Collection<User>();
+        $fn = function () use ($users) {
+            $first = $users->first();
+        };
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $offset = strpos($source, '$first = $users') + 1;
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'first', $offset),
+        );
+    }
+
+    public function testClosureWithoutUseClauseCannotSeeOuterBinding(): void
+    {
+        // Without `use ($users)`, the closure's scope is isolated from
+        // the outer scope -- accessing `$users` inside is undefined.
+        // The resolver yields, matching PHP's runtime behaviour where
+        // the variable is unbound.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        $users = new Collection<User>();
+        $fn = function () {
+            $first = $users->first();
+        };
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $offset = strpos($source, '$first = $users') + 1;
+
+        self::assertNull(
+            $resolver->resolveVariable('/Use.xphp', 'first', $offset),
+            'closure without use clause must not see outer bindings',
+        );
+    }
+
+    public function testClosureParamSeededAlongsideCapture(): void
+    {
+        // Params + captured uses both seed the closure scope.  Mixed
+        // usage: a generic-typed param plus a captured outer variable.
+        $workspace = $this->workspace();
+        $this->openCollection($workspace, returnType: '?T');
+        $this->openUser($workspace);
+        $source = <<<'XPHP'
+        <?php
+        use App\Containers\Collection;
+        use App\Models\User;
+        $outer = new Collection<User>();
+        $fn = function (Collection<User> $param) use ($outer) {
+            $a = $param->first();
+            $b = $outer->first();
+        };
+        XPHP;
+        $this->open($workspace, '/Use.xphp', $source);
+
+        $resolver = $this->resolver($workspace);
+        $aOffset = strpos($source, '$a = $param') + 1;
+        $bOffset = strpos($source, '$b = $outer') + 1;
+
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'a', $aOffset),
+        );
+        self::assertSame(
+            '?App\\Models\\User',
+            $resolver->resolveVariable('/Use.xphp', 'b', $bOffset),
+        );
     }
 
     public function testRebuildsBindingsOnDocumentVersionBump(): void
@@ -250,7 +709,7 @@ final class GenericResolverTest extends TestCase
         XPHP);
 
         $resolver = $this->resolver($workspace);
-        self::assertSame('?App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'user'));
+        self::assertSame('?App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'user', PHP_INT_MAX));
 
         // Re-publish Collection.xphp at v2 with first() now returning T
         // (no `?`).  Bindings live on /Use.xphp's cache; since the
@@ -274,7 +733,7 @@ final class GenericResolverTest extends TestCase
         $useSource = $workspace->get('/Use.xphp')->text;
         $workspace->update(new VersionedTextDocumentIdentifier(2, '/Use.xphp'), $useSource);
 
-        self::assertSame('App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'user'));
+        self::assertSame('App\\Models\\User', $resolver->resolveVariable('/Use.xphp', 'user', PHP_INT_MAX));
     }
 
     private function resolver(PhpactorWorkspace $workspace): GenericResolver
@@ -282,7 +741,8 @@ final class GenericResolverTest extends TestCase
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
         $lookup = new WorkspaceClassLikeLookup($workspace, $cache);
-        return new GenericResolver($workspace, $cache, $lookup, $parser);
+        $index = new FqnIndex($workspace, $cache, $parser, '');
+        return new GenericResolver($workspace, $cache, $lookup, $parser, $index);
     }
 
     private function resolverWithFilesystem(PhpactorWorkspace $workspace, string $rootPath): GenericResolver
@@ -294,7 +754,7 @@ final class GenericResolverTest extends TestCase
             new WorkspaceClassLikeLookup($workspace, $cache),
             new FilesystemClassLikeLookup($index),
         );
-        return new GenericResolver($workspace, $cache, $lookup, $parser);
+        return new GenericResolver($workspace, $cache, $lookup, $parser, $index);
     }
 
     private function rmrf(string $dir): void

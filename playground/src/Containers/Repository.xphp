@@ -9,4 +9,6 @@ interface Repository<T>
     public function save(T $item): void;
 
     public function first(): ?T;
+
+    public function items(): Collection<T>;
 }

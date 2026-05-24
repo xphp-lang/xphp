@@ -141,7 +141,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new WorkspaceClassLikeLookup($workspace, $cache),
             new FilesystemClassLikeLookup($fqnIndex),
         );
-        $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $xphpParser);
+        $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $xphpParser, $fqnIndex);
         $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector, $genericParams, $genericResolver);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(

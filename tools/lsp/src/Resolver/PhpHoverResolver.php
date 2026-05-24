@@ -96,7 +96,7 @@ final class PhpHoverResolver
                                     ? $this->renderProperty($c, $symbol->name())
                                     : null,
             Symbol::CONSTANT  => $this->renderConstant($context, $symbol->name()),
-            Symbol::VARIABLE  => $this->renderVariable($uri, $context, $symbol->name()),
+            Symbol::VARIABLE  => $this->renderVariable($uri, $offset, $context, $symbol->name()),
             default           => null,
         };
 
@@ -232,15 +232,16 @@ final class PhpHoverResolver
      * `$x = 1` shows `int $x` rather than `1 $x`.  Class types are
      * left unchanged (their `generalize()` returns the same FQN).
      */
-    private function renderVariable(string $uri, NodeContext $context, string $name): ?string
+    private function renderVariable(string $uri, int $offset, NodeContext $context, string $name): ?string
     {
         // Resolver-first: when we can monomorphize the variable's source
         // (a `$x = new Generic<...>(...)` followed by `$y = $x->method()`
-        // in the same file), the resolver returns the substituted concrete
-        // type and we render that directly.  When it can't model the
-        // shape, fall through to worse-reflection + prettify -- this
+        // in the same file, OR a `function f(Collection<User> $users)`
+        // param at scope entry), the resolver returns the substituted
+        // concrete type and we render that directly.  When it can't model
+        // the shape, fall through to worse-reflection + prettify -- this
         // resolver is purely additive, never regresses the fallback.
-        $resolved = $this->genericResolver->resolveVariable($uri, $name);
+        $resolved = $this->genericResolver->resolveVariable($uri, $name, $offset);
         if ($resolved !== null) {
             return self::format(sprintf('%s $%s', $resolved, $name), '');
         }

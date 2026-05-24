@@ -6,21 +6,31 @@ namespace XPHP\Lsp\Resolver;
 
 use PhpParser\Node;
 use PhpParser\Node\ComplexType;
+use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\Closure;
+use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\New_;
+use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Param;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\Namespace_;
+use PhpParser\Node\Stmt\Use_;
+use PhpParser\Node\UseItem;
 use PhpParser\Node\UnionType;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Transpiler\Monomorphize\Specializer;
 use XPHP\Transpiler\Monomorphize\TypeParam;
 use XPHP\Transpiler\Monomorphize\TypeRef;
@@ -44,24 +54,41 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  * That keeps LSP-time and compile-time substitution semantics in lockstep
  * (a divergence here would be a bug factory).
  *
- * Scope: in-same-file assignments only, one method hop maximum.
+ * Scope model (Phase 1.1):
  *
- * Supported:
- *   $x = new Generic<TypeArgs>(...);
- *   $y = $x->method(...);    // returns substituted type
+ *   Bindings live in a list of `Scope`s -- one top-level scope covering
+ *   the whole document, plus one nested scope per `function` / class
+ *   method body.  At lookup time the resolver picks the innermost scope
+ *   containing the cursor offset and reads bindings from there.  No
+ *   parent-chain yet: two functions with conflicting `$x` types don't
+ *   leak across each other, but a closure can't see its outer scope
+ *   either (that's Phase 1.5's job).
+ *
+ * Supported shapes (each contributes a binding into the current scope):
+ *
+ *   - `$x = new Generic<TypeArgs>(...);`         (top-level or in-function)
+ *   - `$y = $x->method(...);`                    (in-scope receiver)
+ *   - `function f(Generic<TypeArgs> $param)`     (Phase 1.1)
+ *   - `$y = Cls::method<TypeArgs>(...);`         (Phase 1.2)
+ *   - `$y = generic_fn<TypeArgs>(...);`          (Phase 1.3)
+ *   - `$y = $x->a()->b()->...->c();`             (Phase 1.4: chained calls)
+ *   - `function () use ($captured) { ... }`      (Phase 1.5: closure capture)
+ *
+ * Internally, Phase 1.4 introduced a recursive `inferType(Node, Env)`
+ * that types arbitrary expressions -- variables, `new`, method calls,
+ * static calls, generic functions -- so chained calls of any depth
+ * compose cleanly.  Each call site builds an Env from the current scope's
+ * bindings + lookups; the recursion handles n-step chains identically
+ * to the 1-step case.
  *
  * Out of scope (returns null, fallback to GenericParamRegistry::prettify):
- *   - chained calls in one statement (`$a->b()->c()`)
- *   - static method calls (`Cls::method<T>(...)`)
- *   - generic functions (`identity<T>(...)`)
- *   - param-typed scope entry (`function f(Collection<User> $users)`)
- *   - closure-captured variables
- *   - filesystem-only classes (ClassLikeLookup needs the file open)
+ *   - arrow functions `fn ($x) => $x->method()` -- different scoping rules
+ *   - `$this` binding inside non-static methods
  */
 final class GenericResolver
 {
     /**
-     * @var array<string, array{version: int, bindings: array<string, VarBinding|ResolvedType>}>
+     * @var array<string, array{version: int, scopes: list<array{start: int, end: int, bindings: array<string, VarBinding|ResolvedType>}>}>
      */
     private array $cache = [];
 
@@ -70,23 +97,18 @@ final class GenericResolver
         private readonly ParsedDocumentCache $documents,
         private readonly ClassLikeLookup $classes,
         private readonly XphpSourceParser $parser,
+        private readonly FqnIndex $fqnIndex,
     ) {
     }
 
     /**
-     * Return the substituted display string for `$varName` at the current
-     * version of `$uri`, or null when the resolver can't model the
-     * variable's RHS (caller falls back to its existing path).
+     * Return the substituted display string for `$varName` at byte offset
+     * `$byteOffset`, or null when the resolver can't model the variable's
+     * binding (caller falls back to its existing path).
      */
-    public function resolveVariable(string $uri, string $varName): ?string
+    public function resolveVariable(string $uri, string $varName, int $byteOffset): ?string
     {
-        if (!$this->workspace->has($uri)) {
-            return null;
-        }
-        $item = $this->workspace->get($uri);
-        $bindings = $this->bindingsFor($uri, $item->version, $item->text);
-
-        $binding = $bindings[$varName] ?? null;
+        $binding = $this->bindingAt($uri, $varName, $byteOffset);
         if ($binding === null) {
             return null;
         }
@@ -102,25 +124,15 @@ final class GenericResolver
     }
 
     /**
-     * Resolve the substituted concrete type of `$varName` as a
-     * `ResolvedType`.  Mirrors `resolveVariable` but returns the
+     * Resolve the substituted concrete type of `$varName` at `$byteOffset`
+     * as a `ResolvedType`.  Mirrors `resolveVariable` but returns the
      * underlying `{TypeRef, nullable}` so the completion path can read
      * `ref->name` directly for `reflectClassLike` without parsing the
      * display string back.
-     *
-     * Returns null when the resolver has nothing for the variable -- the
-     * caller should fall back to the unsubstituted receiver from
-     * worse-reflection.
      */
-    public function resolveVariableTypeRef(string $uri, string $varName): ?ResolvedType
+    public function resolveVariableTypeRef(string $uri, string $varName, int $byteOffset): ?ResolvedType
     {
-        if (!$this->workspace->has($uri)) {
-            return null;
-        }
-        $item = $this->workspace->get($uri);
-        $bindings = $this->bindingsFor($uri, $item->version, $item->text);
-
-        $binding = $bindings[$varName] ?? null;
+        $binding = $this->bindingAt($uri, $varName, $byteOffset);
         if ($binding === null) {
             return null;
         }
@@ -141,12 +153,6 @@ final class GenericResolver
      * method-call name, the receiver isn't a tracked variable, or the
      * return type can't be modelled -- in all cases the caller should
      * fall back to the unsubstituted render.
-     *
-     * Used by hover on a method-call token (e.g. cursor on `first` in
-     * `$users->first()`).  Where `renderVariable` answers "what type does
-     * the LHS variable end up with", this answers "what type does this
-     * specific call site evaluate to" -- the same substitution, applied
-     * one statement earlier in the chain.
      */
     public function resolveMethodReturnTypeAt(string $uri, int $byteOffset): ?string
     {
@@ -154,7 +160,8 @@ final class GenericResolver
             return null;
         }
         $item = $this->workspace->get($uri);
-        $bindings = $this->bindingsFor($uri, $item->version, $item->text);
+        $scopes = $this->scopesFor($uri, $item->version, $item->text);
+        $bindings = self::bindingsAt($scopes, $byteOffset);
 
         $result = $this->documents->getOrParse($uri, $item->version, $item->text);
         if ($result->ast === null) {
@@ -164,11 +171,30 @@ final class GenericResolver
         if ($call === null) {
             return null;
         }
-        $resolved = self::resolveMethodCall($call, $bindings, $this->classes);
+        // useMap/currentNamespace would let chained static-call inference
+        // through.  For now the method-hover entry point doesn't track
+        // them -- if profiling shows hover often lands on chained calls
+        // through static calls, we'd plumb them via a per-document
+        // index sibling to `scopesFor`.  Falling back to empty is safe.
+        $resolved = self::resolveMethodCall($call, $bindings, $this->classes, $this->fqnIndex);
         if ($resolved === null) {
             return null;
         }
         return $resolved->render();
+    }
+
+    /**
+     * Lookup binding for `$varName` at `$byteOffset` (innermost scope wins).
+     */
+    private function bindingAt(string $uri, string $varName, int $byteOffset): VarBinding|ResolvedType|null
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $scopes = $this->scopesFor($uri, $item->version, $item->text);
+        $bindings = self::bindingsAt($scopes, $byteOffset);
+        return $bindings[$varName] ?? null;
     }
 
     /**
@@ -221,12 +247,12 @@ final class GenericResolver
     }
 
     /**
-     * @return array<string, VarBinding|ResolvedType>
+     * @return list<array{start: int, end: int, bindings: array<string, VarBinding|ResolvedType>}>
      */
-    private function bindingsFor(string $uri, int $version, string $text): array
+    private function scopesFor(string $uri, int $version, string $text): array
     {
         if (isset($this->cache[$uri]) && $this->cache[$uri]['version'] === $version) {
-            return $this->cache[$uri]['bindings'];
+            return $this->cache[$uri]['scopes'];
         }
         $result = $this->documents->getOrParse($uri, $version, $text);
         $ast = $result->ast;
@@ -244,65 +270,273 @@ final class GenericResolver
                 $ast = null;
             }
         }
-        $bindings = $ast === null ? [] : $this->build($ast);
-        $this->cache[$uri] = ['version' => $version, 'bindings' => $bindings];
-        return $bindings;
+        $scopes = $ast === null ? self::emptyScopes() : $this->build($ast);
+        $this->cache[$uri] = ['version' => $version, 'scopes' => $scopes];
+        return $scopes;
     }
 
     /**
-     * @param list<Node\Stmt> $ast
+     * @return list<array{start: int, end: int, bindings: array<string, VarBinding|ResolvedType>}>
+     */
+    private static function emptyScopes(): array
+    {
+        return [['start' => 0, 'end' => PHP_INT_MAX, 'bindings' => []]];
+    }
+
+    /**
+     * Pick the innermost (narrowest-range) scope whose `[start, end]`
+     * contains `$offset`.  Top-level scope is the catch-all -- it always
+     * matches and has the widest range, so any nested function scope
+     * wins on overlap.
+     *
+     * @param list<array{start: int, end: int, bindings: array<string, VarBinding|ResolvedType>}> $scopes
      * @return array<string, VarBinding|ResolvedType>
+     */
+    private static function bindingsAt(array $scopes, int $offset): array
+    {
+        $best = null;
+        foreach ($scopes as $scope) {
+            if ($offset < $scope['start'] || $offset > $scope['end']) {
+                continue;
+            }
+            if ($best === null || ($scope['end'] - $scope['start']) < ($best['end'] - $best['start'])) {
+                $best = $scope;
+            }
+        }
+        return $best === null ? [] : $best['bindings'];
+    }
+
+    /**
+     * Build the list of scopes for a document.  Always returns at least
+     * one (top-level) scope.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return list<array{start: int, end: int, bindings: array<string, VarBinding|ResolvedType>}>
      */
     private function build(array $ast): array
     {
-        $bindings = [];
-        $visitor = new class($bindings, $this->classes) extends NodeVisitorAbstract {
+        // Pre-allocate the catch-all top-level scope.  Function bodies
+        // get nested scopes appended during the walk.
+        $scopes = self::emptyScopes();
+        $stack = [0]; // index into $scopes; top is the current scope
+        // Per-document use map: short-name alias -> fully-qualified name.
+        // Populated as we walk Use_ statements; consulted by static-call
+        // resolution when the cursor's `Cls::method<...>(...)` references
+        // a class by its imported short name (which nikic doesn't qualify
+        // for us -- the LSP doesn't run NameResolver to keep AST mutation
+        // cheap).
+        $useMap = [];
+        $currentNamespace = '';
+
+        $classes = $this->classes;
+        $fqnIndex = $this->fqnIndex;
+
+        $visitor = new class($scopes, $stack, $useMap, $currentNamespace, $classes, $fqnIndex) extends NodeVisitorAbstract {
             /**
-             * @param array<string, VarBinding|ResolvedType> $bindings
+             * @param list<array{start: int, end: int, bindings: array<string, VarBinding|ResolvedType>}> $scopes
+             * @param list<int> $stack
+             * @param array<string, string> $useMap
              */
             public function __construct(
-                public array &$bindings,
+                public array &$scopes,
+                public array &$stack,
+                public array &$useMap,
+                public string &$currentNamespace,
                 private readonly ClassLikeLookup $classes,
+                private readonly FqnIndex $fqnIndex,
             ) {
             }
 
             public function enterNode(Node $node): null
             {
-                if (!$node instanceof Assign) {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
                     return null;
                 }
+                if ($node instanceof Use_) {
+                    foreach ($node->uses as $u) {
+                        if (!$u instanceof UseItem) {
+                            continue;
+                        }
+                        $fqn = $u->name->toString();
+                        $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
+                        $this->useMap[$alias] = $fqn;
+                    }
+                    return null;
+                }
+
+                // Open a new scope for function-like declarations.  Their
+                // parameters seed bindings; the body Assigns then go into
+                // the same scope.
+                if ($node instanceof Function_ || $node instanceof ClassMethod) {
+                    $start = $node->getStartFilePos();
+                    $end = $node->getEndFilePos();
+                    if ($start < 0 || $end < 0) {
+                        return null;
+                    }
+                    $this->scopes[] = [
+                        'start' => $start,
+                        'end' => $end,
+                        'bindings' => self::seedFromParams($node->params, $this->classes),
+                    ];
+                    $this->stack[] = count($this->scopes) - 1;
+                    return null;
+                }
+
+                // Closure: like a function, but also inherits explicit
+                // outer-scope bindings via the `use (...)` clause.  Phase 1.5.
+                if ($node instanceof Closure) {
+                    $start = $node->getStartFilePos();
+                    $end = $node->getEndFilePos();
+                    if ($start < 0 || $end < 0) {
+                        return null;
+                    }
+                    $outerBindings = $this->currentBindings();
+                    $closureBindings = self::seedFromParams($node->params, $this->classes);
+                    foreach ($node->uses as $use) {
+                        if (!$use instanceof ClosureUse) {
+                            continue;
+                        }
+                        if (!$use->var instanceof Variable || !is_string($use->var->name)) {
+                            continue;
+                        }
+                        $varName = $use->var->name;
+                        if (isset($outerBindings[$varName])) {
+                            $closureBindings[$varName] = $outerBindings[$varName];
+                        }
+                    }
+                    $this->scopes[] = [
+                        'start' => $start,
+                        'end' => $end,
+                        'bindings' => $closureBindings,
+                    ];
+                    $this->stack[] = count($this->scopes) - 1;
+                    return null;
+                }
+
+                if ($node instanceof Assign) {
+                    $this->handleAssign($node);
+                }
+                return null;
+            }
+
+            private static function lastSegment(string $fqn): string
+            {
+                $pos = strrpos($fqn, '\\');
+                return $pos === false ? $fqn : substr($fqn, $pos + 1);
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof Function_ || $node instanceof ClassMethod || $node instanceof Closure) {
+                    array_pop($this->stack);
+                }
+                return null;
+            }
+
+            private function handleAssign(Assign $node): void
+            {
                 $lhs = $node->var;
                 if (!$lhs instanceof Variable || !is_string($lhs->name)) {
-                    return null;
+                    return;
                 }
                 $name = $lhs->name;
-
                 $rhs = $node->expr;
+
                 if ($rhs instanceof New_) {
                     $binding = GenericResolver::buildFromNew($rhs, $this->classes);
                     if ($binding !== null) {
-                        $this->bindings[$name] = $binding;
+                        $this->writeBinding($name, $binding);
                     }
-                    return null;
+                    return;
                 }
                 if ($rhs instanceof MethodCall) {
                     $resolved = GenericResolver::resolveMethodCall(
                         $rhs,
-                        $this->bindings,
+                        $this->currentBindings(),
                         $this->classes,
+                        $this->fqnIndex,
+                        $this->useMap,
+                        $this->currentNamespace,
                     );
                     if ($resolved !== null) {
-                        $this->bindings[$name] = $resolved;
+                        $this->writeBinding($name, $resolved);
+                    }
+                    return;
+                }
+                if ($rhs instanceof StaticCall) {
+                    $resolved = GenericResolver::resolveStaticCall(
+                        $rhs,
+                        $this->classes,
+                        $this->useMap,
+                        $this->currentNamespace,
+                    );
+                    if ($resolved !== null) {
+                        $this->writeBinding($name, $resolved);
+                    }
+                    return;
+                }
+                if ($rhs instanceof FuncCall) {
+                    $resolved = GenericResolver::resolveFuncCall($rhs, $this->fqnIndex);
+                    if ($resolved !== null) {
+                        $this->writeBinding($name, $resolved);
                     }
                 }
-                return null;
+            }
+
+            /**
+             * @return array<string, VarBinding|ResolvedType>
+             */
+            private function currentBindings(): array
+            {
+                $idx = $this->stack[count($this->stack) - 1];
+                return $this->scopes[$idx]['bindings'];
+            }
+
+            private function writeBinding(string $name, VarBinding|ResolvedType $binding): void
+            {
+                $idx = $this->stack[count($this->stack) - 1];
+                $this->scopes[$idx]['bindings'][$name] = $binding;
+            }
+
+            /**
+             * Build initial bindings from a function's parameters.
+             *
+             * @param list<Param> $params
+             * @return array<string, VarBinding|ResolvedType>
+             */
+            private static function seedFromParams(array $params, ClassLikeLookup $classes): array
+            {
+                $bindings = [];
+                foreach ($params as $param) {
+                    if (!$param->var instanceof Variable || !is_string($param->var->name)) {
+                        continue;
+                    }
+                    $type = $param->type;
+                    // Nullable wrapper: `?Collection<User> $users` carries
+                    // the Name we want underneath.  We track the binding
+                    // without nullability -- VarBinding only encodes the
+                    // class + paramMap, and a nullable receiver still
+                    // dispatches to the same class's methods.
+                    if ($type instanceof NullableType) {
+                        $type = $type->type;
+                    }
+                    if (!$type instanceof Name) {
+                        continue;
+                    }
+                    $binding = GenericResolver::buildFromName($type, $classes);
+                    if ($binding !== null) {
+                        $bindings[$param->var->name] = $binding;
+                    }
+                }
+                return $bindings;
             }
         };
 
         $traverser = new NodeTraverser();
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
-        return $visitor->bindings;
+        return $visitor->scopes;
     }
 
     /**
@@ -318,8 +552,21 @@ final class GenericResolver
         if (!$class instanceof Name) {
             return null;
         }
-        $templateFqn = $class->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-        $args = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        return self::buildFromName($class, $classes);
+    }
+
+    /**
+     * Build a `VarBinding` from a `Name` node carrying
+     * `ATTR_TEMPLATE_FQN` + `ATTR_GENERIC_ARGS`.  Shared between the
+     * `new Generic<...>(...)` call site and the parameter-type-hint
+     * extraction in `seedFromParams`.
+     *
+     * @internal called from the visitor closure.
+     */
+    public static function buildFromName(Name $name, ClassLikeLookup $classes): ?VarBinding
+    {
+        $templateFqn = $name->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+        $args = $name->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
         if (!is_string($templateFqn) || !is_array($args) || $args === []) {
             return null;
         }
@@ -342,35 +589,106 @@ final class GenericResolver
     }
 
     /**
-     * Resolve a `$x->method(...)` RHS, looking up `$x`'s binding and
-     * substituting the method's return type.  Returns a `ResolvedType` or
-     * null when the call can't be modelled.
+     * Recursive expression typer.  Introduced in Phase 1.4 to type
+     * arbitrary expressions so chained calls (`$a->b()->c()`) compose
+     * without a separate code path for each chain depth.  Every other
+     * call-site type resolver (resolveMethodCall, resolveStaticCall,
+     * resolveFuncCall) is a leaf of this dispatch -- exactly one
+     * shape per leaf, no nesting.
+     *
+     * Returns null when the expression's type can't be modelled (the
+     * caller falls back to its existing path).  The recursion stays
+     * bounded by AST depth -- pathological chains are very unusual in
+     * real source, and infinite cycles are impossible because the AST
+     * is a tree.
      *
      * @param array<string, VarBinding|ResolvedType> $bindings
-     * @internal called from the visitor closure.
+     * @param array<string, string> $useMap
+     */
+    public static function inferType(
+        Node $expr,
+        array $bindings,
+        ClassLikeLookup $classes,
+        FqnIndex $fqnIndex,
+        array $useMap,
+        string $currentNamespace,
+    ): ?ResolvedType {
+        if ($expr instanceof Variable && is_string($expr->name)) {
+            $binding = $bindings[$expr->name] ?? null;
+            if ($binding === null) {
+                return null;
+            }
+            if ($binding instanceof VarBinding) {
+                return self::resolvedTypeFromBinding($binding);
+            }
+            return $binding;
+        }
+        if ($expr instanceof New_) {
+            $varBinding = self::buildFromNew($expr, $classes);
+            return $varBinding === null ? null : self::resolvedTypeFromBinding($varBinding);
+        }
+        if ($expr instanceof MethodCall) {
+            return self::resolveMethodCall($expr, $bindings, $classes, $fqnIndex, $useMap, $currentNamespace);
+        }
+        if ($expr instanceof StaticCall) {
+            return self::resolveStaticCall($expr, $classes, $useMap, $currentNamespace);
+        }
+        if ($expr instanceof FuncCall) {
+            return self::resolveFuncCall($expr, $fqnIndex);
+        }
+        return null;
+    }
+
+    /**
+     * Convert a `VarBinding` (class + paramMap) into a `ResolvedType` -- a
+     * `TypeRef` whose `args` carry the bound type-args so downstream
+     * `inferType` calls can recover the paramMap for further chained
+     * substitutions.  Without this round-trip the receiver of a chained
+     * call would lose its generic context.
+     */
+    private static function resolvedTypeFromBinding(VarBinding $binding): ResolvedType
+    {
+        $args = array_values($binding->paramMap);
+        return new ResolvedType(new TypeRef($binding->classFqn, $args), false);
+    }
+
+    /**
+     * Resolve a `$x->method(...)` RHS by typing the receiver via
+     * `inferType` then substituting the method's return type with the
+     * receiver's type-arg bindings.  Receiver can be any expression --
+     * Variable (1-step), MethodCall (n-step chain), etc.
+     *
+     * @param array<string, VarBinding|ResolvedType> $bindings
+     * @param array<string, string> $useMap
+     * @internal called from the visitor closure and from inferType.
      */
     public static function resolveMethodCall(
         MethodCall $call,
         array $bindings,
         ClassLikeLookup $classes,
+        FqnIndex $fqnIndex,
+        array $useMap = [],
+        string $currentNamespace = '',
     ): ?ResolvedType {
-        $receiver = $call->var;
-        if (!$receiver instanceof Variable || !is_string($receiver->name)) {
-            return null;
-        }
-        $binding = $bindings[$receiver->name] ?? null;
-        if (!$binding instanceof VarBinding) {
-            return null;
-        }
         if (!$call->name instanceof Identifier) {
             return null;
         }
-        $methodName = $call->name->toString();
-        $classLike = $classes->find($binding->classFqn);
+        $receiverType = self::inferType(
+            $call->var,
+            $bindings,
+            $classes,
+            $fqnIndex,
+            $useMap,
+            $currentNamespace,
+        );
+        if ($receiverType === null) {
+            return null;
+        }
+        $classLike = $classes->find($receiverType->ref->name);
         if ($classLike === null) {
             return null;
         }
-        $method = self::findMethod($classLike, $methodName);
+        $method = self::findMethod($classLike, $call->name->toString());
         if ($method === null) {
             return null;
         }
@@ -378,20 +696,191 @@ final class GenericResolver
         if ($returnType === null) {
             return null;
         }
-        $paramNames = [];
+        // Rebuild paramMap from the receiver's TypeRef args (set during
+        // `resolvedTypeFromBinding` or by a prior chained call's
+        // substituted output).  When the receiver has no args -- e.g.
+        // an unconstrained or already fully-substituted scalar -- the
+        // method's own substitution is a no-op, which is correct.
+        $paramMap = self::paramMapFromReceiver($classLike, $receiverType);
+        $paramNames = array_keys($paramMap);
+
+        [$nullable, $ref] = self::returnTypeToRef($returnType, $paramNames) ?? [null, null];
+        if ($ref === null) {
+            return null;
+        }
+        $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+        return new ResolvedType($substituted, $nullable);
+    }
+
+    /**
+     * Rebuild `paramName => TypeRef` from a class's `ATTR_GENERIC_PARAMS`
+     * zipped with the receiver `ResolvedType`'s `args`.  Returns an empty
+     * array when the class is non-generic or when the receiver carries
+     * no args.
+     *
+     * @return array<string, TypeRef>
+     */
+    private static function paramMapFromReceiver(ClassLike $classLike, ResolvedType $receiver): array
+    {
         $params = $classLike->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-        if (is_array($params)) {
-            foreach ($params as $p) {
-                if ($p instanceof TypeParam) {
-                    $paramNames[] = $p->name;
-                }
+        if (!is_array($params) || $params === []) {
+            return [];
+        }
+        $args = $receiver->ref->args;
+        $map = [];
+        foreach ($params as $i => $p) {
+            if (!$p instanceof TypeParam) {
+                continue;
             }
+            if (!isset($args[$i]) || !$args[$i] instanceof TypeRef) {
+                continue;
+            }
+            $map[$p->name] = $args[$i];
+        }
+        return $map;
+    }
+
+    /**
+     * Resolve a `Cls::method<TypeArgs>(...)` RHS.  Reads the class via the
+     * per-document use map (xphp's parser doesn't run nikic's NameResolver
+     * so single-segment Names stay un-qualified at LSP time), finds the
+     * method's `ATTR_METHOD_GENERIC_PARAMS`, zips with the call site's
+     * `ATTR_METHOD_GENERIC_ARGS`, and substitutes the return type.
+     *
+     * Returns null when the class can't be located, the method isn't
+     * generic, or the args don't match the param arity.
+     *
+     * @param array<string, string> $useMap   alias -> FQN
+     * @internal called from the visitor closure.
+     */
+    public static function resolveStaticCall(
+        StaticCall $call,
+        ClassLikeLookup $classes,
+        array $useMap,
+        string $currentNamespace,
+    ): ?ResolvedType {
+        if (!$call->class instanceof Name) {
+            return null;
+        }
+        if (!$call->name instanceof Identifier) {
+            return null;
+        }
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        if (!is_array($args) || $args === []) {
+            return null;
+        }
+        $classFqn = self::resolveNameWithUseMap($call->class, $useMap, $currentNamespace);
+        if ($classFqn === null) {
+            return null;
+        }
+        $classLike = $classes->find($classFqn);
+        if ($classLike === null) {
+            return null;
+        }
+        $method = self::findMethod($classLike, $call->name->toString());
+        if ($method === null) {
+            return null;
+        }
+        $params = $method->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        if (!is_array($params) || count($params) !== count($args)) {
+            return null;
+        }
+        $paramMap = [];
+        $paramNames = [];
+        foreach ($params as $i => $param) {
+            if (!$param instanceof TypeParam || !($args[$i] instanceof TypeRef)) {
+                return null;
+            }
+            $paramMap[$param->name] = $args[$i];
+            $paramNames[] = $param->name;
+        }
+        $returnType = $method->returnType;
+        if ($returnType === null) {
+            return null;
         }
         [$nullable, $ref] = self::returnTypeToRef($returnType, $paramNames) ?? [null, null];
         if ($ref === null) {
             return null;
         }
-        $substituted = Specializer::substituteTypeRef($ref, $binding->paramMap);
+        $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+        return new ResolvedType($substituted, $nullable);
+    }
+
+    /**
+     * Resolve a single-segment or qualified class Name through the per-
+     * document use map.  Mirrors the resolution rules used by xphp's own
+     * parser: leading `\` means already FQ; first segment matched against
+     * the use map; otherwise prefixed with the current namespace.
+     *
+     * @param array<string, string> $useMap
+     */
+    private static function resolveNameWithUseMap(Name $name, array $useMap, string $currentNamespace): ?string
+    {
+        $raw = $name->toString();
+        if (str_starts_with($raw, '\\')) {
+            return ltrim($raw, '\\');
+        }
+        $first = self::firstSegment($raw);
+        if (isset($useMap[$first])) {
+            $rest = substr($raw, strlen($first));
+            return $useMap[$first] . $rest;
+        }
+        return $currentNamespace !== ''
+            ? $currentNamespace . '\\' . $raw
+            : $raw;
+    }
+
+    private static function firstSegment(string $name): string
+    {
+        $pos = strpos($name, '\\');
+        return $pos === false ? $name : substr($name, 0, $pos);
+    }
+
+    /**
+     * Resolve a `generic_fn<TypeArgs>(...)` RHS.  The FuncCall carries
+     * `ATTR_TEMPLATE_FQN` (resolved against use-fn aliases by xphp's
+     * parser) and `ATTR_METHOD_GENERIC_ARGS`.  Look up the Function_
+     * declaration via FqnIndex (open-doc preferred, filesystem fallback),
+     * substitute the type-params in the return type.
+     *
+     * @internal called from the visitor closure.
+     */
+    public static function resolveFuncCall(FuncCall $call, FqnIndex $fqnIndex): ?ResolvedType
+    {
+        if (!$call->name instanceof Name) {
+            return null;
+        }
+        $templateFqn = $call->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        if (!is_string($templateFqn) || !is_array($args) || $args === []) {
+            return null;
+        }
+        $function = $fqnIndex->functionFor($templateFqn);
+        if ($function === null) {
+            return null;
+        }
+        $params = $function->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        if (!is_array($params) || count($params) !== count($args)) {
+            return null;
+        }
+        $paramMap = [];
+        $paramNames = [];
+        foreach ($params as $i => $param) {
+            if (!$param instanceof TypeParam || !($args[$i] instanceof TypeRef)) {
+                return null;
+            }
+            $paramMap[$param->name] = $args[$i];
+            $paramNames[] = $param->name;
+        }
+        $returnType = $function->returnType;
+        if ($returnType === null) {
+            return null;
+        }
+        [$nullable, $ref] = self::returnTypeToRef($returnType, $paramNames) ?? [null, null];
+        if ($ref === null) {
+            return null;
+        }
+        $substituted = Specializer::substituteTypeRef($ref, $paramMap);
         return new ResolvedType($substituted, $nullable);
     }
 
@@ -437,14 +926,22 @@ final class GenericResolver
             if (in_array($raw, $paramNames, true)) {
                 return [false, new TypeRef($raw, [], isTypeParam: true)];
             }
-            // XphpSourceParser doesn't run nikic's NameResolver, so a bare
-            // `User` in a return position stays a single-segment Name.
-            // We hand back the raw name; downstream substitution treats
-            // it as a real class.  Most generic class declarations either
-            // return scalars, the template param, or fully-qualified
-            // class names via use statements that xphp transpilation
-            // doesn't touch -- so the bare-name case is mostly the
-            // type-param case (handled above).
+            // XphpSourceParser stamps `ATTR_TEMPLATE_FQN` on Name nodes
+            // followed by `<...>` (e.g. `Collection<T>` in a return type)
+            // and `ATTR_GENERIC_ARGS` with the resolved TypeRef list.
+            // Both are exactly what we need: a fully-qualified class name
+            // plus the args (which Specializer::substituteTypeRef will
+            // recurse into to substitute nested type-params).
+            $templateFqn = $type->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+            $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+            if (is_string($templateFqn)) {
+                $argList = is_array($args)
+                    ? array_values(array_filter($args, static fn ($a): bool => $a instanceof TypeRef))
+                    : [];
+                return [false, new TypeRef($templateFqn, $argList)];
+            }
+            // Bare un-generic Name (e.g. `User` directly).  No way to
+            // qualify without NameResolver -- hand back the raw name.
             return [false, new TypeRef($raw)];
         }
         if ($type instanceof UnionType || $type instanceof IntersectionType || $type instanceof ComplexType) {

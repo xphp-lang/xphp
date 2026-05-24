@@ -14,6 +14,7 @@ echo '[GenericInterface] Repository<User> implemented by InMemoryRepository<User
 $repo = new InMemoryRepository<User>();
 $repo->save(new User('alice'));
 $repo->save(new User('bob'));
+$first = $repo->items()->first();
 
 echo '  first()->name              = ', $repo->first()?->name ?? '<null>', PHP_EOL;
 

@@ -187,7 +187,7 @@ final class PhpCompletionResolver
         // rather than an empty list.
         if ($context->symbol()->symbolType() === 'variable') {
             $varName = $context->symbol()->name();
-            $resolved = $this->genericResolver->resolveVariableTypeRef($uri, $varName);
+            $resolved = $this->genericResolver->resolveVariableTypeRef($uri, $varName, $receiverProbe);
             if ($resolved !== null && $resolved->ref->name !== '' && $resolved->ref->name !== $lookupName) {
                 self::trace(sprintf(
                     'receiver swap via GenericResolver: $%s %s -> %s',

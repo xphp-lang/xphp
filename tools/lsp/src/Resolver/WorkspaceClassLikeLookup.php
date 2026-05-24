@@ -6,6 +6,7 @@ namespace XPHP\Lsp\Resolver;
 
 use PhpParser\Node;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
@@ -58,6 +59,7 @@ final class WorkspaceClassLikeLookup implements ClassLikeLookup
     {
         $visitor = new class($needle) extends NodeVisitorAbstract {
             public ?ClassLike $found = null;
+            private string $currentNamespace = '';
 
             public function __construct(private readonly string $needle)
             {
@@ -68,11 +70,25 @@ final class WorkspaceClassLikeLookup implements ClassLikeLookup
                 if ($this->found !== null) {
                     return null;
                 }
-                if (!$node instanceof ClassLike) {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
                     return null;
                 }
+                if (!$node instanceof ClassLike || $node->name === null) {
+                    return null;
+                }
+                // Generic classes get ATTR_TEMPLATE_FQN stamped by
+                // XphpSourceParser during the marker pass; non-generic
+                // classes don't.  We need to match both shapes, so
+                // reconstruct from namespace + short name as a fallback.
                 $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-                if (is_string($fqn) && $fqn === $this->needle) {
+                if (!is_string($fqn)) {
+                    $short = $node->name->toString();
+                    $fqn = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $short
+                        : $short;
+                }
+                if ($fqn === $this->needle) {
                     $this->found = $node;
                 }
                 return null;

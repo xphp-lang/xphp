@@ -472,6 +472,7 @@ final class PhpCompletionResolverTest extends TestCase
             $workspaceSymbols,
             ReflectorFactory::defaultStubPath(),
         );
+        $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, '');
         $reflector = (new ReflectorFactory(
             $workspace,
             $cache,
@@ -479,7 +480,7 @@ final class PhpCompletionResolverTest extends TestCase
             rootPath: '',
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
-            fqnIndex: new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
+            fqnIndex: $fqnIndex,
         ))->build();
         $classLikeLookup = new \XPHP\Lsp\Resolver\WorkspaceClassLikeLookup($workspace, $cache);
         return new PhpCompletionResolver(
@@ -489,7 +490,7 @@ final class PhpCompletionResolverTest extends TestCase
             $completionIndex,
             $cache,
             new \XPHP\Lsp\Resolver\GenericParamRegistry($workspace, $cache),
-            new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser),
+            new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex),
         );
     }
 

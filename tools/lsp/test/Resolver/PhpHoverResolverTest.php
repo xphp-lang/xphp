@@ -191,6 +191,30 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringNotContainsString('App\\Containers\\T', $markdown);
     }
 
+    public function testParamTypedScopeEntrySubstitutesInFunctionBody(): void
+    {
+        // Phase 1.1 e2e: cursor on a variable assigned from a method call
+        // INSIDE a function whose parameter is generic-typed -- the param
+        // type seeds the binding, the method call substitutes through it.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\nfunction handle(Collection<User> \$users) {\n    \$first = \$users->first();\n    echo \$first;\n}\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo $first', strlen('echo '));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('?App\\Models\\User $first', $markdown);
+        self::assertStringNotContainsString('?T $first', $markdown);
+    }
+
     public function testVariableHoverFallsBackToPrettifyForUnmodeledShapes(): void
     {
         // GenericResolver only handles same-file `new Generic<...>()` +
@@ -298,10 +322,10 @@ final class PhpHoverResolverTest extends TestCase
             rootPath: '',
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
-            fqnIndex: new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
+            fqnIndex: $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, ''),
         ))->build();
         $classLikeLookup = new WorkspaceClassLikeLookup($workspace, $cache);
-        $generic = new GenericResolver($workspace, $cache, $classLikeLookup, $parser);
+        $generic = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
         return new PhpHoverResolver(
             $workspace,
             $parser,
