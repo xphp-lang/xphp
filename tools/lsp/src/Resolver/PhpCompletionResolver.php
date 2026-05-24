@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
+use PhpParser\ErrorHandler\Collecting as CollectingErrorHandler;
 use PhpParser\Node;
 use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\Assign;
@@ -12,6 +13,8 @@ use PhpParser\Node\Param;
 use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
+use PhpParser\Parser;
+use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\CompletionItem;
 use Phpactor\LanguageServerProtocol\CompletionItemKind;
@@ -166,12 +169,19 @@ final class PhpCompletionResolver
             return [];
         }
 
+        // Nullable wrapper: worse-reflection surfaces `function f(): ?User`
+        // return-type as the receiver type `?App\Models\User` for chained
+        // `f()?->|` access.  reflectClassLike treats the `?` as part of the
+        // FQN and throws SourceNotFound -- so strip it before lookup.  The
+        // members of `?User` are the same as the members of `User`.
+        $lookupName = ltrim($typeName, '?');
+
         try {
-            $class = $this->reflector->reflectClassLike($typeName);
+            $class = $this->reflector->reflectClassLike($lookupName);
         } catch (Throwable $t) {
             self::trace(sprintf(
                 'reflectClassLike(%s) threw %s: %s',
-                $typeName,
+                $lookupName,
                 $t::class,
                 self::oneLine($t->getMessage()),
             ));
@@ -183,7 +193,7 @@ final class PhpCompletionResolver
         $constsAll = count($class->constants());
         self::trace(sprintf(
             'reflectClassLike(%s) ok methods=%d props=%d consts=%d',
-            $typeName,
+            $lookupName,
             $methodsAll,
             $propsAll,
             $constsAll,
@@ -277,8 +287,23 @@ final class PhpCompletionResolver
         }
         $item = $this->workspace->get($uri);
         $result = $this->cache->getOrParse($uri, $item->version, $item->text);
-        if ($result->ast === null) {
-            return [];
+
+        $ast = $result->ast;
+        if ($ast === null) {
+            // The cache's strict parse failed -- typical when the user is
+            // mid-edit and the trailing characters aren't valid PHP yet
+            // (e.g. cursor on `$us` with no statement terminator).  Retry
+            // with an error-collecting handler so we get a best-effort AST
+            // of everything BEFORE the broken region -- enough to surface
+            // variables the user already declared above.
+            $ast = $this->tolerantParse($item->text);
+            self::trace(sprintf(
+                'variable completion: cache miss; tolerant-parse %s',
+                $ast === null ? 'returned null too' : sprintf('recovered %d top-level stmts', count($ast)),
+            ));
+            if ($ast === null) {
+                return [];
+            }
         }
 
         $collector = new class extends NodeVisitorAbstract {
@@ -313,7 +338,7 @@ final class PhpCompletionResolver
 
         $traverser = new NodeTraverser();
         $traverser->addVisitor($collector);
-        $traverser->traverse($result->ast);
+        $traverser->traverse($ast);
 
         $items = [];
         foreach (array_keys($collector->names) as $name) {
@@ -460,6 +485,29 @@ final class PhpCompletionResolver
         }
         return stripos($candidate, $prefix) === 0;
     }
+
+    /**
+     * Best-effort parse of xphp-stripped source through nikic with error
+     * recovery so variable completion can still succeed when the user is
+     * mid-edit and the buffer isn't syntactically valid PHP yet.
+     *
+     * @return list<Node\Stmt>|null
+     */
+    private function tolerantParse(string $source): ?array
+    {
+        if (self::$tolerantParser === null) {
+            self::$tolerantParser = (new ParserFactory())->createForHostVersion();
+        }
+        $stripped = $this->parser->strip($source);
+        try {
+            $ast = self::$tolerantParser->parse($stripped, new CollectingErrorHandler());
+        } catch (Throwable) {
+            return null;
+        }
+        return $ast;
+    }
+
+    private static ?Parser $tolerantParser = null;
 
     /**
      * Write a tagged diagnostic line to stderr.  PhpStorm captures the LSP

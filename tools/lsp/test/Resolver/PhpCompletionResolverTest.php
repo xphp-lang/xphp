@@ -305,6 +305,67 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('__construct', $labels);
     }
 
+    public function testCompletesMembersOnNullableReceiverType(): void
+    {
+        // worse-reflection surfaces a nullable return type like
+        //     function getMaybeUser(): ?User
+        // as the receiver type `?App\Models\User` for `getMaybeUser()?->|`
+        // chained access.  Without stripping the `?`, reflectClassLike
+        // treats it as part of the FQN and throws SourceNotFound -- the
+        // exact shape captured in xphp-20260524-202152-019.log.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class User {
+            public string $name = '';
+            public function shout(): string { return ''; }
+        }
+        XPHP);
+        $this->open($workspace, '/Repo.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Repo {
+            public function getMaybeUser(): ?User { return null; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Repo;\n\$r = new Repo();\n\$r->getMaybeUser()?->\necho 'x';\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt(
+            $workspace,
+            '/Use.xphp',
+            $useSource,
+            '?->',
+            strlen('?->'),
+        );
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('shout', $labels);
+        self::assertContains('name', $labels);
+    }
+
+    public function testCompletesVariablesWhenSourceMidEditDoesNotParseStrictly(): void
+    {
+        // The user types `$us` with cursor on the `s` -- nikic refuses the
+        // document because `$us` isn't a complete statement.  Before the
+        // fix the resolver returned [] outright; now we fall back to a
+        // tolerant parse so variables declared on PRIOR lines still
+        // surface.  This is the exact shape captured in
+        // xphp-20260524-202152-019.log at line 13 char 2-3.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$users = [];\n\$usage = 1;\n\$other = 2;\n\$us";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, '$us', strlen('$us'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$users', $labels, 'prior `$users = []` must surface');
+        self::assertContains('$usage', $labels, 'prior `$usage = 1` must surface');
+        // `other` doesn't prefix-match `us`.
+        self::assertNotContains('$other', $labels);
+    }
+
     public function testExpressionPositionEmptyPrefixReturnsEmpty(): void
     {
         // Same guard as `new` -- no completion without a prefix at
