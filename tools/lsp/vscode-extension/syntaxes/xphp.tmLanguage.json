@@ -15,9 +15,9 @@
     "xphp-extras": {
       "patterns": [
         {
-          "comment": "Generic argument clause after a class-like name: `Box<...>`. Highlights the angle brackets as operators so they stand out from the bundled PHP grammar that would otherwise miss them.",
+          "comment": "Generic argument clause after a class-like name: `Box<...>`. Highlights the angle brackets as operators so they stand out from the bundled PHP grammar that would otherwise miss them. The look-behind is intentionally single-character (fixed-length) because IntelliJ's TextMate plugin uses Joni, which rejects variable-length look-behinds (a `*`-quantified character class fails to compile, the whole rule is skipped, and generic-clause highlighting silently doesn't fire). VS Code's Oniguruma accepts both forms; a single-char identifier-class match here is enough to distinguish `Box<` from a comparison ` < `.",
           "name": "meta.generic.xphp",
-          "begin": "(?<=[A-Za-z_\\\\][A-Za-z0-9_\\\\]*)\\s*(<)(?=[A-Za-z_\\\\\\s])",
+          "begin": "(?<=[A-Za-z0-9_\\\\])\\s*(<)(?=[A-Za-z_\\\\\\s])",
           "end": "(>)",
           "beginCaptures": {
             "1": { "name": "punctuation.definition.generic.begin.xphp" }
