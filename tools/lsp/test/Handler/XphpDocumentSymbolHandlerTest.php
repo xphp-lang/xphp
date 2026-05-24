@@ -177,6 +177,31 @@ final class XphpDocumentSymbolHandlerTest extends TestCase
         self::assertSame('documentSymbol', $methods['textDocument/documentSymbol']);
     }
 
+    public function testTBracketPropertyEmitsOriginalSourcePositions(): void
+    {
+        // Regression for the prod trace from xphp-20260525-003910-606.log:
+        // properties declared with `T[]` sugar reported selectionRanges
+        // shifted by +2 columns because the parser rewrites `T[]` (3 bytes)
+        // to `array` (5 bytes).  The handler must back-translate AST
+        // offsets through the ByteOffsetMap before constructing Ranges.
+        $source = "<?php\nnamespace App;\nclass Repo<T>\n{\n    private T[] \$items = [];\n}\n";
+        $symbols = $this->collect($source);
+
+        self::assertCount(1, $symbols);
+        $children = $symbols[0]->children ?? [];
+        self::assertCount(1, $children);
+        $prop = $children[0];
+        self::assertSame('$items', $prop->name);
+
+        // The original source's line 4 (0-indexed) is:
+        //   "    private T[] $items = [];"
+        // `$items` starts at column 16, `items` (the name) starts at column 17.
+        // Without the offset map the handler would emit column 18 (the byte
+        // position in the stripped source where `array $items` ends at 18).
+        self::assertSame(4, $prop->selectionRange->start->line);
+        self::assertSame(16, $prop->selectionRange->start->character);
+    }
+
     public function testSelectionRangeTargetsNameNotEntireClass(): void
     {
         // The outline panel scrolls/highlights based on selectionRange; if we

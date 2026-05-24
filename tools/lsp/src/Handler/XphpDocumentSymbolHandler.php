@@ -30,6 +30,7 @@ use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\SymbolKind;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
+use XPHP\Transpiler\Monomorphize\ByteOffsetMap;
 
 /**
  * `textDocument/documentSymbol` handler.
@@ -87,9 +88,10 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
         }
 
         $positionMap = new PositionMap($item->text);
+        $byteOffsetMap = $result->byteOffsetMap;
         $symbols = [];
         foreach ($result->ast as $stmt) {
-            self::collectTopLevel($stmt, $positionMap, $symbols);
+            self::collectTopLevel($stmt, $positionMap, $byteOffsetMap, $symbols);
         }
         return new Success($symbols);
     }
@@ -97,30 +99,30 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
     /**
      * @param list<DocumentSymbol> $out
      */
-    private static function collectTopLevel(Node $stmt, PositionMap $map, array &$out): void
+    private static function collectTopLevel(Node $stmt, PositionMap $map, ByteOffsetMap $offsets, array &$out): void
     {
         if ($stmt instanceof Namespace_) {
             foreach ($stmt->stmts as $child) {
-                self::collectTopLevel($child, $map, $out);
+                self::collectTopLevel($child, $map, $offsets, $out);
             }
             return;
         }
         if ($stmt instanceof ClassLike) {
-            $sym = self::classLikeSymbol($stmt, $map);
+            $sym = self::classLikeSymbol($stmt, $map, $offsets);
             if ($sym !== null) {
                 $out[] = $sym;
             }
             return;
         }
         if ($stmt instanceof Function_) {
-            $sym = self::functionSymbol($stmt, $map);
+            $sym = self::functionSymbol($stmt, $map, $offsets);
             if ($sym !== null) {
                 $out[] = $sym;
             }
         }
     }
 
-    private static function classLikeSymbol(ClassLike $node, PositionMap $map): ?DocumentSymbol
+    private static function classLikeSymbol(ClassLike $node, PositionMap $map, ByteOffsetMap $offsets): ?DocumentSymbol
     {
         if ($node->name === null) {
             // Anonymous classes have no entry point in the outline.
@@ -129,26 +131,26 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
         $children = [];
         foreach ($node->stmts as $member) {
             if ($member instanceof ClassMethod) {
-                $sym = self::methodSymbol($member, $map);
+                $sym = self::methodSymbol($member, $map, $offsets);
                 if ($sym !== null) {
                     $children[] = $sym;
                 }
                 continue;
             }
             if ($member instanceof Property) {
-                foreach (self::propertySymbols($member, $map) as $sym) {
+                foreach (self::propertySymbols($member, $map, $offsets) as $sym) {
                     $children[] = $sym;
                 }
                 continue;
             }
             if ($member instanceof ClassConst) {
-                foreach (self::classConstSymbols($member, $map) as $sym) {
+                foreach (self::classConstSymbols($member, $map, $offsets) as $sym) {
                     $children[] = $sym;
                 }
                 continue;
             }
             if ($member instanceof EnumCase) {
-                $sym = self::enumCaseSymbol($member, $map);
+                $sym = self::enumCaseSymbol($member, $map, $offsets);
                 if ($sym !== null) {
                     $children[] = $sym;
                 }
@@ -158,8 +160,8 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
         return new DocumentSymbol(
             name: $node->name->toString(),
             kind: self::classLikeKind($node),
-            range: self::rangeOf($node, $map),
-            selectionRange: self::rangeOf($node->name, $map),
+            range: self::rangeOf($node, $map, $offsets),
+            selectionRange: self::rangeOf($node->name, $map, $offsets),
             children: $children,
         );
     }
@@ -185,17 +187,17 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
         return SymbolKind::CLASS_;
     }
 
-    private static function functionSymbol(Function_ $node, PositionMap $map): ?DocumentSymbol
+    private static function functionSymbol(Function_ $node, PositionMap $map, ByteOffsetMap $offsets): ?DocumentSymbol
     {
         return new DocumentSymbol(
             name: $node->name->toString(),
             kind: SymbolKind::FUNCTION,
-            range: self::rangeOf($node, $map),
-            selectionRange: self::rangeOf($node->name, $map),
+            range: self::rangeOf($node, $map, $offsets),
+            selectionRange: self::rangeOf($node->name, $map, $offsets),
         );
     }
 
-    private static function methodSymbol(ClassMethod $node, PositionMap $map): ?DocumentSymbol
+    private static function methodSymbol(ClassMethod $node, PositionMap $map, ByteOffsetMap $offsets): ?DocumentSymbol
     {
         $name = $node->name->toString();
         $kind = strcasecmp($name, '__construct') === 0
@@ -204,23 +206,23 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
         return new DocumentSymbol(
             name: $name,
             kind: $kind,
-            range: self::rangeOf($node, $map),
-            selectionRange: self::rangeOf($node->name, $map),
+            range: self::rangeOf($node, $map, $offsets),
+            selectionRange: self::rangeOf($node->name, $map, $offsets),
         );
     }
 
     /**
      * @return list<DocumentSymbol>
      */
-    private static function propertySymbols(Property $node, PositionMap $map): array
+    private static function propertySymbols(Property $node, PositionMap $map, ByteOffsetMap $offsets): array
     {
         $out = [];
         foreach ($node->props as $prop) {
             $out[] = new DocumentSymbol(
                 name: '$' . $prop->name->toString(),
                 kind: SymbolKind::PROPERTY,
-                range: self::rangeOf($prop, $map),
-                selectionRange: self::rangeOf($prop->name, $map),
+                range: self::rangeOf($prop, $map, $offsets),
+                selectionRange: self::rangeOf($prop->name, $map, $offsets),
             );
         }
         return $out;
@@ -229,34 +231,38 @@ final class XphpDocumentSymbolHandler implements Handler, CanRegisterCapabilitie
     /**
      * @return list<DocumentSymbol>
      */
-    private static function classConstSymbols(ClassConst $node, PositionMap $map): array
+    private static function classConstSymbols(ClassConst $node, PositionMap $map, ByteOffsetMap $offsets): array
     {
         $out = [];
         foreach ($node->consts as $const) {
             $out[] = new DocumentSymbol(
                 name: $const->name->toString(),
                 kind: SymbolKind::CONSTANT,
-                range: self::rangeOf($const, $map),
-                selectionRange: self::rangeOf($const->name, $map),
+                range: self::rangeOf($const, $map, $offsets),
+                selectionRange: self::rangeOf($const->name, $map, $offsets),
             );
         }
         return $out;
     }
 
-    private static function enumCaseSymbol(EnumCase $node, PositionMap $map): ?DocumentSymbol
+    private static function enumCaseSymbol(EnumCase $node, PositionMap $map, ByteOffsetMap $offsets): ?DocumentSymbol
     {
         return new DocumentSymbol(
             name: $node->name->toString(),
             kind: SymbolKind::ENUM_MEMBER,
-            range: self::rangeOf($node, $map),
-            selectionRange: self::rangeOf($node->name, $map),
+            range: self::rangeOf($node, $map, $offsets),
+            selectionRange: self::rangeOf($node->name, $map, $offsets),
         );
     }
 
-    private static function rangeOf(Node|Identifier $node, PositionMap $map): Range
+    private static function rangeOf(Node|Identifier $node, PositionMap $map, ByteOffsetMap $offsets): Range
     {
-        $start = $node->getStartFilePos();
-        $end = $node->getEndFilePos() + 1;
+        // AST offsets index into the stripped source (post `T[] -> array`
+        // rewrite).  Translate back to the original-source byte offsets
+        // before mapping to line/character -- otherwise the LSP client
+        // scrolls to the wrong place in any file using T[] sugar.
+        $start = $offsets->toOriginal($node->getStartFilePos());
+        $end = $offsets->toOriginal($node->getEndFilePos() + 1);
         if ($start < 0) {
             $start = 0;
         }

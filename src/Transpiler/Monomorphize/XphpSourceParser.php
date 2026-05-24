@@ -70,7 +70,23 @@ final class XphpSourceParser
      */
     public function parse(string $source): array
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource] = $this->scanAndStrip($source);
+        return $this->parseWithMap($source)[0];
+    }
+
+    /**
+     * Same as `parse()` but also returns the byte-offset map -- used by LSP
+     * handlers that emit positions back to the client and need to translate
+     * AST offsets (which are positioned in the stripped source) into the
+     * original source's byte offsets.
+     *
+     * Returns the identity map when no length-changing replacements fired
+     * (the common case for files without `T[]` array-suffix sugar).
+     *
+     * @return array{0: list<Node\Stmt>, 1: ByteOffsetMap}
+     */
+    public function parseWithMap(string $source): array
+    {
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
 
         $ast = $this->parser->parse($cleanedSource);
         if ($ast === null) {
@@ -79,7 +95,7 @@ final class XphpSourceParser
 
         $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
-        return $ast;
+        return [$ast, $byteOffsetMap];
     }
 
     /**
@@ -98,7 +114,16 @@ final class XphpSourceParser
      */
     public function parseTolerant(string $source): ?array
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource] = $this->scanAndStrip($source);
+        return $this->parseTolerantWithMap($source)?->ast;
+    }
+
+    /**
+     * Same as `parseTolerant()` but also returns the byte-offset map.
+     * Returns null only when the parser couldn't produce any AST at all.
+     */
+    public function parseTolerantWithMap(string $source): ?ParseWithMapResult
+    {
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
 
         $errorHandler = new \PhpParser\ErrorHandler\Collecting();
         $ast = $this->parser->parse($cleanedSource, $errorHandler);
@@ -108,7 +133,7 @@ final class XphpSourceParser
 
         $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
-        return $ast;
+        return new ParseWithMapResult($ast, $byteOffsetMap);
     }
 
     /**
@@ -131,7 +156,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string}
+     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string, 4: ByteOffsetMap}
      */
     private function scanAndStrip(string $source): array
     {
@@ -256,8 +281,9 @@ final class XphpSourceParser
         }
 
         $cleaned = self::applyReplacements($source, $replacements);
+        $byteOffsetMap = ByteOffsetMap::fromReplacements($replacements);
 
-        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap];
     }
 
     /**
