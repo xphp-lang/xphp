@@ -6,6 +6,7 @@ namespace XPHP\Lsp\Handler;
 
 use PhpParser\Node;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
@@ -46,6 +47,27 @@ final readonly class WorkspaceSymbols
                 continue;
             }
             foreach (self::collectFqns($result->ast) as $fqn) {
+                $fqns[$fqn] = true;
+            }
+        }
+        return array_keys($fqns);
+    }
+
+    /**
+     * @return list<string>  Fully-qualified top-level function names across
+     *                       the open workspace.  Methods and closures don't
+     *                       appear here -- only `function name() {...}`
+     *                       declarations at namespace level.
+     */
+    public function allFunctionFqns(): array
+    {
+        $fqns = [];
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            foreach (self::collectFunctionFqns($result->ast) as $fqn) {
                 $fqns[$fqn] = true;
             }
         }
@@ -115,6 +137,42 @@ final readonly class WorkspaceSymbols
                     $this->currentNamespace = $node->name?->toString() ?? '';
                 }
                 if ($node instanceof ClassLike && $node->name !== null) {
+                    $short = $node->name->toString();
+                    $this->fqns[] = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $short
+                        : $short;
+                }
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->fqns;
+    }
+
+    /**
+     * @param list<Node\Stmt> $ast
+     * @return list<string>
+     */
+    private static function collectFunctionFqns(array $ast): array
+    {
+        $visitor = new class extends NodeVisitorAbstract {
+            /** @var list<string> */
+            public array $fqns = [];
+
+            private string $currentNamespace = '';
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                // Only top-level Function_ nodes count; methods and closures
+                // aren't surfaced as "functions" in completion candidates.
+                if ($node instanceof Function_) {
                     $short = $node->name->toString();
                     $this->fqns[] = $this->currentNamespace !== ''
                         ? $this->currentNamespace . '\\' . $short

@@ -155,6 +155,124 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertSame([], $resolver->complete('/never-opened.xphp', 0, 0));
     }
 
+    public function testCompletesVariablesInScopeAfterDollar(): void
+    {
+        // Use an already-syntactically-valid completion site (inside an `if`
+        // condition) so the source parses cleanly -- a cursor in the middle
+        // of an unterminated `echo $re` would have nikic refuse the document
+        // and our resolver fall back to empty.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$repo = 1;\n\$report = 2;\nforeach (\$items as \$item) {}\nif (\$re) {}\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'if ($re', strlen('if ($re'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$repo', $labels);
+        self::assertContains('$report', $labels);
+        // `re` doesn't prefix-match `items` or `item`, so they're excluded.
+        self::assertNotContains('$items', $labels);
+        self::assertNotContains('$item', $labels);
+    }
+
+    public function testCompletesVariablesAfterBareDollarSign(): void
+    {
+        // Cursor immediately after `$` -- we seek inside an existing
+        // `$alpha` reference so the source still parses.  The detector
+        // sees prefix="" and char-before-prefix="$" -> variable context.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$alpha = 1;\n\$beta = 2;\necho \$alpha;\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'echo $', strlen('echo $'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$alpha', $labels);
+        self::assertContains('$beta', $labels);
+    }
+
+    public function testCompletesUserClassesInExpressionPosition(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // Short-name match `User` against prefix `Use`.
+        self::assertContains('User', $labels);
+
+        // After `new`, only classes -- no functions.
+        $kinds = array_map(static fn (CompletionItem $i): int => $i->kind ?? -1, $items);
+        self::assertNotContains(\Phpactor\LanguageServerProtocol\CompletionItemKind::FUNCTION, $kinds);
+    }
+
+    public function testNewWithEmptyPrefixReturnsEmpty(): void
+    {
+        // Empty prefix in `new ` would otherwise dump every class FQN in
+        // the workspace + stubs into the popup.  Resolver guards against
+        // it; user has to type at least one char.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App;\nclass User {}\n");
+        $useSource = "<?php\n\$x = new ";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new ', strlen('new '));
+        self::assertSame([], $items);
+    }
+
+    public function testCompletesWorkspaceFunctionsByPrefix(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/funcs.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        function greet(string $n): string { return $n; }
+        function gravity(): float { return 9.8; }
+        function unrelated(): void {}
+        XPHP);
+        $useSource = "<?php\nuse function App\\greet;\necho gr";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'echo gr', strlen('echo gr'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('greet', $labels);
+        self::assertContains('gravity', $labels);
+        self::assertNotContains('unrelated', $labels);
+    }
+
+    public function testCompletesNativeFunctionsFromStubsByPrefix(): void
+    {
+        if (!is_dir(ReflectorFactory::defaultStubPath())) {
+            self::markTestSkipped('jetbrains/phpstorm-stubs not installed');
+        }
+        $workspace = $this->workspace();
+        $source = "<?php\necho strl";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'echo strl', strlen('echo strl'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // `strl` prefix matches `strlen` (and possibly nothing else in stubs).
+        self::assertContains('strlen', $labels);
+    }
+
+    public function testExpressionPositionEmptyPrefixReturnsEmpty(): void
+    {
+        // Same guard as `new` -- no completion without a prefix at
+        // expression position; the alternative is dumping ~6000 stub
+        // FQNs on the user.
+        $workspace = $this->workspace();
+        $source = "<?php\necho ";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'echo ', strlen('echo '));
+        self::assertSame([], $items);
+    }
+
     private function completeAt(
         PhpactorWorkspace $workspace,
         string $uri,
@@ -173,6 +291,11 @@ final class PhpCompletionResolverTest extends TestCase
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $workspaceSymbols = new \XPHP\Lsp\Handler\WorkspaceSymbols($workspace, $cache);
+        $completionIndex = new \XPHP\Lsp\Resolver\CompletionIndex(
+            $workspaceSymbols,
+            ReflectorFactory::defaultStubPath(),
+        );
         $reflector = (new ReflectorFactory(
             $workspace,
             $cache,
@@ -181,7 +304,7 @@ final class PhpCompletionResolverTest extends TestCase
             stubPath: ReflectorFactory::defaultStubPath(),
             cacheDir: ReflectorFactory::defaultCacheDir(),
         ))->build();
-        return new PhpCompletionResolver($workspace, $parser, $reflector);
+        return new PhpCompletionResolver($workspace, $parser, $reflector, $completionIndex, $cache);
     }
 
     private function workspace(): PhpactorWorkspace

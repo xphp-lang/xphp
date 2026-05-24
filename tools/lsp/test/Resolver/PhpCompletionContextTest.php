@@ -78,4 +78,85 @@ final class PhpCompletionContextTest extends TestCase
         $source = '$arr =>';
         self::assertNull(PhpCompletionContext::detect($source, strlen($source)));
     }
+
+    public function testDetectsVariableContextAfterDollar(): void
+    {
+        // Cursor right after `$repo` -- variable completion candidate
+        // shape (`$re|`, `$repo|`).
+        $source = '$repo';
+        self::assertSame(
+            ['kind' => 'variable', 'prefix' => 'repo'],
+            PhpCompletionContext::detect($source, strlen($source)),
+        );
+    }
+
+    public function testDetectsVariableContextWithEmptyPrefixRightAfterDollar(): void
+    {
+        // Cursor immediately after `$` (no identifier chars yet) -- still
+        // variable context, empty prefix.
+        $source = 'echo $';
+        self::assertSame(
+            ['kind' => 'variable', 'prefix' => ''],
+            PhpCompletionContext::detect($source, strlen($source)),
+        );
+    }
+
+    public function testDetectsNewKeywordContext(): void
+    {
+        // After `new ` -- class-only completion.
+        $source = '$x = new Us';
+        self::assertSame(
+            ['kind' => 'new', 'prefix' => 'Us'],
+            PhpCompletionContext::detect($source, strlen($source)),
+        );
+    }
+
+    public function testDetectsNewWithMultipleSpaces(): void
+    {
+        // Whitespace after `new` is collapsed -- still recognised as a
+        // `new` keyword context (PHP grammar allows arbitrary whitespace
+        // between `new` and the class name).
+        $source = "\$x = new\n    Us";
+        $hit = PhpCompletionContext::detect($source, strlen($source));
+        self::assertSame('new', $hit['kind'] ?? null);
+        self::assertSame('Us', $hit['prefix'] ?? null);
+    }
+
+    public function testNewKeywordEmbeddedInIdentifierIsNotMatched(): void
+    {
+        // `mynew Foo` -- the `new` is part of the prior identifier, not
+        // the keyword.  Must classify as `expression`, not `new`.
+        $source = 'mynew Fo';
+        $hit = PhpCompletionContext::detect($source, strlen($source));
+        self::assertSame('expression', $hit['kind'] ?? null);
+        self::assertSame('Fo', $hit['prefix'] ?? null);
+    }
+
+    public function testDetectsExpressionContextForBareIdentifier(): void
+    {
+        // Cursor on a bare identifier with no preceding operator -- could
+        // be a function or class reference (both are suggested at this
+        // shape).
+        $source = 'echo str';
+        self::assertSame(
+            ['kind' => 'expression', 'prefix' => 'str'],
+            PhpCompletionContext::detect($source, strlen($source)),
+        );
+    }
+
+    public function testNumberLiteralIsNotAnIdentifier(): void
+    {
+        // PHP identifiers can't start with a digit; `$x = 1;` with cursor
+        // mid-number-literal mustn't classify as `expression` with
+        // prefix `1`.  Returns null so no completion fires.
+        $source = '$x = 1';
+        self::assertNull(PhpCompletionContext::detect($source, strlen($source)));
+    }
+
+    public function testRejectsCursorAfterSemicolon(): void
+    {
+        // Just after `;` and a newline -- no identifier prefix; null.
+        $source = "\$x = 1;\n";
+        self::assertNull(PhpCompletionContext::detect($source, strlen($source)));
+    }
 }

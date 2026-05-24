@@ -48,6 +48,7 @@ use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
+use XPHP\Lsp\Resolver\CompletionIndex;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
 use XPHP\Lsp\Resolver\PhpDefinitionResolver;
 use XPHP\Lsp\Resolver\PhpHoverResolver;
@@ -108,7 +109,6 @@ final class LspDispatcherFactory implements DispatcherFactory
         ))->build();
         $phpDefinitionResolver = new PhpDefinitionResolver($workspace, $xphpParser, $reflector, $cache);
         $phpHoverResolver = new PhpHoverResolver($workspace, $xphpParser, $reflector);
-        $phpCompletionResolver = new PhpCompletionResolver($workspace, $xphpParser, $reflector);
 
         $diagnosticsProvider = new XphpDiagnosticsProvider(
             $cache,
@@ -141,6 +141,19 @@ final class LspDispatcherFactory implements DispatcherFactory
         // (completion + definition).  Both call the same in-memory AST cache,
         // so reusing the helper avoids constructing parallel collectors.
         $workspaceSymbols = new WorkspaceSymbols($workspace, $cache);
+
+        // CompletionIndex unifies workspace + stubs FQNs.  Stubs are loaded
+        // from the same path we already extracted to in `ReflectorFactory`,
+        // so the index's stubs portion is a one-time JSON read on first use
+        // (built on demand if missing).
+        $completionIndex = new CompletionIndex($workspaceSymbols, ReflectorFactory::defaultStubPath());
+        $phpCompletionResolver = new PhpCompletionResolver(
+            $workspace,
+            $xphpParser,
+            $reflector,
+            $completionIndex,
+            $cache,
+        );
 
         $handlers = new Handlers(
             new TextDocumentHandler($eventDispatcher),

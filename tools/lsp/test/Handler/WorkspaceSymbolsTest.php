@@ -15,6 +15,27 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 final class WorkspaceSymbolsTest extends TestCase
 {
+    public function testCollectsFunctionFqnsAcrossOpenDocuments(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/funcs.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        function greet(string $n): string { return $n; }
+        function farewell(): void {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/util.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        function global_fn() {}
+        XPHP));
+
+        $fqns = $this->newSymbols($workspace)->allFunctionFqns();
+
+        self::assertContains('App\\greet', $fqns);
+        self::assertContains('App\\farewell', $fqns);
+        self::assertContains('global_fn', $fqns);
+    }
+
     public function testCollectsClassFqnsAcrossOpenDocuments(): void
     {
         $workspace = new PhpactorWorkspace();
