@@ -6,8 +6,12 @@ namespace XPHP\Lsp\Reflection;
 
 use PhpParser\Node;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\Interface_;
 use PhpParser\Node\Stmt\Namespace_;
+use PhpParser\Node\Stmt\Trait_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
@@ -60,6 +64,16 @@ final class FqnIndex
      * @var array<string, string>|null  FQN -> "class" or "function" kind for the filesystem entries.
      */
     private ?array $filesystemKinds = null;
+
+    /**
+     * @var array<string, array{kind: string, line: int, char: int}>|null
+     *   FQN -> declaration metadata for the filesystem entries.  Carries the
+     *   finer ClassLike kind (interface/trait/enum/class) + the identifier
+     *   token's (line, char) so `allDeclarations()` can build a Location
+     *   without re-parsing.  Open-doc declarations are walked on demand and
+     *   not stored here.
+     */
+    private ?array $filesystemSymbols = null;
 
     /**
      * @var array<string, list<string>>|null  FQN -> ordered list of generic-param names; null until first build.
@@ -208,6 +222,65 @@ final class FqnIndex
             }
             $seen[$fqn] = true;
             yield $fqn => $paramNames;
+        }
+    }
+
+    /**
+     * Yield every declaration the index knows about, from both open docs and
+     * the filesystem.  Used by `workspace/symbol` to filter and emit
+     * SymbolInformation across the workspace without each handler doing its
+     * own walk.
+     *
+     * Each entry carries:
+     *   - `fqn`     full backslash-qualified name (no leading `\`)
+     *   - `kind`    "class" | "interface" | "trait" | "enum" | "function"
+     *   - `uri`     file URI (open docs return the workspace URI;
+     *               filesystem-only files return `file://` + absolute path)
+     *   - `line`    LSP-coords line (0-based) of the identifier token
+     *   - `char`    LSP-coords character offset of the identifier token
+     *
+     * Open-doc URIs win over filesystem paths when the same FQN is declared
+     * in both -- the editor view always reflects unsaved edits.
+     *
+     * @return iterable<array{fqn: string, kind: string, uri: string, line: int, char: int}>
+     */
+    public function allDeclarations(): iterable
+    {
+        $seen = [];
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            $offsets = $result->byteOffsetMap;
+            foreach (self::collectSymbolHits($result->ast) as $hit) {
+                if (isset($seen[$hit['fqn']])) {
+                    continue;
+                }
+                $seen[$hit['fqn']] = true;
+                $origByte = $offsets->toOriginal($hit['startByte']);
+                [$line, $char] = self::byteToLineChar($item->text, $origByte);
+                yield [
+                    'fqn' => $hit['fqn'],
+                    'kind' => $hit['kind'],
+                    'uri' => (string) $uri,
+                    'line' => $line,
+                    'char' => $char,
+                ];
+            }
+        }
+        foreach ($this->filesystemSymbols() as $fqn => $meta) {
+            if (isset($seen[$fqn])) {
+                continue;
+            }
+            $seen[$fqn] = true;
+            yield [
+                'fqn' => $fqn,
+                'kind' => $meta['kind'],
+                'uri' => 'file://' . ($this->filesystemMap()[$fqn] ?? ''),
+                'line' => $meta['line'],
+                'char' => $meta['char'],
+            ];
         }
     }
 
@@ -412,11 +485,23 @@ final class FqnIndex
         return $this->filesystemGenericParams ?? [];
     }
 
+    /**
+     * @return array<string, array{kind: string, line: int, char: int}>
+     */
+    private function filesystemSymbols(): array
+    {
+        if ($this->filesystemSymbols === null) {
+            $this->buildFilesystemIndex();
+        }
+        return $this->filesystemSymbols ?? [];
+    }
+
     private function buildFilesystemIndex(): void
     {
         $map = [];
         $kinds = [];
         $genericParams = [];
+        $symbols = [];
         if (!is_dir($this->rootPath)) {
             @fwrite(STDERR, sprintf(
                 "[xphp-lsp fqn-index] rootPath %s not a directory; filesystem index empty\n",
@@ -425,6 +510,7 @@ final class FqnIndex
             $this->filesystemMap = $map;
             $this->filesystemKinds = $kinds;
             $this->filesystemGenericParams = $genericParams;
+            $this->filesystemSymbols = $symbols;
             return;
         }
 
@@ -443,13 +529,15 @@ final class FqnIndex
             }
 
             try {
-                $ast = $this->parser->parseTolerant($source);
+                $parsed = $this->parser->parseTolerantWithMap($source);
             } catch (Throwable) {
                 continue;
             }
-            if ($ast === null) {
+            if ($parsed === null) {
                 continue;
             }
+            $ast = $parsed->ast;
+            $offsets = $parsed->byteOffsetMap;
 
             foreach (self::collectDeclarations($ast) as $fqn => $kind) {
                 $map[$fqn] = $file->getPathname();
@@ -457,6 +545,15 @@ final class FqnIndex
             }
             foreach (self::collectGenericClasses($ast) as $fqn => $paramNames) {
                 $genericParams[$fqn] = $paramNames;
+            }
+            foreach (self::collectSymbolHits($ast) as $hit) {
+                $origByte = $offsets->toOriginal($hit['startByte']);
+                [$line, $char] = self::byteToLineChar($source, $origByte);
+                $symbols[$hit['fqn']] = [
+                    'kind' => $hit['kind'],
+                    'line' => $line,
+                    'char' => $char,
+                ];
             }
         }
 
@@ -471,6 +568,7 @@ final class FqnIndex
         $this->filesystemMap = $map;
         $this->filesystemKinds = $kinds;
         $this->filesystemGenericParams = $genericParams;
+        $this->filesystemSymbols = $symbols;
     }
 
     private function classLikeFromFile(string $path, string $needle): ?ClassLike
@@ -557,6 +655,96 @@ final class FqnIndex
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
         return $visitor->fqns;
+    }
+
+    /**
+     * Walk an AST collecting one entry per ClassLike / Function_ declaration
+     * with the finer ClassLike kind preserved (interface / trait / enum /
+     * class) and the identifier token's start byte (stripped-source coords --
+     * caller back-translates through the byte-offset map before mapping to
+     * line/character).
+     *
+     * Used by `allDeclarations()` to power workspace/symbol search; the
+     * coarser `collectDeclarations()` path is kept for the existing FQN-only
+     * consumers.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return list<array{fqn: string, kind: string, startByte: int}>
+     */
+    private static function collectSymbolHits(array $ast): array
+    {
+        $visitor = new class extends NodeVisitorAbstract {
+            /** @var list<array{fqn: string, kind: string, startByte: int}> */
+            public array $hits = [];
+
+            private string $currentNamespace = '';
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                $short = null;
+                $kind = null;
+                $startByte = null;
+                if ($node instanceof ClassLike && $node->name !== null) {
+                    $short = $node->name->toString();
+                    $kind = match (true) {
+                        $node instanceof Interface_ => 'interface',
+                        $node instanceof Trait_ => 'trait',
+                        $node instanceof Enum_ => 'enum',
+                        default => 'class',
+                    };
+                    $startByte = $node->name->getStartFilePos();
+                } elseif ($node instanceof Function_) {
+                    $short = $node->name->toString();
+                    $kind = 'function';
+                    $startByte = $node->name->getStartFilePos();
+                }
+                if ($short !== null && $startByte !== null && $startByte >= 0) {
+                    $fqn = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $short
+                        : $short;
+                    $this->hits[] = [
+                        'fqn' => $fqn,
+                        'kind' => $kind,
+                        'startByte' => $startByte,
+                    ];
+                }
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->hits;
+    }
+
+    /**
+     * Map a byte offset within `$source` to (line, character) in LSP
+     * 0-based coordinates.  Simple O(byteOffset) scan -- we only call this
+     * for the small set of declaration identifiers, so a full PositionMap
+     * (which precomputes line starts up front) would be overkill.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private static function byteToLineChar(string $source, int $byteOffset): array
+    {
+        if ($byteOffset <= 0) {
+            return [0, 0];
+        }
+        $clamped = min($byteOffset, strlen($source));
+        $line = 0;
+        $lineStart = 0;
+        for ($i = 0; $i < $clamped; $i++) {
+            if ($source[$i] === "\n") {
+                $line++;
+                $lineStart = $i + 1;
+            }
+        }
+        return [$line, $clamped - $lineStart];
     }
 
     /**

@@ -53,6 +53,22 @@ final class LspDispatcherFactoryTest extends TestCase
         self::assertSame('xphp-lsp', $result->serverInfo['name'] ?? null);
     }
 
+    public function testWorkspaceSymbolProviderAdvertised(): void
+    {
+        // Phase 2.2 wires XphpWorkspaceSymbolHandler.  Without this
+        // capability PhpStorm's "Go to Symbol" popup stays empty when it
+        // queries the LSP for workspace-wide candidates.  Same bool-not-
+        // options-object trick as hover / documentSymbol.
+        $tester = $this->buildTester();
+
+        $result = $tester->initialize();
+
+        self::assertTrue(
+            $result->capabilities->workspaceSymbolProvider,
+            'workspaceSymbolProvider must be announced as bool true',
+        );
+    }
+
     public function testDocumentSymbolProviderAdvertised(): void
     {
         // Without this capability, clients won't issue
