@@ -105,13 +105,44 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('function strlen', $markdown);
     }
 
-    public function testReturnsNullOnVariableCursor(): void
+    public function testHoversVariableWithInferredScalarType(): void
     {
         $workspace = $this->workspace();
         $useSource = "<?php\n\$x = 1;\necho \$x;\n";
         $this->open($workspace, '/Use.xphp', $useSource);
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo $x', strlen('echo '));
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('int', $markdown);
+        self::assertStringContainsString('$x', $markdown);
+    }
+
+    public function testHoversVariableWithInferredClassType(): void
+    {
+        // The exact gap noted in xphp-20260524-204801-302.log id=11:
+        // hover on `$users` showed null because we didn't dispatch
+        // Symbol::VARIABLE.  Now we render the inferred type.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App;\nclass User { public function __construct(public string \$name) {} }\n");
+        $useSource = "<?php\nuse App\\User;\n\$u = new User('a');\necho \$u;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo $u', strlen('echo '));
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('App\\User', $markdown);
+        self::assertStringContainsString('$u', $markdown);
+    }
+
+    public function testReturnsNullOnVariableWithNoInferableType(): void
+    {
+        // Undeclared variable referenced bare -- worse-reflection has
+        // nothing to infer, so we suppress the hover rather than show
+        // an empty tooltip.
+        $workspace = $this->workspace();
+        $useSource = "<?php\necho \$undeclared;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo $undeclared', strlen('echo '));
         self::assertNull($hover);
     }
 

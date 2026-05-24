@@ -94,6 +94,7 @@ final class PhpHoverResolver
                                     ? $this->renderProperty($c, $symbol->name())
                                     : null,
             Symbol::CONSTANT  => $this->renderConstant($context, $symbol->name()),
+            Symbol::VARIABLE  => self::renderVariable($context, $symbol->name()),
             default           => null,
         };
 
@@ -208,6 +209,29 @@ final class PhpHoverResolver
             return null;
         }
         return self::format(sprintf('const %s', (string) $constant->name()), '');
+    }
+
+    /**
+     * Render a variable hover as `Type $name`.  worse-reflection's
+     * `NodeContext::type()` carries the inferred type from prior
+     * assignments / params / closure-use captures in scope.  Returns
+     * null when no useful type was inferred (MissingType, references
+     * to never-declared vars) so the editor doesn't pop up an empty
+     * tooltip.
+     *
+     * Literal types get collapsed via `generalize()` so a hover on
+     * `$x = 1` shows `int $x` rather than `1 $x`.  Class types are
+     * left unchanged (their `generalize()` returns the same FQN).
+     */
+    private static function renderVariable(NodeContext $context, string $name): ?string
+    {
+        $type = (string) $context->type()->generalize();
+        if ($type === '' || $type === '<missing>') {
+            return null;
+        }
+        // No docblock for variables -- worse-reflection's NodeContext
+        // doesn't carry one for locals.  Type + name is the useful bit.
+        return self::format(sprintf('%s $%s', $type, $name), '');
     }
 
     private static function preferType(NodeContext $context, string $fallback): string
