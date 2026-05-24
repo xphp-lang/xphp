@@ -23,7 +23,7 @@ class InMemoryRepository<T> implements Repository<T>
         return $this->items[0] ?? null;
     }
 
-    public function items(): App\Containers\Collection<T>
+    public function items(): Collection<T>
     {
         return new Collection<T>($this->items);
     }
