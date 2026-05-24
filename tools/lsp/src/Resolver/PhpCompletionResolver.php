@@ -178,25 +178,24 @@ final class PhpCompletionResolver
         // members of `?User` are the same as the members of `User`.
         $lookupName = ltrim($typeName, '?');
 
-        // Monomorphization rescue: when the receiver is a variable bound
-        // by a `new Generic<...>(...)` upstream, worse-reflection sees
-        // only the post-strip placeholder (`?App\Containers\T`) and the
-        // lookup above would fail.  GenericResolver has tracked the
-        // type-arg binding and can hand back the substituted concrete
-        // class -- use that instead so the user gets `User`'s methods
-        // rather than an empty list.
-        if ($context->symbol()->symbolType() === 'variable') {
-            $varName = $context->symbol()->name();
-            $resolved = $this->genericResolver->resolveVariableTypeRef($uri, $varName, $receiverProbe);
-            if ($resolved !== null && $resolved->ref->name !== '' && $resolved->ref->name !== $lookupName) {
-                self::trace(sprintf(
-                    'receiver swap via GenericResolver: $%s %s -> %s',
-                    $varName,
-                    $lookupName,
-                    $resolved->ref->name,
-                ));
-                $lookupName = $resolved->ref->name;
-            }
+        // Monomorphization rescue: when the receiver is anything bound
+        // to a generic class (variable holding a `new Generic<...>(...)`,
+        // method call returning a generic-instantiated type, etc.),
+        // worse-reflection sees only the post-strip placeholder
+        // (`?App\Containers\T`) and the lookup above would fail.
+        // GenericResolver walks the receiver expression and hands back
+        // the substituted concrete class.  Covers BOTH the variable
+        // case (`$user->|`) and the chained-call case (`$x->y()?->|`).
+        $swapped = $this->genericResolver->resolveMemberAccessReceiverClassAt($uri, $receiverProbe);
+        if ($swapped !== null && $swapped !== $lookupName) {
+            self::trace(sprintf(
+                'receiver swap via GenericResolver: %s -> %s (kind=%s name=%s)',
+                $lookupName,
+                $swapped,
+                $context->symbol()->symbolType(),
+                $context->symbol()->name(),
+            ));
+            $lookupName = $swapped;
         }
 
         try {

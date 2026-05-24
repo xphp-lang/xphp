@@ -241,6 +241,125 @@ final class GenericResolver
     }
 
     /**
+     * Resolve the FQN of the class that should host a member-access
+     * completion at `$byteOffset`.  Generalises the existing
+     * `resolveVariableTypeRef` swap in `PhpCompletionResolver`: walks
+     * the AST for the innermost expression whose range covers the
+     * offset (Variable, MethodCall, StaticCall, FuncCall, New_, ...)
+     * and runs `inferType` on it.  Returns the substituted class FQN
+     * or null when no usable type can be inferred.
+     *
+     * This is the completion-side parallel of Phase 0.7's hover/GTD
+     * `resolvePropertyReceiverClassAt`: same semantic question -- "what
+     * class are we calling/accessing through?" -- different consumer
+     * (completion sees mid-edit incomplete source where the property
+     * name token doesn't exist yet, so we can't walk for `PropertyFetch`;
+     * we walk for the expression whose end is just before the access
+     * operator instead).
+     */
+    public function resolveMemberAccessReceiverClassAt(string $uri, int $byteOffset): ?string
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $scopes = $this->scopesFor($uri, $item->version, $item->text);
+        $bindings = self::bindingsAt($scopes, $byteOffset);
+
+        $result = $this->documents->getOrParse($uri, $item->version, $item->text);
+        $ast = $result->ast;
+        if ($ast === null) {
+            try {
+                $ast = $this->parser->parseTolerant($item->text);
+            } catch (\Throwable) {
+                $ast = null;
+            }
+            if ($ast === null) {
+                return null;
+            }
+        }
+
+        $expr = self::findInnermostExprCovering($ast, $byteOffset);
+        if ($expr === null) {
+            return null;
+        }
+        // Completion fires mid-edit, so the innermost expression at the
+        // receiverProbe offset may be an incomplete PropertyFetch /
+        // NullsafePropertyFetch / MethodCall whose name token is missing
+        // (the prefix the user is about to type).  In that case unwrap to
+        // the receiver -- the expression we actually want to type for the
+        // class lookup.  `inferType` only knows about "complete" leaf
+        // shapes; this is the one place that handles the mid-edit
+        // partial-AST case.
+        if ($expr instanceof PropertyFetch || $expr instanceof NullsafePropertyFetch) {
+            $expr = $expr->var;
+        } elseif ($expr instanceof MethodCall || $expr instanceof Node\Expr\NullsafeMethodCall) {
+            // If the method-call's name token is missing OR the cursor sits
+            // past the call's closing paren (in a chained access shape),
+            // type the call itself.  Otherwise (cursor inside the args)
+            // type the receiver.
+            if (!$expr->name instanceof Identifier) {
+                $expr = $expr->var;
+            }
+        }
+        $type = self::inferType($expr, $bindings, $this->classes, $this->fqnIndex, [], '');
+        if ($type === null) {
+            return null;
+        }
+        $fqn = $type->ref->name;
+        if ($fqn === '' || $type->ref->isScalar || $type->ref->isTypeParam) {
+            return null;
+        }
+        return $fqn;
+    }
+
+    /**
+     * Walk for the innermost Expression node whose `[startFilePos,
+     * endFilePos]` covers `$byteOffset`.  Used by member-access
+     * completion to find the receiver expression when the cursor sits
+     * past the access operator.
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function findInnermostExprCovering(array $ast, int $byteOffset): ?Node\Expr
+    {
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?Node\Expr $best = null;
+            private int $bestRange = PHP_INT_MAX;
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if (!$node instanceof Node\Expr) {
+                    return null;
+                }
+                $start = $node->getStartFilePos();
+                $end = $node->getEndFilePos();
+                if ($start < 0 || $end < 0) {
+                    return null;
+                }
+                if ($this->offset < $start || $this->offset > $end) {
+                    return null;
+                }
+                $range = $end - $start;
+                if ($range < $this->bestRange) {
+                    $this->best = $node;
+                    $this->bestRange = $range;
+                }
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->best;
+    }
+
+    /**
      * Resolve the FQN of the class hosting a property access at
      * `$byteOffset`.  For `$users->first()?->name` (where
      * `$users: Collection<User>` and `Collection<T>::first(): ?T`), the

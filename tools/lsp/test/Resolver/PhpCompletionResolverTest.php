@@ -403,6 +403,45 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('first', $labels, 'Collection::first must NOT leak through (receiver was swapped)');
     }
 
+    public function testMemberCompletionThroughChainedMethodCallReceiver(): void
+    {
+        // Phase 0.7-completion: cursor at `$repo->first()?->|` -- the
+        // receiver of the chained `?->` is a MethodCall (not a Variable),
+        // so the old variable-symbolType-only swap didn't fire.  The
+        // generalised resolveMemberAccessReceiverClassAt walks the
+        // receiver expression and substitutes via inferType.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repository.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Repository<T> {
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class User {
+            public string $name = '';
+            public function shout(): string { return ''; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Containers\\Repository;\nuse App\\Models\\User;\n\$repo = new Repository<User>();\n\$repo->first()?->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt(
+            $workspace,
+            '/Use.xphp',
+            $useSource,
+            '?->',
+            strlen('?->'),
+        );
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('name', $labels, 'User::$name must surface via chained-receiver substitution');
+        self::assertContains('shout', $labels, 'User::shout must surface');
+    }
+
     public function testMemberCompletionDetailRendersGenericPlaceholderAsBareName(): void
     {
         // The user reported -- xphp-20260524-204801-302.log id=9 -- that the
