@@ -90,7 +90,7 @@ final class PhpHoverResolver
             Symbol::CLASS_    => $this->renderClass(self::preferType($context, $symbol->name())),
             Symbol::FUNCTION  => $this->renderFunction($symbol->name()),
             Symbol::METHOD    => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->renderMethod($c, $symbol->name(), $this->genericResolver->resolveMethodReturnTypeAt($uri, $offset))
+                                    ? $this->renderMethod($c, $symbol->name(), $this->genericResolver->resolveMethodCallSubstitutionAt($uri, $offset))
                                     : null,
             Symbol::PROPERTY  => ($c = self::containerOrNull($context)) !== null
                                     ? $this->renderProperty($c, $symbol->name())
@@ -141,7 +141,7 @@ final class PhpHoverResolver
         return self::format($signature, $docblock);
     }
 
-    private function renderMethod(string $classFqn, string $methodName, ?string $substitutedReturnType = null): ?string
+    private function renderMethod(string $classFqn, string $methodName, ?MethodCallSubstitution $substitution = null): ?string
     {
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
@@ -151,19 +151,25 @@ final class PhpHoverResolver
         }
         $visibility = (string) $method->visibility();
         $static = $method->isStatic() ? 'static ' : '';
-        $params = [];
-        foreach ($method->parameters() as $param) {
-            $type = $this->genericParams->prettify((string) $param->inferredType());
-            $params[] = trim(($type !== '' && $type !== '<missing>' ? $type . ' ' : '') . '$' . $param->name());
-        }
         // When the cursor is on a method call whose receiver is a tracked
         // generic-instantiated variable (e.g. `$users->first()` where
-        // `$users = new Collection<User>(...)`), GenericResolver has already
-        // substituted the type-params in the return type for us; use that
-        // instead of worse-reflection's unsubstituted view.  Otherwise
-        // fall back to prettify (drops the namespace from placeholder names).
-        $return = $substitutedReturnType
-            ?? $this->genericParams->prettify((string) $method->returnType());
+        // `$users = new Collection<User>(...)`), GenericResolver has
+        // already substituted the type-params -- for both the return type
+        // and each parameter type.  Use the substituted form when
+        // available; fall back to prettify (drops the namespace from
+        // placeholder names) for params/return the substitution doesn't
+        // cover (e.g. parameters with union types).
+        $params = [];
+        foreach ($method->parameters() as $param) {
+            $paramName = $param->name();
+            $type = $substitution !== null && isset($substitution->paramTypes[$paramName])
+                ? $substitution->paramTypes[$paramName]
+                : $this->genericParams->prettify((string) $param->inferredType());
+            $params[] = trim(($type !== '' && $type !== '<missing>' ? $type . ' ' : '') . '$' . $paramName);
+        }
+        $return = ($substitution !== null && $substitution->returnType !== null)
+            ? $substitution->returnType
+            : $this->genericParams->prettify((string) $method->returnType());
         $signature = sprintf(
             '%s %sfunction %s(%s)%s',
             $visibility,

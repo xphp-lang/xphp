@@ -93,6 +93,87 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('$name', $markdown);
     }
 
+    public function testMethodHoverSubstitutesParameterTypesAtCallSite(): void
+    {
+        // Phase 0.6: cursor on a method call whose receiver is a tracked
+        // generic-instantiated variable -- the method's parameter types
+        // get substituted with the receiver's type-arg bindings.
+        // Before this commit, hover on `$users->save($user)` would show
+        // `save(T $item): void`; after Phase 0.6, it shows
+        // `save(App\Models\User $item): void`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function save(T $item): void {}
+            public function first(): ?T { return null; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nuse App\\Models\\User;\n\$users = new Collection<User>();\n\$users->save(new User());\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$users->save', strlen('$users->save'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('save(App\\Models\\User $item)', $markdown);
+        self::assertStringNotContainsString('save(T $item)', $markdown);
+    }
+
+    public function testMethodHoverSubstitutesMultipleParameters(): void
+    {
+        // Pair<K, V>::put(K, V): each param gets a different substituted type.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Pair.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Pair<K, V> {
+            public function put(K $key, V $value): void {}
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Pair;\nuse App\\Models\\User;\n\$p = new Pair<string, User>();\n\$p->put('x', new User());\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$p->put', strlen('$p->put'));
+        $markdown = $this->markdown($hover);
+
+        // Both params substituted.
+        self::assertStringContainsString('put(string $key, App\\Models\\User $value)', $markdown);
+        // Neither placeholder leaks through.
+        self::assertStringNotContainsString('K $key', $markdown);
+        self::assertStringNotContainsString('V $value', $markdown);
+    }
+
+    public function testMethodHoverParamsFallBackToPrettifyWhenNoBinding(): void
+    {
+        // Cursor on a method call where no generic-instantiation binding
+        // is in scope (a closed-over receiver, say).  Substitution can't
+        // help; renderMethod falls back to prettify, which strips the
+        // namespace from the placeholder.  Result: `T $item` (NOT
+        // `App\Containers\T $item`, NOT the substituted form either --
+        // because there's no binding to substitute with).
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Collection<T> {
+            public function save(T $item): void {}
+        }
+        XPHP);
+        // No `new Collection<User>(...)` in scope -- just hovering a
+        // method call on a param-typed-without-generics receiver.
+        $useSource = "<?php\nuse App\\Containers\\Collection;\nfunction handle(Collection \$c): void {\n    \$c->save('x');\n}\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$c->save', strlen('$c->save'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('save(T $item)', $markdown);
+        self::assertStringNotContainsString('App\\Containers\\T', $markdown);
+    }
+
     public function testHoversNativeFunctionFromStubs(): void
     {
         if (!is_dir(ReflectorFactory::defaultStubPath())) {

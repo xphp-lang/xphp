@@ -148,13 +148,22 @@ final class GenericResolver
     }
 
     /**
-     * Resolve the substituted return-type display for the `MethodCall`
-     * enclosing `$byteOffset`.  Returns null when the cursor isn't on a
+     * Resolve the substituted-type view of the `MethodCall` enclosing
+     * `$byteOffset` -- both the return type AND each parameter type --
+     * so hover can render the full signature with the call site's
+     * type-args baked in.  Returns null when the cursor isn't on a
      * method-call name, the receiver isn't a tracked variable, or the
-     * return type can't be modelled -- in all cases the caller should
-     * fall back to the unsubstituted render.
+     * method can't be located.
+     *
+     * Parameter substitution mirrors return-type substitution: both
+     * read the method's source AST (xphp attributes intact via
+     * `ClassLikeLookup`) and substitute through
+     * `Specializer::substituteTypeRef`.  Unlike the return type, params
+     * have names attached so they're returned as a `name -> type` map.
+     * Params whose declared type can't be modelled (e.g. union types)
+     * are omitted from the map; caller falls back to prettify for those.
      */
-    public function resolveMethodReturnTypeAt(string $uri, int $byteOffset): ?string
+    public function resolveMethodCallSubstitutionAt(string $uri, int $byteOffset): ?MethodCallSubstitution
     {
         if (!$this->workspace->has($uri)) {
             return null;
@@ -171,16 +180,62 @@ final class GenericResolver
         if ($call === null) {
             return null;
         }
-        // useMap/currentNamespace would let chained static-call inference
-        // through.  For now the method-hover entry point doesn't track
-        // them -- if profiling shows hover often lands on chained calls
-        // through static calls, we'd plumb them via a per-document
-        // index sibling to `scopesFor`.  Falling back to empty is safe.
-        $resolved = self::resolveMethodCall($call, $bindings, $this->classes, $this->fqnIndex);
-        if ($resolved === null) {
+
+        // To substitute params (not just the return type) we need both
+        // the method's ClassMethod AST node AND the receiver's paramMap.
+        // resolveMethodCall encapsulates the receiver lookup; reuse its
+        // logic by infer-then-bind manually here.
+        $receiverType = self::inferType($call->var, $bindings, $this->classes, $this->fqnIndex, [], '');
+        if ($receiverType === null) {
             return null;
         }
-        return $resolved->render();
+        $classLike = $this->classes->find($receiverType->ref->name);
+        if ($classLike === null) {
+            return null;
+        }
+        if (!$call->name instanceof Identifier) {
+            return null;
+        }
+        $method = self::findMethod($classLike, $call->name->toString());
+        if ($method === null) {
+            return null;
+        }
+        $paramMap = self::paramMapFromReceiver($classLike, $receiverType);
+        $paramNames = array_keys($paramMap);
+
+        // Return type.
+        $returnTypeRendered = null;
+        if ($method->returnType !== null) {
+            $tuple = self::returnTypeToRef($method->returnType, $paramNames);
+            if ($tuple !== null) {
+                [$nullable, $ref] = $tuple;
+                $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+                $returnTypeRendered = (new ResolvedType($substituted, $nullable))->render();
+            }
+        }
+
+        // Parameter types -- one entry per parameter that has a modelable
+        // type annotation.  Params with omitted or unsupported types
+        // (union, intersection) get no entry; renderMethod falls back to
+        // prettify for them.
+        $paramTypes = [];
+        foreach ($method->params as $param) {
+            $name = $param->var instanceof Node\Expr\Variable && is_string($param->var->name)
+                ? $param->var->name
+                : null;
+            if ($name === null || $param->type === null) {
+                continue;
+            }
+            $tuple = self::returnTypeToRef($param->type, $paramNames);
+            if ($tuple === null) {
+                continue;
+            }
+            [$nullable, $ref] = $tuple;
+            $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+            $paramTypes[$name] = (new ResolvedType($substituted, $nullable))->render();
+        }
+
+        return new MethodCallSubstitution($returnTypeRendered, $paramTypes);
     }
 
     /**
