@@ -14,12 +14,21 @@ core parser.
 |---|---|
 | `--lint <file>` headless mode (parse + bound checks) | ✅ shipped |
 | `textDocument/publishDiagnostics` over stdio | ✅ shipped |
-| `textDocument/hover` | ✅ shipped |
-| `textDocument/definition` | ✅ shipped |
-| `textDocument/completion` (inside `<…>` type-arg positions) | ✅ shipped |
+| `textDocument/hover` (xphp generics + PHP semantic: class / function / method / property / native funcs) | ✅ shipped |
+| `textDocument/definition` (xphp generics + PHP semantic: class / function / method / property / `use` imports / native funcs) | ✅ shipped |
+| `textDocument/completion` (inside `<…>` type-arg positions + `$obj->` member access + `Cls::` static access) | ✅ shipped |
 | VS Code extension client at `vscode-extension/` | ✅ shipped |
+| PhpStorm plugin at `tools/phpstorm-plugin/` | ✅ shipped |
 
-131 PHPUnit cases, 299 assertions — `make -C tools/lsp test` (or `make test` from this directory).
+PHP-semantic GTD / hover / completion is backed by
+[`phpactor/worse-reflection`](https://github.com/phpactor/worse-reflection)
+and [`jetbrains/phpstorm-stubs`](https://github.com/JetBrains/phpstorm-stubs).
+xphp-specific paths run FIRST (template instantiation, type-args inside
+`<…>` clauses); when those don't apply we fall through to the
+worse-reflection path so behaviour on .xphp files matches PhpStorm's PHP
+intelligence on regular .php files.
+
+`make -C tools/lsp test` runs the PHPUnit suite.
 
 See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
 
@@ -44,14 +53,23 @@ tools/lsp/
 │   │   └── DiagnosticTranslator        framework-neutral → wire-format
 │   ├── Handler/
 │   │   ├── AstPositionResolver         find smallest Name at byte offset
-│   │   ├── XphpHoverHandler            textDocument/hover
-│   │   ├── XphpDefinitionHandler       textDocument/definition
-│   │   ├── XphpCompletionHandler       textDocument/completion
+│   │   ├── XphpHoverHandler            textDocument/hover (xphp + PHP fall-through)
+│   │   ├── XphpDefinitionHandler       textDocument/definition (xphp + PHP fall-through)
+│   │   ├── XphpCompletionHandler       textDocument/completion (xphp + PHP fall-through)
 │   │   ├── TypeArgPositionDetector     backwards-scanner for cursor-in-<…>
 │   │   └── WorkspaceSymbols            collect ClassLike FQNs across open docs
+│   ├── Reflection/
+│   │   ├── ReflectorFactory            builds worse-reflection Reflector for the session
+│   │   ├── WorkspaceSourceLocator      serves open documents (stripped to PHP) to worse-reflection
+│   │   └── FilesystemSourceLocator     serves on-disk .xphp / .php files (stripped to PHP)
+│   ├── Resolver/
+│   │   ├── PhpDefinitionResolver       PHP-semantic GTD via worse-reflection (classes / funcs / methods / props / native stubs)
+│   │   ├── PhpHoverResolver            signature + docblock hover via worse-reflection
+│   │   ├── PhpCompletionResolver       member / static-member completion via worse-reflection
+│   │   └── PhpCompletionContext        source-level detector for `$obj->` / `Cls::` cursor positions
 │   └── (phpactor's own Workspace handles document open/change/close; no
 │        local DocumentStore wrapper needed)
-├── test/                      PHPUnit suite (121 cases)
+├── test/                      PHPUnit suite
 └── vscode-extension/          VS Code client — spawns server over stdio (F5 dev loop)
 ```
 
