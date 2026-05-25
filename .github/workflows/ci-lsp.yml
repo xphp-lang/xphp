@@ -43,12 +43,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup PHP 8.4 (with Xdebug for coverage)
+      - name: Setup PHP 8.4 (with PCOV for coverage)
+        # PCOV is preferred over Xdebug for Infection's initial run: an
+        # order of magnitude less memory under the same coverage scope,
+        # which keeps the runner well clear of the OOM-killer.  The
+        # Makefile target sets pcov.directory + XDEBUG_MODE=off so the
+        # driver choice is deterministic regardless of what else is loaded.
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
           extensions: dom, json, mbstring, tokenizer
-          coverage: xdebug
+          coverage: pcov
           tools: composer:v2
 
       - name: Install LSP dependencies

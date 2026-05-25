@@ -33,15 +33,27 @@ $(INFECTION_PHAR):
 	@chmod +x $@
 
 .PHONY: test/mutation
-# 2048M memory_limit covers Infection's initial Xdebug-instrumented PHPUnit
-# run plus the per-mutation subprocesses; Infection forwards INI flags to
-# its PHPUnit children, so a single -d here propagates.  Without it the
-# initial run silently hits PHP's default cap (no useful error -- Infection
-# just reports "Project tests must be in a passing state").
+# Coverage driver: PCOV, not Xdebug.  PCOV uses orders of magnitude
+# less memory for line-coverage tracking (no full execution-context
+# capture).  Xdebug on the initial 424-test run was triggering the
+# host OOM-killer in tight container envelopes (SIGTERM 143);
+# PCOV reliably stays under 512M total RSS for the same workload.
+#
+# `XDEBUG_MODE=off` ensures Xdebug doesn't load even though the
+# extension is enabled at the docker layer -- otherwise Infection
+# picks Xdebug by precedence regardless of PCOV's presence.
+# `pcov.directory` scopes PCOV to our source tree (without it PCOV
+# tracks every file it sees, vendor/ included, ballooning memory).
 test/mutation: $(INFECTION_PHAR)
 	composer install --quiet && \
-	  php -d error_reporting='E_ALL & ~E_DEPRECATED' -d memory_limit=2048M var/infection.phar \
-	  --threads=max --min-covered-msi=93 --show-mutations --no-progress
+	  XDEBUG_MODE=off php \
+	    -d error_reporting='E_ALL & ~E_DEPRECATED' \
+	    -d memory_limit=512M \
+	    -d pcov.enabled=1 \
+	    -d pcov.directory=src \
+	    var/infection.phar \
+	    --threads=max --min-covered-msi=93 --show-mutations --no-progress \
+	    --initial-tests-php-options='-d error_reporting=E_ALL\&~E_DEPRECATED -d memory_limit=512M -d pcov.enabled=1 -d pcov.directory=src'
 
 .PHONY: build-extension
 build-extension:
