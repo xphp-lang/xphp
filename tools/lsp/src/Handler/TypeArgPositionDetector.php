@@ -26,11 +26,20 @@ namespace XPHP\Lsp\Handler;
 final readonly class TypeArgPositionDetector
 {
     /**
-     * @return array{prefix: string}|null
+     * @return array{prefix: string, containerName: string, slot: int}|null
      *   null  → cursor is not in a type-arg position
-     *   array → cursor IS in a type-arg position; `prefix` is the substring the
-     *           user has typed since the last `<` or `,` (post-whitespace),
-     *           used to filter completion candidates.
+     *   array → cursor IS in a type-arg position.
+     *           `prefix`        - substring typed since the last `<` or `,`
+     *                             (post-whitespace), used to filter candidates.
+     *           `containerName` - the Name preceding the unmatched `<` (the
+     *                             generic class / function whose type-args we
+     *                             are inside).  Same form as it appeared in
+     *                             source -- may be a short name (`Box`) or a
+     *                             qualified one (`App\Box`).
+     *           `slot`          - 0-based index of the type-arg slot the
+     *                             cursor sits in (0 for `Box<|`, 1 for
+     *                             `Pair<Foo, |`, ...).  Used by bound-aware
+     *                             completion to pick the relevant bound.
      */
     public static function detect(string $source, int $offset): ?array
     {
@@ -50,12 +59,20 @@ final readonly class TypeArgPositionDetector
 
         // Walk back from the prefix start with a `<>` depth counter. We're
         // looking for the FIRST `<` at depth 0 (i.e. an unmatched opener).
+        // Count commas seen at depth 0 along the way -- that's the slot
+        // index for the cursor's argument position.
         $depth = 0;
+        $slot = 0;
         $i = $prefixStart - 1;
         while ($i >= 0) {
             $c = $source[$i];
             if ($c === '>') {
                 $depth++;
+                $i--;
+                continue;
+            }
+            if ($c === ',' && $depth === 0) {
+                $slot++;
                 $i--;
                 continue;
             }
@@ -68,7 +85,19 @@ final readonly class TypeArgPositionDetector
                     if ($j < 0 || !self::isIdentifierByte($source[$j])) {
                         return null;
                     }
-                    return ['prefix' => $prefix];
+                    // Scan the container Name backwards: identifier bytes,
+                    // possibly through `\` separators.
+                    $nameEnd = $i; // exclusive
+                    $nameStart = $j;
+                    while ($nameStart > 0 && self::isIdentifierByte($source[$nameStart - 1])) {
+                        $nameStart--;
+                    }
+                    $containerName = substr($source, $nameStart, $nameEnd - $nameStart);
+                    return [
+                        'prefix' => $prefix,
+                        'containerName' => $containerName,
+                        'slot' => $slot,
+                    ];
                 }
                 $depth--;
                 $i--;

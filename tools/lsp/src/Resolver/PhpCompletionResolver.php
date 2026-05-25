@@ -672,9 +672,9 @@ final class PhpCompletionResolver
     /**
      * "Does `$callerFqn` extend or implement `$receiverFqn`?"  Used by
      * member-completion to decide whether protected members of the
-     * receiver class should surface at the cursor.  Worse-reflection's
-     * `parents()` plus `interfaces()` give the ancestor set; a BFS over
-     * both keeps cost bounded even with deep / wide hierarchies.
+     * receiver class should surface at the cursor.  Delegates to
+     * worse-reflection's `isInstanceOf` which walks the entire ancestor
+     * chain (parents + interfaces, transitive).
      */
     private function isSubclassOf(string $callerFqn, string $receiverFqn): bool
     {
@@ -685,35 +685,10 @@ final class PhpCompletionResolver
         }
         try {
             $class = $this->reflector->reflectClassLike($callerNorm);
+            return $class->isInstanceOf(\Phpactor\WorseReflection\Core\ClassName::fromString($receiverNorm));
         } catch (\Throwable) {
             return false;
         }
-        // BFS the parent + interface tree.  Worse-reflection's `parents`
-        // returns the immediate parent chain; `interfaces` returns the
-        // implementations.  Cycles are impossible in PHP class graphs
-        // but the visited set keeps us safe.
-        $visited = [];
-        $queue = [$class];
-        while ($queue !== []) {
-            $current = array_shift($queue);
-            $name = ltrim((string) $current->name(), '\\');
-            if (isset($visited[$name])) {
-                continue;
-            }
-            $visited[$name] = true;
-            if ($name === $receiverNorm) {
-                return true;
-            }
-            foreach ($current->parents() as $parent) {
-                $queue[] = $parent;
-            }
-            if (method_exists($current, 'interfaces')) {
-                foreach ($current->interfaces() as $iface) {
-                    $queue[] = $iface;
-                }
-            }
-        }
-        return false;
     }
 
     /**

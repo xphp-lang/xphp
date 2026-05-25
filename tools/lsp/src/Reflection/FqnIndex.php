@@ -117,6 +117,14 @@ final class FqnIndex
      */
     private ?array $filesystemFuncMethodGenericParams = null;
 
+    /**
+     * @var array<string, list<?string>>|null  fqn -> ordered bound FQNs per
+     *     generic-param slot (null entries for unbounded params).  Phase 3
+     *     bound-aware type-arg completion reads this to filter candidates
+     *     against the slot's declared upper bound.
+     */
+    private ?array $filesystemGenericBounds = null;
+
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
@@ -321,8 +329,51 @@ final class FqnIndex
         $this->filesystemKinds = null;
         $this->filesystemGenericParams = null;
         $this->filesystemFuncMethodGenericParams = null;
+        $this->filesystemGenericBounds = null;
         $this->filesystemSymbols = null;
         $this->filesystemWalkedPaths = null;
+    }
+
+    /**
+     * Look up the bound FQN list for a generic class.  Each entry is the
+     * declared upper bound for that slot (e.g. `Stringable` for
+     * `Box<T: Stringable>`), or `null` when the slot is unbounded.
+     *
+     * Open-doc declarations win over filesystem copies, matching the rest
+     * of the index.  Returns `null` when no generic-class declaration is
+     * known for `$fqn` (non-generic class, unknown FQN, or parse failure).
+     *
+     * @return list<?string>|null
+     */
+    public function boundsForGenericClass(string $fqn): ?array
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return null;
+        }
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            foreach (self::collectGenericClassBounds($result->ast) as $boundFqn => $bounds) {
+                if ($boundFqn === $needle) {
+                    return $bounds;
+                }
+            }
+        }
+        return $this->filesystemGenericBoundsMap()[$needle] ?? null;
+    }
+
+    /**
+     * @return array<string, list<?string>>
+     */
+    private function filesystemGenericBoundsMap(): array
+    {
+        if ($this->filesystemGenericBounds === null) {
+            $this->buildFilesystemIndex();
+        }
+        return $this->filesystemGenericBounds ?? [];
     }
 
     /**
@@ -752,6 +803,7 @@ final class FqnIndex
         $kinds = [];
         $genericParams = [];
         $funcMethodGenericParams = [];
+        $genericBounds = [];
         $symbols = [];
         $walkedPaths = [];
         if (!is_dir($this->rootPath)) {
@@ -763,6 +815,7 @@ final class FqnIndex
             $this->filesystemKinds = $kinds;
             $this->filesystemGenericParams = $genericParams;
             $this->filesystemFuncMethodGenericParams = $funcMethodGenericParams;
+            $this->filesystemGenericBounds = $genericBounds;
             $this->filesystemSymbols = $symbols;
             $this->filesystemWalkedPaths = $walkedPaths;
             return;
@@ -804,6 +857,9 @@ final class FqnIndex
             foreach (self::collectGenericFunctionsAndMethods($ast) as $fqn => $paramNames) {
                 $funcMethodGenericParams[$fqn] = $paramNames;
             }
+            foreach (self::collectGenericClassBounds($ast) as $fqn => $bounds) {
+                $genericBounds[$fqn] = $bounds;
+            }
             foreach (self::collectSymbolHits($ast) as $hit) {
                 $origByte = $offsets->toOriginal($hit['startByte']);
                 [$line, $char] = self::byteToLineChar($source, $origByte);
@@ -827,6 +883,7 @@ final class FqnIndex
         $this->filesystemKinds = $kinds;
         $this->filesystemGenericParams = $genericParams;
         $this->filesystemFuncMethodGenericParams = $funcMethodGenericParams;
+        $this->filesystemGenericBounds = $genericBounds;
         $this->filesystemSymbols = $symbols;
         $this->filesystemWalkedPaths = $walkedPaths;
     }
@@ -1074,6 +1131,63 @@ final class FqnIndex
                         : $short;
                 }
                 $this->fqns[$fqn] = $paramNames;
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->fqns;
+    }
+
+    /**
+     * Collect generic-class bound FQNs per slot.  Mirrors
+     * `collectGenericClasses` but yields the bound side of each
+     * TypeParam (or null when the slot is unbounded) instead of the
+     * placeholder names.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array<string, list<?string>>
+     */
+    private static function collectGenericClassBounds(array $ast): array
+    {
+        $visitor = new class extends NodeVisitorAbstract {
+            /** @var array<string, list<?string>> */
+            public array $fqns = [];
+
+            private string $currentNamespace = '';
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if (!$node instanceof ClassLike || $node->name === null) {
+                    return null;
+                }
+                $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                if (!is_array($params) || $params === []) {
+                    return null;
+                }
+                $bounds = [];
+                foreach ($params as $p) {
+                    if ($p instanceof TypeParam) {
+                        $bounds[] = $p->boundFqn !== null ? ltrim($p->boundFqn, '\\') : null;
+                    }
+                }
+                if ($bounds === []) {
+                    return null;
+                }
+                $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                if (!is_string($fqn)) {
+                    $short = $node->name->toString();
+                    $fqn = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $short
+                        : $short;
+                }
+                $this->fqns[$fqn] = $bounds;
                 return null;
             }
         };
