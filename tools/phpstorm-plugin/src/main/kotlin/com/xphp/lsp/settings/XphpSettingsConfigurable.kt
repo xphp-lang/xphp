@@ -1,6 +1,6 @@
 package com.xphp.lsp.settings
 
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.ui.dsl.builder.AlignX
@@ -37,9 +37,16 @@ class XphpSettingsConfigurable : BoundConfigurable("xPHP") {
         // `.withTitle(...)`); the older `browseDialogTitle = ...` named
         // argument is deprecated -- and on this build the Kotlin compiler
         // promotes that deprecation to an error.
+        //
+        // `FileChooserDescriptorFactory.createSingleFileDescriptor()` was
+        // also deprecated in 2024.x -- the Plugin Verifier flags it.
+        // Instantiating `FileChooserDescriptor` directly with the explicit
+        // flag tuple (files=true, folders=false, jars=false, jarsAsFiles=
+        // false, jarContents=false, chooseMultiple=false) is the stable
+        // replacement that ships in every supported IDE build.
         row("xphp LSP binary:") {
             textFieldWithBrowseButton(
-                FileChooserDescriptorFactory.createSingleFileDescriptor()
+                FileChooserDescriptor(true, false, false, false, false, false)
                     .withTitle("Select xphp LSP binary"),
             )
                 .bindText(settings.state::lspPath)
@@ -58,7 +65,7 @@ class XphpSettingsConfigurable : BoundConfigurable("xPHP") {
         // non-PATH installs work the same across editors.
         row("PHP interpreter:") {
             textFieldWithBrowseButton(
-                FileChooserDescriptorFactory.createSingleFileDescriptor()
+                FileChooserDescriptor(true, false, false, false, false, false)
                     .withTitle("Select PHP interpreter"),
             )
                 .bindText(settings.state::phpPath)

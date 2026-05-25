@@ -62,7 +62,14 @@ class XphpLspServerDescriptor(project: Project) :
     // `lspHoverSupport`, ...) feed an older opt-in path that wraps customizers
     // in `*Disabled` defaults; overriding this single property bypasses that
     // logic and gives the modern, lint-clean opt-in.
-    override val lspCustomization: LspCustomization = LspCustomization()
+    //
+    // `LspCustomization` itself is annotated `@ApiStatus.OverrideOnly` --
+    // the IntelliJ Plugin Verifier flags `LspCustomization()` direct
+    // instantiation in client code (OVERRIDE_ONLY_API_USAGES).  Using an
+    // empty anonymous subclass satisfies the contract: we're EXTENDING
+    // the class (the documented use case), not constructing it from
+    // outside, and we inherit every default the no-arg path provides.
+    override val lspCustomization: LspCustomization = object : LspCustomization() {}
 
     // IntelliJ's LSP framework dedupes "is this server already running?"
     // by descriptor equality.  Our `XphpLspServerSupportProvider.fileOpened`
