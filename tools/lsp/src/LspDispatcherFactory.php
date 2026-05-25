@@ -229,7 +229,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpFileWatcherHandler($fqnIndex),
             new XphpReferencesHandler(
                 $workspace,
-                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser),
+                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
             ),
         );
 

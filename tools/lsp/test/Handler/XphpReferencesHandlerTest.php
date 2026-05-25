@@ -18,7 +18,12 @@ use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\XphpReferencesHandler;
 use XPHP\Lsp\PositionMap;
 use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Lsp\Reflection\ReflectorFactory;
+use XPHP\Lsp\Resolver\CompositeClassLikeLookup;
+use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
+use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\ReferenceFinder;
+use XPHP\Lsp\Resolver\WorkspaceClassLikeLookup;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 use function Amp\Promise\wait;
@@ -176,6 +181,117 @@ final class XphpReferencesHandlerTest extends TestCase
         self::assertCount(2, $childMatches, 'extends + instanceof both count');
     }
 
+    public function testFindsMethodReferencesAcrossWorkspace(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class User {
+            public function shout(): string { return ''; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\User;
+        $u = new User();
+        $u->shout();
+        $u->shout();
+        XPHP));
+
+        // Cursor on the method declaration: `function shout`.
+        $locations = $this->references($workspace, '/User.xphp', 'function shout', strlen('function '));
+
+        // Declaration in /User.xphp + 2 calls in /Use.xphp = 3.
+        self::assertCount(3, $locations);
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/User.xphp', $uris);
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(2, $useMatches);
+    }
+
+    public function testFindsMethodReferencesFromCallSiteCursor(): void
+    {
+        // Cursor on a `$x->method()` call -- should still find every
+        // call of the same method on the same receiver class, including
+        // the declaration site.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {\n    public function shout(): string { return ''; }\n}\n"));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, "<?php\nuse App\\User;\n\$u = new User();\n\$u->shout();\n"));
+
+        $locations = $this->references($workspace, '/Use.xphp', '->shout', strlen('->'));
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/User.xphp', $uris);
+        self::assertContains('/Use.xphp', $uris);
+    }
+
+    public function testMethodRefsDoNotLeakAcrossClassesWithSameName(): void
+    {
+        // Two unrelated classes both define `shout()`.  Cursor on User's
+        // declaration must NOT surface calls on a Megaphone instance.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Both.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class User {
+            public function shout(): string { return ''; }
+        }
+        class Megaphone {
+            public function shout(): string { return ''; }
+        }
+        $u = new User();
+        $u->shout();
+        $m = new Megaphone();
+        $m->shout();
+        XPHP));
+
+        // Cursor on User's `function shout`.
+        $source = $workspace->get('/Both.xphp')->text;
+        $byte = strpos($source, 'function shout') + strlen('function ');
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $handler = $this->handler($workspace);
+        $params = new ReferenceParams(
+            new ReferenceContext(true),
+            new TextDocumentIdentifier('/Both.xphp'),
+            new Position($line, $character),
+        );
+        $locations = wait($handler->references($params));
+
+        // Decl + $u->shout() = 2.  $m->shout() (on line index 11) must
+        // NOT appear.  No location should sit on the Megaphone call's line.
+        self::assertCount(2, $locations);
+        foreach ($locations as $loc) {
+            self::assertNotSame(11, $loc->range->start->line, 'must not match the Megaphone instance call');
+        }
+    }
+
+    public function testFindsPropertyReferences(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class User {
+            public string $name = '';
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\User;
+        $u = new User();
+        echo $u->name;
+        echo $u->name;
+        XPHP));
+
+        $locations = $this->references($workspace, '/User.xphp', '$name', 1);
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/User.xphp', $uris);
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(2, $useMatches);
+    }
+
     public function testEmptyResultWhenCursorIsNotOnReferenceableSymbol(): void
     {
         $workspace = new PhpactorWorkspace();
@@ -227,9 +343,23 @@ final class XphpReferencesHandlerTest extends TestCase
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
         $fqnIndex = new FqnIndex($workspace, $cache, $parser, $this->root);
+        $reflector = (new ReflectorFactory(
+            $workspace,
+            $cache,
+            $parser,
+            rootPath: $this->root,
+            stubPath: ReflectorFactory::defaultStubPath(),
+            cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: $fqnIndex,
+        ))->build();
+        $classLikeLookup = new CompositeClassLikeLookup(
+            new WorkspaceClassLikeLookup($workspace, $cache),
+            new FilesystemClassLikeLookup($fqnIndex),
+        );
+        $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
         return new XphpReferencesHandler(
             $workspace,
-            new ReferenceFinder($workspace, $cache, $fqnIndex, $parser),
+            new ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $genericResolver),
         );
     }
 
