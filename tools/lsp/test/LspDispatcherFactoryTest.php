@@ -53,6 +53,21 @@ final class LspDispatcherFactoryTest extends TestCase
         self::assertSame('xphp-lsp', $result->serverInfo['name'] ?? null);
     }
 
+    public function testReferencesProviderAdvertised(): void
+    {
+        // Phase 4.1 wires XphpReferencesHandler.  Without this capability
+        // PhpStorm's "Find Usages" (Alt+F7) won't even ask the LSP.  Same
+        // bool-not-options-object trick used everywhere else.
+        $tester = $this->buildTester();
+
+        $result = $tester->initialize();
+
+        self::assertTrue(
+            $result->capabilities->referencesProvider,
+            'referencesProvider must be announced as bool true',
+        );
+    }
+
     public function testWorkspaceSymbolProviderAdvertised(): void
     {
         // Phase 2.2 wires XphpWorkspaceSymbolHandler.  Without this

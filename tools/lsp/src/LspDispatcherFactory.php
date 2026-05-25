@@ -50,6 +50,7 @@ use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
 use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
+use XPHP\Lsp\Handler\XphpReferencesHandler;
 use XPHP\Lsp\Handler\XphpWorkspaceSymbolHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Reflection\FqnIndex;
@@ -59,6 +60,7 @@ use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
 use XPHP\Lsp\Resolver\GenericParamRegistry;
 use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
+use XPHP\Lsp\Resolver\ReferenceFinder;
 use XPHP\Lsp\Resolver\WorkspaceClassLikeLookup;
 use XPHP\Lsp\Resolver\PhpDefinitionResolver;
 use XPHP\Lsp\Resolver\PhpHoverResolver;
@@ -225,6 +227,10 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpDocumentSymbolHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),
             new XphpFileWatcherHandler($fqnIndex),
+            new XphpReferencesHandler(
+                $workspace,
+                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser),
+            ),
         );
 
         $runner = new HandlerMethodRunner(

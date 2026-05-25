@@ -90,6 +90,15 @@ final class FqnIndex
     private ?array $filesystemSymbols = null;
 
     /**
+     * @var list<string>|null  Absolute paths of every .xphp/.php file the
+     *   walk visited, regardless of whether the file declared any FQNs.
+     *   Used by `indexedFilesystemPaths()` -- find-references needs to
+     *   see files that USE classes without declaring them (Consumer.xphp
+     *   does `new App\User()` but defines nothing of its own).
+     */
+    private ?array $filesystemWalkedPaths = null;
+
+    /**
      * @var array<string, list<string>>|null  FQN -> ordered list of generic-param names; null until first build.
      * Populated alongside the filesystem walk so consumers like `GenericParamRegistry::prettify`
      * don't trigger N additional parses to read `ATTR_GENERIC_PARAMS` per class.
@@ -256,6 +265,7 @@ final class FqnIndex
         $this->filesystemKinds = null;
         $this->filesystemGenericParams = null;
         $this->filesystemSymbols = null;
+        $this->filesystemWalkedPaths = null;
     }
 
     /**
@@ -432,6 +442,28 @@ final class FqnIndex
             'char' => $best['char'],
             'short' => $shortName,
         ];
+    }
+
+    /**
+     * Absolute paths of every .xphp/.php file the filesystem walk visited,
+     * INCLUDING files that didn't declare any FQNs (consumer-only files
+     * that reference classes without defining one).  Open-doc URIs are
+     * NOT included -- callers needing both sources iterate `$workspace`
+     * separately first, then walk these paths skipping any already
+     * covered.
+     *
+     * Used by the find-references finder (Phase 4.1) to enumerate the
+     * cross-workspace search space without each consumer doing its own
+     * walk.
+     *
+     * @return list<string>
+     */
+    public function indexedFilesystemPaths(): array
+    {
+        if ($this->filesystemWalkedPaths === null) {
+            $this->buildFilesystemIndex();
+        }
+        return $this->filesystemWalkedPaths ?? [];
     }
 
     /**
@@ -652,6 +684,7 @@ final class FqnIndex
         $kinds = [];
         $genericParams = [];
         $symbols = [];
+        $walkedPaths = [];
         if (!is_dir($this->rootPath)) {
             @fwrite(STDERR, sprintf(
                 "[xphp-lsp fqn-index] rootPath %s not a directory; filesystem index empty\n",
@@ -661,6 +694,7 @@ final class FqnIndex
             $this->filesystemKinds = $kinds;
             $this->filesystemGenericParams = $genericParams;
             $this->filesystemSymbols = $symbols;
+            $this->filesystemWalkedPaths = $walkedPaths;
             return;
         }
 
@@ -672,6 +706,7 @@ final class FqnIndex
                 continue;
             }
             $filesScanned++;
+            $walkedPaths[] = $file->getPathname();
 
             $source = @file_get_contents($file->getPathname());
             if ($source === false) {
@@ -719,6 +754,7 @@ final class FqnIndex
         $this->filesystemKinds = $kinds;
         $this->filesystemGenericParams = $genericParams;
         $this->filesystemSymbols = $symbols;
+        $this->filesystemWalkedPaths = $walkedPaths;
     }
 
     private function classLikeFromFile(string $path, string $needle): ?ClassLike
