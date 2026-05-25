@@ -12,13 +12,19 @@ core parser.
 
 | Feature | Status |
 |---|---|
-| `--lint <file>` headless mode (parse + bound checks) | ✅ shipped |
-| `textDocument/publishDiagnostics` over stdio | ✅ shipped |
-| `textDocument/hover` (xphp generics + PHP semantic: class / function / method / property / native funcs) | ✅ shipped |
-| `textDocument/definition` (xphp generics + PHP semantic: class / function / method / property / `use` imports / native funcs) | ✅ shipped |
-| `textDocument/completion` (inside `<…>` type-arg positions + `$obj->` member access + `Cls::` static access) | ✅ shipped |
-| VS Code extension client at `vscode-extension/` | ✅ shipped |
-| PhpStorm plugin at `tools/phpstorm-plugin/` | ✅ shipped |
+| `--lint <file>` headless mode (parse + bound checks) | shipped |
+| `textDocument/publishDiagnostics` over stdio | shipped |
+| `textDocument/hover` (xphp generics + PHP semantic: class / function / method / property / native funcs; parameter and return-type substitution at static / instance / free-function call sites) | shipped |
+| `textDocument/definition` (xphp generics + PHP semantic: class / function / method / property / `use` imports / native funcs / closed-file targets via FqnIndex) | shipped |
+| `textDocument/completion` (`<...>` type-arg positions with bound-aware filtering + `$obj->` member access + `Cls::` static access + `Cls::$` static property + scope-aware variables + visibility-aware filtering inside same class / subclass + string / comment suppression) | shipped |
+| `textDocument/references` for classes, functions, methods, properties (with inheritance walk into subclass receivers) | shipped |
+| `textDocument/rename` (alias-aware short-name rewriting; `RenameFile` gated on client `resourceOperations`) | shipped |
+| `textDocument/documentSymbol` (hierarchical ClassLike / function / method tree) | shipped |
+| `workspace/symbol` (cross-file FQN search via FqnIndex) | shipped |
+| `workspace/didChangeWatchedFiles` (bulk invalidation of the filesystem index for long sessions) | shipped |
+| UTF-16 column counting (positions correct past supplementary-plane codepoints) | shipped |
+| VS Code extension client at `vscode-extension/` | shipped |
+| PhpStorm plugin at `tools/phpstorm-plugin/` | shipped |
 
 PHP-semantic GTD / hover / completion is backed by
 [`phpactor/worse-reflection`](https://github.com/phpactor/worse-reflection)
@@ -113,14 +119,18 @@ Capabilities advertised at `initialize`:
 - `textDocumentSync: 1` (Full)
 - `hoverProvider`
 - `definitionProvider`
-- `completionProvider` with `triggerCharacters: ["<", ","]`
+- `referencesProvider`
+- `documentSymbolProvider`
+- `workspaceSymbolProvider`
+- `renameProvider`
+- `completionProvider` with `triggerCharacters: ["<", ",", ">", ":"]`
 
 ## Test
 
 ```bash
 # From the repo root:
-make -C tools/lsp test            # PHPUnit, 131 cases / 299 assertions
-make -C tools/lsp test/mutation   # Infection, 94 % MSI under a 93 % gate
+make -C tools/lsp test            # PHPUnit, 424 cases / 1244 assertions
+make -C tools/lsp test/mutation   # Infection, MSI under a 93 % gate
 
 # Or from this directory:
 cd tools/lsp
