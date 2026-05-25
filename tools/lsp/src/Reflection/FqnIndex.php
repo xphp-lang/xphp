@@ -56,6 +56,20 @@ final class FqnIndex
     private const SKIP_DIRS = ['.git', 'vendor', 'node_modules', 'var', 'build'];
 
     /**
+     * Path components skipped when their immediate parent matches.  Captures
+     * test-fixture trees that declare classes with the same FQN as real
+     * source -- a common Composer-style layout where running the LSP over
+     * the xphp repo itself surfaced wrong-file GTD targets in prod traces
+     * (Phase 2.2 / 2.3).
+     *
+     * Format: `['parentBasename' => ['skippedChild', ...]]`
+     */
+    private const SKIP_NESTED = [
+        'test' => ['fixture', 'fixtures'],
+        'tests' => ['fixture', 'fixtures'],
+    ];
+
+    /**
      * @var array<string, string>|null  FQN -> absolute filesystem path; null until first build.
      */
     private ?array $filesystemMap = null;
@@ -358,19 +372,19 @@ final class FqnIndex
     }
 
     /**
-     * Locate ANY declaration whose short name matches `$shortName`, first
-     * across open docs then across filesystem.  First match wins -- short-
-     * name collisions across namespaces (e.g. App\Models\User vs
-     * App\Fixtures\User) resolve in iteration order with no preference.
-     *
-     * Cross-namespace tie-breaking (preferring non-fixture paths, prox-
-     * imity to current file, etc.) is parked as Phase 3 polish.
-     *
-     * Used by the definition handler's Path 2 (type-arg identifier inside
-     * a generic clause -- the `User` of `identity<User>(...)`) which the
+     * Locate ANY declaration whose short name matches `$shortName`.  Used
+     * by the definition handler's Path 2 (type-arg identifier inside a
+     * `<...>` clause -- the `User` of `identity<User>(...)`) which the
      * parser strips before the post-strip parser ever sees it, so we only
-     * have the short identifier source-text and need to resolve it via
-     * workspace+filesystem lookup.
+     * have the short identifier source-text and need to resolve via
+     * workspace + filesystem lookup.
+     *
+     * Resolution order (Phase 3 polish):
+     *   1. Open-doc match wins.  The editor's unsaved buffer beats any
+     *      on-disk copy, full stop.
+     *   2. Among filesystem matches, shortest URI wins -- proxy for
+     *      "closer to rootPath" since fs-walk emits absolute paths.
+     *      Alphabetical tiebreak after length for determinism.
      *
      * @return array{uri: string, line: int, char: int, short: string}|null
      */
@@ -381,27 +395,43 @@ final class FqnIndex
         }
         $tailSuffix = '\\' . $shortName;
         $tailLen = strlen($tailSuffix);
+        $openDocHit = null;
+        $fsCandidates = [];
         foreach ($this->allDeclarations() as $hit) {
-            if ($hit['fqn'] === $shortName) {
-                return [
-                    'uri' => $hit['uri'],
-                    'line' => $hit['line'],
-                    'char' => $hit['char'],
-                    'short' => $shortName,
-                ];
+            $fqn = $hit['fqn'];
+            $matches = $fqn === $shortName
+                || (strlen($fqn) > $tailLen && substr($fqn, -$tailLen) === $tailSuffix);
+            if (!$matches) {
+                continue;
             }
-            if (strlen($hit['fqn']) > $tailLen
-                && substr($hit['fqn'], -$tailLen) === $tailSuffix
-            ) {
-                return [
-                    'uri' => $hit['uri'],
-                    'line' => $hit['line'],
-                    'char' => $hit['char'],
-                    'short' => $shortName,
-                ];
+            if (str_starts_with($hit['uri'], 'file://')) {
+                $fsCandidates[] = $hit;
+            } elseif ($openDocHit === null) {
+                $openDocHit = $hit;
             }
         }
-        return null;
+        if ($openDocHit !== null) {
+            return [
+                'uri' => $openDocHit['uri'],
+                'line' => $openDocHit['line'],
+                'char' => $openDocHit['char'],
+                'short' => $shortName,
+            ];
+        }
+        if ($fsCandidates === []) {
+            return null;
+        }
+        usort($fsCandidates, static function (array $a, array $b): int {
+            $byLength = strlen($a['uri']) <=> strlen($b['uri']);
+            return $byLength !== 0 ? $byLength : strcmp($a['uri'], $b['uri']);
+        });
+        $best = $fsCandidates[0];
+        return [
+            'uri' => $best['uri'],
+            'line' => $best['line'],
+            'char' => $best['char'],
+            'short' => $shortName,
+        ];
     }
 
     /**
@@ -718,8 +748,18 @@ final class FqnIndex
         $filter = new \RecursiveCallbackFilterIterator(
             $directoryIterator,
             static function (SplFileInfo $file): bool {
-                if ($file->isDir()) {
-                    return !in_array($file->getFilename(), self::SKIP_DIRS, true);
+                if (!$file->isDir()) {
+                    return true;
+                }
+                $name = $file->getFilename();
+                if (in_array($name, self::SKIP_DIRS, true)) {
+                    return false;
+                }
+                $parent = basename($file->getPath());
+                if (isset(self::SKIP_NESTED[$parent])
+                    && in_array($name, self::SKIP_NESTED[$parent], true)
+                ) {
+                    return false;
                 }
                 return true;
             },

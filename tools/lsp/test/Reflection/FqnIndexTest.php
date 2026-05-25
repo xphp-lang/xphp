@@ -256,6 +256,70 @@ final class FqnIndexTest extends TestCase
         self::assertNull($index->locationForFqn('Nope\\Mystery'));
     }
 
+    public function testFilesystemWalkSkipsNestedTestFixturesDir(): void
+    {
+        // Phase 3 polish: `test/fixture/...` declarations were polluting
+        // workspace symbol search + closed-file GTD in the xphp repo
+        // itself (confirmed in prod traces 2.2 + 2.3).  The walk now
+        // skips `fixture` / `fixtures` when nested under a `test` /
+        // `tests` directory.
+        $this->writeFile('src/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $this->writeFile('test/fixture/source/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $this->writeFile('test/fixtures/another/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $this->writeFile('tests/fixture/yetmore/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+
+        $index = $this->index(new PhpactorWorkspace());
+
+        $location = $index->locationForFqn('App\\Models\\User');
+        self::assertNotNull($location);
+        self::assertSame('file://' . $this->root . '/src/User.xphp', $location['uri']);
+    }
+
+    public function testFilesystemWalkDoesNotSkipNonTestFixtureDirs(): void
+    {
+        // A `fixture` directory NOT under `test` (e.g. someone's domain
+        // model) must still be walked.
+        $this->writeFile('src/fixture/Item.xphp', "<?php\nnamespace App;\nclass Item {}\n");
+
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertContains('App\\Item', $index->allClassFqns());
+    }
+
+    public function testShortNameTiebreakPrefersShorterPath(): void
+    {
+        // When two non-fixture files declare the same short-named class
+        // across different namespaces, deterministic tiebreak picks the
+        // shortest URI.
+        $this->writeFile('a/User.xphp', "<?php\nnamespace App\\A;\nclass User {}\n");
+        $this->writeFile('deep/path/here/User.xphp', "<?php\nnamespace App\\Deep;\nclass User {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        $hit = $index->locationByShortName('User');
+        self::assertNotNull($hit);
+        self::assertSame('file://' . $this->root . '/a/User.xphp', $hit['uri']);
+    }
+
+    public function testShortNameLookupOpenDocBeatsLongerFsPath(): void
+    {
+        // Open-doc precedence isn't disrupted by the tiebreak refactor:
+        // even when a shorter filesystem path exists, the open buffer
+        // wins.
+        $this->writeFile('a/User.xphp', "<?php\nnamespace App\\A;\nclass User {}\n");
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem(
+            '/edit/deeper/path/User.xphp',
+            'xphp',
+            1,
+            "<?php\nnamespace App\\B;\nclass User {}\n",
+        ));
+
+        $hit = $this->index($workspace)->locationByShortName('User');
+        self::assertNotNull($hit);
+        self::assertSame('/edit/deeper/path/User.xphp', $hit['uri']);
+    }
+
     public function testInvalidateFilesystemForcesRebuildOnNextQuery(): void
     {
         $this->writeFile('Alpha.xphp', "<?php\nnamespace App;\nclass Alpha {}\n");
