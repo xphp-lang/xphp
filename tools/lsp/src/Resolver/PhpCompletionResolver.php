@@ -124,7 +124,7 @@ final class PhpCompletionResolver
         ));
 
         $items = match ($hit['kind']) {
-            'member', 'static' => $this->completeMembers($uri, $document->text, $hit),
+            'member', 'static', 'static-prop' => $this->completeMembers($uri, $document->text, $hit),
             'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset),
             'new'              => $this->completeClassesByPrefix($hit['prefix']),
             'expression'       => array_merge(
@@ -229,6 +229,15 @@ final class PhpCompletionResolver
 
         $items = [];
         $isStatic = $hit['kind'] === 'static';
+        $isStaticProp = $hit['kind'] === 'static-prop';
+        // Static-prop is a STATIC context (the `::$prop` form), but the
+        // member set we want is only static properties -- no methods,
+        // no constants.  Treat as static for the same-class / subclass
+        // visibility plumbing below; gate the iteration shapes below
+        // on the discriminating $isStaticProp flag.
+        if ($isStaticProp) {
+            $isStatic = true;
+        }
         $droppedMagic = 0;
         $droppedStatic = 0;
         $droppedVis = 0;
@@ -246,32 +255,47 @@ final class PhpCompletionResolver
             && $callerClassFqn !== null
             && $this->isSubclassOf($callerClassFqn, $lookupName);
 
-        foreach ($class->methods() as $method) {
-            if (str_starts_with($method->name(), '__')) {
-                $droppedMagic++;
-                continue;
+        // static-prop is a narrow context -- only static properties show.
+        // Skip methods + constants entirely; that keeps `Cls::$|` from
+        // polluting the popup with unrelated members.
+        if (!$isStaticProp) {
+            foreach ($class->methods() as $method) {
+                if (str_starts_with($method->name(), '__')) {
+                    $droppedMagic++;
+                    continue;
+                }
+                if ($isStatic xor $method->isStatic()) {
+                    $droppedStatic++;
+                    continue;
+                }
+                if (!self::isVisibleFromCaller($method->visibility(), $isSameClass, $isSubclass)) {
+                    $droppedVis++;
+                    continue;
+                }
+                if (!self::matchesPrefix($method->name(), $hit['prefix'])) {
+                    $droppedPrefix++;
+                    continue;
+                }
+                $items[] = self::methodItem($method);
             }
-            if ($isStatic xor $method->isStatic()) {
-                $droppedStatic++;
-                continue;
-            }
-            if (!self::isVisibleFromCaller($method->visibility(), $isSameClass, $isSubclass)) {
-                $droppedVis++;
-                continue;
-            }
-            if (!self::matchesPrefix($method->name(), $hit['prefix'])) {
-                $droppedPrefix++;
-                continue;
-            }
-            $items[] = self::methodItem($method);
         }
 
-        // Properties only show on instance-member access.  Static
-        // properties via `Cls::$prop` use a `$` prefix that
-        // `PhpCompletionContext` doesn't currently recognise as a
-        // separate shape, so we skip statics here -- punt to a
-        // follow-up.
-        if (!$isStatic) {
+        if ($isStaticProp) {
+            // `Cls::$|` -- only static properties.
+            foreach ($class->properties() as $property) {
+                if (!$property->isStatic()) {
+                    continue;
+                }
+                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                    continue;
+                }
+                if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                    continue;
+                }
+                $items[] = self::propertyItem($property);
+            }
+        } elseif (!$isStatic) {
+            // `$obj->|` -- only instance properties.
             foreach ($class->properties() as $property) {
                 if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
                     continue;
@@ -285,7 +309,7 @@ final class PhpCompletionResolver
                 $items[] = self::propertyItem($property);
             }
         } else {
-            // Static constants surface on `Cls::|`.
+            // `Cls::|` -- static methods (above) + class constants.
             foreach ($class->constants() as $constant) {
                 if (!self::matchesPrefix((string) $constant->name(), $hit['prefix'])) {
                     continue;

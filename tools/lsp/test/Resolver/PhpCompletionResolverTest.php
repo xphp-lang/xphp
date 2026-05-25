@@ -227,6 +227,64 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('balance', $labels, 'private prop must NOT leak across classes');
     }
 
+    public function testStaticPropertyCompletionAfterColonColonDollar(): void
+    {
+        // Phase 3: `Cls::$|` -- only static properties surface.  Methods,
+        // instance properties, and constants must NOT appear.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Counter.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Counter
+        {
+            public static int $total = 0;
+            public static string $label = '';
+            public int $instance = 0;
+            public const VERSION = 1;
+            public static function tick(): void {}
+        }
+        XPHP);
+        // `Counter::$` -- cursor at the bare-`$` position.  Use an
+        // existing `Counter::$total` in source so the file parses.
+        $useSource = "<?php\nuse App\\Counter;\necho Counter::\$total;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'Counter::$', strlen('Counter::$'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('total', $labels);
+        self::assertContains('label', $labels);
+        self::assertNotContains('instance', $labels, 'instance prop must not surface on static-prop completion');
+        self::assertNotContains('VERSION', $labels, 'constants must not surface on static-prop completion');
+        self::assertNotContains('tick', $labels, 'methods must not surface on static-prop completion');
+    }
+
+    public function testStaticPropertyCompletionFiltersByPrefix(): void
+    {
+        // `Cls::$la|` -- prefix filter narrows to props matching `la*`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Counter.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Counter
+        {
+            public static int $total = 0;
+            public static string $label = '';
+            public static string $latest = '';
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Counter;\necho Counter::\$label;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Cursor inside `$label` after the `la` prefix.
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$label', strlen('$la'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('label', $labels);
+        self::assertContains('latest', $labels);
+        self::assertNotContains('total', $labels, 'prefix `la` must exclude `total`');
+    }
+
     public function testProtectedMembersVisibleInsideSubclass(): void
     {
         // Phase 3 polish: subclass-protected -- when the cursor is inside

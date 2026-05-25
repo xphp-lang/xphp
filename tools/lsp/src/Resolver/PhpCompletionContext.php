@@ -73,6 +73,7 @@ final class PhpCompletionContext
     /**
      * @return array{kind: 'member',     receiverEnd: int, prefix: string}
      *       | array{kind: 'static',     receiverEnd: int, prefix: string}
+     *       | array{kind: 'static-prop',receiverEnd: int, prefix: string}
      *       | array{kind: 'variable',                     prefix: string}
      *       | array{kind: 'new',                          prefix: string}
      *       | array{kind: 'expression',                   prefix: string}
@@ -113,6 +114,22 @@ final class PhpCompletionContext
             return [
                 'kind' => 'member',
                 'receiverEnd' => $prefixStart - 2,
+                'prefix' => $prefix,
+            ];
+        }
+
+        // `Cls::$pre|` => static property access.  The `$` is preceded by
+        // `::`, which distinguishes it from a plain `$var` completion.
+        // Must come BEFORE the generic `$` -> variable branch so the
+        // static-prop case isn't swallowed.
+        if ($prefixStart >= 3
+            && $source[$prefixStart - 1] === '$'
+            && $source[$prefixStart - 2] === ':'
+            && $source[$prefixStart - 3] === ':'
+        ) {
+            return [
+                'kind' => 'static-prop',
+                'receiverEnd' => $prefixStart - 3,
                 'prefix' => $prefix,
             ];
         }
