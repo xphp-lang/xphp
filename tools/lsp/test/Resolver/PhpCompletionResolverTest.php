@@ -252,11 +252,31 @@ final class PhpCompletionResolverTest extends TestCase
         $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'Counter::$', strlen('Counter::$'));
         $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
 
-        self::assertContains('total', $labels);
-        self::assertContains('label', $labels);
+        // Labels carry the `$` prefix so PhpStorm's popup filter (which
+        // matches against the text typed since the last word boundary)
+        // accepts them when the user has typed `Stats::$` -- without the
+        // `$`, PhpStorm drops every item.  insertText is the bare name
+        // (`total`) so the `$` already in source isn't double-inserted.
+        self::assertContains('$total', $labels);
+        self::assertContains('$label', $labels);
         self::assertNotContains('instance', $labels, 'instance prop must not surface on static-prop completion');
+        self::assertNotContains('$instance', $labels, 'instance prop must not surface on static-prop completion');
         self::assertNotContains('VERSION', $labels, 'constants must not surface on static-prop completion');
         self::assertNotContains('tick', $labels, 'methods must not surface on static-prop completion');
+
+        // Each item must carry a textEdit so PhpStorm doesn't extend the
+        // replacement range backwards through the `$` -- the regression
+        // diagnosed via prod log id=28 (xphp-20260525-172338-536.log).
+        // newText is the bare property name; range stays at the cursor
+        // when the typed prefix is empty.
+        foreach ($items as $item) {
+            self::assertNotNull($item->textEdit, 'static-prop item must carry a textEdit anchor');
+            self::assertSame(
+                ltrim($item->label, '$'),
+                $item->textEdit->newText,
+                'textEdit.newText must be the bare property name (no leading $)',
+            );
+        }
     }
 
     public function testStaticPropertyCompletionFiltersByPrefix(): void
@@ -280,9 +300,9 @@ final class PhpCompletionResolverTest extends TestCase
         $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$label', strlen('$la'));
         $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
 
-        self::assertContains('label', $labels);
-        self::assertContains('latest', $labels);
-        self::assertNotContains('total', $labels, 'prefix `la` must exclude `total`');
+        self::assertContains('$label', $labels);
+        self::assertContains('$latest', $labels);
+        self::assertNotContains('$total', $labels, 'prefix `la` must exclude `total`');
     }
 
     public function testProtectedMembersVisibleInsideSubclass(): void

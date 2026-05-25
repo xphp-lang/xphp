@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Models\Stats;
+
+// Phase 3 fixture: static-property completion (`Cls::$|`).
+//
+// Trigger completion right after the `$` in each marker.
+
+// CURSOR HERE -- type `Stats::$` and Ctrl+Space.
+// Expected: total, label, latest (statics only).
+// NOT expected: instance (instance prop), VERSION (constant), tick (method).
+echo Stats::$latest;
+
+// Prefix filter: `Stats::$la|` -> label, latest (no total).
+echo Stats::$label;
+
+// Sanity baseline: `Stats::|` (no $) keeps surfacing methods + constants.
+echo Stats::VERSION;
+Stats::tick();

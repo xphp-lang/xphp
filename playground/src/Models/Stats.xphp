@@ -1,0 +1,31 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+/**
+ * Phase 3 fixture: static-property completion target (`Cls::$|`).
+ *
+ * Completion at `Stats::$|` should surface ONLY the static properties:
+ *   - `total`, `label`, `latest`
+ *
+ * Must NOT surface:
+ *   - `instance` (instance property)
+ *   - `VERSION`  (class constant)
+ *   - `tick`     (method)
+ */
+class Stats
+{
+    public static int $total = 0;
+    public static string $label = '';
+    public static string $latest = '';
+
+    public int $instance = 0;
+    public const VERSION = 1;
+
+    public static function tick(): void
+    {
+        self::$total++;
+    }
+}

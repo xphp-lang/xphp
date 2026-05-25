@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Models\User;
+
+// Phase 3 fixture: UTF-16 column counting.
+//
+// The `🚀` and `🥑` emojis are supplementary-plane codepoints (UTF-8
+// 4-byte, UTF-16 surrogate pair = 2 code units).  Before this commit,
+// the LSP server's column accounting was 1 unit short past each emoji,
+// shifting hover/GTD positions off by one for every emoji on the line.
+//
+// Test:
+//   - Place cursor on `User` in the line below.
+//   - Hover -> tooltip should show "class App\Models\User" (NOT empty).
+//   - Ctrl+Click -> jumps to User.xphp.
+//
+// If columns are mis-encoded, the cursor effectively lands one position
+// to the left of `User`, hitting the closing `*/` of the docblock and
+// returning null.
+
+/** 🚀 launch -- 🥑 avocado */ $u = new User('phase3');
+
+echo $u->name;

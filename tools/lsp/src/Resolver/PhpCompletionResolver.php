@@ -24,6 +24,9 @@ use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\CompletionItem;
 use Phpactor\LanguageServerProtocol\CompletionItemKind;
+use Phpactor\LanguageServerProtocol\Position;
+use Phpactor\LanguageServerProtocol\Range;
+use Phpactor\LanguageServerProtocol\TextEdit;
 use Phpactor\TextDocument\ByteOffset;
 use Phpactor\TextDocument\TextDocumentBuilder;
 use Phpactor\WorseReflection\Core\Inference\Symbol;
@@ -124,7 +127,7 @@ final class PhpCompletionResolver
         ));
 
         $items = match ($hit['kind']) {
-            'member', 'static', 'static-prop' => $this->completeMembers($uri, $document->text, $hit),
+            'member', 'static', 'static-prop' => $this->completeMembers($uri, $document->text, $hit, $line, $character),
             'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset),
             'new'              => $this->completeClassesByPrefix($hit['prefix']),
             'expression'       => array_merge(
@@ -142,7 +145,7 @@ final class PhpCompletionResolver
      * @param array{kind: string, receiverEnd: int, prefix: string} $hit
      * @return list<CompletionItem>
      */
-    private function completeMembers(string $uri, string $documentText, array $hit): array
+    private function completeMembers(string $uri, string $documentText, array $hit, int $line = 0, int $character = 0): array
     {
         $stripped = $this->parser->strip($documentText);
         $source = TextDocumentBuilder::create($stripped)->uri($uri)->language('php')->build();
@@ -282,6 +285,24 @@ final class PhpCompletionResolver
 
         if ($isStaticProp) {
             // `Cls::$|` -- only static properties.
+            // The textEdit's range starts at the cursor (in LSP coords)
+            // and extends to the same point: an explicit empty-range
+            // anchor.  Without it PhpStorm extends the replacement
+            // range backwards through the `$` and swallows it on
+            // accept, producing `Cls::name` (constant access) instead
+            // of `Cls::$name` (static-property access).  PhpStorm
+            // observed in prod log id=28 of xphp-20260525-172338-536.log.
+            $staticPropAnchorStart = new Position($line, $character);
+            $staticPropPrefixLen = strlen($hit['prefix']);
+            $staticPropAnchorEnd = new Position($line, $character);
+            // When the user has typed `Stats::$la|`, the popup-side
+            // filter has already narrowed to items whose label has
+            // `$la` prefix.  On accept we still need to replace the
+            // `la` they typed -- extend the range BACKWARDS to cover
+            // the typed prefix (but NOT the `$`).
+            if ($staticPropPrefixLen > 0) {
+                $staticPropAnchorStart = new Position($line, max(0, $character - $staticPropPrefixLen));
+            }
             foreach ($class->properties() as $property) {
                 if (!$property->isStatic()) {
                     continue;
@@ -292,7 +313,11 @@ final class PhpCompletionResolver
                 if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
                     continue;
                 }
-                $items[] = self::propertyItem($property);
+                $items[] = $this->propertyItem(
+                    $property,
+                    forStaticProp: true,
+                    textEditRange: new Range($staticPropAnchorStart, $staticPropAnchorEnd),
+                );
             }
         } elseif (!$isStatic) {
             // `$obj->|` -- only instance properties.
@@ -666,14 +691,41 @@ final class PhpCompletionResolver
         );
     }
 
-    private function propertyItem($property): CompletionItem
+    private function propertyItem($property, bool $forStaticProp = false, ?Range $textEditRange = null): CompletionItem
     {
         $type = $this->genericParams->prettify((string) $property->inferredType());
+        $name = $property->name();
+        if ($forStaticProp) {
+            // For `Cls::$|`:
+            //  - label carries the `$` so PhpStorm's popup-filter accepts
+            //    items matching the user's typed `$` prefix.  (Without it,
+            //    every item is dropped silently -- diagnosed via prod log
+            //    id=6 of xphp-20260525-171654-492.log.)
+            //  - textEdit pins the replacement range explicitly so
+            //    PhpStorm doesn't extend the range backwards through the
+            //    `$` and swallow it on accept (which produced
+            //    `Stats::name` instead of `Stats::$name` in prod log
+            //    id=28 of xphp-20260525-172338-536.log).
+            //  - newText is the bare property name; the `$` already in
+            //    source survives because the textEdit's range starts AT
+            //    or AFTER the `$`.
+            $item = new CompletionItem(
+                label: '$' . $name,
+                kind: CompletionItemKind::PROPERTY,
+                detail: $type !== '' && $type !== '<missing>' ? $type : null,
+                insertText: $name,
+                filterText: '$' . $name,
+            );
+            if ($textEditRange !== null) {
+                $item->textEdit = new TextEdit($textEditRange, $name);
+            }
+            return $item;
+        }
         return new CompletionItem(
-            label: $property->name(),
+            label: $name,
             kind: CompletionItemKind::PROPERTY,
             detail: $type !== '' && $type !== '<missing>' ? $type : null,
-            insertText: $property->name(),
+            insertText: $name,
         );
     }
 

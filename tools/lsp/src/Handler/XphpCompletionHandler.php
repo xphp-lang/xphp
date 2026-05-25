@@ -131,7 +131,7 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
     {
         $items = [];
 
-        foreach ($this->symbols->allClassFqns() as $fqn) {
+        foreach ($this->candidateClassFqns() as $fqn) {
             $shortName = self::lastSegment($fqn);
             if (!self::matchesPrefix($shortName, $fqn, $prefix)) {
                 continue;
@@ -202,6 +202,12 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
      *     the identifier (Phase 3 polish "short-name tie-break" can pick
      *     the best one later).
      *
+     * Uses `FqnIndex::allDeclarations()` (open docs + filesystem) so we
+     * find the container even when its declaration file is closed in
+     * the editor.  Falls back to `WorkspaceSymbols::allClassFqns()`
+     * (open-only) when no `FqnIndex` is wired -- legacy constructor
+     * path.
+     *
      * @return list<string>
      */
     private function resolveContainerFqns(string $name): array
@@ -214,6 +220,17 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
             return [$needle];
         }
         $matches = [];
+        if ($this->fqnIndex !== null) {
+            foreach ($this->fqnIndex->allDeclarations() as $hit) {
+                if ($hit['kind'] !== 'class') {
+                    continue;
+                }
+                if (self::lastSegment($hit['fqn']) === $needle) {
+                    $matches[] = $hit['fqn'];
+                }
+            }
+            return $matches;
+        }
         foreach ($this->symbols->allClassFqns() as $fqn) {
             if (self::lastSegment($fqn) === $needle) {
                 $matches[] = $fqn;
@@ -266,6 +283,36 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
             return true;
         }
         return stripos($shortName, $needle) === 0 || stripos($fqn, $needle) !== false;
+    }
+
+    /**
+     * Class FQNs eligible as type-arg candidates.  Prefers `FqnIndex`
+     * (open docs + filesystem) when wired so closed-file workspace
+     * classes also surface; falls back to `WorkspaceSymbols` (open
+     * only) on the legacy constructor path used by older tests.
+     *
+     * @return iterable<string>
+     */
+    private function candidateClassFqns(): iterable
+    {
+        if ($this->fqnIndex !== null) {
+            $seen = [];
+            foreach ($this->fqnIndex->allDeclarations() as $hit) {
+                if ($hit['kind'] !== 'class') {
+                    continue;
+                }
+                $fqn = $hit['fqn'];
+                if (isset($seen[$fqn])) {
+                    continue;
+                }
+                $seen[$fqn] = true;
+                yield $fqn;
+            }
+            return;
+        }
+        foreach ($this->symbols->allClassFqns() as $fqn) {
+            yield $fqn;
+        }
     }
 
     private static function lastSegment(string $fqn): string
