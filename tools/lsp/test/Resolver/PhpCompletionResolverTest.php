@@ -227,6 +227,49 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('balance', $labels, 'private prop must NOT leak across classes');
     }
 
+    public function testProtectedMembersVisibleInsideSubclass(): void
+    {
+        // Phase 3 polish: subclass-protected -- when the cursor is inside
+        // a class that extends the receiver, the receiver's protected
+        // members must surface.  Private members must NOT (that's the
+        // declaring-class-only gate).
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Animal.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Animal {
+            protected int $age = 0;
+            private string $secret = '';
+            protected function sniff(): void {}
+            private function dream(): void {}
+        }
+        XPHP);
+        // Subclass body uses `$this->` -- the receiver class FQN is
+        // `Animal`, and the caller's enclosing class is `Dog`.
+        $this->open($workspace, '/Dog.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal
+        {
+            public function run(): void
+            {
+                $marker = $this->label;
+            }
+        }
+        XPHP);
+        $useSource = $workspace->get('/Dog.xphp')->text;
+
+        $items = $this->completeAt($workspace, '/Dog.xphp', $useSource, '$this->', strlen('$this->'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // Protected members of the ancestor surface in the subclass.
+        self::assertContains('age', $labels, 'protected prop must surface in subclass');
+        self::assertContains('sniff', $labels, 'protected method must surface in subclass');
+        // Private members stay invisible -- subclass can't see private.
+        self::assertNotContains('secret', $labels, 'private prop must stay hidden in subclass');
+        self::assertNotContains('dream', $labels, 'private method must stay hidden in subclass');
+    }
+
     public function testCompletesPublicPropertiesAfterArrow(): void
     {
         $workspace = $this->workspace();

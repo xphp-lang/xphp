@@ -232,11 +232,15 @@ final class PhpCompletionResolver
 
         // Phase 3 polish: thread the caller's enclosing class FQN so
         // private + protected members are visible when the cursor is
-        // inside the same class.  Subclass-protected (where caller is a
-        // descendant of the receiver class) is left for a later phase --
-        // requires walking the inheritance chain.
+        // inside the same class.  Subclass-protected (caller is a
+        // descendant of the receiver class) consults worse-reflection's
+        // parents() walk -- protected becomes visible there too;
+        // private stays gated to same-class only.
         $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
         $isSameClass = $callerClassFqn !== null && $callerClassFqn === $lookupName;
+        $isSubclass = !$isSameClass
+            && $callerClassFqn !== null
+            && $this->isSubclassOf($callerClassFqn, $lookupName);
 
         foreach ($class->methods() as $method) {
             if (str_starts_with($method->name(), '__')) {
@@ -247,7 +251,7 @@ final class PhpCompletionResolver
                 $droppedStatic++;
                 continue;
             }
-            if (!self::isVisibleFromCaller($method->visibility(), $isSameClass)) {
+            if (!self::isVisibleFromCaller($method->visibility(), $isSameClass, $isSubclass)) {
                 $droppedVis++;
                 continue;
             }
@@ -265,7 +269,7 @@ final class PhpCompletionResolver
         // follow-up.
         if (!$isStatic) {
             foreach ($class->properties() as $property) {
-                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass)) {
+                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
                     continue;
                 }
                 if ($property->isStatic()) {
@@ -502,16 +506,67 @@ final class PhpCompletionResolver
         );
     }
 
-    private static function isVisibleFromCaller(Visibility $visibility, bool $isSameClass): bool
+    private static function isVisibleFromCaller(Visibility $visibility, bool $isSameClass, bool $isSubclass): bool
     {
         if ($visibility->isPublic()) {
             return true;
         }
-        // Private + protected both surface when caller is inside the
-        // receiver class.  Subclass-protected-only access (caller is a
-        // descendant of receiver) is parked: it requires walking the
-        // inheritance chain via worse-reflection's TypeHierarchy.
-        return $isSameClass;
+        if ($isSameClass) {
+            return true;
+        }
+        // Private stays gated to the declaring class.  Protected leaks
+        // one level: subclasses see their ancestors' protected members.
+        if ($isSubclass && !$visibility->isPrivate()) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * "Does `$callerFqn` extend or implement `$receiverFqn`?"  Used by
+     * member-completion to decide whether protected members of the
+     * receiver class should surface at the cursor.  Worse-reflection's
+     * `parents()` plus `interfaces()` give the ancestor set; a BFS over
+     * both keeps cost bounded even with deep / wide hierarchies.
+     */
+    private function isSubclassOf(string $callerFqn, string $receiverFqn): bool
+    {
+        $callerNorm = ltrim($callerFqn, '\\');
+        $receiverNorm = ltrim($receiverFqn, '\\');
+        if ($callerNorm === '' || $receiverNorm === '' || $callerNorm === $receiverNorm) {
+            return false;
+        }
+        try {
+            $class = $this->reflector->reflectClassLike($callerNorm);
+        } catch (\Throwable) {
+            return false;
+        }
+        // BFS the parent + interface tree.  Worse-reflection's `parents`
+        // returns the immediate parent chain; `interfaces` returns the
+        // implementations.  Cycles are impossible in PHP class graphs
+        // but the visited set keeps us safe.
+        $visited = [];
+        $queue = [$class];
+        while ($queue !== []) {
+            $current = array_shift($queue);
+            $name = ltrim((string) $current->name(), '\\');
+            if (isset($visited[$name])) {
+                continue;
+            }
+            $visited[$name] = true;
+            if ($name === $receiverNorm) {
+                return true;
+            }
+            foreach ($current->parents() as $parent) {
+                $queue[] = $parent;
+            }
+            if (method_exists($current, 'interfaces')) {
+                foreach ($current->interfaces() as $iface) {
+                    $queue[] = $iface;
+                }
+            }
+        }
+        return false;
     }
 
     /**
