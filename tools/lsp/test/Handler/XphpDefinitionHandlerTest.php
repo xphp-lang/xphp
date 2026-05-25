@@ -330,6 +330,77 @@ final class XphpDefinitionHandlerTest extends TestCase
         rmdir($dir);
     }
 
+    public function testGtdOnFunctionDeclarationReturnsCallSitesAsReferences(): void
+    {
+        // Ctrl+Click on the function's OWN declaration name -- standard
+        // GTD is a no-op (cursor is already at the decl), so the handler
+        // promotes the request to find-usages and returns the list of
+        // call sites instead.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/funcs.xphp', 'xphp', 1, "<?php\nnamespace App;\nfunction greet(): void {}\n"));
+        $workspace->open(new TextDocumentItem('/Use1.xphp', 'xphp', 1, "<?php\nuse function App\\greet;\ngreet();\n"));
+        $workspace->open(new TextDocumentItem('/Use2.xphp', 'xphp', 1, "<?php\nApp\\greet();\n"));
+
+        // Cursor on `greet` in the declaration.
+        $source = $workspace->get('/funcs.xphp')->text;
+        $result = $this->definitionAtNeedle($workspace, '/funcs.xphp', $source, 'function greet', strlen('function '));
+
+        self::assertIsArray($result, 'GTD on a declaration must return an array of usage Locations');
+        $uris = array_map(fn (Location $l): string => $l->uri, $result);
+        self::assertContains('/Use1.xphp', $uris);
+        self::assertContains('/Use2.xphp', $uris);
+        self::assertNotContains('/funcs.xphp', $uris, 'the declaration itself must NOT appear in the references list');
+    }
+
+    public function testGtdOnClassDeclarationReturnsUsages(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, "<?php\nuse App\\User;\n\$u = new User();\n"));
+
+        $source = $workspace->get('/User.xphp')->text;
+        $result = $this->definitionAtNeedle($workspace, '/User.xphp', $source, 'class User', strlen('class '));
+
+        self::assertIsArray($result);
+        $uris = array_map(fn (Location $l): string => $l->uri, $result);
+        self::assertContains('/Use.xphp', $uris);
+        self::assertNotContains('/User.xphp', $uris);
+    }
+
+    public function testGtdOnDeclarationWithNoUsagesFallsThroughToNormalGtd(): void
+    {
+        // No references exist anywhere -- the handler falls through to
+        // normal GTD paths (which return null for a self-targeting decl).
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/lonely.xphp', 'xphp', 1, "<?php\nnamespace App;\nfunction lonely(): void {}\n"));
+
+        $source = $workspace->get('/lonely.xphp')->text;
+        $result = $this->definitionAtNeedle($workspace, '/lonely.xphp', $source, 'function lonely', strlen('function '));
+
+        self::assertNull($result);
+    }
+
+    /**
+     * @return Location|list<Location>|null
+     */
+    private function definitionAtNeedle(
+        PhpactorWorkspace $workspace,
+        string $uri,
+        string $source,
+        string $needle,
+        int $offsetInNeedle,
+    ): mixed {
+        $byte = strpos($source, $needle);
+        self::assertNotFalse($byte);
+        $byte += $offsetInNeedle;
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $params = new DefinitionParams(
+            new TextDocumentIdentifier($uri),
+            new Position($line, $character),
+        );
+        return wait($this->newHandler($workspace)->definition($params));
+    }
+
     private function definitionAtOffset(
         XphpDefinitionHandler $handler,
         string $uri,
@@ -367,11 +438,27 @@ final class XphpDefinitionHandlerTest extends TestCase
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
         $fqnIndex = new FqnIndex($workspace, $cache, $parser, $rootPath ?? '');
+        $reflector = (new \XPHP\Lsp\Reflection\ReflectorFactory(
+            $workspace,
+            $cache,
+            $parser,
+            rootPath: $rootPath ?? '',
+            stubPath: \XPHP\Lsp\Reflection\ReflectorFactory::defaultStubPath(),
+            cacheDir: \XPHP\Lsp\Reflection\ReflectorFactory::defaultCacheDir(),
+            fqnIndex: $fqnIndex,
+        ))->build();
+        $classLikeLookup = new \XPHP\Lsp\Resolver\CompositeClassLikeLookup(
+            new \XPHP\Lsp\Resolver\WorkspaceClassLikeLookup($workspace, $cache),
+            new \XPHP\Lsp\Resolver\FilesystemClassLikeLookup($fqnIndex),
+        );
+        $genericResolver = new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
+        $referenceFinder = new \XPHP\Lsp\Resolver\ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $genericResolver);
         return new XphpDefinitionHandler(
             $workspace,
             $cache,
             new WorkspaceSymbols($workspace, $cache),
             $fqnIndex,
+            $referenceFinder,
         );
     }
 }

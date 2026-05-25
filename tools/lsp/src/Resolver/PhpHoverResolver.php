@@ -99,6 +99,26 @@ final class PhpHoverResolver
                 : null;
         }
 
+        // Cursor on a declaration's own name token (`function foo`,
+        // `class Foo`, `public function method()`).  Worse-reflection
+        // returns an unhelpful symbol classification for these (the
+        // declaration isn't a "reference" -- it IS the symbol), so the
+        // standard dispatch yields null.  Walk the AST to identify the
+        // enclosing declaration and render its signature directly.
+        $declHit = $this->declarationFqnAtOffset($uri, $offset);
+        if ($declHit !== null) {
+            $markdown = match ($declHit['kind']) {
+                'function' => $this->renderFunction($declHit['fqn']),
+                'class'    => $this->renderClass($declHit['fqn']),
+                'method'   => $this->renderMethod($declHit['className'], $declHit['memberName']),
+                'property' => $this->renderProperty($declHit['className'], $declHit['memberName']),
+                default    => null,
+            };
+            if ($markdown !== null) {
+                return new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown));
+            }
+        }
+
         // METHOD / PROPERTY / CONSTANT dispatch go through `containerOrNull`
         // so a MissingType container (when worse-reflection can't infer
         // the receiver -- e.g. result of an xphp generic method call)
@@ -324,6 +344,106 @@ final class PhpHoverResolver
         return $out;
     }
 
+
+    /**
+     * Detect whether the cursor sits on the name token of a Function_,
+     * ClassLike, ClassMethod, or PropertyProperty declaration.  Returns
+     * a {kind, fqn, [className, memberName]} hit so the caller can pick
+     * the right render path.  Used when worse-reflection's reflectOffset
+     * returns nothing useful for a declaration cursor (the symbol IS the
+     * declaration; there's nothing to "look up").
+     *
+     * @return array{kind: string, fqn?: string, className?: string, memberName?: string}|null
+     */
+    private function declarationFqnAtOffset(string $uri, int $byteOffset): ?array
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        try {
+            $ast = $this->parser->parseTolerant($item->text);
+        } catch (Throwable) {
+            return null;
+        }
+        if ($ast === null) {
+            return null;
+        }
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?array $hit = null;
+            private string $namespace = '';
+            /** @var list<string> */
+            private array $classStack = [];
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Namespace_) {
+                    $this->namespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if ($node instanceof Node\Stmt\ClassLike && $node->name !== null) {
+                    $short = $node->name->toString();
+                    $fqn = $this->namespace !== '' ? $this->namespace . '\\' . $short : $short;
+                    $this->classStack[] = $fqn;
+                    if ($this->hits($node->name)) {
+                        $this->hit = ['kind' => 'class', 'fqn' => $fqn];
+                    }
+                    return null;
+                }
+                if ($node instanceof Node\Stmt\Function_) {
+                    if ($this->hits($node->name)) {
+                        $short = $node->name->toString();
+                        $fqn = $this->namespace !== '' ? $this->namespace . '\\' . $short : $short;
+                        $this->hit = ['kind' => 'function', 'fqn' => $fqn];
+                    }
+                    return null;
+                }
+                if ($node instanceof Node\Stmt\ClassMethod && $this->classStack !== []) {
+                    if ($this->hits($node->name)) {
+                        $this->hit = [
+                            'kind' => 'method',
+                            'className' => end($this->classStack),
+                            'memberName' => $node->name->toString(),
+                        ];
+                    }
+                    return null;
+                }
+                if ($node instanceof Node\PropertyItem && $this->classStack !== []) {
+                    if ($this->hits($node->name)) {
+                        $this->hit = [
+                            'kind' => 'property',
+                            'className' => end($this->classStack),
+                            'memberName' => $node->name->toString(),
+                        ];
+                    }
+                }
+                return null;
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\ClassLike && $node->name !== null) {
+                    array_pop($this->classStack);
+                }
+                return null;
+            }
+
+            private function hits(Node $name): bool
+            {
+                $s = $name->getStartFilePos();
+                $e = $name->getEndFilePos();
+                return $s >= 0 && $this->offset >= $s && $this->offset <= $e;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->hit;
+    }
 
     /**
      * Mirror of `PhpDefinitionResolver::useFunctionFqnAtOffset`: detect a

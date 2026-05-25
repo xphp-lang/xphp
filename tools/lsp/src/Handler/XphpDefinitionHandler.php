@@ -6,6 +6,9 @@ namespace XPHP\Lsp\Handler;
 
 use Amp\Promise;
 use Amp\Success;
+use PhpParser\Node;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
 use Phpactor\LanguageServer\Core\Handler\Handler;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
@@ -18,6 +21,7 @@ use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Lsp\Resolver\PhpDefinitionResolver;
+use XPHP\Lsp\Resolver\ReferenceFinder;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -48,6 +52,7 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
         private readonly ParsedDocumentCache $cache,
         private readonly WorkspaceSymbols $workspaceSymbols,
         private readonly FqnIndex $fqnIndex,
+        private readonly ReferenceFinder $referenceFinder,
         private readonly ?PhpDefinitionResolver $phpResolver = null,
     ) {
     }
@@ -88,6 +93,27 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
             $params->position->line,
             $params->position->character,
         );
+
+        // Path 0: cursor sits on a declaration's own name token
+        // (`function foo`, `class Foo`, `public function method()`,
+        // `public $prop`).  Standard GTD would either no-op (already AT
+        // the decl) or return null.  Promote this to "find usages" --
+        // when the user Ctrl+Clicks their own declaration they almost
+        // always mean "show me everywhere this is used".  Return the
+        // reference locations (excluding the decl itself).  PhpStorm
+        // handles `Location[]` by popping a multi-target navigator.
+        if (self::isOnDeclarationName($currentResult->ast, $offset)) {
+            $references = $this->referenceFinder->findReferences(
+                $params->textDocument->uri,
+                $offset,
+                includeDeclaration: false,
+            );
+            if ($references !== []) {
+                return new Success($references);
+            }
+            // Fall through to normal GTD if there are no usages -- the
+            // user sees "no targets" instead of nothing.
+        }
 
         // Path 1: cursor on a Name carrying ATTR_TEMPLATE_FQN -- the
         // outer site of a generic instantiation (`Box` in
@@ -140,6 +166,54 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
         }
 
         return new Success(null);
+    }
+
+    /**
+     * Detect whether the byte offset falls on the name token of a
+     * Function_, ClassLike, ClassMethod, or PropertyItem declaration.
+     * Used by Path 0 to promote GTD-on-decl into find-usages.
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function isOnDeclarationName(array $ast, int $byteOffset): bool
+    {
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public bool $hit = false;
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->hit) {
+                    return null;
+                }
+                $nameNode = null;
+                if ($node instanceof Node\Stmt\ClassLike) {
+                    $nameNode = $node->name;
+                } elseif ($node instanceof Node\Stmt\Function_) {
+                    $nameNode = $node->name;
+                } elseif ($node instanceof Node\Stmt\ClassMethod) {
+                    $nameNode = $node->name;
+                } elseif ($node instanceof Node\PropertyItem) {
+                    $nameNode = $node->name;
+                }
+                if ($nameNode === null) {
+                    return null;
+                }
+                $s = $nameNode->getStartFilePos();
+                $e = $nameNode->getEndFilePos();
+                if ($s >= 0 && $this->offset >= $s && $this->offset <= $e) {
+                    $this->hit = true;
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->hit;
     }
 
     private static function lastSegment(string $identifier): string

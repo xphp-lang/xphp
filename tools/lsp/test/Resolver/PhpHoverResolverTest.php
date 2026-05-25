@@ -232,6 +232,50 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('App\\Models\\User', $markdown);
     }
 
+    public function testHoverOnFunctionDeclarationNameShowsSignature(): void
+    {
+        // Regression: cursor on the function name in its OWN declaration
+        // (`function originalCount(...)`) previously returned null
+        // because worse-reflection has no useful symbol classification
+        // for the declaration name token.  AST-based fallback now
+        // identifies the enclosing Function_ and renders its signature.
+        $workspace = $this->workspace();
+        $useSource = "<?php\nnamespace App;\n/** Counts items. */\nfunction originalCount(array \$items): int { return count(\$items); }\n";
+        $this->open($workspace, '/funcs.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/funcs.xphp', $useSource, 'originalCount', 3);
+
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('originalCount', $markdown);
+        self::assertStringContainsString('Counts items', $markdown);
+    }
+
+    public function testHoverOnClassDeclarationNameShowsSignature(): void
+    {
+        $workspace = $this->workspace();
+        $useSource = "<?php\nnamespace App;\n/** A widget. */\nclass Widget { public string \$name = ''; }\n";
+        $this->open($workspace, '/Widget.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Widget.xphp', $useSource, 'class Widget', strlen('class '));
+
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('Widget', $markdown);
+        self::assertStringContainsString('A widget', $markdown);
+    }
+
+    public function testHoverOnMethodDeclarationNameShowsSignature(): void
+    {
+        $workspace = $this->workspace();
+        $useSource = "<?php\nnamespace App;\nclass Widget {\n    /** Shouts loudly. */\n    public function shout(): string { return ''; }\n}\n";
+        $this->open($workspace, '/Widget.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Widget.xphp', $useSource, 'function shout', strlen('function '));
+
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('shout', $markdown);
+        self::assertStringContainsString('Shouts loudly', $markdown);
+    }
+
     public function testHoverInsideUseFunctionImportShowsFunctionSignature(): void
     {
         // Regression: cursor on the function name inside
