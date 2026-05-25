@@ -167,6 +167,35 @@ final class WorkspaceSymbolsTest extends TestCase
         self::assertSame('/User.xphp', $location->uri);
     }
 
+    public function testFindClassByNameTieBreakPrefersNonFixtureCandidate(): void
+    {
+        // Phase 3 polish: when the same short name appears in BOTH a
+        // fixture path and a canonical path, the canonical wins.
+        // Without the tie-break, the first document iterated would
+        // shadow the real source -- breaking GTD into actual code.
+        $workspace = new PhpactorWorkspace();
+        // Fixture opens first -- without the tie-break, this would win.
+        $workspace->open(new TextDocumentItem('/tests/Fixtures/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}"));
+        $workspace->open(new TextDocumentItem('/src/Models/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}"));
+
+        $location = $this->newSymbols($workspace)->findClassByName('User');
+
+        self::assertNotNull($location);
+        self::assertSame('/src/Models/User.xphp', $location->uri, 'canonical src/ path must outrank tests/Fixtures');
+    }
+
+    public function testFindClassByNameTieBreakPrefersNonVendorCandidate(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/vendor/acme/lib/User.xphp', 'xphp', 1, "<?php\nnamespace Acme;\nclass User {}"));
+        $workspace->open(new TextDocumentItem('/src/Models/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}"));
+
+        $location = $this->newSymbols($workspace)->findClassByName('User');
+
+        self::assertNotNull($location);
+        self::assertSame('/src/Models/User.xphp', $location->uri, 'app code must outrank vendor copy');
+    }
+
     private function newSymbols(PhpactorWorkspace $workspace): WorkspaceSymbols
     {
         $cache = new ParsedDocumentCache(

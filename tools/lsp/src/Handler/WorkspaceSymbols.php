@@ -96,6 +96,14 @@ final readonly class WorkspaceSymbols
         if ($shortName === '') {
             return null;
         }
+        // Phase 3 polish: when multiple open documents define a class
+        // with the same short name (typical in repos with parallel
+        // fixture trees -- `tests/Fixtures/User.xphp` shadowing the real
+        // `src/Models/User.xphp`), prefer the non-fixture / non-vendor
+        // candidate.  Rank-walk every match, lowest penalty wins; first
+        // hit among equal-penalty matches preserves prior order.
+        /** @var array{location: Location, penalty: int}|null $best */
+        $best = null;
         foreach ($this->workspace as $uri => $item) {
             $result = $this->cache->getOrParse($uri, $item->version, $item->text);
             if ($result->ast === null) {
@@ -108,15 +116,38 @@ final readonly class WorkspaceSymbols
             $positionMap = new PositionMap($item->text);
             [$startLine, $startChar] = $positionMap->offsetToPosition($found['startOffset']);
             [$endLine, $endChar] = $positionMap->offsetToPosition($found['endOffset']);
-            return new Location(
+            $location = new Location(
                 $uri,
                 new Range(
                     new Position($startLine, $startChar),
                     new Position($endLine, $endChar),
                 ),
             );
+            $penalty = self::pathPenalty($uri);
+            if ($best === null || $penalty < $best['penalty']) {
+                $best = ['location' => $location, 'penalty' => $penalty];
+            }
         }
-        return null;
+        return $best === null ? null : $best['location'];
+    }
+
+    /**
+     * Score a URI's "is this canonical workspace code" likelihood.
+     * Lower is better.  Fixture / test / vendor paths get a positive
+     * penalty so the canonical implementation outranks them when the
+     * short name collides.  Match is case-insensitive on the path
+     * segment to catch both `tests/` and `Tests/` etc.
+     */
+    private static function pathPenalty(string $uri): int
+    {
+        $needle = strtolower($uri);
+        $penalty = 0;
+        foreach (['/vendor/', '/tests/', '/test/', '/fixtures/', '/fixture/', '/stubs/', '/stub/'] as $segment) {
+            if (str_contains($needle, $segment)) {
+                $penalty += 10;
+            }
+        }
+        return $penalty;
     }
 
     /**
