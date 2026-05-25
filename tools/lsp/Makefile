@@ -33,9 +33,14 @@ $(INFECTION_PHAR):
 	@chmod +x $@
 
 .PHONY: test/mutation
+# 2048M memory_limit covers Infection's initial Xdebug-instrumented PHPUnit
+# run plus the per-mutation subprocesses; Infection forwards INI flags to
+# its PHPUnit children, so a single -d here propagates.  Without it the
+# initial run silently hits PHP's default cap (no useful error -- Infection
+# just reports "Project tests must be in a passing state").
 test/mutation: $(INFECTION_PHAR)
 	composer install --quiet && \
-	  php -d error_reporting='E_ALL & ~E_DEPRECATED' var/infection.phar \
+	  php -d error_reporting='E_ALL & ~E_DEPRECATED' -d memory_limit=2048M var/infection.phar \
 	  --threads=max --min-covered-msi=93 --show-mutations --no-progress
 
 .PHONY: build-extension
