@@ -7,11 +7,15 @@ namespace XPHP\Lsp\Resolver;
 use PhpParser\ErrorHandler\Collecting as CollectingErrorHandler;
 use PhpParser\Node;
 use PhpParser\Node\ClosureUse;
+use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Param;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Foreach_;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
@@ -121,7 +125,7 @@ final class PhpCompletionResolver
 
         $items = match ($hit['kind']) {
             'member', 'static' => $this->completeMembers($uri, $document->text, $hit),
-            'variable'         => $this->completeVariables($uri, $hit['prefix']),
+            'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset),
             'new'              => $this->completeClassesByPrefix($hit['prefix']),
             'expression'       => array_merge(
                 $this->completeClassesByPrefix($hit['prefix']),
@@ -308,15 +312,29 @@ final class PhpCompletionResolver
     }
 
     /**
-     * Variable completion: every name introduced by a Param / Assign-target /
-     * Foreach var / ClosureUse anywhere in the current document, filtered by
-     * prefix.  Cursor-scope-unaware (matches the same compromise made in
-     * `PhpDefinitionResolver::locateVariable`); shadowed variables surface
-     * once with their first appearance.
+     * Variable completion, scope-aware.
+     *
+     * Visible names at the cursor:
+     *   - Top-level cursor: variables introduced anywhere at the script's
+     *     top level (outside any function/method/closure).
+     *   - Inside a function/method: only that body's params + locally-
+     *     assigned variables.  PHP's function-scope barrier hides outer
+     *     scope from regular `function` / method bodies.
+     *   - Inside a `function () use ($a, $b) { ... }` closure: the
+     *     closure's params + `use (...)` captures + closure-local
+     *     variables.  Outer-scope names not in the use clause stay
+     *     hidden.
+     *   - Inside an `fn () => ...` arrow function: the arrow's params +
+     *     all outer-scope variables (PHP's auto-capture semantics).
+     *
+     * Mid-edit safety: if the strict parse failed (typical for cursor on
+     * `$us` with no statement terminator), retry with an error-collecting
+     * handler so the variables defined BEFORE the broken region still
+     * surface.
      *
      * @return list<CompletionItem>
      */
-    private function completeVariables(string $uri, string $prefix): array
+    private function completeVariables(string $uri, string $prefix, int $cursorOffset): array
     {
         if (!$this->workspace->has($uri)) {
             return [];
@@ -326,12 +344,6 @@ final class PhpCompletionResolver
 
         $ast = $result->ast;
         if ($ast === null) {
-            // The cache's strict parse failed -- typical when the user is
-            // mid-edit and the trailing characters aren't valid PHP yet
-            // (e.g. cursor on `$us` with no statement terminator).  Retry
-            // with an error-collecting handler so we get a best-effort AST
-            // of everything BEFORE the broken region -- enough to surface
-            // variables the user already declared above.
             $ast = $this->tolerantParse($item->text);
             self::trace(sprintf(
                 'variable completion: cache miss; tolerant-parse %s',
@@ -342,15 +354,168 @@ final class PhpCompletionResolver
             }
         }
 
-        $collector = new class extends NodeVisitorAbstract {
-            /** @var array<string, true> */
-            public array $names = [];
+        // The script body itself is the outermost "scope" (null sentinel).
+        // Inner scopes are Function_/ClassMethod/Closure/ArrowFunction nodes.
+        // The chain runs outermost (null) -> ... -> innermost (the scope
+        // containing the cursor).
+        $chain = self::scopeChainAt($ast, $cursorOffset);
+
+        /** @var array<string, true> $visible */
+        $visible = [];
+
+        $innermost = end($chain);
+        if ($innermost === null) {
+            // Top-level cursor -- collect top-level variables.
+            self::collectScopeBodyVariables($ast, $visible);
+        } else {
+            self::collectScopeOwnVariables($innermost, $visible);
+
+            // Closures: only explicit `use (...)` brings outer names in.
+            // (Already captured by collectScopeOwnVariables.)
+            //
+            // ArrowFunctions: auto-capture from the chain of enclosing
+            // arrow functions / top-level until we hit the first function
+            // barrier (Function_, ClassMethod, Closure).  Closure stops
+            // the walk because it ALREADY filters outer scope through its
+            // own `use (...)` clause.
+            if ($innermost instanceof ArrowFunction) {
+                for ($i = count($chain) - 2; $i >= 0; $i--) {
+                    $outer = $chain[$i];
+                    if ($outer === null) {
+                        self::collectScopeBodyVariables($ast, $visible);
+                        break;
+                    }
+                    self::collectScopeOwnVariables($outer, $visible);
+                    if ($outer instanceof Function_
+                        || $outer instanceof ClassMethod
+                        || $outer instanceof Closure
+                    ) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        $items = [];
+        foreach (array_keys($visible) as $name) {
+            if (!self::variableMatchesPrefix($name, $prefix)) {
+                continue;
+            }
+            $items[] = new CompletionItem(
+                label: '$' . $name,
+                kind: CompletionItemKind::VARIABLE,
+                insertText: $name,
+            );
+        }
+        return $items;
+    }
+
+    /**
+     * Build the scope chain (outermost -> innermost) for `$byteOffset`.
+     * `null` represents the script's top-level scope.  Each non-null
+     * entry is the scope node (Function_/ClassMethod/Closure/ArrowFunction)
+     * whose `[startFilePos..endFilePos]` covers the cursor.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return list<Function_|ClassMethod|Closure|ArrowFunction|null>
+     */
+    private static function scopeChainAt(array $ast, int $byteOffset): array
+    {
+        /** @var list<Function_|ClassMethod|Closure|ArrowFunction> $covering */
+        $covering = [];
+        $visitor = new class($byteOffset, $covering) extends NodeVisitorAbstract {
+            /** @param list<Function_|ClassMethod|Closure|ArrowFunction> $covering */
+            public function __construct(
+                private readonly int $cursor,
+                private array &$covering,
+            ) {
+            }
 
             public function enterNode(Node $node): null
             {
-                if ($node instanceof Param && $node->var instanceof Variable && is_string($node->var->name)) {
-                    $this->names[$node->var->name] = true;
+                if (!$node instanceof Function_
+                    && !$node instanceof ClassMethod
+                    && !$node instanceof Closure
+                    && !$node instanceof ArrowFunction
+                ) {
                     return null;
+                }
+                $start = $node->getStartFilePos();
+                $end = $node->getEndFilePos();
+                if ($start === -1 || $end === -1) {
+                    return null;
+                }
+                if ($this->cursor >= $start && $this->cursor <= $end + 1) {
+                    $this->covering[] = $node;
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+
+        // Sort by innermost (largest start, smallest end).  Simple sort by
+        // startFilePos ascending puts ancestors first.
+        usort($covering, static fn ($a, $b) => $a->getStartFilePos() <=> $b->getStartFilePos());
+        return array_merge([null], $covering);
+    }
+
+    /**
+     * Collect variables introduced in a scope's own body: its params,
+     * its `use (...)` captures (for closures), and assignments / foreach
+     * / closure-use within the body that don't descend into a nested
+     * scope.
+     *
+     * @param array<string, true> $names  out-param accumulator
+     */
+    private static function collectScopeOwnVariables(
+        Function_|ClassMethod|Closure|ArrowFunction $scope,
+        array &$names,
+    ): void {
+        foreach ($scope->params as $param) {
+            if ($param->var instanceof Variable && is_string($param->var->name)) {
+                $names[$param->var->name] = true;
+            }
+        }
+        if ($scope instanceof Closure) {
+            foreach ($scope->uses as $use) {
+                if ($use->var instanceof Variable && is_string($use->var->name)) {
+                    $names[$use->var->name] = true;
+                }
+            }
+        }
+        $body = $scope instanceof ArrowFunction ? [$scope->expr] : ($scope->stmts ?? []);
+        if (is_array($body)) {
+            self::collectScopeBodyVariables($body, $names);
+        }
+    }
+
+    /**
+     * Walk `$nodes` collecting variable-defining sites, BUT skipping any
+     * nested function/method/closure/arrow body so we don't leak names
+     * from a sibling scope.  Used both for the script's top-level body
+     * and for the body of a specific scope node.
+     *
+     * @param array<int, Node> $nodes
+     * @param array<string, true> $names  out-param accumulator
+     */
+    private static function collectScopeBodyVariables(array $nodes, array &$names): void
+    {
+        $collector = new class($names) extends NodeVisitorAbstract {
+            /** @param array<string, true> $names */
+            public function __construct(private array &$names)
+            {
+            }
+
+            public function enterNode(Node $node): null|int
+            {
+                if ($node instanceof Function_
+                    || $node instanceof ClassMethod
+                    || $node instanceof Closure
+                    || $node instanceof ArrowFunction
+                ) {
+                    return NodeTraverser::DONT_TRAVERSE_CHILDREN;
                 }
                 if ($node instanceof Assign && $node->var instanceof Variable && is_string($node->var->name)) {
                     $this->names[$node->var->name] = true;
@@ -363,31 +528,13 @@ final class PhpCompletionResolver
                     if ($node->valueVar instanceof Variable && is_string($node->valueVar->name)) {
                         $this->names[$node->valueVar->name] = true;
                     }
-                    return null;
-                }
-                if ($node instanceof ClosureUse && $node->var instanceof Variable && is_string($node->var->name)) {
-                    $this->names[$node->var->name] = true;
                 }
                 return null;
             }
         };
-
         $traverser = new NodeTraverser();
         $traverser->addVisitor($collector);
-        $traverser->traverse($ast);
-
-        $items = [];
-        foreach (array_keys($collector->names) as $name) {
-            if (!self::variableMatchesPrefix($name, $prefix)) {
-                continue;
-            }
-            $items[] = new CompletionItem(
-                label: '$' . $name,
-                kind: CompletionItemKind::VARIABLE,
-                insertText: $name,
-            );
-        }
-        return $items;
+        $traverser->traverse($nodes);
     }
 
     /**

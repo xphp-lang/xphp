@@ -402,6 +402,82 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('$item', $labels);
     }
 
+    public function testVariableCompletionRespectsFunctionScopeBoundary(): void
+    {
+        // Phase 3 polish: function bodies are scope barriers in PHP --
+        // variables from outside don't leak in.  Before this commit the
+        // collector dumped every variable in the document; cursor inside
+        // `inner()` saw `$outer` despite that being inaccessible.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$outer = 1;\nfunction inner(\$param): int {\n    \$local = \$param;\n    return \$local;\n}\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        // Cursor on `$local` inside `inner()`.
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'return $local', strlen('return $'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$local', $labels);
+        self::assertContains('$param', $labels);
+        // $outer is at top-level scope; the function scope barrier hides it.
+        self::assertNotContains('$outer', $labels);
+    }
+
+    public function testVariableCompletionInClosureRespectsUseClause(): void
+    {
+        // PHP closures only see the outer scope variables they explicitly
+        // import via `use (...)`.  Other outer-scope vars stay hidden.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$visible = 1;\n\$hidden = 2;\n\$cb = function () use (\$visible) {\n    \$inner = \$visible;\n    return \$inner;\n};\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        // Cursor inside the closure body.
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'return $inner', strlen('return $'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$inner', $labels);
+        self::assertContains('$visible', $labels);
+        // $hidden was NOT imported via use; closures don't auto-capture.
+        self::assertNotContains('$hidden', $labels);
+        // $cb is OUTSIDE the closure (top-level), but it's the closure's
+        // own assignment target -- arguably visible from outside the
+        // closure but we're inside it: stays hidden.
+        self::assertNotContains('$cb', $labels);
+    }
+
+    public function testVariableCompletionInArrowFnAutoCapturesOuter(): void
+    {
+        // PHP arrow functions auto-capture all outer-scope vars by value.
+        // Inside `fn () => ...`, the user should see outer vars without
+        // needing an explicit use clause.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$outer = 1;\n\$factor = 2;\n\$cb = fn (\$x) => \$x * \$factor;\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        // Cursor on `$factor` inside the arrow's body.
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, '* $factor', strlen('* $'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$x', $labels);
+        self::assertContains('$factor', $labels);
+        self::assertContains('$outer', $labels, 'arrow fn auto-captures outer scope vars');
+    }
+
+    public function testVariableCompletionInMethodHidesTopLevelVars(): void
+    {
+        // Methods are scope barriers -- top-level vars from above the
+        // class declaration must NOT surface inside method bodies.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$topLevel = 1;\nclass Foo {\n    public function bar(\$arg): int {\n        \$inMethod = \$arg;\n        return \$inMethod;\n    }\n}\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'return $inMethod', strlen('return $'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('$inMethod', $labels);
+        self::assertContains('$arg', $labels);
+        self::assertNotContains('$topLevel', $labels, 'method scope hides top-level vars');
+    }
+
     public function testCompletesVariablesAfterBareDollarSign(): void
     {
         // Cursor immediately after `$` -- we seek inside an existing
