@@ -232,6 +232,32 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('App\\Models\\User', $markdown);
     }
 
+    public function testStaticPropertyHoverShowsType(): void
+    {
+        // Follow-up item 4: cursor on `Foo::$prop` should render the
+        // property type / docblock, symmetric to instance-property
+        // hover.  worse-reflection's containerType resolves to the
+        // class on the LHS of `::`, so the existing renderProperty
+        // path should work without modification.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Counter.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Counter {
+            /** Live count. */
+            public static int $count = 0;
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Counter;\necho Counter::\$count;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '::$count', 2);
+
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('$count', $markdown);
+        self::assertStringContainsString('static', $markdown, 'static modifier must appear in the rendered signature');
+    }
+
     public function testPropertyHoverFallsBackToWorseReflectionWhenNoBinding(): void
     {
         // Boundary lock: when no binding is in scope, the resolver

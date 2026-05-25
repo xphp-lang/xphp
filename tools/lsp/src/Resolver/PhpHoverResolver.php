@@ -201,11 +201,13 @@ final class PhpHoverResolver
             return null;
         }
         $visibility = (string) $property->visibility();
+        $static = $property->isStatic() ? 'static ' : '';
         $type = $this->genericParams->prettify((string) $property->inferredType());
         $signature = sprintf(
-            "// %s\n%s %s\$%s",
+            "// %s\n%s %s%s\$%s",
             $classFqn,
             $visibility,
+            $static,
             $type !== '' && $type !== '<missing>' ? $type . ' ' : '',
             $property->name(),
         );

@@ -109,6 +109,27 @@ final class PhpDefinitionResolverTest extends TestCase
         $this->assertResolves($location, '/User.xphp', 'name');
     }
 
+    public function testJumpsFromStaticPropertyAccessToProperty(): void
+    {
+        // Follow-up item 4: GTD on `Foo::$prop` should jump to the
+        // static property declaration, symmetric to instance-property
+        // GTD.  worse-reflection's containerType on a StaticPropertyFetch
+        // resolves to the LHS class, so locateProperty already works.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Counter.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Counter {
+            public static int $count = 0;
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Counter;\necho Counter::\$count;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, '::$count', 2);
+        $this->assertResolves($location, '/Counter.xphp', 'count');
+    }
+
     public function testJumpsFromUserFunctionCallToFunctionDeclaration(): void
     {
         $workspace = $this->workspace();
