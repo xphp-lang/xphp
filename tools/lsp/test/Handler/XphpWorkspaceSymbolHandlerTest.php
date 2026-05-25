@@ -183,6 +183,35 @@ final class XphpWorkspaceSymbolHandlerTest extends TestCase
         self::assertStringStartsNotWith('file://', $results[0]->location->uri);
     }
 
+    public function testClassMemberSuffixIsStripped(): void
+    {
+        // Phase 3: PhpStorm sends `Class::method` when the user types
+        // the qualified form in the symbol popup.  We don't index methods
+        // at workspace level so we strip the suffix and return the class
+        // match.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass Box {}\n"));
+
+        $names = array_map(
+            fn (SymbolInformation $s): string => $s->name,
+            $this->query($workspace, 'Box::get'),
+        );
+        self::assertContains('Box', $names);
+    }
+
+    public function testEmptyClassMemberStillStripsAndReturns(): void
+    {
+        // `Class::` (no member yet -- mid-typing) also resolves to the class.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass Box {}\n"));
+
+        $names = array_map(
+            fn (SymbolInformation $s): string => $s->name,
+            $this->query($workspace, 'Box::'),
+        );
+        self::assertContains('Box', $names);
+    }
+
     public function testResultCapPreventsRunawayPayloads(): void
     {
         // Cap is 250 -- emit 260 declarations and assert we cut off.

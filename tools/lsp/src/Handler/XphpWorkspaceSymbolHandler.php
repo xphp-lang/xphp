@@ -64,7 +64,7 @@ final class XphpWorkspaceSymbolHandler implements Handler, CanRegisterCapabiliti
      */
     public function symbol(WorkspaceSymbolParams $params): Promise
     {
-        $query = strtolower($params->query);
+        $query = strtolower(self::stripMemberSuffix($params->query));
         $results = [];
         foreach ($this->fqnIndex->allDeclarations() as $hit) {
             if ($query !== '' && !self::matches($hit['fqn'], $query)) {
@@ -76,6 +76,19 @@ final class XphpWorkspaceSymbolHandler implements Handler, CanRegisterCapabiliti
             }
         }
         return new Success($results);
+    }
+
+    /**
+     * PhpStorm's symbol popup sends `Class::method` (or `Class::`) when the
+     * user types the class-qualified form -- our handler doesn't index
+     * methods at workspace level, so we strip the `::...` suffix and treat
+     * it as a class query.  The client surfaces the class hit; user can
+     * navigate, then use file-local document-symbols / GTD for the member.
+     */
+    private static function stripMemberSuffix(string $query): string
+    {
+        $idx = strpos($query, '::');
+        return $idx === false ? $query : substr($query, 0, $idx);
     }
 
     private static function matches(string $fqn, string $lcQuery): bool
