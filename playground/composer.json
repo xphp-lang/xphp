@@ -1,16 +1,16 @@
 {
     "name": "xphp-lang/playground",
-    "description": "Sandbox app to explore xphp features. Compiles its own .xphp sources via a local path-repo dependency on xphp-lang/xphp-parser.",
+    "description": "Sandbox app to explore xphp features. Compiles its own .xphp sources via a local path-repo dependency on xphp-lang/xphp.",
     "type": "project",
     "license": "MIT",
     "require": {
         "php": "^8.4.0",
-        "xphp-lang/xphp-parser": "@dev"
+        "xphp-lang/xphp": "@dev"
     },
     "repositories": [
         {
             "type": "path",
-            "url": "../",
+            "url": "../core/",
             "options": {
                 "symlink": true
             }

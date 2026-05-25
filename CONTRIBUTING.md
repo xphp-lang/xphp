@@ -3,34 +3,38 @@
 ## Monorepo layout
 
 The repository hosts the xphp language plus the tooling that grows around it.
-The core compiler keeps its privileged location at the root; everything else
-lives under `tools/<name>/`, as an independent sub-project with its own build
-system, lockfile, tests, and CI workflow.
+Every shippable artifact lives in its own sub-project with its own build
+system, lockfile, tests, and CI workflow.  The PHP core compiler lives under
+`core/`; satellites (LSP, PhpStorm plugin, etc.) live under `tools/<name>/`.
 
 ```
 xphp-lang/
-+-- src/, test/, bin/, composer.json     # the core compiler (PHP)
++-- core/                                # the PHP compiler package
+|   +-- src/, test/, bin/, composer.json
+|   `-- Makefile, infection.json5, phpunit.xml.dist
 +-- docs/                                # language-level documentation
 +-- playground/                          # demo workspace that depends on the core
 +-- tools/
 |   +-- lsp/                             # Language Server (PHP, phpactor/language-server)
-|   `-- <future tools land here>         # e.g. tools/phpstorm-plugin/ (Kotlin + Gradle)
+|   +-- phpstorm-plugin/                 # JetBrains plugin (Kotlin + Gradle)
+|   `-- vscode-extension/                # VS Code client (TypeScript)
 +-- .github/workflows/
-|   +-- ci-core.yml                      # phpunit + infection for the core
+|   +-- ci-core.yml                      # phpunit + infection for core/
 |   `-- ci-<package>.yml                 # one file per package under tools/
-`-- Makefile                             # core-only commands; each tool ships its own Makefile
++-- docker-compose.yml                   # shared dev stack
+`-- README.md, CONTRIBUTING.md           # repo-level docs
 ```
 
 ### What goes where
 
 | Concern                                  | Lives at      |
 |------------------------------------------|---------------|
-| Compiler source + tests                  | `src/`, `test/` (root) |
+| Compiler source + tests                  | `core/src/`, `core/test/` |
 | Language documentation (generics, roadmap, comparison) | `docs/` (root) |
 | Demo / acceptance harness                | `playground/` |
 | Anything that *uses* the compiler externally | `tools/<name>/` |
 | Per-tool documentation                   | `tools/<name>/README.md` |
-| Shared dev tooling (Makefile, .docker/, .github/) | root |
+| Shared dev tooling (`.docker/`, `.github/`, compose files) | root |
 
 The split is a single principle in disguise: **the core compiler is the
 product; everything else is a way to consume it**. A package that depends on
@@ -58,9 +62,9 @@ sibling:
    per-package dependencies.
 
 3. **Cross-package dependency on the core**: PHP packages do this via a
-   path-repo back to the root, the way `tools/lsp/composer.json` declares
-   `"xphp-lang/xphp-parser": "@dev"` with `repositories: [{type: path, url:
-   "../../"}]`. Other languages need their own analog. The PhpStorm plugin
+   path-repo back to `core/`, the way `tools/lsp/composer.json` declares
+   `"xphp-lang/xphp": "@dev"` with `repositories: [{type: path, url:
+   "../../core/"}]`. Other languages need their own analog. The PhpStorm plugin
    takes a different route: it doesn't compile against xphp at all -- it
    spawns the LSP as a subprocess and bundles the LSP's pre-built PHAR
    (via `processResources` copying `../lsp/var/xphp-lsp.phar`) into the
@@ -89,8 +93,9 @@ sibling:
    whose CI needs **both** ecosystems (PHP to build the bundled PHAR,
    then JDK + Gradle to build the plugin around it).
 
-6. **Add the package to the roadmap** (`docs/roadmap.md` Shipped → Tooling
-   once it ships) and consider a one-line entry in the README pointing at
+6. **Add the package to the roadmap**
+   ([`docs/roadmap.md`](/docs/roadmap.md) Shipped → Tooling once it ships)
+   and consider a one-line entry in the [README](/README.md) pointing at
    it.
 
 ### CI: one workflow file per package, no path filters
@@ -115,17 +120,17 @@ workflow level. Leave required status checks intact.
 ### Unit tests
 
 ```bash
-make test/unit
+make -C core test/unit
 ```
 
 Most tests are pure unit tests against `XPHP\Transpiler\Monomorphize\*`. The handful of
-**integration tests** compile a fixture under `test/fixture/compile/<name>/` end-to-end and
+**integration tests** compile a fixture under `core/test/fixture/compile/<name>/` end-to-end and
 either assert on the emitted text or autoload the result and call into it at runtime. Those
 runtime tests have one isolation gotcha worth knowing before you add a new one.
 
 #### Cross-fixture class-table collisions
 
-`Registry::generatedFqn` (`src/Transpiler/Monomorphize/Registry.php`) names every specialized
+`Registry::generatedFqn` (`core/src/Transpiler/Monomorphize/Registry.php`) names every specialized
 class as:
 
 ```
@@ -174,29 +179,6 @@ cause.
 Mutation testing is the headline quality signal -- the test suite isn't just covering lines, it's surviving deliberate
 code perturbations. Run via [Infection](https://infection.github.io/):
 
-```bash
-make test/mutation
-```
-
-**Current state (581 mutants generated):**
-
-| Outcome              | Count   | Notes                                                             |
-|----------------------|---------|-------------------------------------------------------------------|
-| Killed by tests      | 542     | An assertion failed under the mutated code                        |
-| Killed by timeout    | 8       | The mutation caused an infinite loop (e.g. the depth-cap fixture) |
-| **Escaped**          | **31**  | See breakdown below                                               |
-| **Covered Code MSI** | **94%** |                                                                   |
-
-The 31 escapes split cleanly:
-
-- **8 mathematically equivalent** -- `break` vs `continue` after `unset`; `>` vs `>=` on a bound whose message is
-  constant either way; double-slash paths the filesystem normalizes; ltrim calls on values that are already-trimmed at
-  insertion. No test can kill these without the source becoming less defensive.
-- **22 scanner boundary checks** -- `<` vs `<=` on `$i < $n` end-of-stream guards in the manual token walker. Killing
-  them requires synthesizing token streams that end exactly at the boundary the mutation flips. High effort per mutant,
-  low signal for real-world correctness; well-formed PHP source never hits them.
-- **0 mutations corresponding to a real-world bug class** that the suite isn't catching.
-
-The CI workflow runs Infection on every PR and every push to `main`, failing the build if MSI drops below **93%**.
+The CI workflow runs Infection on every PR and every push to `main`, failing the build if MSI drops below **95%**.
 `infection.json5` carries a curated set of per-mutator `ignore` rules for equivalent / cosmetic cases so the report only
 surfaces genuine test gaps when they appear.

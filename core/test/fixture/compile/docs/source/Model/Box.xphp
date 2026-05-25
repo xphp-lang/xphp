@@ -1,0 +1,9 @@
+<?php
+namespace App\Model;
+
+class Box<T> {
+    public function __construct(
+        public T $item,
+    ) {
+    }
+}

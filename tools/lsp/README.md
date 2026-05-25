@@ -1,7 +1,7 @@
 # xphp Language Server
 
 LSP implementation that powers diagnostics, hover, go-to-definition, and completion for `.xphp`
-files in VS Code (and any LSP-aware editor). Reuses the `xphp-parser` AST + `Registry` +
+files in VS Code (and any LSP-aware editor). Reuses the `xphp` AST + `Registry` +
 `TypeHierarchy` from the parent package directly — no separate parser, no duplication.
 
 A separate Composer package living under `tools/lsp/` so it can declare its own dependencies
@@ -23,8 +23,8 @@ core parser.
 | `workspace/symbol` (cross-file FQN search via FqnIndex) | shipped |
 | `workspace/didChangeWatchedFiles` (bulk invalidation of the filesystem index for long sessions) | shipped |
 | UTF-16 column counting (positions correct past supplementary-plane codepoints) | shipped |
-| VS Code extension client at `vscode-extension/` | shipped |
 | PhpStorm plugin at `tools/phpstorm-plugin/` | shipped |
+| VS Code extension at `tools/vscode-extension/` (sibling package; consumer of this server) | shipped |
 
 PHP-semantic GTD / hover / completion is backed by
 [`phpactor/worse-reflection`](https://github.com/phpactor/worse-reflection)
@@ -36,13 +36,13 @@ intelligence on regular .php files.
 
 `make -C tools/lsp test` runs the PHPUnit suite.
 
-See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
+See [`docs/roadmap.md`](/docs/roadmap.md) (Shipped → Tooling) for the broader feature inventory.
 
 ## Layout
 
 ```
 tools/lsp/
-├── composer.json              path-references the parent xphp-parser
+├── composer.json              path-references the parent xphp
 ├── bin/xphp-lsp               CLI entry — `--lint <file>` for CI, no args for LSP stdio
 ├── src/
 │   ├── Server.php             entry-point router (--lint vs LSP transport)
@@ -75,9 +75,13 @@ tools/lsp/
 │   │   └── PhpCompletionContext        source-level detector for `$obj->` / `Cls::` cursor positions
 │   └── (phpactor's own Workspace handles document open/change/close; no
 │        local DocumentStore wrapper needed)
-├── test/                      PHPUnit suite
-└── vscode-extension/          VS Code client — spawns server over stdio (F5 dev loop)
+└── test/                      PHPUnit suite
 ```
+
+The VS Code client that spawns this server over stdio lives at the
+sibling `tools/vscode-extension/` -- see its README for the F5 dev
+loop and the configurable `xphp.serverPath` it uses to locate this
+package's `bin/xphp-lsp`.
 
 ## Install
 
@@ -86,7 +90,7 @@ cd tools/lsp
 composer install
 ```
 
-The parent `xphp-parser` package is path-referenced via composer (`repositories: type=path`),
+The parent `xphp` package is path-referenced via composer (`repositories: type=path`),
 so local edits there are picked up immediately without re-publishing.
 
 ## Run
@@ -111,8 +115,8 @@ tools/lsp/bin/xphp-lsp        # speaks LSP over stdio; no arguments
 ```
 
 Use this as the `command` in any LSP client (Neovim's `vim.lsp.start`, Helix's
-`languages.toml`, etc.). The bundled VS Code extension under `vscode-extension/` does this
-spawn for you.
+`languages.toml`, etc.). The sibling VS Code extension under `tools/vscode-extension/`
+does this spawn for you.
 
 Capabilities advertised at `initialize`:
 
@@ -175,9 +179,9 @@ working tree. Same lazy-download pattern as `infection.phar`: the build download
 `--no-dev` install.
 
 One quirk worth knowing: the path-repo entry in `composer.json` pins
-`"symlink": true` for the live dev workflow (edits to the parent `xphp-parser` are
+`"symlink": true` for the live dev workflow (edits to the parent `xphp` are
 picked up immediately). PHARs can't traverse symlinks, so the `build/phar` target
-swaps the symlinked `vendor/xphp-lang/xphp-parser` for a real copy of its `src/` +
+swaps the symlinked `vendor/xphp-lang/xphp` for a real copy of its `src/` +
 `composer.json`, regenerates the classmap, and restores the symlinked install at the
 end so subsequent `make test` runs keep the live behavior. Net: building the PHAR
 does not disturb your dev install.
@@ -192,16 +196,16 @@ tools/lsp/bin/xphp-lsp --lint playground/src/Demos/Bounds.xphp
 
 ## VS Code extension
 
-See `vscode-extension/README.md` for the client-side setup. Quick start:
-
-```bash
-make -C tools/lsp build-extension     # npm install + tsc
-# then open tools/lsp/vscode-extension/ in VS Code and hit F5
-```
+The VS Code client lives as a peer package at
+[`tools/vscode-extension/`](/tools/vscode-extension/) (separate sibling
+under `tools/`, not nested under `lsp/`).  See
+[`tools/vscode-extension/README.md`](/tools/vscode-extension/README.md)
+for the F5 dev loop and the `xphp.serverPath` setting it uses to find
+this server.
 
 ## Why a separate composer package
 
-The parser package (`xphp-lang/xphp-parser`) has a deliberately minimal dependency surface —
+The parser package (`xphp-lang/xphp`) has a deliberately minimal dependency surface —
 `nikic/php-parser` + `symfony/console`. The LSP needs `phpactor/language-server` and its
 transitive deps (`amphp/`, `webmozart/`, …). Keeping the two as separate composer packages
 means a downstream consumer who only wants the parser (e.g. a CI pipeline running `bin/xphp

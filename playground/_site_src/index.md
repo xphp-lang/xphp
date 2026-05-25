@@ -10,9 +10,9 @@ Browse the `.xphp` sources and the compiled artifacts from a recent run.
 | | |
 |---|---|
 | Branch | `unknown` |
-| Commit | [`unknown`](https://github.com/xphp-lang/xphp-parser) |
+| Commit | [`unknown`](https://github.com/xphp-lang/xphp) |
 | Built | `2026-05-21T05:47:38Z` |
-| Source | [https://github.com/xphp-lang/xphp-parser](https://github.com/xphp-lang/xphp-parser) |
+| Source | [https://github.com/xphp-lang/xphp](https://github.com/xphp-lang/xphp) |
 
 ## Source `.xphp` files (22)
 {: id="source"}

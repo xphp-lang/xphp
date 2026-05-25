@@ -109,9 +109,9 @@ intellijPlatform {
     }
 }
 
-// Bring the TextMate grammar from tools/lsp/vscode-extension/syntaxes/ into
-// the plugin resources at build time -- single source of truth across the
-// VS Code extension and this plugin.  The grammar isn't wired to a TextMate
+// Bring the TextMate grammar from tools/vscode-extension/syntaxes/ into the
+// plugin resources at build time -- single source of truth across the VS
+// Code extension and this plugin.  The grammar isn't wired to a TextMate
 // bundle yet (chunk 3 registers the file type only; LSP semantic tokens from
 // chunk 4 cover highlighting), but bundling it now means the resource exists
 // when a later chunk plugs it in.
@@ -121,7 +121,7 @@ intellijPlatform {
 // flags any indirect path from copy output to the `jar` task's input
 // directory, and adding the source here makes the dependency explicit by
 // construction.
-val tmLanguageSource = file("../lsp/vscode-extension/syntaxes/xphp.tmLanguage.json")
+val tmLanguageSource = file("../vscode-extension/syntaxes/xphp.tmLanguage.json")
 
 // PHAR built by `make -C tools/lsp build/phar`.  Bundled into the plugin jar
 // at `bin/xphp-lsp.phar`; PharExtractor reads it from the classpath on

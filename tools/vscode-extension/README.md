@@ -1,6 +1,6 @@
 # xphp Language extension for VS Code
 
-VS Code client for the [xphp Language Server](../README.md). Provides
+VS Code client for the [xphp Language Server](/tools/lsp/README.md). Provides
 `.xphp` file association, light syntax highlighting layered on top of the
 bundled PHP grammar, and live LSP features:
 
@@ -20,18 +20,17 @@ spawns it over stdio.
 From the repo root, ensure the server is installed:
 
 ```sh
-make test/lsp        # composer install inside tools/lsp + run the suite
+make -C tools/lsp test    # composer install inside tools/lsp + run the suite
 ```
 
 Then in the extension directory:
 
 ```sh
-cd tools/lsp/vscode-extension
-npm install
-npm run compile
+cd tools/vscode-extension
+make build                # npm install + npm run compile
 ```
 
-Open `tools/lsp/vscode-extension/` in VS Code and press **F5**. A new
+Open `tools/vscode-extension/` in VS Code and press **F5**. A new
 Extension Development Host window opens with the extension loaded; the
 host opens the repo root as its workspace so `.xphp` files under
 `playground/src/` are immediately available to test.
@@ -59,6 +58,6 @@ extension's own messages plus everything the server writes to stderr.
 
 ## Publishing
 
-Out of scope for this branch. The MVP runs from the F5 dev workflow only;
-marketplace packaging via `vsce package` lands when the feature surface
-stabilises.
+Marketplace publication is deferred indefinitely.  This package exists
+for local dev iteration; PhpStorm is the primary editor target.
+Revisit only when an external user asks for VS Code distribution.

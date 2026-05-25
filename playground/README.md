@@ -1,7 +1,7 @@
 # xphp playground
 
 Self-contained sandbox for poking at xphp features. Has its own `composer.json`
-that depends on `xphp-lang/xphp-parser` via a Composer path repository pointing
+that depends on `xphp-lang/xphp` via a Composer path repository pointing
 one level up — the same shape any downstream consumer would use.
 
 ## Usage

@@ -1,5 +1,5 @@
 {
-    "name": "xphp-lang/xphp-parser",
+    "name": "xphp-lang/xphp",
     "description": "Parse xphp files and convert them into php files",
     "type": "library",
     "license": "MIT",

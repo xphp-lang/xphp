@@ -79,12 +79,14 @@ function resolveServerPath(output: OutputChannel): string | undefined {
     }
 
     // Convention: when the extension is loaded from inside this repo (the F5
-    // dev workflow), the server sits next to it at ../bin/xphp-lsp. When the
+    // dev workflow), the server sits at the sibling tools/lsp/bin/xphp-lsp.
+    // `__dirname` at runtime points at tools/vscode-extension/out, so walking
+    // up two levels lands at tools/, then we step into lsp/bin/.  When the
     // extension is installed standalone, the user must set xphp.serverPath
-    // explicitly. We try the in-repo path first and fall back to the
+    // explicitly.  We try the in-repo path first and fall back to the
     // workspace's tools/lsp directory.
     const candidates = [
-        path.resolve(__dirname, "..", "..", "bin", "xphp-lsp"),
+        path.resolve(__dirname, "..", "..", "lsp", "bin", "xphp-lsp"),
         ...(workspace.workspaceFolders ?? []).map((folder) =>
             path.join(folder.uri.fsPath, "tools", "lsp", "bin", "xphp-lsp"),
         ),

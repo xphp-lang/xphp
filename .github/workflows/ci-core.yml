@@ -30,9 +30,11 @@ jobs:
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
+        with:
+          working-directory: core
 
       - name: Run PHPUnit
-        run: make test/unit
+        run: make -C core test/unit
 
   infection:
     name: Mutation testing
@@ -51,11 +53,13 @@ jobs:
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
+        with:
+          working-directory: core
 
       - name: Run Infection
-        # --min-covered-msi=93 fails CI if mutation score drops below 93 (current baseline: 94%).
-        # --threads=4 parallelizes mutant runs; safe on the 2-core ubuntu-latest runner.
-        run: make test/mutation
+        # --min-covered-msi=95 fails CI if the mutation score drops below
+        # the gate.  Threads=max parallelises mutant runs.
+        run: make -C core test/mutation
 
       - name: Upload Infection report
         if: always()
@@ -63,7 +67,7 @@ jobs:
         with:
           name: infection-report
           path: |
-            var/infection.log
-            var/infection.html
+            core/var/infection.log
+            core/var/infection.html
           if-no-files-found: ignore
           retention-days: 14
