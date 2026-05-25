@@ -36,7 +36,7 @@ intelligence on regular .php files.
 
 `make -C tools/lsp test` runs the PHPUnit suite.
 
-See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
+See [`docs/roadmap.md`](/docs/roadmap.md) (Shipped → Tooling) for the broader feature inventory.
 
 ## Layout
 
@@ -196,10 +196,12 @@ tools/lsp/bin/xphp-lsp --lint playground/src/Demos/Bounds.xphp
 
 ## VS Code extension
 
-The VS Code client lives as a peer package at `tools/vscode-extension/`
-(separate sibling under `tools/`, not nested under `lsp/`).  See
-`tools/vscode-extension/README.md` for the F5 dev loop and the
-`xphp.serverPath` setting it uses to find this server.
+The VS Code client lives as a peer package at
+[`tools/vscode-extension/`](/tools/vscode-extension/) (separate sibling
+under `tools/`, not nested under `lsp/`).  See
+[`tools/vscode-extension/README.md`](/tools/vscode-extension/README.md)
+for the F5 dev loop and the `xphp.serverPath` setting it uses to find
+this server.
 
 ## Why a separate composer package
 

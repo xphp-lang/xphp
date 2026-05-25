@@ -1,6 +1,6 @@
 # xphp Language extension for VS Code
 
-VS Code client for the [xphp Language Server](../lsp/README.md). Provides
+VS Code client for the [xphp Language Server](/tools/lsp/README.md). Provides
 `.xphp` file association, light syntax highlighting layered on top of the
 bundled PHP grammar, and live LSP features:
 
@@ -58,6 +58,6 @@ extension's own messages plus everything the server writes to stderr.
 
 ## Publishing
 
-Out of scope for this branch. The MVP runs from the F5 dev workflow only;
-marketplace packaging via `vsce package` lands when the feature surface
-stabilises.
+Marketplace publication is deferred indefinitely.  This package exists
+for local dev iteration; PhpStorm is the primary editor target.
+Revisit only when an external user asks for VS Code distribution.

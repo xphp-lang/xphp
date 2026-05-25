@@ -3,7 +3,7 @@
 This document covers how `xphp` implements generics: what the compiler emits, what's supported today, the naming
 scheme for generated classes, and the trade-offs the monomorphization model accepts.
 
-For the broader project context, see the [README](../README.md).
+For the broader project context, see the [README](/README.md).
 
 ---
 

@@ -207,7 +207,8 @@ community and ecosystem already trust.
 
 ## Editor tooling
 
-A Language Server Protocol implementation under [tools/lsp/](tools/lsp/) delivers the full editor surface for `.xphp`
+The compiler itself lives at [core/](core/) (Composer package
+`xphp-lang/xphp`); a Language Server Protocol implementation under [tools/lsp/](tools/lsp/) delivers the full editor surface for `.xphp`
 files: live diagnostics, hover (xphp generics + PHP semantic, with parameter and return-type substitution),
 go-to-definition, find references, rename, document and workspace symbols, and rich completion (member access,
 static access, static property, type-arg positions with bound-aware filtering, scope-aware variables, visibility

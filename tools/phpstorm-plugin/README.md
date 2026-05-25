@@ -3,7 +3,7 @@
 Editing intelligence for `.xphp` files inside PhpStorm -- diagnostics, hover,
 go-to-definition, completion -- driven by the same Language Server Protocol
 implementation that backs the VS Code extension at
-[`tools/vscode-extension/`](../vscode-extension/). One server, one
+[`tools/vscode-extension/`](/tools/vscode-extension/). One server, one
 TextMate grammar, two editor integrations.
 
 | Feature | How |
@@ -111,7 +111,7 @@ them into the standard editor UI.
 The xphp monorepo separates the **compiler product** (root) from the **tools
 that consume it** (`tools/<name>/`). The PhpStorm plugin consumes the
 compiler's published behaviour by spawning the LSP -- never as a compile-time
-dependency. See [CONTRIBUTING.md "Monorepo layout"](../../CONTRIBUTING.md) for
+dependency. See [CONTRIBUTING.md "Monorepo layout"](/CONTRIBUTING.md) for
 the convention; this package is the worked example for "package whose CI
 needs both ecosystems (PHP + JDK)".
 
