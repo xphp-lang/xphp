@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+class Animal
+{
+    public string $name = '';
+
+    // Phase 3 subclass-protected completion fixture:
+    // - $age (protected) MUST surface inside Dog's body via `$this->`
+    // - $secret (private) MUST NOT surface inside Dog's body
+    protected int $age = 0;
+    private string $secret = '';
+
+    public function speak(): string
+    {
+        return 'generic noise';
+    }
+
+    // Phase 3 fixture: protected method visible from subclass.
+    protected function sniff(): string
+    {
+        return 'sniff';
+    }
+
+    // Phase 3 fixture: private method hidden from subclass.
+    private function dream(): string
+    {
+        return 'dreaming';
+    }
+}

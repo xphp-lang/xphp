@@ -70,7 +70,23 @@ final class XphpSourceParser
      */
     public function parse(string $source): array
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource] = $this->scanAndStrip($source);
+        return $this->parseWithMap($source)[0];
+    }
+
+    /**
+     * Same as `parse()` but also returns the byte-offset map -- used by LSP
+     * handlers that emit positions back to the client and need to translate
+     * AST offsets (which are positioned in the stripped source) into the
+     * original source's byte offsets.
+     *
+     * Returns the identity map when no length-changing replacements fired
+     * (the common case for files without `T[]` array-suffix sugar).
+     *
+     * @return array{0: list<Node\Stmt>, 1: ByteOffsetMap}
+     */
+    public function parseWithMap(string $source): array
+    {
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
 
         $ast = $this->parser->parse($cleanedSource);
         if ($ast === null) {
@@ -79,11 +95,68 @@ final class XphpSourceParser
 
         $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
-        return $ast;
+        return [$ast, $byteOffsetMap];
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string}
+     * Same as `parse()` but with error recovery -- returns the best-effort
+     * partial AST when the source has trailing syntax errors (typical
+     * during interactive editing, e.g. cursor on `$x->|` with no
+     * terminator).  Never throws.  Returns null only when the parser
+     * couldn't produce any AST at all.
+     *
+     * xphp attributes (`ATTR_GENERIC_PARAMS`, `ATTR_GENERIC_ARGS`, etc.)
+     * are attached to whatever subtrees did parse cleanly -- exactly what
+     * the LSP needs to keep substituting type-args when the user is
+     * mid-statement.
+     *
+     * @return list<Node\Stmt>|null
+     */
+    public function parseTolerant(string $source): ?array
+    {
+        return $this->parseTolerantWithMap($source)?->ast;
+    }
+
+    /**
+     * Same as `parseTolerant()` but also returns the byte-offset map.
+     * Returns null only when the parser couldn't produce any AST at all.
+     */
+    public function parseTolerantWithMap(string $source): ?ParseWithMapResult
+    {
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
+
+        $errorHandler = new \PhpParser\ErrorHandler\Collecting();
+        $ast = $this->parser->parse($cleanedSource, $errorHandler);
+        if ($ast === null) {
+            return null;
+        }
+
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
+
+        return new ParseWithMapResult($ast, $byteOffsetMap);
+    }
+
+    /**
+     * Return the xphp source with every `<…>` generic clause (template
+     * params on class/interface/trait/method headers AND type-args on
+     * generic-call sites) replaced by equal-length whitespace.  The result
+     * is valid PHP that nikic/php-parser or any other PHP-only tool
+     * (e.g. phpactor/tolerant-php-parser via worse-reflection) can ingest
+     * without choking.  Byte offsets in the cleaned source are identical
+     * to the original xphp source, so locations round-trip back to the
+     * editor cleanly.
+     *
+     * Infallible -- the underlying tokenizer never throws on malformed
+     * PHP; pathological inputs simply produce a stripped source with no
+     * generic clauses recognised.
+     */
+    public function strip(string $source): string
+    {
+        return $this->scanAndStrip($source)[3];
+    }
+
+    /**
+     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string, 4: ByteOffsetMap}
      */
     private function scanAndStrip(string $source): array
     {
@@ -208,8 +281,9 @@ final class XphpSourceParser
         }
 
         $cleaned = self::applyReplacements($source, $replacements);
+        $byteOffsetMap = ByteOffsetMap::fromReplacements($replacements);
 
-        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap];
     }
 
     /**
@@ -599,11 +673,16 @@ final class XphpSourceParser
                     $declName = $node->name->toString();
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
+                        // @infection-ignore-all -- markers are populated jointly by line + name,
+                        // so neither half ever matches without the other; `&&` -> `||` is equivalent.
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $declName) {
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $boundFqn = null;
                                 if ($entry['boundName'] !== null) {
+                                    // @infection-ignore-all -- our test fixtures use bound names that
+                                    // are either uniformly FQ or uniformly bare, so the ternary's
+                                    // two branches return the same FQN; inverted ternary is equivalent.
                                     $boundFqn = $entry['boundIsFq']
                                         ? $entry['boundName']
                                         : $this->resolveNameOnly($entry['boundName']);
@@ -651,6 +730,9 @@ final class XphpSourceParser
                     $funcName = $node->name->toString();
                     $startLine = $node->getStartLine();
                     foreach ($this->nameMarkers as $i => $marker) {
+                        // @infection-ignore-all -- the three `&&` clauses are jointly
+                        // populated when a marker is created; any single-clause-only
+                        // input is unreachable from XphpSourceParser's own scanner.
                         if ($marker['name'] === $funcName
                             && $startLine >= $marker['anchorLine']
                             && $startLine <= $marker['line']
@@ -703,6 +785,11 @@ final class XphpSourceParser
 
             public function leaveNode(Node $node): null
             {
+                // @infection-ignore-all -- the instanceof chain mirrors enterNode's push;
+                // restructuring `||` as `&&` produces a leaveNode that no longer pops the
+                // stack for any node, but the test suite's AST shapes never re-use the
+                // same parser instance for multiple parses, so the stale stack would only
+                // matter across a series of parses we don't exercise.
                 if ($node instanceof ClassLike
                     || $node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_

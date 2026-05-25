@@ -13,10 +13,13 @@ use OutOfBoundsException;
  * and 1-based line numbers. LSP wants 0-based lines and 0-based UTF-16 code-unit
  * columns within each line. This class owns the conversion for one source string.
  *
- * MVP simplification: column = UTF-8 character index, not UTF-16 code-unit index.
- * For pure ASCII (which describes basically all .xphp source we'll see in practice)
- * these are identical. A real UTF-16 implementation is a small follow-up — see
- * `toLspCharacter()` for the seam.
+ * Character index = UTF-16 code units, per the LSP spec.  Every Unicode
+ * scalar in the Basic Multilingual Plane (UTF-8 1/2/3-byte sequences)
+ * counts as one code unit; supplementary-plane scalars (UTF-8 4-byte,
+ * codepoint > U+FFFF -- emoji, less-common CJK extensions) count as two
+ * because UTF-16 represents them as surrogate pairs.  For ASCII source
+ * this collapses to byte counts; for documents with a `🚀` in a comment
+ * the columns past that character still match what the editor reports.
  */
 final readonly class PositionMap
 {
@@ -71,14 +74,22 @@ final readonly class PositionMap
             ? $this->lineOffsets[$line + 1] - 1
             : $length;
         $lineText = substr($this->source, $lineStart, $lineEnd - $lineStart);
-        // Walk characters until we've consumed `$character` of them — handles
-        // multibyte UTF-8 the same way offsetToPosition does (one Unicode char
-        // = one column in our MVP UTF-16 stand-in).
+        // Walk UTF-16 code units until we've consumed `$character` of them.
+        // BMP chars (UTF-8 1/2/3-byte) count as 1 unit each; supplementary-
+        // plane chars (UTF-8 4-byte) count as 2.  Stop short if the next
+        // char would land us inside a surrogate pair -- editors usually
+        // clamp to the codepoint boundary, mirroring that here.
         $consumed = 0;
         $bytes = 0;
-        while ($consumed < $character && $bytes < strlen($lineText)) {
-            $bytes += self::utf8CharLength($lineText[$bytes]);
-            $consumed++;
+        $lineBytes = strlen($lineText);
+        while ($consumed < $character && $bytes < $lineBytes) {
+            $byteLen = self::utf8CharLength($lineText[$bytes]);
+            $units = $byteLen === 4 ? 2 : 1;
+            if ($consumed + $units > $character) {
+                break;
+            }
+            $bytes += $byteLen;
+            $consumed += $units;
         }
         return $lineStart + $bytes;
     }
@@ -159,12 +170,21 @@ final readonly class PositionMap
     }
 
     /**
-     * Character count as the LSP client sees it. See class doc — MVP: UTF-8 chars.
+     * UTF-16 code-unit count -- the LSP wire encoding for column offsets.
+     * BMP characters (UTF-8 1/2/3-byte) contribute 1 unit each;
+     * supplementary-plane characters (UTF-8 4-byte) contribute 2 because
+     * UTF-16 represents them as a surrogate pair.
      */
     private static function toLspCharacter(string $text): int
     {
-        // mb_strlen falls back to byte-length on missing extension; explicit utf-8 is safer.
-        return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
+        $units = 0;
+        $len = strlen($text);
+        for ($i = 0; $i < $len;) {
+            $byteLen = self::utf8CharLength($text[$i]);
+            $units += $byteLen === 4 ? 2 : 1;
+            $i += $byteLen;
+        }
+        return $units;
     }
 
     /**

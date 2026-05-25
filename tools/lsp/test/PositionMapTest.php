@@ -68,11 +68,14 @@ final class PositionMapTest extends TestCase
         self::assertSame([0, 2], $map->offsetToPosition(4));
     }
 
-    public function testFourByteCharacterCountedAsOneColumn(): void
+    public function testFourByteCharacterCountedAsSurrogatePair(): void
     {
-        // "a😀b" — 😀 is U+1F600 encoded as 0xF0 0x9F 0x98 0x80 (4 bytes). 'b' is byte 5, char 2.
+        // "a😀b" — 😀 is U+1F600 encoded as 0xF0 0x9F 0x98 0x80 (4 bytes
+        // in UTF-8 = 2 UTF-16 code units, since it lives in the
+        // supplementary plane).  'b' lives at byte 5; its LSP column is
+        // 3 (1 for 'a' + 2 for the surrogate pair).
         $map = new PositionMap("a\xF0\x9F\x98\x80b");
-        self::assertSame([0, 2], $map->offsetToPosition(5));
+        self::assertSame([0, 3], $map->offsetToPosition(5));
     }
 
     public function testOffsetOnEmptyDocumentMapsToZeroZero(): void
@@ -214,11 +217,16 @@ final class PositionMapTest extends TestCase
         self::assertSame(3, $map->positionToOffset(0, 2));
     }
 
-    public function testPositionWalksFourByteCharactersAsSingleColumns(): void
+    public function testPositionWalksFourByteCharactersAsSurrogatePairs(): void
     {
-        // "😀a" — character 1 (the 'a') is at byte 4.
+        // "😀a" — 😀 is a supplementary-plane codepoint = 2 UTF-16 code
+        // units.  'a' lives at byte 4, LSP column 2.  Column 1 (mid
+        // surrogate pair) clamps back to the start of 😀 -- consistent
+        // with editors that don't allow cursor placement between the
+        // high and low surrogate.
         $map = new PositionMap("\xF0\x9F\x98\x80a");
-        self::assertSame(4, $map->positionToOffset(0, 1));
+        self::assertSame(0, $map->positionToOffset(0, 1));
+        self::assertSame(4, $map->positionToOffset(0, 2));
     }
 
     public function testInvalidUtf8LeadingByteFallsBackToOneByte(): void
@@ -262,14 +270,16 @@ final class PositionMapTest extends TestCase
     public function testPositionWalksDiverseFourByteSequences(): void
     {
         // Exercise the `($code & 0xF8) === 0xF0` branch. Four-byte leaders
-        // are 0xF0..0xF4.
+        // are 0xF0..0xF4.  Each 4-byte UTF-8 char is 2 UTF-16 code units,
+        // so the 3 chars + 'z' span 7 columns total (2+2+2+1).
         //   😀 → 0xF0 0x9F 0x98 0x80
         //   🥑 → 0xF0 0x9F 0xA5 0x91
         //   𐀀 → 0xF0 0x90 0x80 0x80   (linear-B; first SMP codepoint)
         $map = new PositionMap("\xF0\x9F\x98\x80\xF0\x9F\xA5\x91\xF0\x90\x80\x80z");
-        // 3 four-byte chars + 'z' → 4 chars; z at byte 12.
-        self::assertSame(12, $map->positionToOffset(0, 3));
-        self::assertSame(13, $map->positionToOffset(0, 4));
+        // Column 6 = past all three 4-byte chars (start of 'z'); byte 12.
+        self::assertSame(12, $map->positionToOffset(0, 6));
+        // Column 7 = past 'z'; byte 13.
+        self::assertSame(13, $map->positionToOffset(0, 7));
     }
 
     public function testPositionWalksOddLeaderThreeByteSequence(): void
@@ -287,21 +297,34 @@ final class PositionMapTest extends TestCase
         // Locks mutations on the `($code & 0xF8) === 0xF0` line: with `0xF7`
         // or `0xF9` instead of `0xF8`, ODD 4-byte leaders mismatch. Synthetic
         // U+50000 → 0xF1 0x90 0x80 0x80 (4-byte sequence with odd leader).
+        // Surrogate-pair encoding: column 2 = past the 4-byte char.
         $map = new PositionMap("\xF1\x90\x80\x80z");
-        self::assertSame(4, $map->positionToOffset(0, 1));
-        self::assertSame(5, $map->positionToOffset(0, 2));
+        self::assertSame(4, $map->positionToOffset(0, 2));
+        self::assertSame(5, $map->positionToOffset(0, 3));
+    }
+
+    public function testOffsetToPositionEncodesSupplementaryCharsAsSurrogatePair(): void
+    {
+        // Phase 3 polish: end-to-end UTF-16 encoding for offsetToPosition.
+        // Emoji + ASCII: each emoji is one UTF-8 4-byte sequence and
+        // contributes 2 UTF-16 code units (surrogate pair).
+        $map = new PositionMap("// 🚀 launch");
+        // '🚀' starts at byte 3, ends at byte 7; 'launch' starts at byte 8.
+        // LSP columns: '/'=0,'/'=1,' '=2,'🚀'=3-4 (surrogate pair),' '=5,'l'=6
+        self::assertSame([0, 6], $map->offsetToPosition(8));
     }
 
     public function testPositionMixedAsciiAndMultibyteSequence(): void
     {
         // Final mixed run to ensure all four branches of utf8CharLength get
-        // hit in the same call. "a€😀b" → bytes a (1), € (3), 😀 (4), b (1) = 9 bytes, 4 chars.
+        // hit in the same call. "a€😀b" — bytes a(1), €(3), 😀(4), b(1) = 9 bytes.
+        // UTF-16 columns: a=1, €=1 (BMP), 😀=2 (surrogate pair), b=1 = 5 cols.
         $map = new PositionMap("a\xE2\x82\xAC\xF0\x9F\x98\x80b");
         self::assertSame(0, $map->positionToOffset(0, 0));
         self::assertSame(1, $map->positionToOffset(0, 1));   // past 'a'
         self::assertSame(4, $map->positionToOffset(0, 2));   // past €
-        self::assertSame(8, $map->positionToOffset(0, 3));   // past 😀
-        self::assertSame(9, $map->positionToOffset(0, 4));   // past 'b'
+        self::assertSame(8, $map->positionToOffset(0, 4));   // past 😀 (cols 2,3)
+        self::assertSame(9, $map->positionToOffset(0, 5));   // past 'b'
     }
 
     // =====================================================================

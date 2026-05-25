@@ -12,6 +12,21 @@
          failOnRisky="true"
          failOnIncomplete="true">
 
+  <!--
+    512M covers the one-time worse-reflection stub-map build that
+    runs on first invocation of the suite (phpactor's tolerant-php-
+    parser walks every jetbrains/phpstorm-stubs file once; the map is
+    cached to /tmp afterwards).  Same value the test target sets via
+    `php -d memory_limit=`, lifted here so subprocesses that invoke
+    phpunit directly (notably Infection's initial coverage run) pick
+    the same ceiling up.  PHPUnit applies `ini` directives early
+    enough to affect the test process; on a /tmp cleanup or a fresh
+    checkout the default 128M would OOM mid-stub-build.
+  -->
+  <php>
+    <ini name="memory_limit" value="512M"/>
+  </php>
+
   <testsuites>
     <testsuite name="xphp-lsp">
       <directory>test</directory>

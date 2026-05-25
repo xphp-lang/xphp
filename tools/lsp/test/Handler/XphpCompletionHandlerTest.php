@@ -19,6 +19,8 @@ use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 use function Amp\Promise\wait;
 
@@ -201,6 +203,131 @@ final class XphpCompletionHandlerTest extends TestCase
         self::assertContains('Thing', $labels);
     }
 
+    public function testBoundedTypeArgWorksWhenContainerClassIsFilesystemOnly(): void
+    {
+        // Prod regression: bound-aware filtering used WorkspaceSymbols
+        // (open-only) to resolve the container Name to its FQN, so when
+        // the generic class's file was closed in the editor the lookup
+        // returned null and filtering degraded to "no bound".  The
+        // candidate enumeration had the same gap.  Both now consult
+        // FqnIndex (open + filesystem).
+        $root = sys_get_temp_dir() . '/xphp-comp-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            // Container + candidates live only on disk -- nothing
+            // is in the open workspace.
+            file_put_contents($root . '/Box.xphp', <<<'XPHP'
+            <?php
+            namespace App;
+            class Box<T: \Stringable> {}
+            XPHP);
+            file_put_contents($root . '/Tag.xphp', <<<'XPHP'
+            <?php
+            namespace App;
+            class Tag implements \Stringable {
+                public function __toString(): string { return ''; }
+            }
+            XPHP);
+            file_put_contents($root . '/Number.xphp', <<<'XPHP'
+            <?php
+            namespace App;
+            class Number {}
+            XPHP);
+
+            $workspace = new PhpactorWorkspace();
+            $useSource = "<?php\nnamespace App;\n\$x = new Box<";
+            $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+            $list = $this->completeBoundAware($workspace, '/Use.xphp', $useSource, strlen($useSource), $root);
+            $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+
+            self::assertContains('Tag', $labels, 'closed-file Stringable implementor must still surface');
+            self::assertNotContains('Number', $labels, 'closed-file non-implementor must be filtered out');
+            self::assertNotContains('int', $labels, 'scalars must be dropped when slot is class-bounded');
+        } finally {
+            $this->rmrfPath($root);
+        }
+    }
+
+    private function rmrfPath(string $dir): void
+    {
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $p = $dir . '/' . $entry;
+            if (is_dir($p)) {
+                $this->rmrfPath($p);
+            } else {
+                unlink($p);
+            }
+        }
+        rmdir($dir);
+    }
+
+    public function testBoundedTypeArgFiltersToSubtypesAndDropsScalars(): void
+    {
+        // Phase 3: `Box<T: Stringable>` constrains the type arg.  Completion
+        // at `new Box<|` must surface only candidates that satisfy the
+        // bound (subclasses or implementors of Stringable), drop scalars
+        // (a scalar can't be Stringable), and keep classes that don't.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T: \Stringable> {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Tag implements \Stringable {
+            public function __toString(): string { return ''; }
+        }
+        class Number {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $list = $this->completeBoundAware($workspace, '/Use.xphp', $useSource, strlen($useSource));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+
+        self::assertContains('Tag', $labels, 'Stringable implementor must surface');
+        self::assertNotContains('Number', $labels, 'non-Stringable class must be filtered out');
+        self::assertNotContains('int', $labels, 'scalars must be dropped when slot is class-bounded');
+        self::assertNotContains('string', $labels, 'scalars must be dropped when slot is class-bounded');
+    }
+
+    public function testUnboundedSecondSlotStillSuggestsScalarsAndClasses(): void
+    {
+        // Slot indexing: `Pair<K: \Stringable, V>` -- slot 0 is bounded
+        // and should filter; slot 1 is unbounded and should keep scalars
+        // plus every class.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Pair.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Pair<K: \Stringable, V> {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Tag implements \Stringable {
+            public function __toString(): string { return ''; }
+        }
+        class Number {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\n\$x = new Pair<Tag, ";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $list = $this->completeBoundAware($workspace, '/Use.xphp', $useSource, strlen($useSource));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $list->items);
+
+        // Slot 1 (V) is unbounded -- everything goes.
+        self::assertContains('Tag', $labels);
+        self::assertContains('Number', $labels);
+        self::assertContains('int', $labels);
+    }
+
     public function testCompletionAdvertisesCorrectTriggerCharacters(): void
     {
         // Locks the ArrayItemRemoval on line 65: each of '<' and ',' is
@@ -214,7 +341,7 @@ final class XphpCompletionHandlerTest extends TestCase
 
         self::assertNotNull($capabilities->completionProvider);
         self::assertSame(
-            ['<', ','],
+            ['<', ',', '>', ':'],
             $capabilities->completionProvider->triggerCharacters,
         );
     }
@@ -247,6 +374,45 @@ final class XphpCompletionHandlerTest extends TestCase
         $handler = new XphpCompletionHandler(
             $workspace,
             new WorkspaceSymbols($workspace, $cache),
+        );
+        return wait($handler->complete($params));
+    }
+
+    /**
+     * Variant of `complete` that wires FqnIndex + Reflector so the bound-
+     * aware filtering path can run.  Used by tests exercising
+     * `Box<T: \Stringable>`-style suppression.
+     */
+    private function completeBoundAware(
+        PhpactorWorkspace $workspace,
+        string $uri,
+        string $source,
+        int $byteOffset,
+        string $rootPath = '',
+    ): CompletionList {
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byteOffset);
+        $params = new CompletionParams(
+            new TextDocumentIdentifier($uri),
+            new Position($line, $character),
+        );
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $fqnIndex = new FqnIndex($workspace, $cache, $parser, $rootPath);
+        $reflector = (new ReflectorFactory(
+            $workspace,
+            $cache,
+            $parser,
+            rootPath: $rootPath,
+            stubPath: ReflectorFactory::defaultStubPath(),
+            cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: $fqnIndex,
+        ))->build();
+        $handler = new XphpCompletionHandler(
+            $workspace,
+            new WorkspaceSymbols($workspace, $cache),
+            null,
+            $fqnIndex,
+            $reflector,
         );
         return wait($handler->complete($params));
     }

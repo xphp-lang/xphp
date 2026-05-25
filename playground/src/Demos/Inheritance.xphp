@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Models\Animal;
+use App\Models\Cat;
+use App\Models\Dog;
+
+echo '[Inheritance] Find Usages / Rename across subclass receivers', PHP_EOL;
+
+$animal = new Animal();
+$animal->name = 'whatever';
+echo $animal->name, ': ', $animal->speak(), PHP_EOL;
+
+// Dog inherits both `speak` and `$name` unchanged. Find Usages on
+// Animal::speak (or Animal::$name) MUST include these two lines; rename
+// MUST rewrite the call site here.
+$dog = new Dog();
+$dog->name = 'rex';
+echo $dog->name, ': ', $dog->speak(), PHP_EOL;
+
+// Cat OVERRIDES `speak`. Find Usages on Animal::speak MUST NOT include
+// this call -- it resolves to Cat::speak. But the property `$name` is
+// still inherited unchanged, so the property access here MUST be in
+// the result set for Animal::$name.
+$cat = new Cat();
+$cat->name = 'whiskers';
+echo $cat->name, ': ', $cat->speak(), PHP_EOL;
+
+echo PHP_EOL;

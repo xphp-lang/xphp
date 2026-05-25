@@ -7,6 +7,7 @@ namespace XPHP\Lsp\Analyzer;
 use PhpParser\Error as PhpParserError;
 use RuntimeException;
 use XPHP\Lsp\PositionMap;
+use XPHP\Transpiler\Monomorphize\ByteOffsetMap;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -30,12 +31,13 @@ class Analyzer
         $positionMap = new PositionMap($source);
 
         try {
-            $ast = $this->parser->parse($source);
-            return new ParseResult($ast, []);
+            [$ast, $byteOffsetMap] = $this->parser->parseWithMap($source);
+            return new ParseResult($ast, [], $byteOffsetMap);
         } catch (PhpParserError $e) {
             return new ParseResult(
                 ast: null,
                 diagnostics: [self::buildParseErrorDiagnostic($positionMap, $e, $source)],
+                byteOffsetMap: ByteOffsetMap::identity(),
             );
         } catch (RuntimeException $e) {
             // XphpSourceParser also throws plain RuntimeException for "parser returned null"
@@ -43,6 +45,7 @@ class Analyzer
             // sees *something* in the gutter rather than nothing.
             return new ParseResult(
                 ast: null,
+                byteOffsetMap: ByteOffsetMap::identity(),
                 diagnostics: [self::buildLineDiagnostic(
                     $positionMap,
                     1,

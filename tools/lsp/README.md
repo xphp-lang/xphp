@@ -12,14 +12,29 @@ core parser.
 
 | Feature | Status |
 |---|---|
-| `--lint <file>` headless mode (parse + bound checks) | ✅ shipped |
-| `textDocument/publishDiagnostics` over stdio | ✅ shipped |
-| `textDocument/hover` | ✅ shipped |
-| `textDocument/definition` | ✅ shipped |
-| `textDocument/completion` (inside `<…>` type-arg positions) | ✅ shipped |
-| VS Code extension client at `vscode-extension/` | ✅ shipped |
+| `--lint <file>` headless mode (parse + bound checks) | shipped |
+| `textDocument/publishDiagnostics` over stdio | shipped |
+| `textDocument/hover` (xphp generics + PHP semantic: class / function / method / property / native funcs; parameter and return-type substitution at static / instance / free-function call sites) | shipped |
+| `textDocument/definition` (xphp generics + PHP semantic: class / function / method / property / `use` imports / native funcs / closed-file targets via FqnIndex) | shipped |
+| `textDocument/completion` (`<...>` type-arg positions with bound-aware filtering + `$obj->` member access + `Cls::` static access + `Cls::$` static property + scope-aware variables + visibility-aware filtering inside same class / subclass + string / comment suppression) | shipped |
+| `textDocument/references` for classes, functions, methods, properties (with inheritance walk into subclass receivers) | shipped |
+| `textDocument/rename` (alias-aware short-name rewriting; `RenameFile` gated on client `resourceOperations`) | shipped |
+| `textDocument/documentSymbol` (hierarchical ClassLike / function / method tree) | shipped |
+| `workspace/symbol` (cross-file FQN search via FqnIndex) | shipped |
+| `workspace/didChangeWatchedFiles` (bulk invalidation of the filesystem index for long sessions) | shipped |
+| UTF-16 column counting (positions correct past supplementary-plane codepoints) | shipped |
+| VS Code extension client at `vscode-extension/` | shipped |
+| PhpStorm plugin at `tools/phpstorm-plugin/` | shipped |
 
-121 PHPUnit cases, 276 assertions — `make test/lsp`.
+PHP-semantic GTD / hover / completion is backed by
+[`phpactor/worse-reflection`](https://github.com/phpactor/worse-reflection)
+and [`jetbrains/phpstorm-stubs`](https://github.com/JetBrains/phpstorm-stubs).
+xphp-specific paths run FIRST (template instantiation, type-args inside
+`<…>` clauses); when those don't apply we fall through to the
+worse-reflection path so behaviour on .xphp files matches PhpStorm's PHP
+intelligence on regular .php files.
+
+`make -C tools/lsp test` runs the PHPUnit suite.
 
 See `docs/roadmap.md` (Shipped → Tooling) for the broader feature inventory.
 
@@ -44,14 +59,23 @@ tools/lsp/
 │   │   └── DiagnosticTranslator        framework-neutral → wire-format
 │   ├── Handler/
 │   │   ├── AstPositionResolver         find smallest Name at byte offset
-│   │   ├── XphpHoverHandler            textDocument/hover
-│   │   ├── XphpDefinitionHandler       textDocument/definition
-│   │   ├── XphpCompletionHandler       textDocument/completion
+│   │   ├── XphpHoverHandler            textDocument/hover (xphp + PHP fall-through)
+│   │   ├── XphpDefinitionHandler       textDocument/definition (xphp + PHP fall-through)
+│   │   ├── XphpCompletionHandler       textDocument/completion (xphp + PHP fall-through)
 │   │   ├── TypeArgPositionDetector     backwards-scanner for cursor-in-<…>
 │   │   └── WorkspaceSymbols            collect ClassLike FQNs across open docs
+│   ├── Reflection/
+│   │   ├── ReflectorFactory            builds worse-reflection Reflector for the session
+│   │   ├── WorkspaceSourceLocator      serves open documents (stripped to PHP) to worse-reflection
+│   │   └── FilesystemSourceLocator     serves on-disk .xphp / .php files (stripped to PHP)
+│   ├── Resolver/
+│   │   ├── PhpDefinitionResolver       PHP-semantic GTD via worse-reflection (classes / funcs / methods / props / native stubs)
+│   │   ├── PhpHoverResolver            signature + docblock hover via worse-reflection
+│   │   ├── PhpCompletionResolver       member / static-member completion via worse-reflection
+│   │   └── PhpCompletionContext        source-level detector for `$obj->` / `Cls::` cursor positions
 │   └── (phpactor's own Workspace handles document open/change/close; no
 │        local DocumentStore wrapper needed)
-├── test/                      PHPUnit suite (121 cases)
+├── test/                      PHPUnit suite
 └── vscode-extension/          VS Code client — spawns server over stdio (F5 dev loop)
 ```
 
@@ -95,13 +119,23 @@ Capabilities advertised at `initialize`:
 - `textDocumentSync: 1` (Full)
 - `hoverProvider`
 - `definitionProvider`
-- `completionProvider` with `triggerCharacters: ["<", ","]`
+- `referencesProvider`
+- `documentSymbolProvider`
+- `workspaceSymbolProvider`
+- `renameProvider`
+- `completionProvider` with `triggerCharacters: ["<", ",", ">", ":"]`
 
 ## Test
 
 ```bash
-make test/lsp           # PHPUnit, 121 cases / 276 assertions
-make test/lsp/mutation  # Infection, 95 % MSI under a 93 % gate
+# From the repo root:
+make -C tools/lsp test            # PHPUnit, 424 cases / 1244 assertions
+make -C tools/lsp test/mutation   # Infection, MSI under a 93 % gate
+
+# Or from this directory:
+cd tools/lsp
+make test
+make test/mutation
 ```
 
 `test/lsp` runs `composer install --quiet` then PHPUnit with
@@ -117,7 +151,7 @@ vendor/bin/phpunit
 
 ### Mutation testing
 
-`test/lsp/mutation` downloads `infection.phar` lazily into `tools/lsp/var/` and runs against
+`test/mutation` downloads `infection.phar` lazily into `tools/lsp/var/` and runs against
 the same source + test set. The PHAR distribution ships its internal deps under PHP-Scoper
 prefixes, so it sidesteps the `thecodingmachine/safe` / `psr/log` conflicts that prevent
 composer-installed Infection from coexisting with `phpactor/language-server` (`phpactor` pins
@@ -128,12 +162,40 @@ The PHAR avoids all of that.
 Curated equivalent-mutation ignores live in `infection.json5` with per-mutator
 `ignore` rules and inline rationale — mirrors the pattern at the repo root.
 
+## Build a self-contained PHAR
+
+```bash
+make -C tools/lsp build/phar     # produces tools/lsp/var/xphp-lsp.phar
+```
+
+The PHAR is the distribution format the JetBrains plugin under `tools/phpstorm-plugin/`
+bundles -- zero-config install for editors that can't reasonably depend on a Composer-managed
+working tree. Same lazy-download pattern as `infection.phar`: the build downloads
+`box.phar` 4.6.6 into `tools/lsp/var/` on first run, then runs Humbug Box against a
+`--no-dev` install.
+
+One quirk worth knowing: the path-repo entry in `composer.json` pins
+`"symlink": true` for the live dev workflow (edits to the parent `xphp-parser` are
+picked up immediately). PHARs can't traverse symlinks, so the `build/phar` target
+swaps the symlinked `vendor/xphp-lang/xphp-parser` for a real copy of its `src/` +
+`composer.json`, regenerates the classmap, and restores the symlinked install at the
+end so subsequent `make test` runs keep the live behavior. Net: building the PHAR
+does not disturb your dev install.
+
+Smoke test:
+
+```bash
+php tools/lsp/var/xphp-lsp.phar --lint playground/src/Demos/Bounds.xphp
+# byte-for-byte identical output to:
+tools/lsp/bin/xphp-lsp --lint playground/src/Demos/Bounds.xphp
+```
+
 ## VS Code extension
 
 See `vscode-extension/README.md` for the client-side setup. Quick start:
 
 ```bash
-make build/lsp-extension      # npm install + tsc
+make -C tools/lsp build-extension     # npm install + tsc
 # then open tools/lsp/vscode-extension/ in VS Code and hit F5
 ```
 

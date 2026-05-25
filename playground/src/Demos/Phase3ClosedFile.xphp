@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Models\Tag;
+
+// Phase 3 fixture: hover + GTD on filesystem-only classes.
+//
+// Test:
+//   1. Close `playground/src/Models/Tag.xphp` in the editor (right-
+//      click the tab -> Close).
+//   2. Hover on `Tag` below -> tooltip should show "class App\Models\Tag"
+//      WITH the docblock.  (Worse-reflection reads it via the
+//      filesystem index even though no buffer is open.)
+//   3. Ctrl+Click on `Tag` -> jumps to Tag.xphp (opening it from disk).
+//   4. Hover on `$t->name` -> tooltip should show the property's type.
+//
+// Before Phase 0, closed-file targets returned null from both hover and
+// GTD; this demo locks in that they keep working in a fresh session.
+
+$t = new Tag('phase3');
+
+echo $t->name;

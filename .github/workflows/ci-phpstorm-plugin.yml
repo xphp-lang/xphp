@@ -1,0 +1,141 @@
+name: PhpStorm Plugin CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Per-workflow concurrency. See ci-core.yml for the rationale.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gradle-build:
+    name: Gradle build (PhpStorm plugin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PHP + Composer are needed to build the bundled xphp-lsp.phar that
+      # processResources copies into the plugin jar at build time. Skipping
+      # this step would still produce a buildable plugin, but it would warn
+      # and ship without an embedded LSP -- defeating the zero-config
+      # install path we shipped in chunk 5.
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer
+          coverage: none
+          tools: composer:v2
+
+      - name: Install LSP dependencies
+        uses: ramsey/composer-install@v3
+        with:
+          working-directory: tools/lsp
+
+      - name: Build xphp-lsp.phar
+        # Same target ci-lsp.yml's runtime relies on; the plugin's
+        # processResources picks this up from tools/lsp/var/.
+        run: make -C tools/lsp build/phar
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          # Cache key is built from the wrapper version + build script
+          # hash, so this stays warm across PRs that don't touch the plugin
+          # build config.
+          gradle-home-cache-cleanup: true
+
+      - name: Build plugin (compile + test)
+        # `make build` from this directory is `./gradlew build`, which runs
+        # compileKotlin, test, and packages the plugin jar via the
+        # IntelliJ Platform Gradle Plugin's `composedJar` task.
+        run: make -C tools/phpstorm-plugin build
+
+      - name: Upload plugin jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: xphp-phpstorm-plugin-jar
+          path: tools/phpstorm-plugin/build/libs/xphp-phpstorm-plugin-*.jar
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpstorm-plugin-test-reports
+          path: |
+            tools/phpstorm-plugin/build/reports/tests/
+            tools/phpstorm-plugin/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  verify-plugin:
+    name: Plugin Verifier (PhpStorm plugin)
+    runs-on: ubuntu-latest
+    needs: gradle-build
+    steps:
+      - uses: actions/checkout@v4
+
+      # The verifier itself doesn't read the PHAR, but Gradle's build graph
+      # treats `processResources` as a prerequisite of `verifyPlugin` --
+      # and `processResources` declares xphp-lsp.phar as a required input
+      # via `inputs.file(...)` in build.gradle.kts.  Without the PHAR on
+      # disk, the build aborts before the verifier even runs:
+      #
+      #   property 'xphpLspPhar' specifies file '.../xphp-lsp.phar'
+      #   which doesn't exist.
+      #
+      # So we rebuild the same PHAR the gradle-build job built.  Both
+      # jobs sit on fresh runners; sharing via an artifact would also
+      # work but the PHAR rebuild is cheap (~2s) compared to the verifier
+      # downloading the IDE matrix that follows.
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer
+          coverage: none
+          tools: composer:v2
+
+      - name: Install LSP dependencies
+        uses: ramsey/composer-install@v3
+        with:
+          working-directory: tools/lsp
+
+      - name: Build xphp-lsp.phar
+        run: make -C tools/lsp build/phar
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run IntelliJ Plugin Verifier
+        # `verifyPlugin` checks binary compatibility across the IDE matrix
+        # declared in build.gradle.kts `pluginVerification.ides {}` -- the
+        # `recommended()` set for since-build 261. A failure here means a
+        # platform API we depend on changed shape between IDE builds.
+        run: make -C tools/phpstorm-plugin verify
+
+      - name: Upload Plugin Verifier reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpstorm-plugin-verifier-reports
+          path: tools/phpstorm-plugin/build/reports/pluginVerifier/
+          if-no-files-found: ignore
+          retention-days: 14

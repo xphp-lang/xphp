@@ -129,6 +129,8 @@ final class GenericMethodCompiler
 
         // Strip the original method templates from their owning classes.
         foreach ($methodTemplates as $key => $template) {
+            // @infection-ignore-all — explode limit 2 vs 3: the key never contains
+            // more than one `::` so the third capture would be empty in either case.
             [$classFqn, $methodName] = explode('::', $key, 2);
             $class = $classByFqn[$classFqn] ?? null;
             if ($class !== null) {

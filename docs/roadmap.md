@@ -31,11 +31,19 @@ timeline
                 : XPHP_HASH_LENGTH configurable (16..64)
         Tooling
                 : LSP server at tools/lsp/ (PHP on phpactor/language-server)
-                : LSP — live diagnostics (parse errors / bound violations / duplicate templates)
-                : LSP — hover (specialized FQN + type-param bound)
-                : LSP — go-to-definition for generic instantiations
-                : LSP — completion of class names inside type-arg positions
+                : LSP -- live diagnostics (parse errors / bound violations / duplicate templates)
+                : LSP -- hover (specialized FQN + type-param bound, parameter and return-type substitution at static / instance / free-function call sites)
+                : LSP -- go-to-definition for generic instantiations, members, type-args, use-imports, filesystem-only targets
+                : LSP -- completion: class names inside type-arg positions, member / static access, scope-aware variables, Cls::$prop, bound-aware filtering
+                : LSP -- find references for classes, functions, methods, properties (with subclass-inherited member walks)
+                : LSP -- rename symbol (alias-aware, file rename when client supports it)
+                : LSP -- documentSymbol outline (Cmd+O / Structure panel)
+                : LSP -- workspace/symbol search (cross-file, FqnIndex-backed)
+                : LSP -- workspace/didChangeWatchedFiles (long sessions stay fresh on external edits)
+                : LSP -- UTF-16 column counting (correct positions past emoji / supplementary-plane chars)
+                : LSP -- short-name tie-break (canonical src/ wins over tests / fixtures / vendor)
                 : VS Code extension client at tools/lsp/vscode-extension/
+                : PhpStorm plugin at tools/phpstorm-plugin/ (Kotlin + Gradle, IntelliJ Platform LSP API)
                 : --lint headless CLI for CI (file:line:col error output)
         Developer experience
                 : PSR-4 fixtures
@@ -55,7 +63,7 @@ timeline
                 : Live transpilation via stream wrapper (no build step)
                 : Phpdoc substitution in generated bodies
                 : Real cycle detection (replaces depth-cap heuristic)
-    section Vision
+    section Long-term
         Type system breadth
                 : Type aliases (named type expressions, including unions)
                 : Literal types (finite string / int sets)
@@ -69,6 +77,24 @@ timeline
                 : Source maps (stack traces back to .xphp lines)
                 : phpstan / psalm bridge
                 : REPL / playground
+        LSP capabilities -- low effort
+                : Signature help (parameter list + active arg as you type)
+                : Document highlight (same-file occurrences under the cursor)
+                : Type definition (Ctrl+Click jumps to the type of a symbol)
+                : Implementation (list implementors of an interface / abstract method)
+                : Folding ranges (class / method bodies, <...> clauses, docblocks)
+        LSP capabilities -- medium effort
+                : Inlay hints (ghost text for inferred types and parameter names)
+                : Code actions / quick fixes (add use, implement Stringable, widen bound, ...)
+                : Code lens (N references and Run inline)
+                : Auto-import on completion (accept Tag, auto-add use App\Models\Tag)
+                : Semantic tokens (richer-than-TextMate classifications)
+        LSP capabilities -- xphp-unique
+                : Show generated PHP at any specialization site (lowering preview)
+                : Specialization explorer (every concrete Box<X> for a generic class)
+                : Inlay hint of the specialized FQN at instantiation sites
+                : Reverse-map mangled FQN back to the source template
+                : Bound-error fix-its (implement missing interface, swap type-arg)
         Longer-term explorations
                 : AST macros / metaprogramming
                 : Decorators-as-attributes interop

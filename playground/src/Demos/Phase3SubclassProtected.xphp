@@ -1,0 +1,31 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+// Phase 3 fixture: subclass-protected completion.
+//
+// Test:
+//   1. Place the cursor on the empty line marked `// CURSOR HERE` below.
+//   2. Type `$this->` and trigger completion (Ctrl+Space).
+//
+// Expected (Phase 3 visibility-aware completion):
+//   - `age`     (protected on Animal)  -> shows
+//   - `sniff`   (protected on Animal)  -> shows
+//   - `name`    (public on Animal)     -> shows
+//   - `speak`   (public on Animal)     -> shows
+//   - `run`     (own method)           -> shows
+//
+// Must NOT show:
+//   - `secret`  (private on Animal)    -> hidden from subclass
+//   - `dream`   (private on Animal)    -> hidden from subclass
+
+final class Wolf extends Animal
+{
+    public function run(): void
+    {
+        // CURSOR HERE -- type `$this->` and trigger completion.
+        $marker = $this->name;
+    }
+}

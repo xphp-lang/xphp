@@ -13,28 +13,31 @@ final class TypeArgPositionDetectorTest extends TestCase
     {
         $source = 'new Box<';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 0], $hit);
     }
 
     public function testDetectsWithPartialIdentifierPrefix(): void
     {
         $source = 'new Box<Pla';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => 'Pla'], $hit);
+        self::assertSame(['prefix' => 'Pla', 'containerName' => 'Box', 'slot' => 0], $hit);
     }
 
     public function testDetectsAfterCommaInMultiArgList(): void
     {
         $source = 'new Pair<Foo, ';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        // Slot 1 -- cursor sits after the first comma at depth 0.
+        self::assertSame(['prefix' => '', 'containerName' => 'Pair', 'slot' => 1], $hit);
     }
 
     public function testDetectsInsideNestedGenericsAtSameDepth(): void
     {
         $source = 'new Box<List<int>, ';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        // Outermost generic is `Box`; the comma inside `List<...>` doesn't
+        // count toward Box's slot because it sits at depth 1.
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
     }
 
     public function testRejectsLessThanOperator(): void
@@ -72,7 +75,8 @@ final class TypeArgPositionDetectorTest extends TestCase
         // Inside the INNER `<…>`, prefix is the partial identifier just typed.
         $source = 'new Box<List<Pla';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => 'Pla'], $hit);
+        // Container is the inner `List`; slot 0 inside it.
+        self::assertSame(['prefix' => 'Pla', 'containerName' => 'List', 'slot' => 0], $hit);
     }
 
     public function testOffsetPastSourceLengthReturnsNull(): void
@@ -98,7 +102,7 @@ final class TypeArgPositionDetectorTest extends TestCase
         // independently is the only way to kill them.
         $source = "new Box<Foo,\t";
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
     }
 
     public function testCursorAfterNewlineSeparatorAcceptsTypeArgContext(): void
@@ -106,7 +110,7 @@ final class TypeArgPositionDetectorTest extends TestCase
         // Locks the `$byte === "\n"` check.
         $source = "new Box<Foo,\n";
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
     }
 
     public function testCursorAfterCarriageReturnSeparatorAcceptsTypeArgContext(): void
@@ -114,7 +118,7 @@ final class TypeArgPositionDetectorTest extends TestCase
         // Locks the `$byte === "\r"` check.
         $source = "new Box<Foo,\r";
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
     }
 
     public function testCursorAfterCommaWithoutSpaceAcceptsTypeArgContext(): void
@@ -122,7 +126,7 @@ final class TypeArgPositionDetectorTest extends TestCase
         // Locks the `$byte === ','` check.
         $source = "new Box<Foo,";
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
     }
 
     public function testCursorAfterSpaceSeparatorAcceptsTypeArgContext(): void
@@ -132,7 +136,7 @@ final class TypeArgPositionDetectorTest extends TestCase
         // the specific char mutation.)
         $source = "new Box<Foo, ";
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
     }
 
     public function testNonSeparatorAndNonIdentifierByteBreaksContext(): void
@@ -155,7 +159,7 @@ final class TypeArgPositionDetectorTest extends TestCase
         // With mutation `$j <= 0`, we'd return null for the 'A' case.
         $source = 'A<';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'A', 'slot' => 0], $hit);
     }
 
     public function testOpenBracketAtOffsetZeroFailsIdentifierCheck(): void
@@ -175,6 +179,39 @@ final class TypeArgPositionDetectorTest extends TestCase
         // escape — still good signal).
         $source = 'new Box<Foo<Bar>, ';
         $hit = TypeArgPositionDetector::detect($source, strlen($source));
-        self::assertSame(['prefix' => ''], $hit);
+        self::assertSame(['prefix' => '', 'containerName' => 'Box', 'slot' => 1], $hit);
+    }
+
+    public function testIdentifierAtReturnsFullNameAtCursorInsideGenericClause(): void
+    {
+        // Cursor sits in the middle of `User` -- prefix `Us`, suffix `er`.
+        $source = 'identity<User>(new User())';
+        $offset = strpos($source, 'User') + 2; // mid-identifier
+        self::assertSame('User', TypeArgPositionDetector::identifierAt($source, $offset));
+    }
+
+    public function testIdentifierAtReturnsNullOutsideGenericClause(): void
+    {
+        $source = '$x = new User();';
+        $offset = strpos($source, 'User') + 1;
+        self::assertNull(TypeArgPositionDetector::identifierAt($source, $offset));
+    }
+
+    public function testIdentifierAtReturnsNullOnWhitespaceInsideGenericClause(): void
+    {
+        // Cursor on the space between `<` and `User`.  No prefix to the
+        // left, no identifier byte at the cursor -> null.
+        $source = 'identity< User>(...)';
+        $offset = strpos($source, '< ') + 1; // on the space
+        self::assertNull(TypeArgPositionDetector::identifierAt($source, $offset));
+    }
+
+    public function testIdentifierAtReturnsFqnStyleNameWithBackslashes(): void
+    {
+        // Backslashes are identifier bytes per the detector's rule, so a
+        // namespace-qualified type-arg comes through intact.
+        $source = 'identity<App\\Models\\User>(...)';
+        $offset = strpos($source, 'User') + 1;
+        self::assertSame('App\\Models\\User', TypeArgPositionDetector::identifierAt($source, $offset));
     }
 }

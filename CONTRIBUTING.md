@@ -1,4 +1,114 @@
-# Contributing 
+# Contributing
+
+## Monorepo layout
+
+The repository hosts the xphp language plus the tooling that grows around it.
+The core compiler keeps its privileged location at the root; everything else
+lives under `tools/<name>/`, as an independent sub-project with its own build
+system, lockfile, tests, and CI workflow.
+
+```
+xphp-lang/
++-- src/, test/, bin/, composer.json     # the core compiler (PHP)
++-- docs/                                # language-level documentation
++-- playground/                          # demo workspace that depends on the core
++-- tools/
+|   +-- lsp/                             # Language Server (PHP, phpactor/language-server)
+|   `-- <future tools land here>         # e.g. tools/phpstorm-plugin/ (Kotlin + Gradle)
++-- .github/workflows/
+|   +-- ci-core.yml                      # phpunit + infection for the core
+|   `-- ci-<package>.yml                 # one file per package under tools/
+`-- Makefile                             # core-only commands; each tool ships its own Makefile
+```
+
+### What goes where
+
+| Concern                                  | Lives at      |
+|------------------------------------------|---------------|
+| Compiler source + tests                  | `src/`, `test/` (root) |
+| Language documentation (generics, roadmap, comparison) | `docs/` (root) |
+| Demo / acceptance harness                | `playground/` |
+| Anything that *uses* the compiler externally | `tools/<name>/` |
+| Per-tool documentation                   | `tools/<name>/README.md` |
+| Shared dev tooling (Makefile, .docker/, .github/) | root |
+
+The split is a single principle in disguise: **the core compiler is the
+product; everything else is a way to consume it**. A package that depends on
+the core's published behavior (LSP analyzing `.xphp` source, an editor plugin
+spawning the LSP, a CI lint tool calling `bin/xphp`) is a tool. The core
+itself never depends on tools.
+
+### Adding a new package
+
+The current shape was settled when we added `tools/lsp/` and validated when
+we added `tools/phpstorm-plugin/` (Kotlin + Gradle, an entirely different
+toolchain than the LSP's PHP + Composer -- both fit the same per-package
+shape, which is the proof the convention generalises). To add a fourth
+sibling:
+
+1. **Create the directory** under `tools/<name>/`. Pick a name that names the
+   thing concretely (`lsp`, `phpstorm-plugin`) rather than abstractly
+   (`server`, `editor-integration`).
+
+2. **Self-contained build**: each package owns its build system. The LSP has
+   `tools/lsp/composer.json`; the JetBrains plugin has
+   `tools/phpstorm-plugin/build.gradle.kts` + `gradle.properties` (every
+   version pin lives there so a single edit propagates to since-build,
+   IDE target, Kotlin runtime, JVM toolchain). The root never collects
+   per-package dependencies.
+
+3. **Cross-package dependency on the core**: PHP packages do this via a
+   path-repo back to the root, the way `tools/lsp/composer.json` declares
+   `"xphp-lang/xphp-parser": "@dev"` with `repositories: [{type: path, url:
+   "../../"}]`. Other languages need their own analog. The PhpStorm plugin
+   takes a different route: it doesn't compile against xphp at all -- it
+   spawns the LSP as a subprocess and bundles the LSP's pre-built PHAR
+   (via `processResources` copying `../lsp/var/xphp-lsp.phar`) into the
+   plugin jar at build time. That's the cleanest cross-package dependency
+   when the consumer doesn't actually need symbols from the dependency.
+
+4. **Per-package Makefile**: each package ships its own `Makefile` at
+   `tools/<name>/Makefile` with short, package-relative target names:
+
+   ```make
+   test:           # phpunit / gradle test / cargo test / ...
+   test/mutation:  # if the package has a mutation surface
+   ```
+
+   Invoke from the repo root with `make -C tools/<name> <target>` or
+   directly from inside the package with `make <target>`. The root
+   `Makefile` does NOT have pass-through targets — each Makefile is the
+   single source of truth for its package's recipes, no delegation
+   layer to drift.
+
+5. **Per-package CI workflow** at `.github/workflows/ci-<name>.yml`. Mirror
+   the existing `ci-lsp.yml` or `ci-phpstorm-plugin.yml` shape: one
+   workflow per package, each with its own concurrency group, each
+   running unconditionally (no path filters — see the next section).
+   `ci-phpstorm-plugin.yml` doubles as the worked example for a package
+   whose CI needs **both** ecosystems (PHP to build the bundled PHAR,
+   then JDK + Gradle to build the plugin around it).
+
+6. **Add the package to the roadmap** (`docs/roadmap.md` Shipped → Tooling
+   once it ships) and consider a one-line entry in the README pointing at
+   it.
+
+### CI: one workflow file per package, no path filters
+
+`.github/workflows/ci-core.yml`, `ci-lsp.yml`, and `ci-phpstorm-plugin.yml`
+are parallel, independent workflows. Each runs on every PR and every push
+to `main`. A new package gets a fourth file in the same shape.
+
+We deliberately **do not** path-filter workflows at the `on:` level. GitHub's
+branch protection requires named status checks to actually run — a
+path-filtered workflow that doesn't trigger on an unrelated change reports
+"expected, never received" and blocks the merge. Running every workflow
+every time costs a small amount of CI minutes (the jobs are parallel and each
+finishes in ~30s); the alternative is a coordination tax with sharp edges.
+
+If CI minutes ever become a real concern, the fix is to add job-level `if:`
+guards using `paths-filter` action results, NOT to add `paths:` at the
+workflow level. Leave required status checks intact.
 
 ## Testing
 

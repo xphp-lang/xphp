@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+// Different namespace from the canonical -- same SHORT name `User` is
+// enough to trigger the tie-break, and using a fixture namespace keeps
+// the PHP runtime from refusing the parallel declaration.
+namespace App\TestFixtures;
+
+/**
+ * Phase 3 fixture: short-name tie-break in findClassByName.
+ *
+ * This is a TEST fixture with the same FQN (`App\Models\User`) as the
+ * canonical implementation at `playground/src/Models/User.xphp`.  When
+ * the user does GTD on a `new User()` reference, the resolver should
+ * prefer the canonical `src/` path over this fixture (which lives in a
+ * `tests/Fixtures/` segment that scores a penalty).
+ *
+ * To verify:
+ *   1. Open BOTH this file and `src/Models/User.xphp` in the editor.
+ *   2. In any file using `new User()` (e.g. Phase3Utf16.xphp), Ctrl+Click `User`.
+ *   3. The jump should land in `src/Models/User.xphp`, NOT here.
+ */
+final class User
+{
+    public function __construct(public readonly string $name)
+    {
+    }
+}

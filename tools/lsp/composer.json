@@ -5,8 +5,10 @@
     "license": "MIT",
     "require": {
         "php": "^8.4.0",
+        "jetbrains/phpstorm-stubs": "^2026.1",
         "phpactor/language-server": "^6.0",
         "phpactor/language-server-protocol": "^3.5",
+        "phpactor/worse-reflection": "^0.6.0",
         "xphp-lang/xphp-parser": "@dev"
     },
     "require-dev": {
