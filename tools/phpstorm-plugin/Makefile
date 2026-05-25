@@ -5,21 +5,36 @@
 # `make <target>` or from the repo root via `make -C tools/phpstorm-plugin
 # <target>`.  See CONTRIBUTING.md "Adding a new package" for the convention.
 #
-# Every gradle invocation routes through the `jdk` service declared in
-# docker-compose.override.yml at the repo root: no host JDK install is
-# required (or supported -- the build is reproducible against the exact
-# JDK + X11 stack inside the container, full stop).  Rootless docker maps
-# the container's UID back to the host user, so build outputs come out
-# owned by you and don't need a follow-up chown.
-
+# Dev (local) gradle invocation routes through the `jdk` service declared
+# in docker-compose.override.yml at the repo root: no host JDK install is
+# required for contributors (or supported -- the build is reproducible
+# against the exact JDK + X11 stack inside the container).  Rootless
+# docker maps the container's UID back to the host user, so build outputs
+# come out owned by you and don't need a follow-up chown.
+#
+# CI takes the other branch: GitHub Actions installs JDK 21 via
+# actions/setup-java, and the runner has no docker compose stack.  When
+# `CI=true` (GitHub Actions sets this by default) the Makefile uses the
+# host-side gradlew so the same targets work in both environments.
+# Local overrides also welcome: `make CI=1 build` forces host-side too.
+#
 # `--project-directory ../..` makes `docker compose` see the repo-root
 # compose files without an actual `cd`, so $(MAKE)'s working directory
 # (this package's dir) stays unchanged.  `-p tools/phpstorm-plugin` tells
 # gradle which sub-project to act on, since the container's working_dir
 # is the repo root (/opt/app), not the plugin package.
+ifdef CI
+# Make's working directory is `tools/phpstorm-plugin/` (the package
+# dir), so `./gradlew` resolves against it; no `-p <path>` needed.
+GRADLEW     := ./gradlew
+GRADLE_OPTS :=
+else
+# Inside the jdk container the working_dir is `/opt/app` (repo root),
+# so the path to the wrapper AND the `-p <path>` are relative to that.
 GRADLEW     := docker compose --project-directory ../.. run --rm jdk \
                  tools/phpstorm-plugin/gradlew
 GRADLE_OPTS := -p tools/phpstorm-plugin
+endif
 
 .PHONY: build
 build:
