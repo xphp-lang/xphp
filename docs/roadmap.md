@@ -34,7 +34,7 @@ timeline
                 : LSP -- live diagnostics (parse errors / bound violations / duplicate templates)
                 : LSP -- hover (specialized FQN + type-param bound, parameter and return-type substitution at static / instance / free-function call sites)
                 : LSP -- go-to-definition for generic instantiations, members, type-args, use-imports, filesystem-only targets
-                : LSP -- completion: class names inside type-arg positions, member / static access, scope-aware variables, Cls::$prop, bound-aware filtering
+                : LSP -- completion: class names inside type-arg positions, member / static access, scope-aware variables, Cls $prop, bound-aware filtering
                 : LSP -- find references for classes, functions, methods, properties (with subclass-inherited member walks)
                 : LSP -- rename symbol (alias-aware, file rename when client supports it)
                 : LSP -- documentSymbol outline (Cmd+O / Structure panel)
@@ -44,7 +44,7 @@ timeline
                 : LSP -- short-name tie-break (canonical src/ wins over tests / fixtures / vendor)
                 : VS Code extension client at tools/vscode-extension/
                 : PhpStorm plugin at tools/phpstorm-plugin/ (Kotlin + Gradle, IntelliJ Platform LSP API)
-                : --lint headless CLI for CI (file:line:col error output)
+                : --lint headless CLI for CI (file,line,col error output)
         Developer experience
                 : PSR-4 fixtures
     section Next
