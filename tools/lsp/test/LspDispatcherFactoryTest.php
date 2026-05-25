@@ -53,6 +53,22 @@ final class LspDispatcherFactoryTest extends TestCase
         self::assertSame('xphp-lsp', $result->serverInfo['name'] ?? null);
     }
 
+    public function testRenameProviderAdvertised(): void
+    {
+        // Phase 4.2 wires XphpRenameHandler.  Without this capability
+        // PhpStorm's Rename refactoring (Shift+F6) won't route to the
+        // LSP.  Same bool-not-options-object trick as every other
+        // capability we advertise.
+        $tester = $this->buildTester();
+
+        $result = $tester->initialize();
+
+        self::assertTrue(
+            $result->capabilities->renameProvider,
+            'renameProvider must be announced as bool true',
+        );
+    }
+
     public function testReferencesProviderAdvertised(): void
     {
         // Phase 4.1 wires XphpReferencesHandler.  Without this capability
