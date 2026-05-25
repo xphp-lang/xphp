@@ -3,7 +3,7 @@
 Editing intelligence for `.xphp` files inside PhpStorm -- diagnostics, hover,
 go-to-definition, completion -- driven by the same Language Server Protocol
 implementation that backs the VS Code extension at
-[`tools/lsp/vscode-extension/`](../lsp/vscode-extension/). One server, one
+[`tools/vscode-extension/`](../vscode-extension/). One server, one
 TextMate grammar, two editor integrations.
 
 | Feature | How |

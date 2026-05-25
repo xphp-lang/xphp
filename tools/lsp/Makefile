@@ -55,10 +55,6 @@ test/mutation: $(INFECTION_PHAR)
 	    --threads=max --min-covered-msi=93 --show-mutations --no-progress \
 	    --initial-tests-php-options='-d error_reporting=E_ALL\&~E_DEPRECATED -d memory_limit=512M -d pcov.enabled=1 -d pcov.directory=src'
 
-.PHONY: build-extension
-build-extension:
-	cd vscode-extension && npm install --no-audit --no-fund --silent && npm run compile
-
 # The xphp-lsp PHAR is built via Humbug Box, distributed as a PHAR itself
 # (same lazy-download pattern as infection.phar so we don't fight phpactor's
 # psr/log ^1.0 pin in composer-resolved Box). The output at var/xphp-lsp.phar

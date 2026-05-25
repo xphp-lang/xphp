@@ -23,8 +23,8 @@ core parser.
 | `workspace/symbol` (cross-file FQN search via FqnIndex) | shipped |
 | `workspace/didChangeWatchedFiles` (bulk invalidation of the filesystem index for long sessions) | shipped |
 | UTF-16 column counting (positions correct past supplementary-plane codepoints) | shipped |
-| VS Code extension client at `vscode-extension/` | shipped |
 | PhpStorm plugin at `tools/phpstorm-plugin/` | shipped |
+| VS Code extension at `tools/vscode-extension/` (sibling package; consumer of this server) | shipped |
 
 PHP-semantic GTD / hover / completion is backed by
 [`phpactor/worse-reflection`](https://github.com/phpactor/worse-reflection)
@@ -75,9 +75,13 @@ tools/lsp/
 │   │   └── PhpCompletionContext        source-level detector for `$obj->` / `Cls::` cursor positions
 │   └── (phpactor's own Workspace handles document open/change/close; no
 │        local DocumentStore wrapper needed)
-├── test/                      PHPUnit suite
-└── vscode-extension/          VS Code client — spawns server over stdio (F5 dev loop)
+└── test/                      PHPUnit suite
 ```
+
+The VS Code client that spawns this server over stdio lives at the
+sibling `tools/vscode-extension/` -- see its README for the F5 dev
+loop and the configurable `xphp.serverPath` it uses to locate this
+package's `bin/xphp-lsp`.
 
 ## Install
 
@@ -111,8 +115,8 @@ tools/lsp/bin/xphp-lsp        # speaks LSP over stdio; no arguments
 ```
 
 Use this as the `command` in any LSP client (Neovim's `vim.lsp.start`, Helix's
-`languages.toml`, etc.). The bundled VS Code extension under `vscode-extension/` does this
-spawn for you.
+`languages.toml`, etc.). The sibling VS Code extension under `tools/vscode-extension/`
+does this spawn for you.
 
 Capabilities advertised at `initialize`:
 
@@ -192,12 +196,10 @@ tools/lsp/bin/xphp-lsp --lint playground/src/Demos/Bounds.xphp
 
 ## VS Code extension
 
-See `vscode-extension/README.md` for the client-side setup. Quick start:
-
-```bash
-make -C tools/lsp build-extension     # npm install + tsc
-# then open tools/lsp/vscode-extension/ in VS Code and hit F5
-```
+The VS Code client lives as a peer package at `tools/vscode-extension/`
+(separate sibling under `tools/`, not nested under `lsp/`).  See
+`tools/vscode-extension/README.md` for the F5 dev loop and the
+`xphp.serverPath` setting it uses to find this server.
 
 ## Why a separate composer package
 

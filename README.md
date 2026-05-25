@@ -215,7 +215,7 @@ filtering across same-class and subclass contexts). The same server powers two e
 
 - **PhpStorm**: plugin at [tools/phpstorm-plugin/](tools/phpstorm-plugin/) targeting PhpStorm 2026.1+ (uses the
   IntelliJ Platform LSP API, free for all editions since 2025.2). This is the primary editor target.
-- **VS Code**: extension client at [tools/lsp/vscode-extension/](tools/lsp/vscode-extension/) for local dev
+- **VS Code**: extension client at [tools/vscode-extension/](tools/vscode-extension/) for local dev
   iteration. Marketplace publication is deferred indefinitely.
 
 Both bind to the same TextMate grammar and the same LSP semantics, so editing experience is consistent across editors.

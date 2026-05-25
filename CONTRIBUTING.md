@@ -16,7 +16,8 @@ xphp-lang/
 +-- playground/                          # demo workspace that depends on the core
 +-- tools/
 |   +-- lsp/                             # Language Server (PHP, phpactor/language-server)
-|   `-- phpstorm-plugin/                 # JetBrains plugin (Kotlin + Gradle)
+|   +-- phpstorm-plugin/                 # JetBrains plugin (Kotlin + Gradle)
+|   `-- vscode-extension/                # VS Code client (TypeScript)
 +-- .github/workflows/
 |   +-- ci-core.yml                      # phpunit + infection for core/
 |   `-- ci-<package>.yml                 # one file per package under tools/

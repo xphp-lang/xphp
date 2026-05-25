@@ -42,7 +42,7 @@ timeline
                 : LSP -- workspace/didChangeWatchedFiles (long sessions stay fresh on external edits)
                 : LSP -- UTF-16 column counting (correct positions past emoji / supplementary-plane chars)
                 : LSP -- short-name tie-break (canonical src/ wins over tests / fixtures / vendor)
-                : VS Code extension client at tools/lsp/vscode-extension/
+                : VS Code extension client at tools/vscode-extension/
                 : PhpStorm plugin at tools/phpstorm-plugin/ (Kotlin + Gradle, IntelliJ Platform LSP API)
                 : --lint headless CLI for CI (file:line:col error output)
         Developer experience
