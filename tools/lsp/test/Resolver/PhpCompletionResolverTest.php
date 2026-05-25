@@ -43,6 +43,190 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains('_secret', $labels, 'private methods must be filtered out');
     }
 
+    public function testPrivateAndProtectedMembersVisibleInsideSameClass(): void
+    {
+        // Phase 3 polish: when the cursor is inside the same class as
+        // the receiver, private + protected members are visible.  The
+        // common case: writing `$this->_helper()` from inside the class
+        // body itself.  Source has a valid existing method so the file
+        // parses cleanly; the cursor sits on the existing `$this->` of
+        // that method (not mid-edit), simulating the user re-typing
+        // after the dot.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Account.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Account
+        {
+            private int $balance = 0;
+            protected string $owner = '';
+            public string $label = '';
+
+            public function describe(): string
+            {
+                $marker = $this->label;
+                return $marker;
+            }
+        }
+        XPHP);
+
+        $source = $workspace->get('/Account.xphp')->text;
+        // Cursor on the `->` AFTER $this in `$marker = $this->label;`,
+        // simulating member completion fired at that position.
+        $items = $this->completeAt($workspace, '/Account.xphp', $source, '$this->', strlen('$this->'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('balance', $labels, 'private prop visible from same class');
+        self::assertContains('owner', $labels, 'protected prop visible from same class');
+        self::assertContains('label', $labels);
+        self::assertContains('describe', $labels);
+    }
+
+    public function testPrivatePropertyVisibleWhenFileIsMidEditAndRegularParseFails(): void
+    {
+        // Regression for prod trace xphp-20260525-092358-161.log:
+        // user types `$th` inside Collection::first() before triggering
+        // completion at `$this->|`.  The mid-edit `$th\n        return ...`
+        // makes the non-tolerant nikic parse throw, so the cached
+        // ParseResult.ast is null.  enclosingClassFqnAt previously
+        // returned null on cache miss -> isSameClass=false -> private
+        // $items dropped silently.  Fix: fall back to parseTolerant.
+        //
+        // Worse-reflection still finds the class via FilesystemSourceLocator
+        // (the on-disk copy is clean even when the in-memory buffer is
+        // dirty), so the regression hinges purely on whether our
+        // enclosingClassFqnAt recovers the enclosing class.  Use a
+        // filesystem fixture so worse-reflection can reflect Collection
+        // the same way it does in prod.
+        $root = sys_get_temp_dir() . '/xphp-vis-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            $cleanSource = "<?php\n\ndeclare(strict_types=1);\n\nnamespace App\\Containers;\n\nclass Collection<T>\n{\n    private T[] \$items;\n\n    public function __construct(T ...\$items)\n    {\n        \$this->items = \$items;\n    }\n\n    public function first(): ?T\n    {\n        return \$this->items[0] ?? null;\n    }\n}\n";
+            file_put_contents($root . '/Collection.xphp', $cleanSource);
+
+            $workspace = $this->workspace();
+            // In-memory buffer with the mid-edit `$th` that breaks the
+            // non-tolerant parse.
+            $dirtySource = "<?php\n\ndeclare(strict_types=1);\n\nnamespace App\\Containers;\n\nclass Collection<T>\n{\n    private T[] \$items;\n\n    public function __construct(T ...\$items)\n    {\n        \$this->items = \$items;\n    }\n\n    public function first(): ?T\n    {\n        \$th\n        return \$this->items[0] ?? null;\n    }\n}\n";
+            $this->open($workspace, $root . '/Collection.xphp', $dirtySource);
+
+            $items = $this->resolverWithRoot($workspace, $root)->complete(
+                $root . '/Collection.xphp',
+                ...$this->lineCharFor($dirtySource, 'return $this->items[0]', strlen('return $this->')),
+            );
+            $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+            self::assertContains(
+                'items',
+                $labels,
+                'private $items must surface even when the regular parse failed mid-edit',
+            );
+        } finally {
+            if (is_dir($root)) {
+                foreach (scandir($root) ?: [] as $e) {
+                    if ($e !== '.' && $e !== '..') {
+                        unlink($root . '/' . $e);
+                    }
+                }
+                rmdir($root);
+            }
+        }
+    }
+
+    /**
+     * @return array{0: int, 1: int}
+     */
+    private function lineCharFor(string $source, string $needle, int $offsetInNeedle): array
+    {
+        $byte = strpos($source, $needle);
+        self::assertNotFalse($byte);
+        $byte += $offsetInNeedle;
+        return (new PositionMap($source))->offsetToPosition($byte);
+    }
+
+    private function resolverWithRoot(PhpactorWorkspace $workspace, string $rootPath): PhpCompletionResolver
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $workspaceSymbols = new \XPHP\Lsp\Handler\WorkspaceSymbols($workspace, $cache);
+        $completionIndex = new \XPHP\Lsp\Resolver\CompletionIndex(
+            $workspaceSymbols,
+            ReflectorFactory::defaultStubPath(),
+        );
+        $fqnIndex = new \XPHP\Lsp\Reflection\FqnIndex($workspace, $cache, $parser, $rootPath);
+        $reflector = (new ReflectorFactory(
+            $workspace,
+            $cache,
+            $parser,
+            rootPath: $rootPath,
+            stubPath: ReflectorFactory::defaultStubPath(),
+            cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: $fqnIndex,
+        ))->build();
+        $classLikeLookup = new \XPHP\Lsp\Resolver\WorkspaceClassLikeLookup($workspace, $cache);
+        return new PhpCompletionResolver(
+            $workspace,
+            $parser,
+            $reflector,
+            $completionIndex,
+            $cache,
+            new \XPHP\Lsp\Resolver\GenericParamRegistry($fqnIndex),
+            new \XPHP\Lsp\Resolver\GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex),
+        );
+    }
+
+    public function testPrivatePropertyVisibleInsideGenericClassWithTBracketSugar(): void
+    {
+        // Regression for the prod trace from xphp-20260525-015638-815.log
+        // id=82/117 -- the `$this->|` completion inside Collection<T>
+        // returned only the 3 public methods, dropping the private
+        // `$items`.  T[] -> array rewrites the source (+2 bytes); the AST
+        // class END is in stripped coords while enclosingClassFqnAt
+        // receives the original-source cursor offset.  Reproduces the
+        // EXACT prod file layout (declare + blank lines + two T[]
+        // occurrences) so any byte-coord shift surfaces.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Collection.xphp', "<?php\n\ndeclare(strict_types=1);\n\nnamespace App\\Containers;\n\nclass Collection<T>\n{\n    private T[] \$items;\n\n    public function __construct(T ...\$items)\n    {\n        \$this->items = \$items;\n    }\n\n    public function first(): ?T\n    {\n        return \$this->items[0] ?? null;\n    }\n\n    public function all(): T[]\n    {\n        return \$this->items;\n    }\n\n    public function count(): int\n    {\n        return count(\$this->items);\n    }\n}\n");
+
+        $source = $workspace->get('/Collection.xphp')->text;
+        // Cursor right after the `->` of `return $this->items[0]` (inside
+        // first() -- this is the position that broke in prod id=82/117).
+        $items = $this->completeAt(
+            $workspace,
+            '/Collection.xphp',
+            $source,
+            'return $this->items[0]',
+            strlen('return $this->'),
+        );
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('items', $labels, 'private $items must surface from inside same class even with T[] sugar');
+    }
+
+    public function testPrivateAndProtectedMembersHiddenFromOutside(): void
+    {
+        // Cursor inside a DIFFERENT class -- the previous default
+        // (public-only) still applies.  No regression.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Account.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Account
+        {
+            private int $balance = 0;
+            public string $label = '';
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Account;\n\$a = new Account();\n\$a->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$a->', 4);
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('label', $labels);
+        self::assertNotContains('balance', $labels, 'private prop must NOT leak across classes');
+    }
+
     public function testCompletesPublicPropertiesAfterArrow(): void
     {
         $workspace = $this->workspace();

@@ -10,7 +10,9 @@ use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Param;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Foreach_;
+use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use PhpParser\Parser;
@@ -228,6 +230,14 @@ final class PhpCompletionResolver
         $droppedVis = 0;
         $droppedPrefix = 0;
 
+        // Phase 3 polish: thread the caller's enclosing class FQN so
+        // private + protected members are visible when the cursor is
+        // inside the same class.  Subclass-protected (where caller is a
+        // descendant of the receiver class) is left for a later phase --
+        // requires walking the inheritance chain.
+        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+        $isSameClass = $callerClassFqn !== null && $callerClassFqn === $lookupName;
+
         foreach ($class->methods() as $method) {
             if (str_starts_with($method->name(), '__')) {
                 $droppedMagic++;
@@ -237,7 +247,7 @@ final class PhpCompletionResolver
                 $droppedStatic++;
                 continue;
             }
-            if (!self::isVisibleFromCaller($method->visibility())) {
+            if (!self::isVisibleFromCaller($method->visibility(), $isSameClass)) {
                 $droppedVis++;
                 continue;
             }
@@ -255,7 +265,7 @@ final class PhpCompletionResolver
         // follow-up.
         if (!$isStatic) {
             foreach ($class->properties() as $property) {
-                if (!self::isVisibleFromCaller($property->visibility())) {
+                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass)) {
                     continue;
                 }
                 if ($property->isStatic()) {
@@ -492,12 +502,91 @@ final class PhpCompletionResolver
         );
     }
 
-    private static function isVisibleFromCaller(Visibility $visibility): bool
+    private static function isVisibleFromCaller(Visibility $visibility, bool $isSameClass): bool
     {
-        // MVP: public only.  Private/protected need to know the caller's
-        // class scope, which worse-reflection's offset reflection gives
-        // us via `scope()` -- threading that through here is a follow-up.
-        return $visibility->isPublic();
+        if ($visibility->isPublic()) {
+            return true;
+        }
+        // Private + protected both surface when caller is inside the
+        // receiver class.  Subclass-protected-only access (caller is a
+        // descendant of receiver) is parked: it requires walking the
+        // inheritance chain via worse-reflection's TypeHierarchy.
+        return $isSameClass;
+    }
+
+    /**
+     * Walk the document AST and return the FQN of the innermost
+     * ClassLike whose `[startFilePos..endFilePos]` covers `$byteOffset`,
+     * or null if the cursor isn't inside a class body.
+     *
+     * Used by member-completion to know whether the caller is inside
+     * the receiver's class -- the gate for surfacing private +
+     * protected members.
+     */
+    private function enclosingClassFqnAt(string $uri, int $byteOffset): ?string
+    {
+        $item = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
+        if ($item === null) {
+            return null;
+        }
+        $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+        $ast = $result->ast;
+        if ($ast === null) {
+            // Cache miss: the cached parse failed because the document is
+            // syntactically mid-edit (a common case for completion -- the
+            // user typed `$t` or similar that breaks the surrounding
+            // statement).  Fall back to the tolerant parser so we still
+            // recover the enclosing class.  Don't cache this result --
+            // the regular `getOrParse` cache stays the source of truth
+            // for non-completion callers.
+            $ast = $this->parser->parseTolerant($item->text);
+            if ($ast === null) {
+                return null;
+            }
+        }
+        // The receiverProbe came from the stripped-source byte offset
+        // (worse-reflection already operates on stripped source), so the
+        // AST positions match without any ByteOffsetMap translation.
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?string $bestFqn = null;
+            public int $bestRange = PHP_INT_MAX;
+            private string $currentNamespace = '';
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if (!$node instanceof ClassLike || $node->name === null) {
+                    return null;
+                }
+                $start = $node->getStartFilePos();
+                $end = $node->getEndFilePos();
+                if ($start < 0 || $end < 0 || $this->offset < $start || $this->offset > $end) {
+                    return null;
+                }
+                $range = $end - $start;
+                if ($range >= $this->bestRange) {
+                    return null;
+                }
+                $short = $node->name->toString();
+                $this->bestFqn = $this->currentNamespace !== ''
+                    ? $this->currentNamespace . '\\' . $short
+                    : $short;
+                $this->bestRange = $range;
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->bestFqn;
     }
 
     private static function matchesPrefix(string $candidate, string $prefix): bool
