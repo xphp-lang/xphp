@@ -79,6 +79,25 @@ final class ByteOffsetMapTest extends TestCase
         self::assertSame(96, $map->toOriginal(100));
     }
 
+    public function testSameLengthEntryBeforeLengthChangingEntryPreservesShift(): void
+    {
+        // Mutation regression: `continue` -> `break` inside
+        // `fromReplacements`'s filter loop.  The same-length replacement
+        // at offset 8 (e.g. `<T>` -> three spaces) must `continue` past,
+        // not `break`; otherwise the subsequent T[] -> array shift is
+        // dropped and downstream positions stop remapping.
+        $map = ByteOffsetMap::fromReplacements([
+            [8, 3, '   '],     // same-length: contributes no shift
+            [20, 3, 'array'],  // T[] -> array (+2 bytes after offset 25 stripped)
+        ]);
+
+        // Stripped 25 is the byte right after 'array' ends; it should map
+        // back to original 23 (right after the original `T[]` ends).
+        // With `break` instead of `continue` the shift table would be
+        // empty, returning identity (25 -> 25).
+        self::assertSame(23, $map->toOriginal(25));
+    }
+
     public function testReplacementsAreSortedRegardlessOfInputOrder(): void
     {
         // Input may arrive in any order (XphpSourceParser accumulates

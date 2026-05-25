@@ -132,6 +132,42 @@ final class RegistryBoundsTest extends TestCase
         );
     }
 
+    public function testSatisfiedBoundOnEarlierParamStillChecksLaterParam(): void
+    {
+        // Mutation regression: `continue` -> `break` on the verdict-true
+        // branch of `Registry::validateBounds` (line 175).
+        //
+        // Pair<K: Stringable, V: Stringable> -- BOTH params bounded, but
+        // only K's concrete type satisfies Stringable.  Original code
+        // validates K, sees verdict===true, `continue`s to V.  V's
+        // concrete fails -> RuntimeException.
+        //
+        // Under the `break` mutation, validation exits after K passes
+        // and V's violation slips through silently -- the test would
+        // see NO exception.  This locks the per-param "keep going"
+        // semantic.
+        $hierarchy = new TypeHierarchy([
+            'App\\Tag' => ['Stringable'],
+        ]);
+        $registry = new Registry(hierarchy: $hierarchy);
+
+        $registry->recordDefinition(
+            'App\\Pair',
+            'Pair',
+            [new TypeParam('K', 'Stringable'), new TypeParam('V', 'Stringable')],
+            new Class_(new Identifier('Pair')),
+            '/Pair.xphp',
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated');
+        $this->expectExceptionMessage('type parameter V');
+        $registry->recordInstantiation(
+            'App\\Pair',
+            [new TypeRef('App\\Tag'), new TypeRef('int', isScalar: true)],
+        );
+    }
+
     public function testUnboundedTypeParamSkipsValidation(): void
     {
         $hierarchy = new TypeHierarchy([]);

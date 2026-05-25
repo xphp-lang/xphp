@@ -968,6 +968,83 @@ PHP;
         self::assertStringContainsString('public function first(): ?T', $printed);
     }
 
+    public function testGenericMethodScannerHandlesFunctionNameAtEndOfSource(): void
+    {
+        // Group B mutation regression: `$k < $n` -> `$k <= $n` boundary
+        // checks at parser.php:182 (and the parallel inner LessThan /
+        // LogicalAnd variants).  Source ends right after `function foo`
+        // so the lookahead index for the `<` of a type-param list lands
+        // at EXACTLY count($tokens).
+        //
+        // - Original: short-circuits on `$k < $n` -> false; skips block.
+        // - Mutated `<=`: condition true, accesses $tokens[$n] (undef),
+        //   PHP throws "Attempt to read property text on null".
+        //
+        // The tolerant entry-point must NOT throw a TypeError from our
+        // scan layer.  Any process-killing crash is observable to
+        // Infection as a "killed by error" outcome.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $result = $parser->parseTolerantWithMap("<?php\nfunction foo");
+        self::assertNotNull($result, 'tolerant parser must produce a result for truncated `function NAME` input');
+    }
+
+    public function testGenericClassScannerHandlesClassNameAtEndOfSource(): void
+    {
+        // Group B mutation regression for the class-scanning twin of
+        // the above: `$k < $n` at parser.php:210 + the inner
+        // LessThan/LogicalAnd mirrors.  Source ends right after
+        // `class Foo`; the lookahead for `<` lands at the array end.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $result = $parser->parseTolerantWithMap("<?php\nclass Foo");
+        self::assertNotNull($result, 'tolerant parser must produce a result for truncated `class NAME` input');
+    }
+
+    public function testGenericInstantiationScannerHandlesIdentifierAtEndOfSource(): void
+    {
+        // Group B mutation regression for the `parseTypeArgList` /
+        // member-access scanner (parser.php:244, 366, 372, 381, 388,
+        // 406, 415).  Source ends right after the identifier that
+        // could-be-a-generic-instantiation; the lookahead for `<`
+        // lands at the boundary.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $result = $parser->parseTolerantWithMap("<?php\nidentity");
+        self::assertNotNull($result, 'tolerant parser must produce a result for truncated identifier-at-EOF');
+    }
+
+    public function testParseTypeParamListHandlesAngleBracketAtEndOfSource(): void
+    {
+        // Group B mutation regression: `$openIdx >= $n` LogicalOr +
+        // GreaterThanOrEqualTo guards in parseTypeParamList / parseTypeArgList
+        // (parser.php:306, 324, 366).  Source ends right after the `<` of
+        // a generic clause; parseTypeParamList enters at the boundary
+        // openIdx == count(tokens) - 1 and the inner skipWs / next-token
+        // checks all land at $n.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $result = $parser->parseTolerantWithMap("<?php\nclass Box<");
+        self::assertNotNull($result, 'tolerant parser must produce a result when a `<` is the last token');
+    }
+
+    public function testParseWithMapIsCallableFromOutsideTheClass(): void
+    {
+        // Mutation regression: `public function parseWithMap` -> `protected`.
+        //
+        // External packages -- notably the LSP analyzer at
+        // tools/lsp/src/Analyzer/Analyzer.php -- depend on `parseWithMap`
+        // being callable from outside the class (they need both the AST
+        // and the ByteOffsetMap for stripped-to-original position
+        // translation).  If the visibility ever drops to `protected`,
+        // those callers break with a fatal "cannot access protected
+        // method" -- but the breakage only surfaces in the LSP package,
+        // not in core's `parse()` tests (which call from inside the
+        // class hierarchy).  This test pins the contract from inside
+        // core so refactors get caught at the right layer.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        [$ast, $byteOffsetMap] = $parser->parseWithMap("<?php\nclass Foo {}\n");
+
+        self::assertIsArray($ast);
+        self::assertInstanceOf(ByteOffsetMap::class, $byteOffsetMap);
+    }
+
     // ===================================================================
     // Helpers for the new tests above
     // ===================================================================
