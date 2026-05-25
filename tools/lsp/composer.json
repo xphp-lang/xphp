@@ -1,6 +1,6 @@
 {
     "name": "xphp-lang/xphp-lsp",
-    "description": "Language Server Protocol implementation for xphp. Powers diagnostics, hover, go-to-definition and completion in VS Code (and any LSP-aware editor) by reusing the xphp-parser AST + Registry directly.",
+    "description": "Language Server Protocol implementation for xphp. Powers diagnostics, hover, go-to-definition and completion in VS Code (and any LSP-aware editor) by reusing the xphp parser AST + Registry directly.",
     "type": "project",
     "license": "MIT",
     "require": {
@@ -9,7 +9,7 @@
         "phpactor/language-server": "^6.0",
         "phpactor/language-server-protocol": "^3.5",
         "phpactor/worse-reflection": "^0.6.0",
-        "xphp-lang/xphp-parser": "@dev"
+        "xphp-lang/xphp": "@dev"
     },
     "require-dev": {
         "phpunit/phpunit": "^13.0"

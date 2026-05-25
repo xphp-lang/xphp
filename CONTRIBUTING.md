@@ -59,7 +59,7 @@ sibling:
 
 3. **Cross-package dependency on the core**: PHP packages do this via a
    path-repo back to the root, the way `tools/lsp/composer.json` declares
-   `"xphp-lang/xphp-parser": "@dev"` with `repositories: [{type: path, url:
+   `"xphp-lang/xphp": "@dev"` with `repositories: [{type: path, url:
    "../../"}]`. Other languages need their own analog. The PhpStorm plugin
    takes a different route: it doesn't compile against xphp at all -- it
    spawns the LSP as a subprocess and bundles the LSP's pre-built PHAR
