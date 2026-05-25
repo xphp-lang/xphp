@@ -1,0 +1,35 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+/**
+ * Reified<T> -- every bare `T` inside the body is substituted at codegen with
+ * the concrete class. `new T(...)`, `T::class`, `instanceof T`,
+ * `is_a($x, T::class)` all produce specialized PHP that references the
+ * concrete type directly, so the monomorphized output behaves the same way
+ * Rust does for reified generics. No reflection / runtime type token needed.
+ */
+class Reified<T>
+{
+    public function make(string $arg): T
+    {
+        return new T($arg);
+    }
+
+    public function className(): string
+    {
+        return T::class;
+    }
+
+    public function isInstance(mixed $x): bool
+    {
+        return $x instanceof T;
+    }
+
+    public function isInstanceViaIsA(mixed $x): bool
+    {
+        return is_a($x, T::class);
+    }
+}

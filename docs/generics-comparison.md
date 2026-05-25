@@ -1,8 +1,31 @@
 # Generic features xphp doesn't have yet
 
-Baseline: xphp today (post `feat/generics-expansion`) has generic classes/interfaces/traits, free + method-scoped generic functions, single upper bounds, nested generics, and a marker-interface trick for `instanceof`. The compilation model is **monomorphization** — same as Rust, opposite of Java/Kotlin's erasure. That last point matters a lot for what's easy vs hard to add.
+Baseline: xphp today ships generic classes / interfaces / traits (any arity, arbitrarily nested), free + method-scoped generic functions (static-call only), single upper bounds enforced at the class **and** method/free-function level with source-level error messages, transitive fixed-point specialization, collision-safe FQCN naming, and a marker-interface trick that makes `instanceof OriginalTemplate` work for every specialization. The compilation model is **monomorphization** — same as Rust, opposite of Java/Kotlin's erasure. That last point matters a lot for what's easy vs hard to add.
 
-Below: gaps grouped by tier, with the language(s) that have each feature. Filtered for things that make sense in a PHP-targeted language — skipping Rust lifetimes, const generics over `usize`, TS template-literal types, etc.
+Below: a quick cross-language reference, then the gaps grouped by tier with the language(s) that have each feature. Filtered for things that make sense in a PHP-targeted language — skipping Rust lifetimes, const generics over `usize`, TS template-literal types, etc.
+
+---
+
+## Cross-language summary
+
+| Feature | TS | Kotlin | Rust | xphp |
+|---|---|---|---|---|
+| Generic classes/ifaces | ✅ | ✅ | ✅ | ✅ |
+| Generic functions/methods | ✅ | ✅ | ✅ | ✅ method-scope = static-call only; free functions full |
+| Upper bounds (class + method + free-function level) | ✅ | ✅ | ✅ | ✅ (single, enforced everywhere) |
+| Multiple bounds | ✅ | ✅ | ✅ | ❌ |
+| Default type params | ✅ | ✅ | ✅ | ❌ |
+| Declaration-site variance | ✅ | ✅ | (via PhantomData) | ❌ |
+| Use-site variance | ❌ | ✅ | n/a | ❌ |
+| Reified via marker interface (`instanceof OriginalFqn`) | n/a | n/a | n/a | ✅ |
+| Reified placeholder in generic body (`instanceof T`, `T::class`, `new T(...)`, `T::method(...)`, `is_a($x, T::class)`) | ❌ | ✅ (inline) | ✅ (monomorphic) | ✅ |
+| Generic type aliases | ✅ | ✅ | ✅ | ❌ |
+| F-bounded recursion | ✅ | ✅ | ✅ | ❌ (bound is bare string) |
+| Wildcard / `*` | ✅ (`unknown`) | ✅ | n/a | ⚠ via marker |
+| Variadic generics | ✅ | ❌ | ⚠ tuples | ❌ |
+| Generic enums / sums | ✅ | ✅ | ✅ | ❌ |
+| Per-arg specialization | ❌ | ❌ | ⚠ nightly | ❌ |
+| Associated types | ❌ | ❌ | ✅ | ❌ |
 
 ---
 
@@ -16,7 +39,7 @@ class Producer<out T> { public function get(): T; }   // covariant
 class Consumer<in T>  { public function set(T $x); }  // contravariant
 ```
 
-Today every `Box<Plastic>` and `Box<Animal>` are unrelated even if `Plastic extends Animal`. With marker interfaces, the only commonality is the erased `Box`. Adding `out T` would let the compiler emit `Box_<Plastic> implements Box_<Animal>` when `Plastic <: Animal` — a real subtype relationship at the specialized FQN level.
+Today every `Box<Dog>` and `Box<Animal>` are unrelated even when `Dog extends Animal`. With marker interfaces, the only commonality is the erased `Box`. Adding `out T` would let the compiler emit `Box_<Dog> implements Box_<Animal>` whenever `Dog <: Animal` — a real subtype relationship at the specialized FQN level.
 
 **Why high-value**: monomorphization already produces per-specialization classes; wiring up the right `implements` chains is mostly a hierarchy lookup at specialization time.
 
@@ -43,21 +66,9 @@ class Sortable<T> where T: \Stringable, T: \Countable { ... }
 Bound validation (`Registry::validateBounds`) already loops per param; trivially extends to loop per (param, bound) pair. Parser is the only real change.
 
 ### 4. Instance-method generic calls
-Already on the MVP-gaps list. `$obj->method<int>(...)` requires knowing the static type of `$obj`. Without inference, the workaround in monomorphized worlds is **declaration-site annotation**: if `$obj` is typed as `Util` in the signature, the compiler knows the receiver class. With strict typing, this covers the majority of practical cases.
+Method-scoped generics ship today for static call sites (`Util::identity<int>(...)`); the gap is instance calls (`$obj->method<int>(...)`), which require knowing the static type of `$obj`. Without inference, the workaround in monomorphized worlds is **declaration-site annotation**: if `$obj` is typed as `Util` in the signature, the compiler knows the receiver class. With strict typing, this covers the majority of practical cases.
 
-### 5. Reified type parameters
-A headline Kotlin feature. Rust gets the same effect "for free" via monomorphization — the type IS known at codegen time.
-
-```php
-function decode<T>(string $json): T {
-    $data = json_decode($json, true);
-    return new T(...$data);   // T is concrete in the specialized body
-}
-```
-
-Today the `Specializer` already substitutes `new T()` (the `New_` class field is a `Name`) — so this works **incidentally**. The gap is that user code can't write `if ($x instanceof T)` and reason about it as part of the documented contract. Worth promoting from "accidentally works" to "documented capability" with `T::class` / `instanceof T` / `is_a($x, T::class)` all guaranteed.
-
-### 6. Generic type aliases
+### 5. Generic type aliases
 TypeScript (`type Result<T,E> = ...`), Rust (`type Result<T> = ...`), Kotlin (`typealias`).
 
 ```php
@@ -156,36 +167,14 @@ The `static` part should "just work" in specializations — worth a fixture to l
 
 ---
 
-## Cross-language summary
-
-| Feature | TS | Kotlin | Rust | xphp |
-|---|---|---|---|---|
-| Generic classes/ifaces | ✅ | ✅ | ✅ | ✅ |
-| Generic functions/methods | ✅ | ✅ | ✅ | ✅ (static-call only) |
-| Upper bounds | ✅ | ✅ | ✅ | ✅ (single) |
-| Multiple bounds | ✅ | ✅ | ✅ | ❌ |
-| Default type params | ✅ | ✅ | ✅ | ❌ |
-| Declaration-site variance | ✅ | ✅ | (via PhantomData) | ❌ |
-| Use-site variance | ❌ | ✅ | n/a | ❌ |
-| Reified at runtime | ❌ | ✅ (inline) | ✅ (monomorphic) | ⚠ accidental |
-| Generic type aliases | ✅ | ✅ | ✅ | ❌ |
-| F-bounded recursion | ✅ | ✅ | ✅ | ❌ (bound is bare string) |
-| Wildcard / `*` | ✅ (`unknown`) | ✅ | n/a | ⚠ via marker |
-| Variadic generics | ✅ | ❌ | ⚠ tuples | ❌ |
-| Generic enums / sums | ✅ | ✅ | ✅ | ❌ |
-| Per-arg specialization | ❌ | ❌ | ⚠ nightly | ❌ |
-| Associated types | ❌ | ❌ | ✅ | ❌ |
-| `instanceof OriginalFqn` | n/a | n/a | n/a | ✅ (clever) |
-
----
-
 ## Next opportunities
 
-The following features seem to offer a better ROI:
+Aligned with `roadmap.md`'s **Next** horizon (Type system depth + Generic surface). In rough priority order:
 
 1. **Default type params + multiple bounds** — both are mostly parser changes, low risk, high quality-of-life.
 2. **Variance annotations (`in`/`out`)** — leverages the monomorphization model uniquely; emit the right `implements` chains between specializations.
-3. **Generic type aliases** — unlocks reuse, and since xphp doesn't have nominal types yet the design is unconstrained.
-4. **Reified-T as a documented contract** — `T::class`, `instanceof T`, `is_a($x, T::class)` all guaranteed. xphp already pays for monomorphization; this is the user-facing payoff over Java/Kotlin.
+3. **F-bounded recursion** (`T: Comparable<T>`) — promote `boundFqn` from bare string to `TypeRef` so the bound can itself be generic.
+4. **Instance-method generic calls** on a typed receiver — declaration-site annotation gives the compiler the receiver class without inference.
+5. **Generic type aliases** — unlocks reuse, and since xphp doesn't have nominal types yet the design is unconstrained.
 
-The combination unique to xphp is **(2) + (4) together**: PHP would become the only mainstream PHP-shaped language with Rust-style reified-and-monomorphized generics _plus_ variance — a differentiator the community can point to.
+The combination unique to xphp is **(2) plus the already-shipped reified-T (Tier 1 #5)**: PHP would become the only mainstream PHP-shaped language with Rust-style reified-and-monomorphized generics _plus_ variance — a differentiator the community can point to.

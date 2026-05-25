@@ -19,12 +19,14 @@ timeline
         Function-level generics
                 : method-scoped generics — static calls only
                 : free generic functions at namespace scope
+                : bound validation for method-level and free-function type-params
         Type-parameter bounds
                 : single upper bound (e.g. T must extend Stringable) validated at compile time
-                : built-in interface whitelist (Stringable / Countable / Iterator / …)
+                : built-in interface whitelist (Stringable / Countable / Iterator / ...)
                 : error messages reference the source-level instantiation, not the hash
         Runtime semantics
                 : instanceof Template via generated marker interfaces
+                : reified T inside a generic body
         Naming and collisions
                 : sha256-based generated FQCN, namespace mirrors template
                 : build-time hash-collision detection with copy-pasteable widen command
@@ -52,11 +54,9 @@ timeline
                 : default type parameters
                 : multiple bounds (T must satisfy A and B)
                 : variance annotations (covariant / contravariant) — leverages monomorphization for real subtype edges
-                : reified T as documented contract (T-class / instanceof T / is_a)
                 : F-bounded recursion (T bounded by a generic of itself)
         Generic surface
                 : instance-method generic calls on a typed receiver
-                : bound validation on method-level type-params
                 : generic type aliases
         Developer experience
                 : Composer plugin for autoload registration

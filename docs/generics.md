@@ -7,6 +7,37 @@ For the broader project context, see the [README](/README.md).
 
 ---
 
+## Monomorphization
+
+> "monomorphization is a compile-time process where polymorphic functions are replaced by many monomorphic functions for
+> each unique instantiation [...]"
+> 
+> from [Wikipedia](https://en.wikipedia.org/wiki/Monomorphization)
+
+It means a code instantiating `Map<K, V>` with `50` distinct `(K, V)` combinations produces `50` generated files.
+
+That's the price `xphp` pays to have the following:
+
+- **Zero runtime overhead.** OpCache compiles each specialized class once; subsequent instantiations are normal `new`
+  calls.
+- **Honest reflection.** `ReflectionParameter::getType()->getName()` returns the real concrete type -- what DI
+  containers and serializers actually need.
+- **Native `TypeError` enforcement** at every boundary, without writing one line of reflection-aware glue.
+
+Type erasure, on the other hand, generates fewer files at the price of re-introducing the exact problem `xphp` exists
+to solve. The trade is intentional.
+
+---
+
+## Comparison VS other languages
+
+For a side-by-side comparison against TypeScript, Kotlin, and Rust — including the features xphp doesn't have yet,
+ordered by tier and tied to the monomorphization model — see [`generics-comparison.md`](generics-comparison.md). It's
+the strategic counterpart to this reference: this file documents _what works_; the comparison documents _what's next,
+and why_.
+
+---
+
 ## How it works
 
 The `xphp compile` command goes through the following phases
@@ -132,13 +163,16 @@ Util::identity<int>(42);    // -> Util::identity_T_<hash-of-int>(42)
 Util::identity<string>('hi'); // -> Util::identity_T_<hash-of-string>('hi')
 ```
 
-MVP limits: static-call sites only (`Util::method<…>`); method must be on a non-generic enclosing class; bound checks on
-method-level type-params aren't enforced yet.
+Bound checks on method-level type-params are enforced at compile time the same way class-level bounds are -- the
+call-site walk routes through `Registry::checkBounds`.
+
+MVP limits: static-call sites only (`Util::method<...>`); method must be on a non-generic enclosing class.
 
 ### Free generic functions
 
 Same shape as method generics but at namespace scope. `function foo<T>(...)` becomes one mangled function per unique
-arg-list, appended to the enclosing namespace; call sites rewrite to fully-qualified mangled refs.
+arg-list, appended to the enclosing namespace; call sites rewrite to fully-qualified mangled refs. Bound checks run
+at compile time, same as method-level and class-level type-params.
 
 MVP limit: the function must live inside a `namespace { ... }` block; bare top-level functions aren't supported yet.
 
@@ -183,28 +217,3 @@ The namespace mirrors the template's original `FQCN`, so two `Box` classes in di
 regardless
 of how their args are spelled. Hash-collision detection at recording time will fail loudly with both colliding
 instantiations, the current hash length, and a re-run command using a longer hash.
-
-### Why monomorphization (and what it costs)
-
-One class file per unique instantiation. A codebase instantiating `Map<K, V>` with `50` distinct `(K, V)` combinations
-produces `50` generated files. That's the cost.
-
-In exchange:
-
-- **Zero runtime overhead.** OpCache compiles each specialized class once; subsequent instantiations are normal `new`
-  calls.
-- **Honest reflection.** `ReflectionParameter::getType()->getName()` returns the real concrete type -- what DI
-  containers and serializers actually need.
-- **Native `TypeError` enforcement** at every boundary, without writing one line of reflection-aware glue.
-
-Type erasure (the phpdoc / attribute path) generates fewer files at the price of re-introducing the exact problem `xphp`
-exists to solve. The trade is intentional.
-
----
-
-## Where xphp's generics stand vs other languages
-
-For a side-by-side comparison against TypeScript, Kotlin, and Rust — including the features xphp doesn't have yet,
-ordered by tier and tied to the monomorphization model — see [`generics-comparison.md`](generics-comparison.md). It's
-the strategic counterpart to this reference: this file documents _what works_; the comparison documents _what's next,
-and why_.

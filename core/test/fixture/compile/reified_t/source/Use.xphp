@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use App\Containers\Reified;
+use App\Models\Alpha;
+use App\Models\Beta;
+
+$forAlpha = new Reified<Alpha>();
+$forBeta = new Reified<Beta>();

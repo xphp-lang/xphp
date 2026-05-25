@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Demos;
+namespace App\LspFixtures;
 
 // Phase 3 fixture: short-name tie-break in findClassByName.
 //

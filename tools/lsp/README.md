@@ -59,22 +59,41 @@ tools/lsp/
 │   │   └── DiagnosticTranslator        framework-neutral → wire-format
 │   ├── Handler/
 │   │   ├── AstPositionResolver         find smallest Name at byte offset
+│   │   ├── XphpTextDocumentHandler     didOpen / didChange / didClose (full-sync overlay)
 │   │   ├── XphpHoverHandler            textDocument/hover (xphp + PHP fall-through)
 │   │   ├── XphpDefinitionHandler       textDocument/definition (xphp + PHP fall-through)
 │   │   ├── XphpCompletionHandler       textDocument/completion (xphp + PHP fall-through)
-│   │   ├── TypeArgPositionDetector     backwards-scanner for cursor-in-<…>
+│   │   ├── XphpReferencesHandler       textDocument/references (with subclass-inherited walks)
+│   │   ├── XphpRenameHandler           textDocument/rename (alias-aware, optional file rename)
+│   │   ├── XphpDocumentSymbolHandler   textDocument/documentSymbol (hierarchical outline)
+│   │   ├── XphpWorkspaceSymbolHandler  workspace/symbol (cross-file, FqnIndex-backed)
+│   │   ├── XphpFileWatcherHandler      workspace/didChangeWatchedFiles (invalidates FqnIndex)
+│   │   ├── TypeArgPositionDetector     backwards-scanner for cursor-in-<...>
 │   │   └── WorkspaceSymbols            collect ClassLike FQNs across open docs
 │   ├── Reflection/
 │   │   ├── ReflectorFactory            builds worse-reflection Reflector for the session
 │   │   ├── WorkspaceSourceLocator      serves open documents (stripped to PHP) to worse-reflection
-│   │   └── FilesystemSourceLocator     serves on-disk .xphp / .php files (stripped to PHP)
+│   │   ├── FilesystemSourceLocator     serves on-disk .xphp / .php files (stripped to PHP)
+│   │   └── FqnIndex                    unified open-doc + on-disk FQN -> declaration index
 │   ├── Resolver/
 │   │   ├── PhpDefinitionResolver       PHP-semantic GTD via worse-reflection (classes / funcs / methods / props / native stubs)
-│   │   ├── PhpHoverResolver            signature + docblock hover via worse-reflection
-│   │   ├── PhpCompletionResolver       member / static-member completion via worse-reflection
-│   │   └── PhpCompletionContext        source-level detector for `$obj->` / `Cls::` cursor positions
-│   └── (phpactor's own Workspace handles document open/change/close; no
-│        local DocumentStore wrapper needed)
+│   │   ├── PhpHoverResolver            signature + docblock hover, param + return-type substitution
+│   │   ├── PhpCompletionResolver       member / static / type-arg / variable / `Cls::$prop` completion
+│   │   ├── PhpCompletionContext        source-level detector for `$obj->` / `Cls::` cursor positions
+│   │   ├── CompletionIndex             candidate enumeration backed by FqnIndex
+│   │   ├── CompositeClassLikeLookup    open-doc overlay over filesystem ClassLike lookup
+│   │   ├── WorkspaceClassLikeLookup    open-doc ClassLike resolver
+│   │   ├── FilesystemClassLikeLookup   filesystem ClassLike resolver
+│   │   ├── GenericResolver             expands generic-param maps for substitution
+│   │   ├── GenericParamRegistry        prettify pass for placeholder pairs
+│   │   ├── ReferenceFinder             cross-file reference collector w/ inheritance walks
+│   │   ├── RenameProvider              alias-aware rename + RenameFile ops gating
+│   │   ├── VarBinding                  scope-aware variable typing (top-level / function / closure)
+│   │   ├── MethodCallSubstitution      receiver-type-aware param + return substitution
+│   │   ├── ResolvedType                value object for resolved type expressions
+│   │   └── StubsIndex                  worse-reflection's PhpStorm-stubs index, file-cached
+│   └── (phpactor's own Workspace handles document open/change/close transport;
+│        XphpTextDocumentHandler is our overlay on top of it.)
 └── test/                      PHPUnit suite
 ```
 

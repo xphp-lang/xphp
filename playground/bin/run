@@ -36,6 +36,7 @@ $demos = [
     'var/dist/Demos/GenericMethod.php',
     'var/dist/Demos/GenericFunction.php',
     'var/dist/Demos/InstanceofTemplate.php',
+    'var/dist/Demos/Reified.php',
 ];
 
 fwrite(STDOUT, "==> Running demos\n\n");

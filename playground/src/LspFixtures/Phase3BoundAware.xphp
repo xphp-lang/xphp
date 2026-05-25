@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Demos;
+namespace App\LspFixtures;
 
 use App\Containers\StringableBox;
 use App\Models\Tag;
@@ -22,7 +22,7 @@ use App\Models\User;
 //   - everything shows (classes + scalars).
 
 // CURSOR HERE -- delete the inside of the `<>` and trigger completion.
-$bounded = new StringableBox<App\Models\Tag>(new Tag('phase3'));
+$bounded = new StringableBox<Tag>(new Tag('phase3'));
 
 // Reference uses so the file parses + classes resolve:
 echo $bounded->describe();

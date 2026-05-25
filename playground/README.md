@@ -10,35 +10,48 @@ one level up — the same shape any downstream consumer would use.
 playground/bin/run
 ```
 
-The first invocation runs `composer install` (which symlinks the parent
-project into `playground/vendor/` via the path repo). After that it compiles
-every `.xphp` under `src/`, then runs all the demos in turn.
-
-The Makefile at the repo root has a `playground` target wrapping the same
-command:
-
-```bash
-make playground
-```
+The first invocation runs `composer install` (which symlinks the
+`core/` package into `playground/vendor/` via the path repo). After
+that it compiles every `.xphp` under `src/`, then runs all the demos
+in turn.
 
 ## What's in here
 
 ```
 playground/
-├── composer.json        # own package, path-repo'd at ../
-├── bin/run              # compile + run all demos
-├── src/
-│   ├── Models/          # plain final classes used as type args
-│   ├── Containers/      # the generic templates
-│   │   ├── Box.xphp     #   Box<T>
-│   │   ├── Pair.xphp    #   Pair<K, V>
-│   │   ├── Map.xphp     #   Map<K, V>
-│   │   ├── Collection.xphp  # Collection<T> — uses T[] + ?T sugar
-│   │   └── Wrapper.xphp     # Wrapper<T> { Box<T> $box; } — transitive
-│   └── Demos/           # top-level scripts that exercise each feature bucket
-└── var/
-    ├── cache/           # generated specialized classes (gitignored)
-    └── dist/            # rewritten .xphp → .php (gitignored)
+|-- composer.json        # own package, path-repo'd at ../core/
+|-- bin/run              # compile + run all demos
+|-- src/
+|   |-- Models/          # plain final classes used as type args
+|   |   |                #   (Animal, Cat, Dog, Food, Plastic, Stats, Tag,
+|   |   |                #    User, Wolf -- Wolf is the subclass-protected
+|   |   |                #    LSP completion fixture)
+|   |-- Containers/      # the generic templates
+|   |   |-- Box.xphp                #   Box<T>
+|   |   |-- Pair.xphp               #   Pair<K, V>
+|   |   |-- Map.xphp                #   Map<K, V>
+|   |   |-- Collection.xphp         #   Collection<T> -- uses T[] + ?T sugar
+|   |   |-- Wrapper.xphp            #   Wrapper<T> { Box<T> $box; } -- transitive
+|   |   |-- Reified.xphp            #   Reified<T> -- new T(), T::class, instanceof T
+|   |   |-- Repository.xphp         #   Repository<T> -- interface
+|   |   |-- InMemoryRepository.xphp #   in-memory Repository<T> impl
+|   |   |-- StringableBox.xphp      #   Box<T: \Stringable> -- bound demo
+|   |   `-- Util.xphp               #   Util::identity<T> -- method/free-function generics
+|   |-- Demos/           # top-level scripts that exercise each feature
+|   |                    #   bucket -- compiled + executed by bin/run.
+|   |                    #   (SingleType, MultiType, NestedTransitive,
+|   |                    #    ArraySugar, Bounds, GenericInterface,
+|   |                    #    GenericMethod, GenericFunction, Inheritance,
+|   |                    #    InstanceofTemplate, Reified)
+|   `-- LspFixtures/     # LSP-only fixtures -- opened in the IDE to verify
+|                        #   editor behaviour (completion, hover, GTD).
+|                        #   Compiled by bin/run but NOT in its execute list.
+|                        #   (Phase3BoundAware, Phase3ClosedFile,
+|                        #    Phase3ScopeAwareVars, Phase3StaticProp,
+|                        #    Phase3TieBreak, Phase3Utf16)
+`-- var/
+    |-- cache/           # generated specialized classes (gitignored)
+    `-- dist/            # rewritten .xphp -> .php (gitignored)
 ```
 
 Each demo reflects on the compiled class to prove that the generic parameter

@@ -1,0 +1,35 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Demos;
+
+use App\Containers\Reified;
+use App\Models\Food;
+use App\Models\Tag;
+
+echo '[Reified] T inside a generic body is substituted at codegen', PHP_EOL;
+
+$tagOps = new Reified<Tag>();
+$foodOps = new Reified<Food>();
+
+// `T::class` -> the substituted FQN. No reflection needed.
+echo '  Reified<Tag>::className()  = ', $tagOps->className(), PHP_EOL;
+echo '  Reified<Food>::className() = ', $foodOps->className(), PHP_EOL;
+
+// `new T($arg)` -> `new \App\Models\Tag($arg)` after specialization.
+$tag = $tagOps->make('blue');
+$food = $foodOps->make('pizza');
+echo '  make("blue")->name        = ', $tag->name, ' (', $tag::class, ')', PHP_EOL;
+echo '  make("pizza")->label      = ', $food->label, ' (', $food::class, ')', PHP_EOL;
+
+// `instanceof T` -> `instanceof \App\Models\Tag`. Crosses real subtype edges,
+// not just the marker interface.
+echo '  $tag  instanceof Tag       = ', $tagOps->isInstance($tag) ? 'yes' : 'NO', PHP_EOL;
+echo '  $food instanceof Tag       = ', $tagOps->isInstance($food) ? 'yes' : 'NO', PHP_EOL;
+
+// `is_a($x, T::class)` composes with the substituted T::class above.
+echo '  is_a($tag, T::class) for Tag  = ', $tagOps->isInstanceViaIsA($tag) ? 'yes' : 'NO', PHP_EOL;
+echo '  is_a($food, T::class) for Tag = ', $tagOps->isInstanceViaIsA($food) ? 'yes' : 'NO', PHP_EOL;
+
+echo PHP_EOL;

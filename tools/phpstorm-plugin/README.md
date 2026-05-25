@@ -1,18 +1,23 @@
 # xphp PhpStorm plugin
 
 Editing intelligence for `.xphp` files inside PhpStorm -- diagnostics, hover,
-go-to-definition, completion -- driven by the same Language Server Protocol
-implementation that backs the VS Code extension at
+go-to-definition, completion, references, rename, document and workspace
+symbols -- driven by the same Language Server Protocol implementation that
+backs the VS Code extension at
 [`tools/vscode-extension/`](/tools/vscode-extension/). One server, one
 TextMate grammar, two editor integrations.
 
 | Feature | How |
 |---|---|
 | Diagnostics (parse errors, generic-bound violations, duplicate templates) | LSP `textDocument/publishDiagnostics` |
-| Hover (specialized FQN + bound info) | LSP `textDocument/hover` |
-| Go-to-definition (across files, into specialized classes) | LSP `textDocument/definition` |
-| Completion (class names inside `<...>` type-arg positions) | LSP `textDocument/completion` |
-| File-type recognition (`.xphp`) | IntelliJ `com.intellij.fileType` extension |
+| Hover (specialized FQN + bound info, parameter & return-type substitution) | LSP `textDocument/hover` |
+| Go-to-definition (across files, into specialized classes, filesystem-only targets) | LSP `textDocument/definition` |
+| Completion (member / static access, type-arg positions, scope-aware variables, `Cls::$prop`) | LSP `textDocument/completion` |
+| Find references (classes, functions, methods, properties, subclass-inherited walks) | LSP `textDocument/references` |
+| Rename symbol (alias-aware; file rename gated on client `resourceOperations`) | LSP `textDocument/rename` |
+| Document outline (Cmd+O / Structure panel) | LSP `textDocument/documentSymbol` |
+| Workspace symbol search | LSP `workspace/symbol` |
+| Syntax highlighting (`.xphp`) | Bundled TextMate grammar registered at project open via `XphpBundleRegistrar` |
 | Zero-config server install | Bundled PHAR auto-extracted on first plugin load |
 
 ## Requirements
@@ -90,20 +95,29 @@ make run-ide
 Open file.xphp in PhpStorm
         |
         v
+XphpBundleRegistrar (postStartupActivity)
+        | registers tools/vscode-extension/syntaxes/xphp.tmLanguage.json
+        | as a TextMate user-bundle the first time a project opens
+        v
+TextMate plugin claims .xphp via the bundle's `fileTypes: ["xphp"]`
+        | (the plugin deliberately registers NO `<fileType>` extension --
+        |  see plugin.xml for the rationale)
+        v
 XphpLspServerSupportProvider.fileOpened()
-        | (filters on XphpFileType)
+        | (filters by file extension == "xphp")
         v
 XphpLspServerDescriptor.createCommandLine()
         | (1) XphpSettings.lspPath if set, else
         | (2) PharExtractor.extract() -> system-dir/xphp/xphp-lsp.phar
-        | (3) else error pointing at settings
+        | (3) else a balloon notification with an "Open Settings..." action
         v
 IntelliJ Platform LSP API spawns `php <path-to-phar>` over stdio
         |
         v
 xphp Language Server (tools/lsp/) replies with diagnostics, hover,
-definition, completion, semantic tokens -- the platform threads
-them into the standard editor UI.
+definition, completion, references, rename, documentSymbol,
+workspace/symbol -- the platform threads them into the standard
+editor UI via LspCustomization (all the above features enabled).
 ```
 
 ## Why this lives under `tools/`

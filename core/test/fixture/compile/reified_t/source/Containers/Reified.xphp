@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Containers;
+
+class Reified<T>
+{
+    public function make(): T
+    {
+        return new T();
+    }
+
+    public function className(): string
+    {
+        return T::class;
+    }
+
+    public function describeStatic(): string
+    {
+        return T::describe();
+    }
+
+    public function isInstance(mixed $x): bool
+    {
+        return $x instanceof T;
+    }
+
+    public function isInstanceViaIsA(mixed $x): bool
+    {
+        return is_a($x, T::class);
+    }
+}

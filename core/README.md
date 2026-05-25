@@ -94,7 +94,7 @@ core/
 ## Test
 
 ```bash
-make -C core test/unit        # PHPUnit: 184 tests / 495 assertions
+make -C core test/unit        # PHPUnit: 192 tests / 545 assertions
 make -C core test/mutation    # Infection: 100% MSI, gate 95%
 ```
 

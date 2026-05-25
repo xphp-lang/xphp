@@ -25,6 +25,6 @@ class InMemoryRepository<T> implements Repository<T>
 
     public function items(): Collection<T>
     {
-        return new Collection<T>($this->items);
+        return new Collection<T>(...$this->items);
     }
 }
