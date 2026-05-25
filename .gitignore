@@ -2,5 +2,14 @@
 /var/
 /vendor/
 /.xphp-cache/
+# Mirror the patterns under core/ -- the PHP core package moved here in
+# the monorepo restructure (composer.json / src / test / bin / Makefile /
+# infection.json5 / phpunit.xml.dist), so its local build artifacts
+# (dist, vendor, infection logs in var/, compile cache) need the same
+# ignores.
+/core/dist/
+/core/var/
+/core/vendor/
+/core/.xphp-cache/
 docker-compose.override.yml
 .phpunit.result.cache

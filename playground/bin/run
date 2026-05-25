@@ -4,7 +4,7 @@
 declare(strict_types=1);
 
 $root = dirname(__DIR__);
-$parserBin = $root . '/../bin/xphp';
+$parserBin = $root . '/../core/bin/xphp';
 
 chdir($root);
 

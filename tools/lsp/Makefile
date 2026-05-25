@@ -82,16 +82,16 @@ build/phar: $(BOX_PHAR)
 	#     PHAR -- PHARs can't follow symlinks, so Box would embed a dangling
 	#     pointer and the runtime can't resolve XPHP\Transpiler\* classes.
 	#     Replace the symlinked package with a real copy of just src/ +
-	#     composer.json (the only paths xphp-parser's PSR-4 autoload reaches)
+	#     composer.json (the only paths xphp's PSR-4 autoload reaches)
 	#     and re-dump the autoloader so the classmap targets the copy.
 	#  3) Restore the symlinked dev install for ongoing `make test` runs.
 	composer install --no-dev --classmap-authoritative --quiet --no-interaction
-	@if [ -L vendor/xphp-lang/xphp-parser ]; then \
-	  parser_src="$$(readlink -f vendor/xphp-lang/xphp-parser)"; \
-	  rm vendor/xphp-lang/xphp-parser; \
-	  mkdir -p vendor/xphp-lang/xphp-parser/src; \
-	  cp -RL "$$parser_src/src/." vendor/xphp-lang/xphp-parser/src/; \
-	  cp -L "$$parser_src/composer.json" vendor/xphp-lang/xphp-parser/composer.json; \
+	@if [ -L vendor/xphp-lang/xphp ]; then \
+	  parser_src="$$(readlink -f vendor/xphp-lang/xphp)"; \
+	  rm vendor/xphp-lang/xphp; \
+	  mkdir -p vendor/xphp-lang/xphp/src; \
+	  cp -RL "$$parser_src/src/." vendor/xphp-lang/xphp/src/; \
+	  cp -L "$$parser_src/composer.json" vendor/xphp-lang/xphp/composer.json; \
 	  composer dump-autoload --classmap-authoritative --no-dev --quiet --no-interaction; \
 	fi
 	php -d phar.readonly=0 var/box.phar compile --no-interaction

@@ -11,7 +11,7 @@ services:
   xphp:
     extends:
       service: php
-    entrypoint: [ "/opt/app/bin/xphp" ]
+    entrypoint: [ "/opt/app/core/bin/xphp" ]
 
   # JDK 21 + Gradle + X11 forwarding for the PhpStorm plugin under
   # tools/phpstorm-plugin/.  This is THE Java toolchain for that package

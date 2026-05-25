@@ -10,7 +10,7 @@
     "repositories": [
         {
             "type": "path",
-            "url": "../",
+            "url": "../core/",
             "options": {
                 "symlink": true
             }
