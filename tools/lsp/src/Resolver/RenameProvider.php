@@ -9,10 +9,12 @@ use Phpactor\LanguageServerProtocol\Location;
 use Phpactor\LanguageServerProtocol\OptionalVersionedTextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\Position;
 use Phpactor\LanguageServerProtocol\Range;
+use Phpactor\LanguageServerProtocol\RenameFile;
 use Phpactor\LanguageServerProtocol\TextDocumentEdit;
 use Phpactor\LanguageServerProtocol\TextEdit;
 use Phpactor\LanguageServerProtocol\WorkspaceEdit;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Reflection\FqnIndex;
 
 /**
  * Builds the `WorkspaceEdit` payload for `textDocument/rename`.
@@ -46,6 +48,17 @@ final class RenameProvider
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ReferenceFinder $finder,
+        private readonly FqnIndex $fqnIndex,
+        /**
+         * Whether the client advertised support for the `rename` resource
+         * operation in `workspace.workspaceEdit.resourceOperations`.  Set
+         * by LspDispatcherFactory from `InitializeParams`.  PhpStorm's
+         * LSP plugin (as of build 261.x) declares `["create"]` only and
+         * silently drops `RenameFile` ops, so we elide them to keep the
+         * response shape honest.  VS Code supports `["create", "rename",
+         * "delete"]` and will apply them.
+         */
+        private readonly bool $clientSupportsRenameFile = true,
     ) {
     }
 
@@ -104,10 +117,74 @@ final class RenameProvider
                 $edits,
             );
         }
+        // Class rename: if the class is declared in a file whose basename
+        // matches the OLD short name (the PSR-4 convention), also emit a
+        // RenameFile op so `Foo.xphp` becomes `Bar.xphp` alongside the
+        // class itself.  Skip when the file name doesn't follow PSR-4
+        // (e.g. multiple classes per file, autoloader-less code, etc.) --
+        // we'd rather under-rename than rename the wrong file.
+        $renameFile = $this->buildFileRenameOp($uri, $byteOffset, $oldShortName, $newName);
+        if ($renameFile !== null) {
+            $documentChanges[] = $renameFile;
+        }
+
         if ($documentChanges === []) {
             return null;
         }
         return new WorkspaceEdit(null, $documentChanges);
+    }
+
+    /**
+     * Emit a `RenameFile` resource operation when the target is a class
+     * whose declaration file basename matches the old short name.  PSR-4
+     * code expects `class Foo` to live in `Foo.xphp`; renaming the class
+     * to `Bar` should follow with `Bar.xphp`.
+     */
+    private function buildFileRenameOp(
+        string $uri,
+        int $byteOffset,
+        string $oldShortName,
+        string $newName,
+    ): ?RenameFile {
+        if (!$this->clientSupportsRenameFile) {
+            return null;
+        }
+        $target = $this->finder->targetAt($uri, $byteOffset);
+        if ($target === null || ($target['kind'] ?? null) !== 'class') {
+            return null;
+        }
+        $fqn = $target['fqn'] ?? null;
+        if (!is_string($fqn)) {
+            return null;
+        }
+        $location = $this->fqnIndex->locationForFqn($fqn);
+        if ($location === null) {
+            return null;
+        }
+        $oldUri = (string) $location['uri'];
+        // Strip `file://` so we can manipulate the path; rebuild it for
+        // the new URI.  Open-doc URIs may not carry the prefix; preserve
+        // whichever form arrived.
+        $hasFilePrefix = str_starts_with($oldUri, 'file://');
+        $oldPath = $hasFilePrefix ? substr($oldUri, strlen('file://')) : $oldUri;
+        $baseDir = dirname($oldPath);
+        $basename = basename($oldPath);
+        $ext = '';
+        $dotPos = strrpos($basename, '.');
+        if ($dotPos !== false && $dotPos > 0) {
+            $ext = substr($basename, $dotPos); // includes the dot
+            $stem = substr($basename, 0, $dotPos);
+        } else {
+            $stem = $basename;
+        }
+        if ($stem !== $oldShortName) {
+            return null;
+        }
+        // dirname('/foo') is '/', not '' -- avoid the doubled slash
+        // when concatenating.
+        $newPath = rtrim($baseDir, '/') . '/' . $newName . $ext;
+        $newUri = $hasFilePrefix ? 'file://' . $newPath : $newPath;
+        return new RenameFile('rename', $oldUri, $newUri);
     }
 
     /**

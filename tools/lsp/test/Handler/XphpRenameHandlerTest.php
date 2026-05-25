@@ -8,6 +8,7 @@ use Amp\Failure;
 use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\Position;
+use Phpactor\LanguageServerProtocol\RenameFile;
 use Phpactor\LanguageServerProtocol\RenameParams;
 use Phpactor\LanguageServerProtocol\TextDocumentEdit;
 use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
@@ -253,6 +254,101 @@ final class XphpRenameHandlerTest extends TestCase
         self::assertSame('foo', substr($useSource, $start, $end - $start));
     }
 
+    public function testClassRenameEmitsRenameFileOpWhenBasenameMatches(): void
+    {
+        // PSR-4 convention: `class Foo` lives in `Foo.xphp`.  Renaming
+        // `Foo` to `Bar` must emit a RenameFile op alongside the
+        // TextEdits so the file follows the class.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, "<?php\nuse App\\User;\n\$u = new User();\n"));
+
+        $edit = $this->renameAt($workspace, '/User.xphp', 'class User', strlen('class '), 'Customer');
+        self::assertNotNull($edit);
+
+        $renameOps = array_filter(
+            $edit->documentChanges ?? [],
+            fn ($c): bool => $c instanceof RenameFile,
+        );
+        self::assertCount(1, $renameOps, 'class rename must emit exactly one RenameFile op');
+        $renameOp = array_values($renameOps)[0];
+        self::assertSame('/User.xphp', $renameOp->oldUri);
+        self::assertSame('/Customer.xphp', $renameOp->newUri);
+        self::assertSame('rename', $renameOp->kind);
+    }
+
+    public function testClassRenameSkipsRenameFileWhenBasenameMismatch(): void
+    {
+        // Multiple classes per file (or any other non-PSR-4 layout) --
+        // the file name doesn't match the class name, so we DON'T rename
+        // the file.  Under-rename rather than rename the wrong file.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Mixed.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\nclass Account {}\n"));
+
+        $edit = $this->renameAt($workspace, '/Mixed.xphp', 'class User', strlen('class '), 'Customer');
+        self::assertNotNull($edit);
+        $renameOps = array_filter(
+            $edit->documentChanges ?? [],
+            fn ($c): bool => $c instanceof RenameFile,
+        );
+        self::assertCount(0, $renameOps, 'file rename must NOT fire when basename mismatches class short name');
+    }
+
+    public function testRenameFileSuppressedWhenClientDoesntSupportRenameOp(): void
+    {
+        // PhpStorm's LSP plugin advertises `resourceOperations: ["create"]`
+        // only -- it silently drops RenameFile ops.  When the client
+        // capability is off, we must NOT emit RenameFile (the in-file
+        // TextEdits still apply, but the user does the file rename
+        // manually).  VS Code advertises rename support and gets the op.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $fqnIndex = new FqnIndex($workspace, $cache, $parser, '');
+        $reflector = (new ReflectorFactory(
+            $workspace,
+            $cache,
+            $parser,
+            rootPath: '',
+            stubPath: ReflectorFactory::defaultStubPath(),
+            cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: $fqnIndex,
+        ))->build();
+        $classLikeLookup = new CompositeClassLikeLookup(
+            new WorkspaceClassLikeLookup($workspace, $cache),
+            new FilesystemClassLikeLookup($fqnIndex),
+        );
+        $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
+        $finder = new ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $genericResolver);
+        $provider = new RenameProvider($workspace, $finder, $fqnIndex, clientSupportsRenameFile: false);
+        $handler = new XphpRenameHandler($workspace, $provider);
+
+        $params = self::paramsFor($workspace, '/User.xphp', 'class User', strlen('class '), 'Customer');
+        $edit = wait($handler->rename($params));
+        self::assertInstanceOf(WorkspaceEdit::class, $edit);
+        $renameOps = array_filter(
+            $edit->documentChanges ?? [],
+            fn ($c): bool => $c instanceof RenameFile,
+        );
+        self::assertCount(0, $renameOps, 'must not emit RenameFile when client doesn\'t support it');
+    }
+
+    public function testMethodRenameDoesNotEmitRenameFile(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User { public function shout(): string { return ''; } }\n"));
+
+        $edit = $this->renameAt($workspace, '/User.xphp', 'function shout', strlen('function '), 'cry');
+        self::assertNotNull($edit);
+        $renameOps = array_filter(
+            $edit->documentChanges ?? [],
+            fn ($c): bool => $c instanceof RenameFile,
+        );
+        self::assertCount(0, $renameOps, 'method rename must NOT touch files');
+    }
+
     public function testFullyQualifiedRefKeepsNamespacePrefix(): void
     {
         $workspace = new PhpactorWorkspace();
@@ -290,7 +386,13 @@ final class XphpRenameHandlerTest extends TestCase
         self::assertNotNull($edit);
         $byUri = [];
         foreach ($edit->documentChanges ?? [] as $tde) {
-            self::assertInstanceOf(TextDocumentEdit::class, $tde);
+            // RenameFile / CreateFile / DeleteFile ops may appear in the
+            // same documentChanges array; the existing tests focus on
+            // TextDocumentEdits, so filter the rest out.  Dedicated
+            // file-rename tests inspect documentChanges directly.
+            if (!$tde instanceof TextDocumentEdit) {
+                continue;
+            }
             $byUri[$tde->textDocument->uri] = $tde->edits;
         }
         return $byUri;
@@ -348,6 +450,6 @@ final class XphpRenameHandlerTest extends TestCase
         );
         $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
         $finder = new ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $genericResolver);
-        return new XphpRenameHandler($workspace, new RenameProvider($workspace, $finder));
+        return new XphpRenameHandler($workspace, new RenameProvider($workspace, $finder, $fqnIndex));
     }
 }

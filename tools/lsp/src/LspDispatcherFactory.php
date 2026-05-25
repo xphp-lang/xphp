@@ -245,6 +245,8 @@ final class LspDispatcherFactory implements DispatcherFactory
                 new RenameProvider(
                     $workspace,
                     new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
+                    $fqnIndex,
+                    self::clientSupportsRenameFileOp($initializeParams),
                 ),
             ),
         );
@@ -268,5 +270,24 @@ final class LspDispatcherFactory implements DispatcherFactory
             new CancellationMiddleware($runner),
             new HandlerMiddleware($runner),
         );
+    }
+
+    /**
+     * Per LSP spec: when the client advertises
+     * `workspace.workspaceEdit.resourceOperations`, the server must
+     * only emit ops in that list.  PhpStorm currently lists `["create"]`
+     * only (no `rename`/`delete`), so any `RenameFile` we send is
+     * silently dropped on the client side and the user sees a partial
+     * apply.  We detect support up-front and elide RenameFile when the
+     * client doesn't claim it.  VS Code advertises all three and gets
+     * the full behavior.
+     */
+    private static function clientSupportsRenameFileOp(InitializeParams $initializeParams): bool
+    {
+        $ops = $initializeParams->capabilities?->workspace?->workspaceEdit?->resourceOperations ?? null;
+        if (!is_array($ops)) {
+            return false;
+        }
+        return in_array('rename', $ops, true);
     }
 }

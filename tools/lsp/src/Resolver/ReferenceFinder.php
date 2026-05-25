@@ -78,6 +78,19 @@ final class ReferenceFinder
     }
 
     /**
+     * Expose the cursor's target descriptor for callers that need to
+     * inspect the symbol's kind / FQN (e.g. RenameProvider's file-rename
+     * branch for class targets).  Mirrors `resolveTargetAt` shape; see
+     * its docblock for the available keys.
+     *
+     * @return array{kind: string, fqn?: string, className?: string, memberName?: string, aliasName?: string, scopeUri?: string, declUri?: string, declLine?: int, declChar?: int}|null
+     */
+    public function targetAt(string $uri, int $byteOffset): ?array
+    {
+        return $this->resolveTargetAt($uri, $byteOffset);
+    }
+
+    /**
      * Short name (last `\`-segment for FQN targets, the member name for
      * method/property targets) of the symbol the cursor is on.  Used by
      * RenameProvider to skip aliased references whose source text
