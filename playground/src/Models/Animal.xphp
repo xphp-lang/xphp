@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+class Animal
+{
+    public string $name = '';
+
+    public function speak(): string
+    {
+        return 'generic noise';
+    }
+}

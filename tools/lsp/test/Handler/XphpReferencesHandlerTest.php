@@ -279,6 +279,156 @@ final class XphpReferencesHandlerTest extends TestCase
         }
     }
 
+    public function testFindsInheritedMethodCallsOnSubclassReceiver(): void
+    {
+        // Item 1: cursor on `Animal::speak` should also surface
+        // `$dog->speak()` -- Dog extends Animal and doesn't override
+        // `speak`, so the call inherits its behaviour.  Before Item 1,
+        // V1's exact-FQN match dropped the Dog call.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Animal {
+            public function speak(): string { return ''; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Dog.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Animal;
+        use App\Dog;
+        $a = new Animal();
+        $a->speak();
+        $d = new Dog();
+        $d->speak();
+        XPHP));
+
+        // Cursor on Animal's `function speak` declaration.
+        $locations = $this->references($workspace, '/Animal.xphp', 'function speak', strlen('function '));
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/Animal.xphp', $uris);
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        // Both `$a->speak()` AND `$d->speak()` must be in the result.
+        self::assertCount(2, $useMatches);
+    }
+
+    public function testOverriddenSubclassMethodIsNotMatchedAsAncestorCall(): void
+    {
+        // Item 1 negative case: if Dog overrides `speak`, then
+        // `$d->speak()` resolves to `Dog::speak`, not `Animal::speak`.
+        // Cursor on Animal::speak must NOT surface the Dog call.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Animal {
+            public function speak(): string { return ''; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Dog.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal {
+            public function speak(): string { return 'woof'; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Animal;
+        use App\Dog;
+        $a = new Animal();
+        $a->speak();
+        $d = new Dog();
+        $d->speak();
+        XPHP));
+
+        $locations = $this->references($workspace, '/Animal.xphp', 'function speak', strlen('function '));
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        // Only `$a->speak()` matches; `$d->speak()` resolves to Dog::speak
+        // (an override) and is a different symbol.
+        self::assertCount(1, $useMatches);
+    }
+
+    public function testCursorOnSubclassInheritedCallResolvesToAncestor(): void
+    {
+        // Cursor on `$d->speak()` (with Dog extends Animal, no override)
+        // -- the target should resolve up to Animal::speak, so the
+        // declaration in Animal.xphp is found AND every call site
+        // through the chain (including `$a->speak()` on the parent).
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Animal {
+            public function speak(): string { return ''; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Dog.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Animal;
+        use App\Dog;
+        $a = new Animal();
+        $a->speak();
+        $d = new Dog();
+        $d->speak();
+        XPHP));
+
+        // Cursor on `$d->speak()` call.
+        $locations = $this->references($workspace, '/Use.xphp', '$d->speak', strlen('$d->'));
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        // Declaration must be found through the ancestor walk.
+        self::assertContains('/Animal.xphp', $uris);
+        // Both call sites in /Use.xphp must be present.
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(2, $useMatches);
+    }
+
+    public function testFindsInheritedPropertyAccessOnSubclassReceiver(): void
+    {
+        // Property variant of the inherited-member walk: Dog inherits
+        // Animal::$name and accesses it through `$d->name`.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Animal {
+            public string $name = '';
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Dog.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Animal;
+        use App\Dog;
+        $a = new Animal();
+        echo $a->name;
+        $d = new Dog();
+        echo $d->name;
+        XPHP));
+
+        $locations = $this->references($workspace, '/Animal.xphp', '$name', 1);
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(2, $useMatches);
+    }
+
     public function testFindsPropertyReferences(): void
     {
         $workspace = new PhpactorWorkspace();

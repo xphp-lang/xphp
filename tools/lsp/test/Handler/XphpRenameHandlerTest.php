@@ -107,6 +107,48 @@ final class XphpRenameHandlerTest extends TestCase
         }
     }
 
+    public function testRenamesMethodAcrossSubclassInheritedCallSites(): void
+    {
+        // Item 1: renaming Animal::speak should also rewrite `$dog->speak()`
+        // when Dog extends Animal without overriding -- the call inherits
+        // the method, so the rewrite must follow.  Without the inheritance
+        // walk, Dog's call site silently survives as a dangling reference
+        // to the renamed-away symbol.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Animal {
+            public function speak(): string { return ''; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Dog.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Animal;
+        use App\Dog;
+        $a = new Animal();
+        $a->speak();
+        $d = new Dog();
+        $d->speak();
+        XPHP));
+
+        $edit = $this->renameAt($workspace, '/Animal.xphp', 'function speak', strlen('function '), 'bark');
+
+        $byUri = self::indexEdits($edit);
+        // Declaration in /Animal.xphp + 2 calls in /Use.xphp (both `$a`
+        // and `$d` flavours) = 3 edits total.
+        self::assertCount(1, $byUri['/Animal.xphp']);
+        self::assertCount(2, $byUri['/Use.xphp']);
+        foreach (array_merge($byUri['/Animal.xphp'], $byUri['/Use.xphp']) as $e) {
+            self::assertSame('bark', $e->newText);
+        }
+    }
+
     public function testRenamesProperty(): void
     {
         $workspace = new PhpactorWorkspace();

@@ -315,6 +315,14 @@ final class ReferenceFinder
             // Identifier as the name token of a method call: `$x->FOO(...)`
             // or `Foo::BAR(...)`.  Infer the receiver class and treat as
             // a method-ref target.
+            //
+            // Item 1: when the receiver inherits the member from an
+            // ancestor, climb to the declaring class.  Without this,
+            // cursor on `$dog->speak()` (with `Dog extends Animal`)
+            // targets the non-existent `Dog::speak`; find-references
+            // then finds nothing and rename does nothing.  Resolving up
+            // to `Animal::speak` makes the symbol identity match every
+            // call site through the inheritance chain.
             if ($parent instanceof MethodCall || $parent instanceof NullsafeMethodCall) {
                 if ($parent->name === $best) {
                     $receiverClass = $this->inferReceiverClassAt(
@@ -323,10 +331,12 @@ final class ReferenceFinder
                         max(0, $parent->var->getEndFilePos()),
                     );
                     if ($receiverClass !== null) {
+                        $memberName = $best->toString();
+                        $declaring = $this->declaringClassOf($receiverClass, $memberName, true) ?? $receiverClass;
                         return [
                             'kind' => 'method',
-                            'className' => $receiverClass,
-                            'memberName' => $best->toString(),
+                            'className' => $declaring,
+                            'memberName' => $memberName,
                         ];
                     }
                 }
@@ -334,10 +344,12 @@ final class ReferenceFinder
             if ($parent instanceof StaticCall && $parent->name === $best) {
                 $receiverClass = self::resolvedNameOf($parent->class);
                 if ($receiverClass !== null) {
+                    $memberName = $best->toString();
+                    $declaring = $this->declaringClassOf($receiverClass, $memberName, true) ?? $receiverClass;
                     return [
                         'kind' => 'method',
-                        'className' => $receiverClass,
-                        'memberName' => $best->toString(),
+                        'className' => $declaring,
+                        'memberName' => $memberName,
                     ];
                 }
             }
@@ -349,10 +361,12 @@ final class ReferenceFinder
                         max(0, $parent->var->getEndFilePos()),
                     );
                     if ($receiverClass !== null) {
+                        $memberName = $best->toString();
+                        $declaring = $this->declaringClassOf($receiverClass, $memberName, false) ?? $receiverClass;
                         return [
                             'kind' => 'property',
-                            'className' => $receiverClass,
-                            'memberName' => $best->toString(),
+                            'className' => $declaring,
+                            'memberName' => $memberName,
                         ];
                     }
                 }
@@ -360,10 +374,12 @@ final class ReferenceFinder
             if ($parent instanceof StaticPropertyFetch && $parent->name === $best) {
                 $receiverClass = self::resolvedNameOf($parent->class);
                 if ($receiverClass !== null) {
+                    $memberName = $best->toString();
+                    $declaring = $this->declaringClassOf($receiverClass, $memberName, false) ?? $receiverClass;
                     return [
                         'kind' => 'property',
-                        'className' => $receiverClass,
-                        'memberName' => $best->toString(),
+                        'className' => $declaring,
+                        'memberName' => $memberName,
                     ];
                 }
             }
@@ -564,6 +580,13 @@ final class ReferenceFinder
         $targetClass = ltrim((string) $target['className'], '\\');
         $targetName = (string) $target['memberName'];
 
+        // Item 1: receiver-side match is "does the receiver class inherit
+        // this member from `$targetClass`?" -- exact-FQN match preserved
+        // for the common case (cheap path), inheritance walk for the
+        // subclass case via `inheritsMemberFromTarget`.  Declaration-side
+        // matches stay as exact `$targetClass` comparisons because we
+        // only want the canonical declaration site, not every
+        // unrelated class that happens to use the same name.
         foreach ($finder->find($ast, static fn (Node $n): bool => true) as $node) {
             if ($target['kind'] === 'method') {
                 if (($node instanceof MethodCall || $node instanceof NullsafeMethodCall)
@@ -575,7 +598,7 @@ final class ReferenceFinder
                         $uri,
                         max(0, $node->var->getEndFilePos()),
                     );
-                    if ($receiver !== null && ltrim($receiver, '\\') === $targetClass) {
+                    if ($receiver !== null && $this->inheritsMemberFromTarget($receiver, $targetName, $targetClass, true)) {
                         yield ['node' => $node->name, 'kind' => 'method'];
                     }
                     continue;
@@ -585,7 +608,7 @@ final class ReferenceFinder
                     && $node->name->toString() === $targetName
                 ) {
                     $receiver = self::resolvedNameOf($node->class);
-                    if ($receiver !== null && ltrim($receiver, '\\') === $targetClass) {
+                    if ($receiver !== null && $this->inheritsMemberFromTarget($receiver, $targetName, $targetClass, true)) {
                         yield ['node' => $node->name, 'kind' => 'method'];
                     }
                     continue;
@@ -610,7 +633,7 @@ final class ReferenceFinder
                     $uri,
                     max(0, $node->var->getEndFilePos()),
                 );
-                if ($receiver !== null && ltrim($receiver, '\\') === $targetClass) {
+                if ($receiver !== null && $this->inheritsMemberFromTarget($receiver, $targetName, $targetClass, false)) {
                     yield ['node' => $node->name, 'kind' => 'property'];
                 }
                 continue;
@@ -620,7 +643,7 @@ final class ReferenceFinder
                 && $node->name->toString() === $targetName
             ) {
                 $receiver = self::resolvedNameOf($node->class);
-                if ($receiver !== null && ltrim($receiver, '\\') === $targetClass) {
+                if ($receiver !== null && $this->inheritsMemberFromTarget($receiver, $targetName, $targetClass, false)) {
                     yield ['node' => $node->name, 'kind' => 'property'];
                 }
                 continue;
@@ -871,6 +894,62 @@ final class ReferenceFinder
             $lookupName = $swapped;
         }
         return $lookupName !== '' ? $lookupName : null;
+    }
+
+    /**
+     * Worse-reflection-backed lookup: "given a class FQN, which class
+     * declares this method/property?"  Walks the receiver's MRO (parent
+     * classes, then implemented interfaces, then traits) and returns the
+     * first declarer's FQN -- which equals the receiver's FQN when the
+     * member is locally declared, and an ancestor's FQN when the member
+     * is inherited.  Null when the class has no such member, or when
+     * reflection fails (closed-source class, parse error, etc.).
+     *
+     * Item 1: this is the single chokepoint for the V1 "exact FQN match"
+     * limitation in find-references / rename.  Both the cursor side
+     * (`resolveTargetAt` for member access) and the collector side
+     * (`collectReferences` member-match) consult this to bridge calls
+     * on a subclass receiver back to the ancestor that actually declared
+     * the member.
+     */
+    private function declaringClassOf(string $receiverFqn, string $memberName, bool $isMethod): ?string
+    {
+        $lookup = ltrim($receiverFqn, '\\');
+        if ($lookup === '' || $memberName === '') {
+            return null;
+        }
+        try {
+            $class = $this->reflector->reflectClassLike($lookup);
+            $member = $isMethod
+                ? $class->methods()->get($memberName)
+                : $class->properties()->get($memberName);
+        } catch (Throwable) {
+            return null;
+        }
+        $declaring = (string) $member->declaringClass()->name();
+        return $declaring !== '' ? ltrim($declaring, '\\') : null;
+    }
+
+    /**
+     * "Does `$receiverFqn` reach `$targetClass` when looking up
+     * `$memberName`?"  True when the receiver is the target, or when
+     * the receiver inherits the member from the target (and hasn't
+     * overridden it -- override would make `declaringClassOf` return the
+     * subclass instead).
+     */
+    private function inheritsMemberFromTarget(
+        string $receiverFqn,
+        string $memberName,
+        string $targetClass,
+        bool $isMethod,
+    ): bool {
+        $receiverNorm = ltrim($receiverFqn, '\\');
+        $targetNorm = ltrim($targetClass, '\\');
+        if ($receiverNorm === $targetNorm) {
+            return true;
+        }
+        $declaring = $this->declaringClassOf($receiverNorm, $memberName, $isMethod);
+        return $declaring !== null && $declaring === $targetNorm;
     }
 
     /**
