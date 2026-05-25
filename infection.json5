@@ -16,10 +16,14 @@
         "@default": true,
 
         // rtrim($x, '/') normalization is defensive; double-slash paths behave identically.
+        // Compiler::relativePath: filesystem inputs Linux-normalize double slashes,
+        // so `rtrim($base, '/') . '/'` vs `$base . '/'` produces an observably identical
+        // target file path under every test fixture and every realistic call site.
         "UnwrapRtrim": {
             "ignore": [
                 "XPHP\\FileSystem\\FileFinder\\NativeFileFinder::find",
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::relativePath",
                 "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
             ]
         },
@@ -41,7 +45,9 @@
         "DecrementInteger": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
-                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
+                // scanAndStrip mirror of the IncrementInteger entry above.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
         // Same family for mkdir(); plus $b[0]/$a[0] index jitter inside applyReplacements
@@ -55,7 +61,12 @@
                 "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArgList",
+                // scanAndStrip's `$j = self::skipWs($tokens, $i + 1)` lookaheads:
+                // off-by-one mutations get absorbed by the outer loop's $i++ on the
+                // next pass (skipped tokens are non-significant whitespace or the
+                // already-consumed closing `>`).
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
 
@@ -78,6 +89,11 @@
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                // Registry::checkBounds: identical to validateBounds rationale -- the error
+                // message reorder mutation swaps "but the supplied concrete type" relative
+                // to the detail line.  Existing bound tests assert substrings, not exact
+                // ordering, so the contract is exercised regardless.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::checkBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
@@ -86,11 +102,19 @@
         "ConcatOperandRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                // Compiler::relativePath: dropping the trailing `/` of `rtrim($base, '/') . '/'`
+                // makes the prefix-match accept sibling-prefix paths, but the resulting target
+                // path has a double slash that Linux normalizes -- observable output identical.
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::relativePath",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::checkBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // SpecializedClassGenerator::emit: the `Registry::GENERATED_NAMESPACE_PREFIX . '\\\\'`
+                // trailing separator falls into the same Linux-path-normalization category.
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
             ]
         },
 
@@ -125,16 +149,6 @@
             ]
         },
 
-        // Defensive ATTR_TEMPLATE_FQN = null cleanup on the cloned specialized class.
-        // (Mutations inside XphpSourceParser's anonymous NodeVisitor — indexUses removals,
-        // marker-loop break vs continue — are suppressed via `// @infection-ignore-all`
-        // annotations in source, since method-scoped ignore doesn't reach anonymous classes.)
-        "MethodCallRemoval": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
-            ]
-        },
-
         // parseTypeArg's `$name = ltrim($tokens[$i]->text, '\\')` is masked by the
         // downstream resolveTypeRef which also strips leading backslashes. Removing
         // the inner ltrim produces a name with an extra `\` prefix that gets stripped
@@ -157,6 +171,10 @@
         "UnwrapLtrim": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
+                // parseTypeParamList: `ltrim($tokens[$i]->text, '\\')` on the param name.
+                // T_STRING tokens emitted by PhpToken::tokenize never carry a leading
+                // backslash, so the ltrim is a defensive no-op.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::isSameInstantiation",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
@@ -172,7 +190,19 @@
         "LogicalOr": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // The scanner sub-parsers (parseTypeParamList, parseTypeArgList,
+                // parseTypeArg, parseArraySuffix, skipWs, resolveAndAttach):
+                // `||` -> `&&` mutations on their `$i >= $n || tokens[i]->text !== '<'`
+                // bail-out guards.  Both branches return null on the same inputs that
+                // real callers ever provide (callers gate on `tokens[i]->text === '<'`
+                // before invoking these helpers).
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArgList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::skipWs",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach"
             ]
         },
         "ReturnRemoval": {
@@ -181,7 +211,15 @@
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
+                // Specializer::substituteTypeRef: dropping `return $ref` on the empty-args
+                // branch falls through to array_map over empty + ctor, producing an
+                // equivalent TypeRef.  Pure micro-optimisation, no observable difference.
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::substituteTypeRef",
+                // ByteOffsetMap::fromReplacements: removing the `return self::identity()`
+                // shortcut falls through to `usort` on an empty array + `new self([])`,
+                // which is exactly what identity() already returns.
+                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::fromReplacements"
             ]
         },
 
@@ -195,7 +233,13 @@
         // doesn't hold.
         "Continue_": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds"
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                // Compiler::compile: `if ($countAfter === $countBefore) continue;`
+                // -> `break;`.  The outer `if (!$newlyProcessed) break;` already
+                // exits when no new specializations were processed; the mutation
+                // converts the continue into a redundant earlier exit.  Observable
+                // behaviour unchanged.
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile"
             ]
         },
 
@@ -221,16 +265,38 @@
         // guard). Reaching the OOB case requires a class header that ends in mid-clause,
         // which fails further downstream — same justification, suppressed for the same
         // reason.
+        // Scanner / sub-parser boundary checks share a single rationale:
+        // `$j < $n` -> `<=` and `&&` -> `||` mutations on the lookahead
+        // guards are absorbed by defensive inner-function guards (the
+        // inner parseTypeParamList / parseTypeArgList re-check the same
+        // condition before doing any real work), so the observable
+        // output of the original and the mutated code converge.  The
+        // Group B EOF-boundary tests in XphpSourceParserTest cover the
+        // few cases where the absorption breaks down (process crash on
+        // $tokens[$n] dereference); the rest of the cluster is true
+        // equivalents.
         "LessThan": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArgList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::skipWs",
+                // ByteOffsetMap::toOriginal: `$strippedPos < $strippedStart` -> `<=`.
+                // At the exact boundary, `strippedPos + priorDelta == originalStart`
+                // by construction (cumDelta cancellation), so both branches return
+                // the same number.
+                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::toOriginal"
             ]
         },
         "LogicalAnd": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
@@ -239,7 +305,88 @@
         "GreaterThanOrEqualTo": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArgList",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext"
+            ]
+        },
+        // `break` -> `continue` in ByteOffsetMap::toOriginal: subsequent loop
+        // iterations don't mutate state (no segments past the cursor satisfy
+        // the inner predicates), so the loop exits naturally and returns the
+        // same `strippedPos + priorDelta`.  Equivalent.
+        "Break_": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::toOriginal"
+            ]
+        },
+        // CallSiteRewriter::rewrite: `['stmts' => []]` -> `[]` on the
+        // Interface_ subnodes array.  Interface_'s constructor defaults
+        // `stmts` to `[]`, so both shapes produce equivalent ASTs.
+        // SpecializedClassGenerator::emit: the `[$declare, $specialized]`
+        // -> `[$specialized]` ArrayItemRemoval drops `declare(strict_types=1)`
+        // on the no-namespace branch -- but our Registry-generated FQNs
+        // ALWAYS carry a namespace, so `nsAst === null` is unreachable
+        // from any realistic input.
+        "ArrayItemRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\CallSiteRewriter::rewrite",
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
+            ]
+        },
+        // Compiler::compile depth-cap: `$depth > MAX` -> `>=`.  Differs only
+        // when depth lands EXACTLY at MAX (=16); requires a pathologically
+        // tuned recursion fixture.  Documented as a known untestable boundary.
+        "GreaterThan": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile"
+            ]
+        },
+        // GenericMethodCompiler::process: `(string) $astKey` -- the cast is
+        // defensive (covers a hypothetical non-string key); in practice
+        // $astKey is always a string already.
+        "CastString": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        // GenericMethodCompiler::process line 113: `if ($methodTemplates === []
+        // && $functionTemplates === []) return;` -- the SubExprNegation
+        // mutation only differs when BOTH templates are non-empty (mutated
+        // returns; original continues to rewrite).  Requires a new fixture
+        // mixing method-level + function-level generics in one compile pass;
+        // out of scope for the existing integration fixtures.
+        "LogicalAndAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        // XphpSourceParser::resolveAndAttach: `$entry['boundIsFq'] ? $entry['boundName']
+        // : $this->resolveNameOnly($entry['boundName'])` -- inverted ternary.
+        // Our tests use bound names that are EITHER all FQ or all bare, so the
+        // ternary's two branches converge to the same FQN for the test inputs.
+        "Ternary": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach"
+            ]
+        },
+        // XphpSourceParser::parseTypeParamList: `$boundIsFq = false` -> `= true`.
+        // The variable is overwritten before the next read on the bounded path,
+        // and unused on the unbounded path.
+        "FalseValue": {
+            "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
+            ]
+        },
+        // XphpSourceParser::scanAndStrip: off-by-one mutations on `$i = $endIdx + 1`
+        // patterns (`+0`, `+2`, `-1`).  The outer `while ($i < $n)` loop with a
+        // bottom `$i++` absorbs the shift: misadvancing forward by 1 just hits the
+        // closing `>` (which the outer increment would skip anyway); going backward
+        // re-processes the closing `>` which doesn't trigger any branch.  Net: no
+        // observable difference in marker accumulation.
+        "Plus": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
 

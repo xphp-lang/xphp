@@ -1011,6 +1011,32 @@ PHP;
         self::assertNotNull($result, 'tolerant parser must produce a result for truncated identifier-at-EOF');
     }
 
+    public function testParseTolerantWithMapAttachesGenericParamAttributesToAst(): void
+    {
+        // Mutation regression: `$this->resolveAndAttach(...)` call dropped
+        // at parser.php:134.  Without it, the tolerant-parse path returns
+        // an AST whose ClassLike nodes are MISSING the xphp attributes
+        // (`ATTR_GENERIC_PARAMS`, `ATTR_TEMPLATE_FQN`) that the LSP
+        // monomorphization-aware paths depend on.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $result = $parser->parseTolerantWithMap("<?php\nnamespace App;\nclass Box<T> { public T \$item; }\n");
+
+        self::assertNotNull($result);
+        $class = self::findFirstClass($result->ast);
+        self::assertNotNull($class, 'tolerant parse must surface the class');
+        self::assertSame('Box', $class->name?->toString());
+
+        // The attributes are what `resolveAndAttach` exists to produce.
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertIsArray($params, 'ATTR_GENERIC_PARAMS must be attached by resolveAndAttach');
+        self::assertCount(1, $params);
+        self::assertSame('T', $params[0]->name);
+        self::assertSame(
+            'App\\Box',
+            $class->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN),
+        );
+    }
+
     public function testParseTypeParamListHandlesAngleBracketAtEndOfSource(): void
     {
         // Group B mutation regression: `$openIdx >= $n` LogicalOr +

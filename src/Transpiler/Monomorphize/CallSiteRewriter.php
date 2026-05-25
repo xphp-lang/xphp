@@ -62,6 +62,8 @@ final class CallSiteRewriter
                         // (so user code's `$x instanceof OriginalName` keeps working).
                         // Generic trait -> just drop (no instanceof against traits).
                         if ($node instanceof Class_ || $node instanceof Interface_) {
+                            // @infection-ignore-all — Interface_'s ctor defaults `stmts` to []
+                            // so `['stmts' => []]` and `[]` are observationally identical.
                             return new Interface_($node->name, ['stmts' => []], $node->getAttributes());
                         }
                         if ($node instanceof Trait_) {

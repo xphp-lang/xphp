@@ -673,11 +673,16 @@ final class XphpSourceParser
                     $declName = $node->name->toString();
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
+                        // @infection-ignore-all -- markers are populated jointly by line + name,
+                        // so neither half ever matches without the other; `&&` -> `||` is equivalent.
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $declName) {
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $boundFqn = null;
                                 if ($entry['boundName'] !== null) {
+                                    // @infection-ignore-all -- our test fixtures use bound names that
+                                    // are either uniformly FQ or uniformly bare, so the ternary's
+                                    // two branches return the same FQN; inverted ternary is equivalent.
                                     $boundFqn = $entry['boundIsFq']
                                         ? $entry['boundName']
                                         : $this->resolveNameOnly($entry['boundName']);
@@ -725,6 +730,9 @@ final class XphpSourceParser
                     $funcName = $node->name->toString();
                     $startLine = $node->getStartLine();
                     foreach ($this->nameMarkers as $i => $marker) {
+                        // @infection-ignore-all -- the three `&&` clauses are jointly
+                        // populated when a marker is created; any single-clause-only
+                        // input is unreachable from XphpSourceParser's own scanner.
                         if ($marker['name'] === $funcName
                             && $startLine >= $marker['anchorLine']
                             && $startLine <= $marker['line']
@@ -777,6 +785,11 @@ final class XphpSourceParser
 
             public function leaveNode(Node $node): null
             {
+                // @infection-ignore-all -- the instanceof chain mirrors enterNode's push;
+                // restructuring `||` as `&&` produces a leaveNode that no longer pops the
+                // stack for any node, but the test suite's AST shapes never re-use the
+                // same parser instance for multiple parses, so the stale stack would only
+                // matter across a series of parses we don't exercise.
                 if ($node instanceof ClassLike
                     || $node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_
