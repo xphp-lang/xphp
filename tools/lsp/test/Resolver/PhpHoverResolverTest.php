@@ -232,6 +232,31 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('App\\Models\\User', $markdown);
     }
 
+    public function testHoverInsideUseFunctionImportShowsFunctionSignature(): void
+    {
+        // Regression: cursor on the function name inside
+        // `use function App\foo;` should show the function signature.
+        // Worse-reflection misclassifies the imported name as
+        // Symbol::CLASS_ -- the AST-context override routes to
+        // renderFunction() instead so the hover surfaces the actual
+        // signature + docblock.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/funcs.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        /** Greet someone. */
+        function greet(string $n): string { return $n; }
+        XPHP);
+        $useSource = "<?php\nuse function App\\greet;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'App\\greet', strlen('App\\'));
+
+        $markdown = $this->markdown($hover);
+        self::assertStringContainsString('greet', $markdown);
+        self::assertStringContainsString('Greet someone', $markdown, 'docblock must surface');
+    }
+
     public function testStaticPropertyHoverShowsType(): void
     {
         // Follow-up item 4: cursor on `Foo::$prop` should render the

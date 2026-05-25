@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
+use PhpParser\Node;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitorAbstract;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\Hover;
 use Phpactor\LanguageServerProtocol\MarkupContent;
@@ -81,6 +84,20 @@ final class PhpHoverResolver
 
         $context = $reflectionOffset->nodeContext();
         $symbol = $context->symbol();
+
+        // Worse-reflection misclassifies the imported name inside
+        // `use function App\foo;` as Symbol::CLASS_, so renderClass
+        // throws SourceNotFound and we return null hover.  Override to
+        // FUNCTION dispatch when the AST context confirms a `use
+        // function` (or group-use) statement.  Mirrors the same fix in
+        // PhpDefinitionResolver.
+        $useFunctionFqn = $this->useFunctionFqnAtOffset($uri, $offset);
+        if ($useFunctionFqn !== null) {
+            $markdown = $this->renderFunction($useFunctionFqn);
+            return $markdown !== null
+                ? new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown))
+                : null;
+        }
 
         // METHOD / PROPERTY / CONSTANT dispatch go through `containerOrNull`
         // so a MissingType container (when worse-reflection can't infer
@@ -305,6 +322,80 @@ final class PhpHoverResolver
             $out .= "\n\n" . $docblockText;
         }
         return $out;
+    }
+
+
+    /**
+     * Mirror of `PhpDefinitionResolver::useFunctionFqnAtOffset`: detect a
+     * `use function App\foo;` (or group-use variant) cursor and return the
+     * imported FQN.  Reusing the cached AST isn't worth the cache
+     * dependency here -- one extra tolerant parse per hover call is fast
+     * enough.
+     */
+    private function useFunctionFqnAtOffset(string $uri, int $byteOffset): ?string
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        try {
+            $ast = $this->parser->parseTolerant($item->text);
+        } catch (Throwable) {
+            return null;
+        }
+        if ($ast === null) {
+            return null;
+        }
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?string $fqn = null;
+            private bool $inside = false;
+            private string $groupPrefix = '';
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->inside = true;
+                }
+                if ($node instanceof Node\Stmt\GroupUse && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->inside = true;
+                    $this->groupPrefix = $node->prefix->toString();
+                }
+                if (!$this->inside || $this->fqn !== null) {
+                    return null;
+                }
+                if ($node instanceof Node\UseItem) {
+                    $start = $node->name->getStartFilePos();
+                    $end = $node->name->getEndFilePos();
+                    if ($start >= 0 && $this->offset >= $start && $this->offset <= $end) {
+                        $name = $node->name->toString();
+                        $this->fqn = $this->groupPrefix !== ''
+                            ? $this->groupPrefix . '\\' . $name
+                            : $name;
+                    }
+                }
+                return null;
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->inside = false;
+                }
+                if ($node instanceof Node\Stmt\GroupUse && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->inside = false;
+                    $this->groupPrefix = '';
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->fqn ?? null;
     }
 
     private static function docblockText(\Phpactor\WorseReflection\Core\DocBlock\DocBlock $docblock): string

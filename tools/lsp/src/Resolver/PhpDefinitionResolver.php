@@ -108,6 +108,18 @@ final class PhpDefinitionResolver
         $context = $reflectionOffset->nodeContext();
         $symbol = $context->symbol();
 
+        // Worse-reflection classifies the imported name inside
+        // `use function App\foo;` as Symbol::CLASS_ (its TolerantParser
+        // sees `App\foo` and assumes it's a class), so the function
+        // dispatch never fires and locateClass throws SourceNotFound.
+        // Override to FUNCTION when the cursor's AST context says we're
+        // inside a `use function` (or `use function Foo\{...}` group)
+        // statement.  Same logic applies to PhpHoverResolver.
+        $useFunctionFqn = $this->useFunctionFqnAtOffset($uri, $offset, $symbol->name());
+        if ($useFunctionFqn !== null) {
+            return $this->locateFunction($useFunctionFqn);
+        }
+
         // For class references, worse-reflection puts the SHORT name (or
         // the literal source name) on the Symbol and the resolved FQN on
         // the inferred Type.  In `new User(...)` after `use App\User;` the
@@ -189,6 +201,84 @@ final class PhpDefinitionResolver
      * common case; revisit with a scope-aware walker when shadowing
      * shows up in user reports.
      */
+    /**
+     * Detect whether the cursor sits inside a `use function App\foo;` (or
+     * group-use `use function App\{foo, bar};`) statement's imported name.
+     * Returns the function FQN if so -- the caller routes to
+     * `locateFunction()` to bypass worse-reflection's misclassification of
+     * the imported name as Symbol::CLASS_.
+     *
+     * `$fallbackName` is the symbol name worse-reflection reported (already
+     * an FQN like `App\foo`) -- used when the AST walk identifies the
+     * `use function` context but we still need a name to look up.
+     */
+    private function useFunctionFqnAtOffset(string $uri, int $byteOffset, string $fallbackName): ?string
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+        $ast = $result->ast;
+        if ($ast === null) {
+            $ast = $this->parser->parseTolerant($item->text);
+            if ($ast === null) {
+                return null;
+            }
+        }
+
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?string $fqn = null;
+            private bool $insideUseFunction = false;
+            private string $groupPrefix = '';
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->insideUseFunction = true;
+                }
+                if ($node instanceof Node\Stmt\GroupUse && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->insideUseFunction = true;
+                    $this->groupPrefix = $node->prefix->toString();
+                }
+                if (!$this->insideUseFunction || $this->fqn !== null) {
+                    return null;
+                }
+                if ($node instanceof Node\UseItem) {
+                    $nameStart = $node->name->getStartFilePos();
+                    $nameEnd = $node->name->getEndFilePos();
+                    if ($nameStart >= 0 && $this->offset >= $nameStart && $this->offset <= $nameEnd) {
+                        $name = $node->name->toString();
+                        $this->fqn = $this->groupPrefix !== ''
+                            ? $this->groupPrefix . '\\' . $name
+                            : $name;
+                    }
+                }
+                return null;
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->insideUseFunction = false;
+                }
+                if ($node instanceof Node\Stmt\GroupUse && $node->type === Node\Stmt\Use_::TYPE_FUNCTION) {
+                    $this->insideUseFunction = false;
+                    $this->groupPrefix = '';
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->fqn ?? null;
+    }
+
     private function locateVariable(string $uri, string $varName): ?Location
     {
         if (!$this->workspace->has($uri)) {

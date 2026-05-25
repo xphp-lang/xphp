@@ -130,6 +130,36 @@ final class PhpDefinitionResolverTest extends TestCase
         $this->assertResolves($location, '/Counter.xphp', 'count');
     }
 
+    public function testJumpsFromUseFunctionImportToFunctionDeclaration(): void
+    {
+        // Regression: cursor on the function name inside a
+        // `use function App\foo;` statement should GTD to the function
+        // declaration.  Worse-reflection misclassifies the imported
+        // name as Symbol::CLASS_ -- a fallback in PhpDefinitionResolver
+        // detects the AST context (Use_::TYPE_FUNCTION) and routes to
+        // locateFunction() instead.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/funcs.xphp', "<?php\nnamespace App;\nfunction greet(string \$n): string { return \$n; }\n");
+        $useSource = "<?php\nuse function App\\greet;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Cursor on `greet` inside `use function App\greet`.
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'App\\greet', strlen('App\\'));
+        $this->assertResolves($location, '/funcs.xphp', 'greet');
+    }
+
+    public function testJumpsFromUseFunctionGroupImportToFunctionDeclaration(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/funcs.xphp', "<?php\nnamespace App;\nfunction greet() {}\nfunction wave() {}\n");
+        $useSource = "<?php\nuse function App\\{greet, wave};\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Cursor on `greet` inside `use function App\{greet, wave}`.
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, '{greet', strlen('{'));
+        $this->assertResolves($location, '/funcs.xphp', 'greet');
+    }
+
     public function testJumpsFromUserFunctionCallToFunctionDeclaration(): void
     {
         $workspace = $this->workspace();
