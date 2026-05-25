@@ -7,6 +7,7 @@ namespace XPHP\Lsp\Reflection;
 use PhpParser\Node;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Interface_;
@@ -104,6 +105,17 @@ final class FqnIndex
      * don't trigger N additional parses to read `ATTR_GENERIC_PARAMS` per class.
      */
     private ?array $filesystemGenericParams = null;
+
+    /**
+     * @var array<string, list<string>>|null  synthetic-FQN -> param names for
+     *     function- and method-scope generics (`function identity<T>(...)`,
+     *     `Util::identity<T>(...)`).  Same role as `filesystemGenericParams`
+     *     but keyed under `Namespace\funcName` / `Namespace\Class::method` so
+     *     it never collides with class entries.  The registry only reads the
+     *     namespace prefix to build its pair set, so the leaf shape doesn't
+     *     matter beyond uniqueness.
+     */
+    private ?array $filesystemFuncMethodGenericParams = null;
 
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
@@ -249,6 +261,50 @@ final class FqnIndex
     }
 
     /**
+     * Like `iterGenericClasses`, but yields function- and method-scope
+     * generic placeholders -- the ones declared with
+     * `ATTR_METHOD_GENERIC_PARAMS` on `Function_` and `ClassMethod` nodes.
+     *
+     * Same shape (`syntheticFqn => paramNames`) so `GenericParamRegistry`
+     * can iterate without caring about the source: it derives
+     * `(namespace, paramName)` from the FQN's last-backslash split, and a
+     * synthetic key like `App\Demos\identity` or `App\Containers\Util::identity`
+     * yields the right namespace either way.
+     *
+     * Why this is separate from `iterGenericClasses`: class generics carry
+     * `ATTR_GENERIC_PARAMS`; function/method generics carry the distinct
+     * `ATTR_METHOD_GENERIC_PARAMS`.  Different attributes, different walks --
+     * keeping them as sibling iterators avoids overloading a single
+     * collector with two unrelated AST shapes.
+     *
+     * @return iterable<string, list<string>>
+     */
+    public function iterGenericFunctionsAndMethods(): iterable
+    {
+        $seen = [];
+        foreach ($this->workspace as $uri => $item) {
+            $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+            if ($result->ast === null) {
+                continue;
+            }
+            foreach (self::collectGenericFunctionsAndMethods($result->ast) as $fqn => $paramNames) {
+                if (isset($seen[$fqn])) {
+                    continue;
+                }
+                $seen[$fqn] = true;
+                yield $fqn => $paramNames;
+            }
+        }
+        foreach ($this->filesystemFuncMethodGenericParams() as $fqn => $paramNames) {
+            if (isset($seen[$fqn])) {
+                continue;
+            }
+            $seen[$fqn] = true;
+            yield $fqn => $paramNames;
+        }
+    }
+
+    /**
      * Discard the cached filesystem index so the next query rebuilds it
      * from a fresh walk under rootPath.  Open-doc state is unaffected
      * (it's already version-keyed through `ParsedDocumentCache`).
@@ -264,6 +320,7 @@ final class FqnIndex
         $this->filesystemMap = null;
         $this->filesystemKinds = null;
         $this->filesystemGenericParams = null;
+        $this->filesystemFuncMethodGenericParams = null;
         $this->filesystemSymbols = null;
         $this->filesystemWalkedPaths = null;
     }
@@ -668,6 +725,17 @@ final class FqnIndex
     }
 
     /**
+     * @return array<string, list<string>>  synthetic-FQN -> ordered param names
+     */
+    private function filesystemFuncMethodGenericParams(): array
+    {
+        if ($this->filesystemFuncMethodGenericParams === null) {
+            $this->buildFilesystemIndex();
+        }
+        return $this->filesystemFuncMethodGenericParams ?? [];
+    }
+
+    /**
      * @return array<string, array{kind: string, line: int, char: int}>
      */
     private function filesystemSymbols(): array
@@ -683,6 +751,7 @@ final class FqnIndex
         $map = [];
         $kinds = [];
         $genericParams = [];
+        $funcMethodGenericParams = [];
         $symbols = [];
         $walkedPaths = [];
         if (!is_dir($this->rootPath)) {
@@ -693,6 +762,7 @@ final class FqnIndex
             $this->filesystemMap = $map;
             $this->filesystemKinds = $kinds;
             $this->filesystemGenericParams = $genericParams;
+            $this->filesystemFuncMethodGenericParams = $funcMethodGenericParams;
             $this->filesystemSymbols = $symbols;
             $this->filesystemWalkedPaths = $walkedPaths;
             return;
@@ -731,6 +801,9 @@ final class FqnIndex
             foreach (self::collectGenericClasses($ast) as $fqn => $paramNames) {
                 $genericParams[$fqn] = $paramNames;
             }
+            foreach (self::collectGenericFunctionsAndMethods($ast) as $fqn => $paramNames) {
+                $funcMethodGenericParams[$fqn] = $paramNames;
+            }
             foreach (self::collectSymbolHits($ast) as $hit) {
                 $origByte = $offsets->toOriginal($hit['startByte']);
                 [$line, $char] = self::byteToLineChar($source, $origByte);
@@ -753,6 +826,7 @@ final class FqnIndex
         $this->filesystemMap = $map;
         $this->filesystemKinds = $kinds;
         $this->filesystemGenericParams = $genericParams;
+        $this->filesystemFuncMethodGenericParams = $funcMethodGenericParams;
         $this->filesystemSymbols = $symbols;
         $this->filesystemWalkedPaths = $walkedPaths;
     }
@@ -1000,6 +1074,95 @@ final class FqnIndex
                         : $short;
                 }
                 $this->fqns[$fqn] = $paramNames;
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->fqns;
+    }
+
+    /**
+     * Walk an AST for function- and method-scope generic placeholders.
+     *
+     * Both `function identity<T>(...)` and `Util::identity<T>(...)` are
+     * stamped with `ATTR_METHOD_GENERIC_PARAMS` by `XphpSourceParser`
+     * (a single attribute for both shapes, since methods are functions
+     * with a receiver from the parser's POV).  We surface them so
+     * `GenericParamRegistry::prettify` can strip the namespace prefix
+     * worse-reflection attaches to bare `T` references inside the body
+     * (`App\Demos\T` -> `T` for a function in `namespace App\Demos`).
+     *
+     * Key shape: `Namespace\funcName` for free functions,
+     * `Namespace\ClassName::methodName` for class methods -- the registry
+     * only needs the namespace prefix, but a unique-per-decl key keeps
+     * subsequent overwrites from losing data.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array<string, list<string>>
+     */
+    private static function collectGenericFunctionsAndMethods(array $ast): array
+    {
+        $visitor = new class extends NodeVisitorAbstract {
+            /** @var array<string, list<string>> */
+            public array $fqns = [];
+
+            private string $currentNamespace = '';
+
+            /** @var list<string>  enclosing class short-name stack (top = innermost) */
+            private array $classStack = [];
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Namespace_) {
+                    $this->currentNamespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if ($node instanceof ClassLike) {
+                    $this->classStack[] = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if (!$node instanceof Function_ && !$node instanceof ClassMethod) {
+                    return null;
+                }
+                $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (!is_array($params) || $params === []) {
+                    return null;
+                }
+                $paramNames = [];
+                foreach ($params as $p) {
+                    if ($p instanceof TypeParam) {
+                        $paramNames[] = $p->name;
+                    }
+                }
+                if ($paramNames === []) {
+                    return null;
+                }
+                $declName = $node->name->toString();
+                if ($node instanceof ClassMethod) {
+                    $className = end($this->classStack);
+                    if ($className === false || $className === '') {
+                        return null;
+                    }
+                    $key = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $className . '::' . $declName
+                        : $className . '::' . $declName;
+                } else {
+                    $key = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $declName
+                        : $declName;
+                }
+                $this->fqns[$key] = $paramNames;
+                return null;
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof ClassLike && $this->classStack !== []) {
+                    array_pop($this->classStack);
+                }
                 return null;
             }
         };

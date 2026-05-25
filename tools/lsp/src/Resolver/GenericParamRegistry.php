@@ -94,7 +94,21 @@ final class GenericParamRegistry
             return $this->pairs;
         }
         $pairs = [];
+        // Class-level placeholders (Collection<T>): T inside method bodies
+        // resolves to `App\Containers\T`; pair set strips back to `T`.
         foreach ($this->fqnIndex->iterGenericClasses() as $fqn => $paramNames) {
+            $sep = strrpos($fqn, '\\');
+            $namespace = $sep === false ? '' : substr($fqn, 0, $sep);
+            foreach ($paramNames as $paramName) {
+                $pairs[$namespace . '|' . $paramName] = true;
+            }
+        }
+        // Function- and method-scope placeholders (identity<T>(...),
+        // Util::identity<T>(...)): T inside the body resolves to the
+        // ENCLOSING namespace's `T`, distinct from any class-level T.
+        // Without this entry, hover on the function/method declaration
+        // line leaks the namespace-doubled placeholder (App\Demos\T).
+        foreach ($this->fqnIndex->iterGenericFunctionsAndMethods() as $fqn => $paramNames) {
             $sep = strrpos($fqn, '\\');
             $namespace = $sep === false ? '' : substr($fqn, 0, $sep);
             foreach ($paramNames as $paramName) {

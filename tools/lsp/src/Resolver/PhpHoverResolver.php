@@ -125,9 +125,17 @@ final class PhpHoverResolver
         // returns "no hover" instead of crashing on the absent `name()`.
         $markdown = match ($symbol->symbolType()) {
             Symbol::CLASS_    => $this->renderClass(self::preferType($context, $symbol->name())),
-            Symbol::FUNCTION  => $this->renderFunction($symbol->name()),
+            Symbol::FUNCTION  => $this->renderFunction(
+                                    $symbol->name(),
+                                    $this->genericResolver->resolveFunctionCallSubstitutionAt($uri, $offset),
+                                ),
             Symbol::METHOD    => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->renderMethod($c, $symbol->name(), $this->genericResolver->resolveMethodCallSubstitutionAt($uri, $offset))
+                                    ? $this->renderMethod(
+                                        $c,
+                                        $symbol->name(),
+                                        $this->genericResolver->resolveMethodCallSubstitutionAt($uri, $offset)
+                                            ?? $this->genericResolver->resolveStaticCallSubstitutionAt($uri, $offset),
+                                    )
                                     : null,
             Symbol::PROPERTY  => $this->renderProperty(
                                     // Resolver-first: substituted receiver wins
@@ -161,7 +169,7 @@ final class PhpHoverResolver
         return self::format($signature, $docblock);
     }
 
-    private function renderFunction(string $name): ?string
+    private function renderFunction(string $name, ?MethodCallSubstitution $substitution = null): ?string
     {
         try {
             $function = $this->reflector->reflectFunction($name);
@@ -170,10 +178,18 @@ final class PhpHoverResolver
         }
         $params = [];
         foreach ($function->parameters() as $param) {
-            $type = $this->genericParams->prettify((string) $param->inferredType());
+            // Phase 5 follow-up: when the call site is a generic
+            // function (`identity<User>(...)`), GenericResolver provides
+            // substituted parameter types via the same MethodCallSubstitution
+            // shape the method path uses.  Prefer the substituted type;
+            // fall back to prettify(inferredType) for params with no
+            // substitution entry (unannotated / union / intersection).
+            $substituted = $substitution?->paramTypes[$param->name()] ?? null;
+            $type = $substituted ?? $this->genericParams->prettify((string) $param->inferredType());
             $params[] = trim(($type !== '' && $type !== '<missing>' ? $type . ' ' : '') . '$' . $param->name());
         }
-        $return = $this->genericParams->prettify((string) $function->inferredType());
+        $return = $substitution?->returnType
+            ?? $this->genericParams->prettify((string) $function->inferredType());
         $signature = sprintf(
             'function %s(%s)%s',
             (string) $function->name(),

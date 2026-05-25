@@ -165,6 +165,110 @@ final class GenericResolver
      * Params whose declared type can't be modelled (e.g. union types)
      * are omitted from the map; caller falls back to prettify for those.
      */
+    /**
+     * Same shape as `resolveMethodCallSubstitutionAt` but for static calls
+     * `Foo::method<T>($x)`.  The "receiver" type-args come from the
+     * call's own `ATTR_METHOD_GENERIC_ARGS` (method-scoped generics), not
+     * from a bound variable's type.  Returns null when the cursor isn't
+     * on a static method-call's name token, when the call isn't generic
+     * (no `<T>` annotation), or when class / method lookup fails.
+     */
+    public function resolveStaticCallSubstitutionAt(string $uri, int $byteOffset): ?MethodCallSubstitution
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $result = $this->documents->getOrParse($uri, $item->version, $item->text);
+        if ($result->ast === null) {
+            return null;
+        }
+        $call = self::findEnclosingStaticCallNameAt($result->ast, $byteOffset);
+        if ($call === null || !$call->class instanceof Name || !$call->name instanceof Identifier) {
+            return null;
+        }
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        if (!is_array($args) || $args === []) {
+            return null;
+        }
+        [$useMap, $namespace] = self::useMapAndNamespaceFor($result->ast);
+        $classFqn = self::resolveNameWithUseMap($call->class, $useMap, $namespace);
+        if ($classFqn === null) {
+            return null;
+        }
+        $classLike = $this->classes->find($classFqn);
+        if ($classLike === null) {
+            return null;
+        }
+        $method = self::findMethod($classLike, $call->name->toString());
+        if ($method === null) {
+            return null;
+        }
+        $params = $method->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        if (!is_array($params) || count($params) !== count($args)) {
+            return null;
+        }
+        $paramMap = [];
+        $paramNames = [];
+        foreach ($params as $i => $param) {
+            if (!$param instanceof TypeParam || !($args[$i] instanceof TypeRef)) {
+                return null;
+            }
+            $paramMap[$param->name] = $args[$i];
+            $paramNames[] = $param->name;
+        }
+        return self::buildSubstitutionFromMap($method, $paramMap, $paramNames);
+    }
+
+    /**
+     * Same shape but for free-function calls `identity<T>($x)`.  Type-args
+     * come from the call's `ATTR_METHOD_GENERIC_ARGS`; the function's
+     * `ATTR_METHOD_GENERIC_PARAMS` provides the names.  Function lookup
+     * uses `FqnIndex::functionFor` so filesystem-only declarations work.
+     */
+    public function resolveFunctionCallSubstitutionAt(string $uri, int $byteOffset): ?MethodCallSubstitution
+    {
+        if (!$this->workspace->has($uri)) {
+            return null;
+        }
+        $item = $this->workspace->get($uri);
+        $result = $this->documents->getOrParse($uri, $item->version, $item->text);
+        if ($result->ast === null) {
+            return null;
+        }
+        $call = self::findEnclosingFuncCallNameAt($result->ast, $byteOffset);
+        if ($call === null || !$call->name instanceof Name) {
+            return null;
+        }
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        if (!is_array($args) || $args === []) {
+            return null;
+        }
+        [$useMap, $namespace] = self::useMapAndNamespaceFor($result->ast);
+        $fnFqn = self::resolveNameWithUseMap($call->name, $useMap, $namespace);
+        if ($fnFqn === null) {
+            return null;
+        }
+        $function = $this->fqnIndex->functionFor($fnFqn);
+        if ($function === null) {
+            return null;
+        }
+        $params = $function->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        if (!is_array($params) || count($params) !== count($args)) {
+            return null;
+        }
+        $paramMap = [];
+        $paramNames = [];
+        foreach ($params as $i => $param) {
+            if (!$param instanceof TypeParam || !($args[$i] instanceof TypeRef)) {
+                return null;
+            }
+            $paramMap[$param->name] = $args[$i];
+            $paramNames[] = $param->name;
+        }
+        return self::buildSubstitutionFromMap($function, $paramMap, $paramNames);
+    }
+
     public function resolveMethodCallSubstitutionAt(string $uri, int $byteOffset): ?MethodCallSubstitution
     {
         if (!$this->workspace->has($uri)) {
@@ -525,6 +629,182 @@ final class GenericResolver
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
         return $visitor->hit;
+    }
+
+    /**
+     * Mirror of `findEnclosingMethodCallNameAt` for static calls
+     * (`Foo::method(...)`).
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function findEnclosingStaticCallNameAt(array $ast, int $byteOffset): ?StaticCall
+    {
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?StaticCall $hit = null;
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->hit !== null || !$node instanceof StaticCall) {
+                    return null;
+                }
+                $name = $node->name;
+                if (!$name instanceof Identifier) {
+                    return null;
+                }
+                $start = $name->getStartFilePos();
+                $end = $name->getEndFilePos();
+                if ($start < 0 || $end < 0) {
+                    return null;
+                }
+                if ($this->offset >= $start && $this->offset <= $end + 1) {
+                    $this->hit = $node;
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->hit;
+    }
+
+    /**
+     * Same shape but for free-function calls (`identity(...)`).
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function findEnclosingFuncCallNameAt(array $ast, int $byteOffset): ?Node\Expr\FuncCall
+    {
+        $visitor = new class($byteOffset) extends NodeVisitorAbstract {
+            public ?Node\Expr\FuncCall $hit = null;
+
+            public function __construct(private readonly int $offset)
+            {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($this->hit !== null || !$node instanceof Node\Expr\FuncCall) {
+                    return null;
+                }
+                $name = $node->name;
+                if (!$name instanceof Name) {
+                    return null;
+                }
+                $start = $name->getStartFilePos();
+                $end = $name->getEndFilePos();
+                if ($start < 0 || $end < 0) {
+                    return null;
+                }
+                if ($this->offset >= $start && $this->offset <= $end + 1) {
+                    $this->hit = $node;
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->hit;
+    }
+
+    /**
+     * Walk the AST collecting namespace + use map at every position.
+     * Returns (useMap, currentNamespace) effective when the document is
+     * processed top-to-bottom -- which matches PHP's resolution rules.
+     * The maps are file-scoped: the same use stmt may not be in effect
+     * elsewhere, but for a single-file resolution this is enough.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array{0: array<string, string>, 1: string}
+     */
+    private static function useMapAndNamespaceFor(array $ast): array
+    {
+        $useMap = [];
+        $namespace = '';
+        $visitor = new class($useMap, $namespace) extends NodeVisitorAbstract {
+            /** @param array<string, string> $useMap */
+            public function __construct(
+                public array &$useMap,
+                public string &$namespace,
+            ) {
+            }
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Namespace_) {
+                    $this->namespace = $node->name?->toString() ?? '';
+                    return null;
+                }
+                if ($node instanceof Node\Stmt\Use_) {
+                    foreach ($node->uses as $useUse) {
+                        $alias = $useUse->getAlias()->toString();
+                        $this->useMap[$alias] = $useUse->name->toString();
+                    }
+                    return null;
+                }
+                if ($node instanceof Node\Stmt\GroupUse) {
+                    $prefix = $node->prefix->toString();
+                    foreach ($node->uses as $useUse) {
+                        $alias = $useUse->getAlias()->toString();
+                        $this->useMap[$alias] = $prefix . '\\' . $useUse->name->toString();
+                    }
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return [$useMap, $namespace];
+    }
+
+    /**
+     * Shared body for `resolveStaticCallSubstitutionAt` /
+     * `resolveFunctionCallSubstitutionAt` (and conceptually the existing
+     * instance-method path).  Given a ClassMethod or Function_ AST node
+     * with a precomputed `paramName -> TypeRef` map, render the
+     * substituted return type + each substituted parameter type into a
+     * `MethodCallSubstitution` value object.
+     *
+     * @param array<string, TypeRef> $paramMap
+     * @param list<string>           $paramNames
+     */
+    private static function buildSubstitutionFromMap(
+        Node\Stmt\ClassMethod|Node\Stmt\Function_ $method,
+        array $paramMap,
+        array $paramNames,
+    ): MethodCallSubstitution {
+        $returnTypeRendered = null;
+        if ($method->returnType !== null) {
+            $tuple = self::returnTypeToRef($method->returnType, $paramNames);
+            if ($tuple !== null) {
+                [$nullable, $ref] = $tuple;
+                $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+                $returnTypeRendered = (new ResolvedType($substituted, $nullable))->render();
+            }
+        }
+        $paramTypes = [];
+        foreach ($method->params as $param) {
+            $name = $param->var instanceof Node\Expr\Variable && is_string($param->var->name)
+                ? $param->var->name
+                : null;
+            if ($name === null || $param->type === null) {
+                continue;
+            }
+            $tuple = self::returnTypeToRef($param->type, $paramNames);
+            if ($tuple === null) {
+                continue;
+            }
+            [$nullable, $ref] = $tuple;
+            $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+            $paramTypes[$name] = (new ResolvedType($substituted, $nullable))->render();
+        }
+        return new MethodCallSubstitution($returnTypeRendered, $paramTypes);
     }
 
     /**

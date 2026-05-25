@@ -146,6 +146,101 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringNotContainsString('V $value', $markdown);
     }
 
+    public function testStaticMethodHoverSubstitutesParameterTypesAtCallSite(): void
+    {
+        // Item 5: static-call param substitution.  Symmetric to the
+        // instance-method Phase 0.6 path, exercising the same machinery
+        // through `resolveStaticCallSubstitutionAt`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Factory.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Factory {
+            public static function make<T>(T $seed): T { return $seed; }
+        }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Containers\\Factory;\nuse App\\Models\\User;\nFactory::make<User>(new User());\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'Factory::make', strlen('Factory::make'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('make(App\\Models\\User $seed)', $markdown);
+        self::assertStringNotContainsString('make(T $seed)', $markdown);
+    }
+
+    public function testFreeFunctionHoverSubstitutesParameterTypesAtCallSite(): void
+    {
+        // Item 5: free-function param substitution.  Reaches the same
+        // substitution path through `resolveFunctionCallSubstitutionAt`,
+        // bridging into `renderFunction`'s new substitution-aware
+        // signature.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/identity.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        function identity<T>(T $value): T { return $value; }
+        XPHP);
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\Models\\User;\nuse function App\\identity;\nidentity<User>(new User());\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'identity<User>', strlen('identity'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('identity(App\\Models\\User $value)', $markdown);
+        self::assertStringNotContainsString('identity(T $value)', $markdown);
+        // Return type also gets substituted.
+        self::assertStringContainsString(': App\\Models\\User', $markdown);
+    }
+
+    public function testFunctionDeclarationHoverStripsNamespaceFromMethodScopeTemplate(): void
+    {
+        // Hover at a call site of a generic free function WITHOUT a type
+        // argument: substitution path returns null, prettify fallback
+        // runs.  Without function-scope template tracking, worse-reflection's
+        // namespace-doubled `App\Demos\T` leaks through; with it, the
+        // prefix is stripped to bare `T`.
+        $workspace = $this->workspace();
+        $declSource = "<?php\nnamespace App\\Demos;\nfunction identity<T>(T \$x): T { return \$x; }\n";
+        $this->open($workspace, '/identity.xphp', $declSource);
+
+        $useSource = "<?php\nuse function App\\Demos\\identity;\nidentity(1);\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+        // Cursor on the unqualified call `identity(...)` -- no `<T>` arg,
+        // no inference path, so renderFunction runs without a substitution.
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, "\nidentity(", strlen("\nidentity"));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('identity(T $x): T', $markdown);
+        self::assertStringNotContainsString('App\\Demos\\T', $markdown);
+    }
+
+    public function testStaticMethodDeclarationHoverStripsNamespaceFromMethodScopeTemplate(): void
+    {
+        // Same gap, method-scope side: `Util::first<T>(...)` declared in
+        // `namespace App\Containers`.  Bare `T` in the body resolves to
+        // `App\Containers\T`; prettify must strip back to `T`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Util.xphp', <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Util {
+            public static function first<T>(array $items): ?T { return $items[0] ?? null; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Containers\\Util;\nUtil::first([]);\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+        // Hover on `first` without a `<T>` type-arg -> substitution path
+        // returns null, prettify fallback runs.
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'Util::first', strlen('Util::first'));
+        $markdown = $this->markdown($hover);
+
+        self::assertStringContainsString('first(array $items): ?T', $markdown);
+        self::assertStringNotContainsString('App\\Containers\\T', $markdown);
+    }
+
     public function testMethodHoverParamsFallBackToPrettifyWhenNoBinding(): void
     {
         // Cursor on a method call where no generic-instantiation binding
