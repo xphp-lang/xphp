@@ -48,6 +48,41 @@ final class PhpCompletionContextTest extends TestCase
         self::assertNull(PhpCompletionContext::detect('abc', 99));
     }
 
+    public function testSuppressesCompletionInsideSingleQuotedString(): void
+    {
+        // Phase 3 polish: cursor between the quotes of '$user->' must
+        // not fire member completion -- the whole thing is a string
+        // literal.
+        $source = "<?php\n\$x = '\$user->';\n";
+        $offset = strpos($source, "->'") + 2; // cursor between `->` and `'`
+        self::assertNull(PhpCompletionContext::detect($source, $offset));
+    }
+
+    public function testSuppressesCompletionInsideLineComment(): void
+    {
+        $source = "<?php\n// note: \$user->name will become...\n";
+        $offset = strpos($source, '->name') + 2;
+        self::assertNull(PhpCompletionContext::detect($source, $offset));
+    }
+
+    public function testSuppressesCompletionInsideDocblock(): void
+    {
+        $source = "<?php\n/**\n * \$user->name\n */\nclass Foo {}\n";
+        $offset = strpos($source, '->name') + 2;
+        self::assertNull(PhpCompletionContext::detect($source, $offset));
+    }
+
+    public function testStillFiresCompletionInsideDoubleQuotedStringInterpolation(): void
+    {
+        // Inside `"$user->name"` the tokenizer splits `$user->name` into
+        // real code tokens (T_VARIABLE / T_OBJECT_OPERATOR / T_STRING),
+        // not literal text -- completion must still fire there.
+        $source = "<?php\n\$x = \"hello \$user->\";\n";
+        $offset = strpos($source, '->"') + 2; // cursor after `->`
+        $hit = PhpCompletionContext::detect($source, $offset);
+        self::assertSame('member', $hit['kind'] ?? null, 'interpolated `->` should still classify as member');
+    }
+
     public function testReturnsNullForNegativeOffset(): void
     {
         self::assertNull(PhpCompletionContext::detect('abc', -1));

@@ -32,12 +32,40 @@ namespace XPHP\Lsp\Resolver;
  *     `<…>` case -- this file is its sibling, picking up where it
  *     stops.
  *
- * Out of scope: detecting string/comment context.  False positives there
- * produce no-match-prefix empty lists rather than crashes, which is
- * acceptable for an MVP.
+ * String/comment context (Phase 3 polish): cursors inside single-quoted
+ * strings, comments, doc-comments, heredoc bodies, or inline-HTML are
+ * suppressed -- typing `'$user->'` shouldn't trigger member-completion
+ * noise.  Double-quoted interpolation is left alone because the
+ * tokenizer already splits `$user->prop` inside `"..."` into regular
+ * code tokens, so completion fires naturally there.
  */
 final class PhpCompletionContext
 {
+    /**
+     * Tokens whose interior treats the cursor as "in literal text" --
+     * completion stays silent inside them.
+     *
+     * Deliberately NOT here:
+     *   - T_INLINE_HTML.  Real .xphp documents always open with `<?php`,
+     *     so HTML-prefix completion is a non-case; the unit tests pass
+     *     bare snippets that PhpToken classifies as T_INLINE_HTML
+     *     wholesale, which we still want to detect as code.  The
+     *     trade-off is that typing `$x->|` in HTML BEFORE an opening
+     *     `<?php` tag (rare; broken xphp anyway) would fire completion;
+     *     accept this edge case.
+     *   - Double-quoted-string INTERPOLATION fragments (T_VARIABLE,
+     *     T_OBJECT_OPERATOR, T_STRING).  Those are real code that
+     *     should complete normally inside `"...$obj->name..."`.
+     */
+    private const TOKEN_IDS_SUPPRESS_COMPLETION = [
+        T_CONSTANT_ENCAPSED_STRING,
+        T_ENCAPSED_AND_WHITESPACE,
+        T_COMMENT,
+        T_DOC_COMMENT,
+        T_START_HEREDOC,
+        T_END_HEREDOC,
+    ];
+
     private function __construct()
     {
     }
@@ -53,6 +81,9 @@ final class PhpCompletionContext
     public static function detect(string $source, int $offset): ?array
     {
         if ($offset < 0 || $offset > strlen($source)) {
+            return null;
+        }
+        if (self::isInLiteralText($source, $offset)) {
             return null;
         }
 
@@ -169,5 +200,46 @@ final class PhpCompletionContext
     private static function isWhitespace(string $byte): bool
     {
         return $byte === ' ' || $byte === "\t" || $byte === "\n" || $byte === "\r";
+    }
+
+    /**
+     * Tokenize the source and decide whether `$offset` falls inside a
+     * literal-text token: single-quoted string body, heredoc literal
+     * region, comment, doc-comment, or inline-HTML.  PHP's tokenizer is
+     * fast in C and the source is already in memory; PhpToken::tokenize
+     * is the cheapest correct way to do this without writing our own
+     * lexer.
+     *
+     * Caller behavior: when this returns true, completion suppresses --
+     * no member / variable / expression suggestions surface, no matter
+     * what byte-level pattern the cursor happens to sit on.
+     */
+    private static function isInLiteralText(string $source, int $offset): bool
+    {
+        // Boundary case: tokenize requires valid bytes; an offset past
+        // end-of-source bottoms out on no token, which means "not in
+        // literal" -- safer to return false than to misclassify.
+        if ($offset < 0 || $offset >= strlen($source)) {
+            return false;
+        }
+        try {
+            $tokens = \PhpToken::tokenize($source);
+        } catch (\Throwable) {
+            return false;
+        }
+        foreach ($tokens as $token) {
+            $start = $token->pos;
+            $end = $start + strlen($token->text);
+            if ($offset < $start) {
+                return false;
+            }
+            if ($offset >= $end) {
+                continue;
+            }
+            // $start <= $offset < $end -- the cursor falls inside this
+            // token.  Suppress only for literal-text token IDs.
+            return in_array($token->id, self::TOKEN_IDS_SUPPRESS_COMPLETION, true);
+        }
+        return false;
     }
 }
