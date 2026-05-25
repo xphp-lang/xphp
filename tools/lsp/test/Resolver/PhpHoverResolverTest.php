@@ -567,6 +567,66 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringNotContainsString('?T $first', $markdown);
     }
 
+    public function testClassNameHoverResolvesAgainstFilesystemOnlyTarget(): void
+    {
+        // Phase 2.3: hover on a class identifier (`new Box()`) where the
+        // class declaration lives only on disk -- never opened in the
+        // editor.  Worse-reflection reaches it through FilesystemSourceLocator
+        // -> FqnIndex.  Before Phase 0, this returned null because the
+        // open-doc workspace was the only source.
+        $root = sys_get_temp_dir() . '/xphp-hover-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Box.xphp', <<<'XPHP'
+            <?php
+            namespace App\Containers;
+            /** A simple box. */
+            class Box {}
+            XPHP);
+
+            $workspace = $this->workspace();
+            $useSource = "<?php\nuse App\\Containers\\Box;\n\$b = new Box();\n";
+            $this->open($workspace, '/Use.xphp', $useSource);
+
+            $hover = $this->hoverAtWithRoot($workspace, '/Use.xphp', $useSource, 'new Box', strlen('new '), $root);
+            $markdown = $this->markdown($hover);
+
+            self::assertStringContainsString('class App\\Containers\\Box', $markdown);
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
+    public function testMethodHoverResolvesAgainstFilesystemOnlyClass(): void
+    {
+        // Phase 2.3: hover on a method call when the receiver's class
+        // declaration lives only on disk.  The hover dispatch reaches
+        // through worse-reflection's offset reflection which in turn
+        // consults FilesystemSourceLocator (the FqnIndex-backed adapter).
+        $root = sys_get_temp_dir() . '/xphp-hover-fs-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Greeter.xphp', <<<'XPHP'
+            <?php
+            namespace App\Util;
+            class Greeter {
+                public function hello(string $name): string { return ''; }
+            }
+            XPHP);
+
+            $workspace = $this->workspace();
+            $useSource = "<?php\nuse App\\Util\\Greeter;\n\$g = new Greeter();\n\$g->hello('x');\n";
+            $this->open($workspace, '/Use.xphp', $useSource);
+
+            $hover = $this->hoverAtWithRoot($workspace, '/Use.xphp', $useSource, '$g->hello', strlen('$g->'), $root);
+            $markdown = $this->markdown($hover);
+
+            self::assertStringContainsString('hello(string $name): string', $markdown);
+        } finally {
+            $this->rmrf($root);
+        }
+    }
+
     public function testVariableHoverPrettifyWorksWithFilesystemOnlyGenericClass(): void
     {
         // Phase 0.5 e2e: Collection.xphp is closed (only on disk).
