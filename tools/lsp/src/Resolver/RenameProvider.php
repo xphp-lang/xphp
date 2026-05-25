@@ -63,6 +63,11 @@ final class RenameProvider
             ));
         }
 
+        $oldShortName = $this->finder->shortNameAt($uri, $byteOffset);
+        if ($oldShortName === null) {
+            return null;
+        }
+
         $locations = $this->finder->findReferences($uri, $byteOffset, true);
         if ($locations === []) {
             return null;
@@ -86,7 +91,7 @@ final class RenameProvider
             $positionMap = new PositionMap($source);
             $edits = [];
             foreach ($locs as $loc) {
-                $edit = self::buildEditForReference($source, $positionMap, $loc, $newName);
+                $edit = self::buildEditForReference($source, $positionMap, $loc, $oldShortName, $newName);
                 if ($edit !== null) {
                     $edits[] = $edit;
                 }
@@ -111,11 +116,20 @@ final class RenameProvider
      * the range is already the short name; for qualified Name nodes
      * (`App\Foo`) we shift `start` past the last `\` so the prefix
      * survives the rename.
+     *
+     * Alias safety: if the location's short-name text doesn't match
+     * `$oldShortName`, the reference reached the target through an
+     * alias (`use function App\Models\{foo as bar}`; `$x = bar();`).
+     * Renaming the source function should preserve aliased call sites
+     * -- they explicitly refer to the function via `bar`, not by its
+     * source name.  Skip the edit and let the alias keep working
+     * (`use function App\Models\{newName as bar}`).
      */
     private static function buildEditForReference(
         string $source,
         PositionMap $positionMap,
         Location $loc,
+        string $oldShortName,
         string $newName,
     ): ?TextEdit {
         $startByte = $positionMap->positionToOffset($loc->range->start->line, $loc->range->start->character);
@@ -124,11 +138,23 @@ final class RenameProvider
             return null;
         }
         $text = substr($source, $startByte, $endByte - $startByte);
-        $lastBackslash = strrpos($text, '\\');
-        if ($lastBackslash === false) {
+        // VarLikeIdentifier nodes (property name token) span `$name`
+        // including the dollar sign; the target's short name doesn't
+        // carry one, so strip a leading `$` from both sides of the
+        // comparison.  Keep it OUT of the rename range -- the dollar
+        // must survive the rename.
+        $hasDollar = str_starts_with($text, '$');
+        $textForCompare = $hasDollar ? substr($text, 1) : $text;
+        $lastBackslash = strrpos($textForCompare, '\\');
+        $shortText = $lastBackslash === false ? $textForCompare : substr($textForCompare, $lastBackslash + 1);
+        if ($shortText !== $oldShortName) {
+            return null;
+        }
+        if ($lastBackslash === false && !$hasDollar) {
             return new TextEdit($loc->range, $newName);
         }
-        $shortStartByte = $startByte + $lastBackslash + 1;
+        $offsetFromStart = ($hasDollar ? 1 : 0) + ($lastBackslash === false ? 0 : $lastBackslash + 1);
+        $shortStartByte = $startByte + $offsetFromStart;
         [$line, $char] = $positionMap->offsetToPosition($shortStartByte);
         return new TextEdit(
             new Range(new Position($line, $char), $loc->range->end),

@@ -77,13 +77,11 @@ final class XphpRenameHandlerTest extends TestCase
         $byUri = self::indexEdits($edit);
         self::assertCount(1, $byUri['/lib.xphp']);
         self::assertSame('better', $byUri['/lib.xphp'][0]->newText);
-        // /use.xphp: 2 calls.  The `use function App\old` alias is NOT
-        // currently tracked as a function reference (4.1 walks FuncCall +
-        // Function_ only -- `use function` Name nodes live under Use_
-        // with type=FUNCTION, which we don't disambiguate yet).  After
-        // this rename the alias will be stale; PhpStorm prompts the
-        // user.  Worth a follow-up to surface use-function aliases too.
-        self::assertCount(2, $byUri['/use.xphp']);
+        // /use.xphp: 1 use-function import + 2 calls = 3 edits.  The
+        // `use function App\old` alias is now tracked symmetric to the
+        // class-import behaviour (Use_::TYPE_FUNCTION branch in
+        // ReferenceFinder).
+        self::assertCount(3, $byUri['/use.xphp']);
     }
 
     public function testRenamesMethodAcrossCallSites(): void
@@ -172,6 +170,87 @@ final class XphpRenameHandlerTest extends TestCase
 
         $params = self::paramsFor($workspace, '/x.xphp', '42', 0, 'Y');
         self::assertNull(wait($this->handler($workspace)->rename($params)));
+    }
+
+    public function testCursorOnAliasDeclTokenRenamesAliasLocally(): void
+    {
+        // Regression for prod trace xphp-20260525-140847-285.log id=21:
+        // cursor on the alias token `xyz` inside `use ... as xyz`
+        // previously returned null because resolveTargetAt didn't
+        // recognise UseItem.alias as a renameable target.  Same effect
+        // as cursor on a call site -- rename the local alias + its
+        // unqualified uses; leave the source function alone.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/lib.xphp', 'xphp', 1, "<?php\nnamespace App\\Models;\nfunction foo() {}\n"));
+        $workspace->open(new TextDocumentItem('/use.xphp', 'xphp', 1, "<?php\nuse function App\\Models\\{foo as xyz};\nxyz();\nxyz();\n"));
+
+        $edit = $this->renameAt($workspace, '/use.xphp', 'as xyz', strlen('as '), 'zzz');
+        $byUri = self::indexEdits($edit);
+
+        self::assertArrayNotHasKey('/lib.xphp', $byUri, 'underlying function must stay untouched');
+        self::assertCount(3, $byUri['/use.xphp'], 'alias decl + 2 call sites = 3 edits');
+        foreach ($byUri['/use.xphp'] as $e) {
+            self::assertSame('zzz', $e->newText);
+        }
+    }
+
+    public function testCursorOnAliasedCallSiteRenamesAliasLocally(): void
+    {
+        // Regression for prod trace xphp-20260525-134748-448.log id=43:
+        // user puts cursor on `xyz()` (a call that resolves via
+        // `use function ... as xyz` to a function elsewhere) and types
+        // `zzz`.  PhpStorm-style: rename the LOCAL alias, not the
+        // underlying function.  The use stmt's source name and the
+        // function declaration must NOT change; only the alias decl and
+        // its call sites in this file get rewritten.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/lib.xphp', 'xphp', 1, "<?php\nnamespace App\\Models;\nfunction foo() {}\n"));
+        $workspace->open(new TextDocumentItem('/use.xphp', 'xphp', 1, "<?php\nuse function App\\Models\\{foo as bar};\nbar();\nbar();\n"));
+
+        $edit = $this->renameAt($workspace, '/use.xphp', 'bar();', 0, 'zzz');
+        $byUri = self::indexEdits($edit);
+
+        // /lib.xphp MUST NOT appear -- the underlying function stays.
+        self::assertArrayNotHasKey('/lib.xphp', $byUri);
+        // /use.xphp gets 3 edits: the alias decl `as bar` -> `as zzz`,
+        // and the two `bar()` call sites.
+        self::assertCount(3, $byUri['/use.xphp']);
+        foreach ($byUri['/use.xphp'] as $e) {
+            self::assertSame('zzz', $e->newText);
+        }
+    }
+
+    public function testAliasedCallSitesArePreservedDuringRename(): void
+    {
+        // Regression for prod trace xphp-20260525-131659-392.log id=192:
+        // `use function App\Models\{foo as bar};` + `bar()` call sites.
+        // Renaming `foo` should rewrite the SOURCE side of the alias
+        // (the group-use entry) but leave aliased call sites alone so
+        // the alias keeps working with the new function name.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/lib.xphp', 'xphp', 1, "<?php\nnamespace App\\Models;\nfunction foo() {}\n"));
+        $workspace->open(new TextDocumentItem('/use.xphp', 'xphp', 1, "<?php\nuse function App\\Models\\{foo as bar};\nbar();\nbar();\n"));
+
+        $edit = $this->renameAt($workspace, '/lib.xphp', 'function foo', strlen('function '), 'fizz');
+        $byUri = self::indexEdits($edit);
+
+        self::assertCount(1, $byUri['/lib.xphp']);
+        self::assertSame('fizz', $byUri['/lib.xphp'][0]->newText);
+        // /use.xphp: ONLY the source name inside `{foo as bar}` should
+        // be edited.  The `bar()` calls keep using the alias.
+        self::assertCount(1, $byUri['/use.xphp']);
+        self::assertSame('fizz', $byUri['/use.xphp'][0]->newText);
+        $useSource = $workspace->get('/use.xphp')->text;
+        $map = new PositionMap($useSource);
+        $start = $map->positionToOffset(
+            $byUri['/use.xphp'][0]->range->start->line,
+            $byUri['/use.xphp'][0]->range->start->character,
+        );
+        $end = $map->positionToOffset(
+            $byUri['/use.xphp'][0]->range->end->line,
+            $byUri['/use.xphp'][0]->range->end->character,
+        );
+        self::assertSame('foo', substr($useSource, $start, $end - $start));
     }
 
     public function testFullyQualifiedRefKeepsNamespacePrefix(): void

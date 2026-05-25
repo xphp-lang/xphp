@@ -136,9 +136,22 @@ final class XphpReferencesHandlerTest extends TestCase
         $locations = $this->references($workspace, '/lib.xphp', 'function identity', strlen('function '));
 
         $uris = array_map(fn (Location $l): string => $l->uri, $locations);
-        // Declaration + two calls in use.xphp.
-        self::assertCount(3, $locations);
+        // Decl + `use function App\identity` import + 2 calls = 4.
+        self::assertCount(4, $locations);
         self::assertContains('/lib.xphp', $uris);
+        self::assertContains('/use.xphp', $uris);
+    }
+
+    public function testFindsFunctionRefsInsideGroupUseStmt(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/lib.xphp', 'xphp', 1, "<?php\nnamespace App;\nfunction one() {}\nfunction two() {}\n"));
+        $workspace->open(new TextDocumentItem('/use.xphp', 'xphp', 1, "<?php\nuse function App\\{one, two};\none();\n"));
+
+        $locations = $this->references($workspace, '/lib.xphp', 'function one', strlen('function '));
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        // decl + group-use entry for `one` + call in use.xphp = 3.
+        self::assertCount(3, $locations);
         self::assertContains('/use.xphp', $uris);
     }
 

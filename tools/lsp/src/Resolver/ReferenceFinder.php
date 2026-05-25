@@ -78,6 +78,33 @@ final class ReferenceFinder
     }
 
     /**
+     * Short name (last `\`-segment for FQN targets, the member name for
+     * method/property targets) of the symbol the cursor is on.  Used by
+     * RenameProvider to skip aliased references whose source text
+     * doesn't match the original symbol -- e.g. `bar()` calls that
+     * resolve to `foo` via `use function foo as bar`.
+     */
+    public function shortNameAt(string $uri, int $byteOffset): ?string
+    {
+        $target = $this->resolveTargetAt($uri, $byteOffset);
+        if ($target === null) {
+            return null;
+        }
+        if (isset($target['aliasName'])) {
+            return (string) $target['aliasName'];
+        }
+        if (isset($target['memberName'])) {
+            return (string) $target['memberName'];
+        }
+        if (!isset($target['fqn'])) {
+            return null;
+        }
+        $fqn = ltrim((string) $target['fqn'], '\\');
+        $idx = strrpos($fqn, '\\');
+        return $idx === false ? $fqn : substr($fqn, $idx + 1);
+    }
+
+    /**
      * @return list<Location>
      */
     public function findReferences(string $uri, int $byteOffset, bool $includeDeclaration): array
@@ -327,6 +354,17 @@ final class ReferenceFinder
                     ];
                 }
             }
+            // Alias declaration token: cursor on `xyz` inside
+            // `use ... as xyz;` (or the group-use variant).  Treat as a
+            // file-scoped alias rename target.  Same shape collect-
+            // References already understands.
+            if ($parent instanceof Node\UseItem && $parent->alias === $best) {
+                return [
+                    'kind' => 'alias',
+                    'aliasName' => $best->toString(),
+                    'scopeUri' => $uri,
+                ];
+            }
         }
 
         // VarLikeIdentifier on a Property declaration (PropertyProperty's
@@ -356,7 +394,22 @@ final class ReferenceFinder
         // NameResolver has run.
         if ($best instanceof Name) {
             $resolved = $best->getAttribute('resolvedName');
+            $literalShort = self::shortSegment($best->toString());
             if ($resolved instanceof Name) {
+                $resolvedShort = self::shortSegment($resolved->toString());
+                // Alias-resolved reference: the literal text the user typed
+                // differs from the underlying short name (`use App\Foo as
+                // Bar; new Bar()` -- literal `Bar`, resolved short `Foo`).
+                // PhpStorm-style: rename should be SCOPED to the alias
+                // locally, not pivot to the source symbol the user can't
+                // see at this site.
+                if ($literalShort !== $resolvedShort && !$best->isFullyQualified()) {
+                    return [
+                        'kind' => 'alias',
+                        'aliasName' => $literalShort,
+                        'scopeUri' => $uri,
+                    ];
+                }
                 $fqn = $resolved->toString();
                 // Distinguish function names from class names by checking
                 // the parent context.  FuncCall.name -> function;
@@ -374,12 +427,47 @@ final class ReferenceFinder
         return null;
     }
 
+    private static function shortSegment(string $name): string
+    {
+        $trimmed = ltrim($name, '\\');
+        $idx = strrpos($trimmed, '\\');
+        return $idx === false ? $trimmed : substr($trimmed, $idx + 1);
+    }
+
     /**
      * @param list<Node\Stmt> $ast
      * @return iterable<array{node: Node, kind: string}>
      */
     private function collectReferences(array $ast, array $target, string $source, string $uri): iterable
     {
+        // Alias rename is file-scoped: PHP's `use ... as <alias>` lives
+        // for the rest of the current file and nowhere else.  Skip every
+        // file except the one the cursor lives in.
+        if ($target['kind'] === 'alias') {
+            if ($uri !== (string) $target['scopeUri']) {
+                return;
+            }
+            $ast = self::cloneWithResolvedNames($ast);
+            $finder = new NodeFinder();
+            $aliasName = (string) $target['aliasName'];
+            foreach ($finder->find($ast, static fn (Node $n): bool => true) as $node) {
+                if ($node instanceof Node\UseItem
+                    && $node->alias instanceof Identifier
+                    && $node->alias->toString() === $aliasName
+                ) {
+                    yield ['node' => $node->alias, 'kind' => 'alias-decl'];
+                    continue;
+                }
+                if ($node instanceof Name
+                    && !$node->isFullyQualified()
+                    && $node->toString() === $aliasName
+                ) {
+                    yield ['node' => $node, 'kind' => 'alias-use'];
+                }
+            }
+            return;
+        }
+
         $ast = self::cloneWithResolvedNames($ast);
         $finder = new NodeFinder();
 
@@ -418,6 +506,32 @@ final class ReferenceFinder
                         : ltrim($node->name->toString(), '\\');
                     if ($candidate === $targetFqn) {
                         yield ['node' => $node->name, 'kind' => 'function'];
+                    }
+                    continue;
+                }
+                // `use function App\foo;` and `use function App\{foo};`
+                // import statements -- the imported Name is a function
+                // reference too, otherwise rename leaves the alias stale.
+                if ($node instanceof Node\Stmt\Use_
+                    && $node->type === Node\Stmt\Use_::TYPE_FUNCTION
+                ) {
+                    foreach ($node->uses as $useUse) {
+                        $candidate = ltrim($useUse->name->toString(), '\\');
+                        if ($candidate === $targetFqn) {
+                            yield ['node' => $useUse->name, 'kind' => 'function-use'];
+                        }
+                    }
+                    continue;
+                }
+                if ($node instanceof Node\Stmt\GroupUse
+                    && $node->type === Node\Stmt\Use_::TYPE_FUNCTION
+                ) {
+                    $prefix = $node->prefix->toString();
+                    foreach ($node->uses as $useUse) {
+                        $candidate = ltrim($prefix . '\\' . $useUse->name->toString(), '\\');
+                        if ($candidate === $targetFqn) {
+                            yield ['node' => $useUse->name, 'kind' => 'function-use'];
+                        }
                     }
                     continue;
                 }
@@ -615,6 +729,12 @@ final class ReferenceFinder
                         || $node instanceof NullsafePropertyFetch
                         || $node instanceof StaticPropertyFetch
                     ) && $node->name === $this->needle) {
+                    $this->parent = $node;
+                    return null;
+                }
+                if ($node instanceof Node\UseItem
+                    && $node->alias === $this->needle
+                ) {
                     $this->parent = $node;
                     return null;
                 }
