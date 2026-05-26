@@ -99,6 +99,7 @@ final class XphpSemanticTokensHandler implements Handler, CanRegisterCapabilitie
         $visitor = new AstVisitor(
             new PositionMap($item->text),
             $result->byteOffsetMap,
+            $item->text,
         );
         $specs = $visitor->visit($result->ast);
         $packed = Encoder::encode($specs);

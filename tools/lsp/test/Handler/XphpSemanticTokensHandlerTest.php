@@ -58,11 +58,14 @@ final class XphpSemanticTokensHandlerTest extends TestCase
         self::assertSame([], $result->data);
     }
 
-    public function testKnownDocumentReturnsEmptyTokensInSliceOne(): void
+    public function testKnownDocumentReturnsNonEmptyTokenStream(): void
     {
-        // Slice 1: pipeline runs end-to-end but visitor emits nothing yet.
-        // Locks the protocol shape (SemanticTokens object with `data` array)
-        // before slice 2 starts emitting real classifications.
+        // Slice 2: visitor classifies keywords, vars, comments,
+        // class names, etc.  The protocol shape (SemanticTokens
+        // object wrapping a packed integer array) is the same as
+        // slice 1; we just have non-empty data now.  Detailed
+        // classification assertions live in AstVisitorTest -- here
+        // we only care that the handler delivers SOMETHING.
         $workspace = new PhpactorWorkspace();
         $workspace->open(new TextDocumentItem('/box.xphp', 'xphp', 1, <<<'XPHP'
         <?php
@@ -79,7 +82,10 @@ final class XphpSemanticTokensHandlerTest extends TestCase
         ]));
 
         self::assertInstanceOf(SemanticTokens::class, $result);
-        self::assertSame([], $result->data);
+        self::assertNotEmpty($result->data);
+        // Sanity: packed array length must be a multiple of 5 (5 ints
+        // per token by LSP spec).
+        self::assertSame(0, count($result->data) % 5);
     }
 
     public function testMalformedParamsReturnsEmptyTokens(): void
