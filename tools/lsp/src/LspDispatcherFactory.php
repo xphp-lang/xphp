@@ -196,6 +196,11 @@ final class LspDispatcherFactory implements DispatcherFactory
                 ['**/*.xphp', '**/*.php'],
                 $initializeParams->capabilities,
             ),
+            // Fix I: warm the FQN index off the `Initialized` event so
+            // the first user-facing hover/definition/completion doesn't
+            // pay the ~500ms filesystem-walk cost in-band.  Async via
+            // Amp\asyncCall -- doesn't block the initialize handshake.
+            new \XPHP\Lsp\Reflection\FqnIndexWarmer($fqnIndex),
             $diagnosticsService,
         );
 
