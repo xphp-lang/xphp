@@ -7,7 +7,9 @@ namespace XPHP\Lsp\Handler;
 use Amp\Promise;
 use Amp\Success;
 use Phpactor\LanguageServer\Core\Handler\Handler;
+use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\DidChangeWatchedFilesParams;
+use Phpactor\LanguageServerProtocol\FileChangeType;
 use XPHP\Lsp\Reflection\FqnIndex;
 
 /**
@@ -26,16 +28,35 @@ use XPHP\Lsp\Reflection\FqnIndex;
  * `dynamicRegistration: true`).  The actual notification routing into
  * this handler is wired by the dispatcher's handler map.
  *
- * Strategy: bulk-invalidate.  Surgical per-file updates would save the
- * ~100ms rebuild cost on the next query, but they double the code path
- * (parse + merge vs. just re-walking) and the rebuild is already fast
- * enough that the next FqnIndex query (typically one keystroke later)
- * isn't perceived as a stall.
+ * Strategy: invalidate ONLY for changes the open-doc layer can't see.
+ *
+ * When a `Changed` notification arrives for a file that's currently open
+ * in the workspace, the open-doc layer has ALREADY been refreshed via
+ * the preceding `textDocument/didChange` + `didSave` notifications.  The
+ * FqnIndex consults open docs before the filesystem cache, so the
+ * filesystem entry for that file is stale-but-unread -- invalidating it
+ * forces a several-hundred-millisecond rebuild that no subsequent query
+ * needed.
+ *
+ * Prod-log evidence (the case that motivated this narrowing):
+ * `didChange` at 00:25:56.502, then `didChangeWatchedFiles` 0.3s later
+ * at 00:25:56.780.  Pre-fix: invalidated the whole index -> 1.4s
+ * rebuild on the next hover.  Post-fix: ignored (the file is open;
+ * open-doc cache already serves the new text); the next hover hits a
+ * still-warm index.
+ *
+ * External changes (`Created`, `Deleted`, or `Changed` to a file the
+ * user hasn't opened) still trigger a bulk invalidation -- those are
+ * the cases the watcher exists for.  Per-file surgical updates would
+ * save the ~100ms rebuild on the next query but would require a
+ * reverse FQN->path index that FqnIndex doesn't currently track; the
+ * bulk re-walk is a fine fallback for the rare external-edit case.
  */
 final class XphpFileWatcherHandler implements Handler
 {
     public function __construct(
         private readonly FqnIndex $fqnIndex,
+        private readonly PhpactorWorkspace $workspace,
     ) {
     }
 
@@ -51,14 +72,31 @@ final class XphpFileWatcherHandler implements Handler
      */
     public function didChangeWatchedFiles(DidChangeWatchedFilesParams $params): Promise
     {
-        $count = count($params->changes);
-        if ($count > 0) {
+        $external = 0;
+        $skippedOpen = 0;
+        foreach ($params->changes as $change) {
+            if ($change->type === FileChangeType::CHANGED && $this->workspace->has($change->uri)) {
+                // The open-doc lifecycle already refreshed this file.
+                $skippedOpen++;
+                continue;
+            }
+            $external++;
+        }
+
+        if ($external > 0) {
             @fwrite(STDERR, sprintf(
-                "[xphp-lsp watch] invalidating filesystem index (%d change%s)\n",
-                $count,
-                $count === 1 ? '' : 's',
+                "[xphp-lsp watch] invalidating filesystem index (%d external change%s, %d open-doc skipped)\n",
+                $external,
+                $external === 1 ? '' : 's',
+                $skippedOpen,
             ));
             $this->fqnIndex->invalidateFilesystem();
+        } elseif ($skippedOpen > 0) {
+            @fwrite(STDERR, sprintf(
+                "[xphp-lsp watch] skipped invalidation (%d open-doc change%s already covered)\n",
+                $skippedOpen,
+                $skippedOpen === 1 ? '' : 's',
+            ));
         }
         // LSP notifications don't have a response payload, but the
         // phpactor dispatcher still expects a Promise return -- resolve
