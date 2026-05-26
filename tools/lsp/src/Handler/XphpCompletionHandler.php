@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
@@ -89,9 +90,12 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
     /**
      * @return Promise<CompletionList>
      */
-    public function complete(CompletionParams $params): Promise
+    public function complete(CompletionParams $params, ?CancellationToken $cancel = null): Promise
     {
         $emptyList = new CompletionList(isIncomplete: false, items: []);
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success($emptyList);
+        }
         if (!$this->workspace->has($params->textDocument->uri)) {
             return new Success($emptyList);
         }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use PhpParser\Node\Stmt\ClassLike;
@@ -84,14 +85,23 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
     /**
      * @return Promise<Hover|null>
      */
-    public function hover(HoverParams $params): Promise
+    public function hover(HoverParams $params, ?CancellationToken $cancel = null): Promise
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success(null);
+        }
         if (!$this->workspace->has($params->textDocument->uri)) {
             return new Success(null);
         }
         $item = $this->workspace->get($params->textDocument->uri);
         $result = $this->cache->getOrParse($params->textDocument->uri, $item->version, $item->text);
         if ($result->ast === null) {
+            return new Success(null);
+        }
+        if ($cancel !== null && $cancel->isRequested()) {
+            // Parse completed but the user has moved on -- skip the
+            // (potentially expensive) PhpHoverResolver / FQN lookup
+            // path below.
             return new Success(null);
         }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Failure;
 use Amp\Promise;
 use Amp\Success;
@@ -55,8 +56,11 @@ final class XphpRenameHandler implements Handler, CanRegisterCapabilities
     /**
      * @return Promise<\Phpactor\LanguageServerProtocol\WorkspaceEdit|null>
      */
-    public function rename(RenameParams $params): Promise
+    public function rename(RenameParams $params, ?CancellationToken $cancel = null): Promise
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success(null);
+        }
         $uri = $params->textDocument->uri;
         if (!$this->workspace->has($uri)) {
             return new Success(null);

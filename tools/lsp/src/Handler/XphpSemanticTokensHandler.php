@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
@@ -89,8 +90,11 @@ final class XphpSemanticTokensHandler implements Handler, CanRegisterCapabilitie
      * @param  array<string, mixed> $textDocument the unwrapped LSP TextDocumentIdentifier
      * @return Promise<SemanticTokens>
      */
-    public function semanticTokensFull(array $textDocument): Promise
+    public function semanticTokensFull(array $textDocument, ?CancellationToken $cancel = null): Promise
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success(new SemanticTokens([]));
+        }
         $uri = self::extractUri($textDocument);
         if ($uri === null || !$this->workspace->has($uri)) {
             return new Success(new SemanticTokens([]));
@@ -98,6 +102,12 @@ final class XphpSemanticTokensHandler implements Handler, CanRegisterCapabilitie
         $item = $this->workspace->get($uri);
         $result = $this->cache->getOrParse($uri, $item->version, $item->text);
         if ($result->ast === null) {
+            return new Success(new SemanticTokens([]));
+        }
+        if ($cancel !== null && $cancel->isRequested()) {
+            // Parse completed but cancel arrived before the visitor
+            // could run -- bail before the (potentially expensive)
+            // tree walk.
             return new Success(new SemanticTokens([]));
         }
 

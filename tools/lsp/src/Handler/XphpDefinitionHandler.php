@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use PhpParser\Node;
@@ -74,8 +75,11 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
     /**
      * @return Promise<Location|null>
      */
-    public function definition(DefinitionParams $params): Promise
+    public function definition(DefinitionParams $params, ?CancellationToken $cancel = null): Promise
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success(null);
+        }
         if (!$this->workspace->has($params->textDocument->uri)) {
             return new Success(null);
         }
