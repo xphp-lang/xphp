@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
+use Amp\CancellationToken;
 use PhpParser\Node;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
@@ -52,7 +53,7 @@ final class PhpHoverResolver
     ) {
     }
 
-    public function resolve(string $uri, int $line, int $character): ?Hover
+    public function resolve(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Hover
     {
         // Top-level safety net -- see the matching pattern in
         // PhpDefinitionResolver::resolve().  An unexpected `Error` from
@@ -60,14 +61,17 @@ final class PhpHoverResolver
         // to stdout and kill the LSP transport.  Always return null
         // instead.
         try {
-            return $this->resolveInner($uri, $line, $character);
+            return $this->resolveInner($uri, $line, $character, $cancel);
         } catch (Throwable) {
             return null;
         }
     }
 
-    private function resolveInner(string $uri, int $line, int $character): ?Hover
+    private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Hover
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return null;
+        }
         if (!$this->workspace->has($uri)) {
             return null;
         }
@@ -76,9 +80,20 @@ final class PhpHoverResolver
         $stripped = $this->parser->strip($document->text);
         $source = TextDocumentBuilder::create($stripped)->uri($uri)->language('php')->build();
 
+        if ($cancel !== null && $cancel->isRequested()) {
+            return null;
+        }
+
         try {
             $reflectionOffset = $this->reflector->reflectOffset($source, ByteOffset::fromInt($offset));
         } catch (Throwable) {
+            return null;
+        }
+
+        if ($cancel !== null && $cancel->isRequested()) {
+            // worse-reflection's reflectOffset is one of the heavier
+            // ops in the chain; bail before render-* if the user
+            // moved on.
             return null;
         }
 
@@ -117,6 +132,9 @@ final class PhpHoverResolver
             if ($markdown !== null) {
                 return new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown));
             }
+        }
+        if ($cancel !== null && $cancel->isRequested()) {
+            return null;
         }
 
         // METHOD / PROPERTY / CONSTANT dispatch go through `containerOrNull`

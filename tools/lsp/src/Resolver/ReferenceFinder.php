@@ -120,8 +120,12 @@ final class ReferenceFinder
     /**
      * @return list<Location>
      */
-    public function findReferences(string $uri, int $byteOffset, bool $includeDeclaration): array
-    {
+    public function findReferences(
+        string $uri,
+        int $byteOffset,
+        bool $includeDeclaration,
+        ?\Amp\CancellationToken $cancel = null,
+    ): array {
         $target = $this->resolveTargetAt($uri, $byteOffset);
         if ($target === null) {
             return [];
@@ -132,6 +136,12 @@ final class ReferenceFinder
 
         // Open-doc pass: live state beats on-disk.
         foreach ($this->workspace as $docUri => $item) {
+            // Cancellation poll per file: the open-doc set is typically
+            // small (tens of files at most) so checking on every
+            // iteration is essentially free.
+            if ($cancel !== null && $cancel->isRequested()) {
+                return [];
+            }
             $seenUris[(string) $docUri] = true;
             $result = $this->cache->getOrParse((string) $docUri, $item->version, $item->text);
             $ast = $result->ast;
@@ -150,8 +160,15 @@ final class ReferenceFinder
         }
 
         // Filesystem pass: parse on demand, skipping any URI the workspace
-        // already covered (open-doc precedence).
+        // already covered (open-doc precedence).  This can be hundreds of
+        // files on big projects, so the cancellation poll is the
+        // load-bearing one for fix D -- if the user moves their cursor
+        // mid-find-references, the scan abandons rather than running to
+        // completion.
         foreach ($this->fqnIndex->indexedFilesystemPaths() as $path) {
+            if ($cancel !== null && $cancel->isRequested()) {
+                return [];
+            }
             $fsUri = 'file://' . $path;
             if (isset($seenUris[$fsUri])) {
                 continue;

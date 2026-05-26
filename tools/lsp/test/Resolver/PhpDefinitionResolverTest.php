@@ -408,6 +408,27 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertLessThanOrEqual(80, $location->range->end->character - $location->range->start->character);
     }
 
+    public function testReturnsNullWhenAlreadyCancelledAtEntry(): void
+    {
+        // Fix D: pre-cancelled token bails at the top of resolveInner,
+        // before worse-reflection's reflectOffset runs.
+        $workspace = new PhpactorWorkspace();
+        $userSource = "<?php\nnamespace App;\nclass User {}\n";
+        $workspace->open(new \Phpactor\LanguageServerProtocol\TextDocumentItem('/User.xphp', 'xphp', 1, $userSource));
+        $useSource = "<?php\nuse App\\User;\n\$u = new User();\n";
+        $workspace->open(new \Phpactor\LanguageServerProtocol\TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $byte = strpos($useSource, 'new User');
+        self::assertNotFalse($byte);
+        [$line, $character] = (new \XPHP\Lsp\PositionMap($useSource))->offsetToPosition($byte + 4);
+
+        $location = $this->resolver($workspace)->resolve('/Use.xphp', $line, $character, $cancel->getToken());
+        self::assertNull($location, 'cancelled token must produce no location even when symbol resolves');
+    }
+
     private function resolver(PhpactorWorkspace $workspace): PhpDefinitionResolver
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());

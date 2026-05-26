@@ -71,7 +71,7 @@ final class XphpRenameHandler implements Handler, CanRegisterCapabilities
             $params->position->character,
         );
         try {
-            $edit = $this->provider->rename($uri, $offset, $params->newName);
+            $edit = $this->provider->rename($uri, $offset, $params->newName, $cancel);
         } catch (InvalidRenameNameException $e) {
             return new Failure(new RuntimeException($e->getMessage(), ErrorCodes::InvalidParams));
         }

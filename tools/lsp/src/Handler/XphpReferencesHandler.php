@@ -62,6 +62,6 @@ final class XphpReferencesHandler implements Handler, CanRegisterCapabilities
             $params->position->character,
         );
         $includeDeclaration = $params->context->includeDeclaration ?? true;
-        return new Success($this->finder->findReferences($uri, $offset, $includeDeclaration));
+        return new Success($this->finder->findReferences($uri, $offset, $includeDeclaration, $cancel));
     }
 }

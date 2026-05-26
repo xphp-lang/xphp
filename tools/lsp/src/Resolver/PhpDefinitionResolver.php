@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
+use Amp\CancellationToken;
 use PhpParser\Node;
 use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\Assign;
@@ -69,7 +70,7 @@ final class PhpDefinitionResolver
     ) {
     }
 
-    public function resolve(string $uri, int $line, int $character): ?Location
+    public function resolve(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Location
     {
         // Belt-and-braces: the resolver calls into third-party
         // worse-reflection which has its own surprises on edge cases
@@ -79,14 +80,17 @@ final class PhpDefinitionResolver
         // as "no result" instead of a fatal that poisons the LSP
         // transport via stdout.
         try {
-            return $this->resolveInner($uri, $line, $character);
+            return $this->resolveInner($uri, $line, $character, $cancel);
         } catch (Throwable) {
             return null;
         }
     }
 
-    private function resolveInner(string $uri, int $line, int $character): ?Location
+    private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Location
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return null;
+        }
         $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
         if ($document === null) {
             return null;
@@ -102,6 +106,13 @@ final class PhpDefinitionResolver
         try {
             $reflectionOffset = $this->reflector->reflectOffset($sourceCode, ByteOffset::fromInt($offset));
         } catch (Throwable) {
+            return null;
+        }
+
+        if ($cancel !== null && $cancel->isRequested()) {
+            // worse-reflection's reflectOffset is one of the heavier
+            // ops in the chain; bail before locate-* if the user
+            // moved on.
             return null;
         }
 

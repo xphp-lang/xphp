@@ -67,8 +67,12 @@ final class RenameProvider
      *     PHP identifier.  The handler converts this to an LSP error
      *     response with a friendly message.
      */
-    public function rename(string $uri, int $byteOffset, string $newName): ?WorkspaceEdit
-    {
+    public function rename(
+        string $uri,
+        int $byteOffset,
+        string $newName,
+        ?\Amp\CancellationToken $cancel = null,
+    ): ?WorkspaceEdit {
         if (!self::isValidIdentifier($newName)) {
             throw new InvalidRenameNameException(sprintf(
                 '"%s" is not a valid PHP identifier; rename aborted.',
@@ -81,7 +85,7 @@ final class RenameProvider
             return null;
         }
 
-        $locations = $this->finder->findReferences($uri, $byteOffset, true);
+        $locations = $this->finder->findReferences($uri, $byteOffset, true, $cancel);
         if ($locations === []) {
             return null;
         }

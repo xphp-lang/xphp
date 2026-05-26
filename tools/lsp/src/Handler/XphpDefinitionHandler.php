@@ -166,6 +166,7 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
                 $params->textDocument->uri,
                 $params->position->line,
                 $params->position->character,
+                $cancel,
             ));
         }
 

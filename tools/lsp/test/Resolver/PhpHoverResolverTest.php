@@ -723,6 +723,26 @@ final class PhpHoverResolverTest extends TestCase
         self::assertNull($resolver->resolve('/never-opened.xphp', 0, 0));
     }
 
+    public function testReturnsNullWhenAlreadyCancelledAtEntry(): void
+    {
+        // Fix D: pre-cancelled token bails at the top of resolveInner,
+        // before any worse-reflection work.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App;\nclass User {}\n");
+        $useSource = "<?php\nuse App\\User;\n\$u = new User();\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $byte = strpos($useSource, 'new User');
+        self::assertNotFalse($byte);
+        [$line, $character] = (new PositionMap($useSource))->offsetToPosition($byte + 4);
+
+        $hover = $this->resolver($workspace)->resolve('/Use.xphp', $line, $character, $cancel->getToken());
+        self::assertNull($hover, 'cancelled token must produce no hover even when symbol resolves');
+    }
+
     public function testPropertyHoverOnSubstitutedReceiverFromStaticCall(): void
     {
         // This test originally asserted null because pre-Phase-1.2 the

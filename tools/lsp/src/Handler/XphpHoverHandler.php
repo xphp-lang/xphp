@@ -128,6 +128,7 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
                 $params->textDocument->uri,
                 $params->position->line,
                 $params->position->character,
+                $cancel,
             );
             if ($hover !== null) {
                 return new Success($hover);
