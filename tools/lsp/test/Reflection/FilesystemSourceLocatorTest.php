@@ -192,6 +192,43 @@ final class FilesystemSourceLocatorTest extends TestCase
         self::assertStringContainsString('class Added', (string) $document);
     }
 
+    public function testTypeParamFqnShortCircuitsBeforePathLookup(): void
+    {
+        // Fix L: `T` referenced inside `namespace App\Containers`
+        // name-resolves to `App\Containers\T`.  We must throw
+        // SourceNotFound (so worse-reflection's chain falls through to
+        // the next locator) but WITHOUT consulting pathFor and WITHOUT
+        // logging the noisy "[xphp-lsp locator] miss" line.
+        file_put_contents(
+            $this->root . '/Box.xphp',
+            "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n",
+        );
+        $locator = $this->newLocator();
+
+        $this->expectException(SourceNotFound::class);
+        $this->expectExceptionMessageMatches('/type-param reference/');
+        $locator->locate(Name::fromString('App\\Containers\\T'));
+    }
+
+    public function testRealClassMissStillHitsTheNormalMissPath(): void
+    {
+        // The short-circuit must NOT swallow legitimate unknown FQNs
+        // -- a name with no generic-param declaration anywhere should
+        // still throw with the workspace-walked miss message.
+        file_put_contents(
+            $this->root . '/Box.xphp',
+            "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n",
+        );
+        $locator = $this->newLocator();
+
+        try {
+            $locator->locate(Name::fromString('App\\Containers\\Unknown'));
+            self::fail('expected SourceNotFound');
+        } catch (SourceNotFound $e) {
+            self::assertStringContainsString('No file under', $e->getMessage());
+        }
+    }
+
     public function testReturnsEmptyMapWhenRootMissing(): void
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());

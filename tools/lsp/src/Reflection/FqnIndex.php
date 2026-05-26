@@ -132,6 +132,18 @@ final class FqnIndex
      */
     private int $filesystemVersion = 0;
 
+    /**
+     * Lazy-built set of `<ns>\<paramName>` strings -- every type-param
+     * name namespace-prefixed by the FQN of its enclosing ClassLike's
+     * namespace.  Lookup-only: callers ask "is this resolved-FQN
+     * actually a type-param reference?" and skip the
+     * not-a-class-but-locator-tries-anyway path.  See
+     * {@see isTypeParamFqn} for the consumer.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $typeParamFqns = null;
+
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
@@ -339,6 +351,7 @@ final class FqnIndex
         $this->filesystemGenericBounds = null;
         $this->filesystemSymbols = null;
         $this->filesystemWalkedPaths = null;
+        $this->typeParamFqns = null;
         $this->filesystemVersion++;
     }
 
@@ -351,6 +364,75 @@ final class FqnIndex
     public function filesystemVersion(): int
     {
         return $this->filesystemVersion;
+    }
+
+    /**
+     * Is `$fqn` a namespace-resolved type-parameter reference rather
+     * than a real class FQN?
+     *
+     * When source code inside `namespace App\Containers` references a
+     * type-param `T`, nikic's name resolver attaches
+     * `App\Containers\T` as the namespacedName.  Worse-reflection then
+     * asks our `SourceCodeLocator` chain "where is `App\Containers\T`?",
+     * which misses (because `T` is a type-param, not a class) and
+     * wastes a workspace walk per lookup.
+     *
+     * This check answers cheaply: "is the LAST segment of $fqn a
+     * type-param of any generic class declared in the SAME namespace?"
+     * If yes, the locator can short-circuit immediately -- no log,
+     * no walk, still throws SourceNotFound to keep worse-reflection's
+     * chain falling through.
+     *
+     * Lookup is O(1) once the lazy set is built;
+     * {@see typeParamFqns} populates it from
+     * {@see iterGenericClasses} on first call.
+     */
+    public function isTypeParamFqn(string $fqn): bool
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return false;
+        }
+        return isset($this->typeParamFqns()[$needle]);
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function typeParamFqns(): array
+    {
+        if ($this->typeParamFqns !== null) {
+            return $this->typeParamFqns;
+        }
+        $set = [];
+        foreach ($this->iterGenericClasses() as $classFqn => $paramNames) {
+            $namespace = self::namespaceOf($classFqn);
+            foreach ($paramNames as $paramName) {
+                $key = $namespace === '' ? $paramName : $namespace . '\\' . $paramName;
+                $set[$key] = true;
+            }
+        }
+        // Function- and method-scope generics share the problem: a `T`
+        // inside `function App\Demos\identity<T>(...)` becomes
+        // `App\Demos\T` after name resolution, and inside
+        // `class App\Containers\Util { function id<T>(...) }` the
+        // synthetic key splits at the last `\` so namespace =
+        // `App\Containers`, which matches what name resolution emits
+        // for a bare `T` inside that method body.
+        foreach ($this->iterGenericFunctionsAndMethods() as $scopeFqn => $paramNames) {
+            $namespace = self::namespaceOf($scopeFqn);
+            foreach ($paramNames as $paramName) {
+                $key = $namespace === '' ? $paramName : $namespace . '\\' . $paramName;
+                $set[$key] = true;
+            }
+        }
+        return $this->typeParamFqns = $set;
+    }
+
+    private static function namespaceOf(string $fqn): string
+    {
+        $pos = strrpos($fqn, '\\');
+        return $pos === false ? '' : substr($fqn, 0, $pos);
     }
 
     /**

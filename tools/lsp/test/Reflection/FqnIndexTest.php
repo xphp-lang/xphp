@@ -351,6 +351,102 @@ final class FqnIndexTest extends TestCase
         self::assertContains('App\\Ok', $index->allClassFqns());
     }
 
+    public function testIsTypeParamFqnRecognisesClassGenericInItsOwnNamespace(): void
+    {
+        // Fix L: `T` referenced inside `namespace App\Containers`
+        // name-resolves to `App\Containers\T`.  That's NOT a class --
+        // it's the type-param of the enclosing `class Box<T>`.  The
+        // locator uses this check to short-circuit the workspace walk
+        // (and the stderr miss log) for that case.
+        $this->writeFile('Box.xphp', "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\T'));
+        self::assertTrue($index->isTypeParamFqn('\\App\\Containers\\T'), 'leading backslash tolerated');
+    }
+
+    public function testIsTypeParamFqnFalseForRealClasses(): void
+    {
+        // A real class FQN (even one with a single-letter name) must
+        // not be mistaken for a type-param reference.
+        $this->writeFile('Box.xphp', "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n");
+        $this->writeFile('Real.xphp', "<?php\nnamespace App\\Containers;\nclass User {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertFalse($index->isTypeParamFqn('App\\Containers\\User'));
+        self::assertFalse($index->isTypeParamFqn('App\\Containers\\Unknown'));
+    }
+
+    public function testIsTypeParamFqnFalseForBareEmptyFqn(): void
+    {
+        $index = $this->index(new PhpactorWorkspace());
+        self::assertFalse($index->isTypeParamFqn(''));
+        self::assertFalse($index->isTypeParamFqn('\\'));
+    }
+
+    public function testIsTypeParamFqnScopedByNamespace(): void
+    {
+        // `Box<T>` lives in `App\Containers`.  A bare `T` reference
+        // resolved under a DIFFERENT namespace (say, `App\Models\T`)
+        // must NOT match this set -- the type-param is namespace-
+        // scoped, and we don't want to suppress legitimate misses
+        // from elsewhere in the workspace.
+        $this->writeFile('Box.xphp', "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\T'));
+        self::assertFalse($index->isTypeParamFqn('App\\Models\\T'));
+        self::assertFalse($index->isTypeParamFqn('T'));
+    }
+
+    public function testIsTypeParamFqnIncludesFunctionScopeGenerics(): void
+    {
+        // Free-function generics share the same problem: `T` inside
+        // `function App\Demos\identity<T>(...)` becomes `App\Demos\T`
+        // after name resolution.
+        $this->writeFile(
+            'identity.xphp',
+            "<?php\nnamespace App\\Demos;\nfunction identity<T>(T \$x): T { return \$x; }\n",
+        );
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertTrue($index->isTypeParamFqn('App\\Demos\\T'));
+    }
+
+    public function testIsTypeParamFqnIncludesMethodScopeGenerics(): void
+    {
+        // Method generics: `T` inside `class App\Containers\Util { function id<T> ... }`
+        // becomes `App\Containers\T` after name resolution, exactly
+        // like a class-scope generic in the same namespace would.
+        $this->writeFile(
+            'Util.xphp',
+            "<?php\nnamespace App\\Containers;\nclass Util { public function id<T>(T \$x): T { return \$x; } }\n",
+        );
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\T'));
+    }
+
+    public function testIsTypeParamFqnRebuildsAfterInvalidation(): void
+    {
+        // After `invalidateFilesystem`, the lazy set is cleared and
+        // rebuilt against the fresh filesystem state.  We add a new
+        // generic class with a NEW param name; before invalidation
+        // it's invisible, after invalidation it's recognised.
+        $this->writeFile('Box.xphp', "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n");
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\T'));
+        self::assertFalse($index->isTypeParamFqn('App\\Containers\\K'));
+
+        $this->writeFile('Pair.xphp', "<?php\nnamespace App\\Containers;\nclass Pair<K, V> {}\n");
+        $index->invalidateFilesystem();
+
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\K'));
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\V'));
+        self::assertTrue($index->isTypeParamFqn('App\\Containers\\T'));
+    }
+
     private function index(PhpactorWorkspace $workspace): FqnIndex
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());

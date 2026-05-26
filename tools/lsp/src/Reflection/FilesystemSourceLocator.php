@@ -82,6 +82,21 @@ final class FilesystemSourceLocator implements SourceCodeLocator
             return $this->hitCache[$needle];
         }
 
+        // Fix L: short-circuit when the FQN is a namespace-resolved
+        // type-param.  nikic's name resolver attaches the enclosing
+        // namespace to every bare identifier, so a hover on `T` inside
+        // `namespace App\Containers` becomes `App\Containers\T`.  That
+        // never resolves to a class, but pre-fix-L we'd still consult
+        // pathFor, log a miss, throw -- repeated dozens of times per
+        // request when worse-reflection's chain re-asks.  Now we
+        // recognise the type-param shape and bail silently.
+        if ($this->index->isTypeParamFqn($needle)) {
+            throw new SourceNotFound(sprintf(
+                '"%s" is a type-param reference, not a class FQN',
+                $needle,
+            ));
+        }
+
         $path = $this->index->pathFor($needle);
 
         if ($path === null) {
