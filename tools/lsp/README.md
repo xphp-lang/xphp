@@ -128,12 +128,15 @@ Capabilities advertised at `initialize`:
 - `workspaceSymbolProvider`
 - `renameProvider`
 - `completionProvider` with `triggerCharacters: ["<", ",", ">", ":"]`
+- `semanticTokensProvider` (full file; standard LSP-spec token-type
+  legend including `typeParameter` for xphp `T` references in
+  generic-syntax positions)
 
 ## Test
 
 ```bash
 # From the repo root:
-make -C tools/lsp test            # PHPUnit, 424 cases / 1244 assertions
+make -C tools/lsp test            # PHPUnit, 475 cases / 1318 assertions
 make -C tools/lsp test/mutation   # Infection, MSI under a 93 % gate
 
 # Or from this directory:

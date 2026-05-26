@@ -42,6 +42,7 @@ timeline
                 : LSP -- workspace/didChangeWatchedFiles (long sessions stay fresh on external edits)
                 : LSP -- UTF-16 column counting (correct positions past emoji / supplementary-plane chars)
                 : LSP -- short-name tie-break (canonical src/ wins over tests / fixtures / vendor)
+                : LSP -- semantic tokens (`textDocument/semanticTokens/full`; AST-driven, type-param `T` paints with the standard `typeParameter` color across PhpStorm + VS Code)
                 : VS Code extension client at tools/vscode-extension/
                 : PhpStorm plugin at tools/phpstorm-plugin/ (Kotlin + Gradle, IntelliJ Platform LSP API)
                 : --lint headless CLI for CI (file,line,col error output)
@@ -88,7 +89,6 @@ timeline
                 : Code actions / quick fixes (add use, implement Stringable, widen bound, ...)
                 : Code lens (N references and Run inline)
                 : Auto-import on completion (accept Tag, auto-add use App\Models\Tag)
-                : Semantic tokens (richer-than-TextMate classifications)
         LSP capabilities -- xphp-unique
                 : Show generated PHP at any specialization site (lowering preview)
                 : Specialization explorer (every concrete Box<X> for a generic class)

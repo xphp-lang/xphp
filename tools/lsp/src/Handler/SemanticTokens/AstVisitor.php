@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace XPHP\Lsp\Handler\SemanticTokens;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\ClassConstFetch;
+use PhpParser\Node\Expr\Instanceof_;
+use PhpParser\Node\Expr\New_;
+use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
+use PhpParser\Node\Name;
 use PhpParser\Node\Param;
 use PhpParser\Node\PropertyItem;
 use PhpParser\Node\Stmt\ClassLike;
@@ -98,32 +103,149 @@ final class AstVisitor
         // Non-strict tokenization (flags=0).  TOKEN_PARSE turns
         // PhpToken into a strict-mode tokenizer that throws ParseError
         // on the `<T>` we use for generics.  In non-strict mode the
-        // `<` and `T` just come back as their literal tokens; we
-        // ignore unclassified single-char tokens anyway.
+        // `<` and `T` just come back as their literal tokens.
         $tokens = @PhpToken::tokenize($this->source);
-        foreach ($tokens as $token) {
-            if (!is_int($token->id)) {
-                continue;
-            }
-            $type = self::$tokenTypeMap[$token->id] ?? null;
-            if ($type === null) {
-                continue;
-            }
-            $offset = $token->pos;
-            $length = strlen($token->text);
-            $this->emit($out, $offset, $length, $type);
+        if ($tokens === false) {
+            return;
         }
+
+        // Slice 3: state machine tracks whether we're inside a
+        // `<...>` generic clause.  `<` opens a clause if (a) the
+        // previous non-trivial token was an identifier (T_STRING),
+        // and (b) the next non-trivial token is an uppercase-starting
+        // identifier or backslash (FQN start).  This rejects
+        // `$size < count($items)` (LHS is T_VARIABLE, not T_STRING)
+        // and `Foo::BAR < 5` (RHS is a number, not uppercase ident).
+        // Inside a clause: T_STRING tokens emit as `typeParameter`,
+        // backslashes as part of FQNs (left unclassified -- the
+        // surrounding T_STRING segments paint).  Depth-counted so
+        // nested `Box<Lst<T>>` still classifies T.
+        $genericDepth = 0;
+        $lastSignificantTokenId = null;
+
+        $tokenCount = count($tokens);
+        for ($i = 0; $i < $tokenCount; $i++) {
+            $token = $tokens[$i];
+
+            // PhpToken's `$id` is always int: for T_* tokens it's the
+            // T_* constant; for single-char tokens (`<`, `>`, `,`, ...)
+            // it's the literal byte value.  Distinguish via the range.
+            $isNamedToken = $token->id >= 256;
+
+            // Treat whitespace + comments as "trivial" for state purposes
+            // (they don't update lastSignificantTokenId and they don't
+            // exit a clause).  Their own classification still happens
+            // below.
+            $isTrivial = $isNamedToken
+                && in_array($token->id, [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true);
+
+            // Open / close angle-clause state on single-char tokens.
+            if (!$isNamedToken && $token->text === '<') {
+                if ($genericDepth > 0) {
+                    $genericDepth++;
+                } elseif ($lastSignificantTokenId === T_STRING
+                    && self::peekIsUppercaseIdent($tokens, $i + 1)
+                ) {
+                    $genericDepth = 1;
+                }
+            } elseif (!$isNamedToken && $token->text === '>' && $genericDepth > 0) {
+                $genericDepth--;
+            }
+
+            // Classify the token.
+            if ($isNamedToken) {
+                $type = self::$tokenTypeMap[$token->id] ?? null;
+                if ($type === null && $genericDepth > 0 && self::isIdentInGenericClause($token->id)) {
+                    // Inside a generic clause an identifier is a type
+                    // name -- emit as `typeParameter` for the LSP-spec
+                    // standard classification.  Covers bare T_STRING
+                    // (`T`) and qualified-name tokens
+                    // (T_NAME_FULLY_QUALIFIED `\Stringable`,
+                    // T_NAME_QUALIFIED `App\Foo`, T_NAME_RELATIVE
+                    // `namespace\Foo`).
+                    $type = 'typeParameter';
+                }
+                if ($type !== null) {
+                    $this->emit($out, $token->pos, strlen($token->text), $type);
+                }
+            }
+
+            if (!$isTrivial) {
+                $lastSignificantTokenId = $isNamedToken ? $token->id : null;
+            }
+        }
+    }
+
+    /**
+     * Token ids that count as "an identifier" inside a generic clause.
+     * Covers PHP 8.0+ qualified-name tokens too -- `\Stringable` comes
+     * back as one T_NAME_FULLY_QUALIFIED, not `\` + T_STRING.
+     */
+    private static function isIdentInGenericClause(int $tokenId): bool
+    {
+        return $tokenId === T_STRING
+            || $tokenId === T_NAME_QUALIFIED
+            || $tokenId === T_NAME_FULLY_QUALIFIED
+            || $tokenId === T_NAME_RELATIVE;
+    }
+
+    /**
+     * Peek forward in the token stream skipping whitespace + comments.
+     * Returns true if the next significant token is a T_STRING starting
+     * with an uppercase letter / underscore / backslash (FQN start) --
+     * the "this `<` opens a generic clause" heuristic.
+     *
+     * @param array<int, \PhpToken> $tokens
+     */
+    private static function peekIsUppercaseIdent(array $tokens, int $startIdx): bool
+    {
+        $count = count($tokens);
+        for ($i = $startIdx; $i < $count; $i++) {
+            $t = $tokens[$i];
+            $isNamed = $t->id >= 256;
+            if ($isNamed && in_array($t->id, [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+            if ($isNamed && $t->id === T_STRING) {
+                $first = $t->text[0] ?? '';
+                return ($first >= 'A' && $first <= 'Z') || $first === '_';
+            }
+            if (!$isNamed && $t->text === '\\') {
+                return true; // FQN like `<\App\User>`
+            }
+            return false;
+        }
+        return false;
     }
 
     /**
      * Pass 2: walk the AST and emit specs for identifier kinds that
      * the token scan can't classify on its own.
      *
+     * Maintains a stack of in-scope type-param names (from
+     * {@see \XPHP\Transpiler\Monomorphize\XphpSourceParser::ATTR_GENERIC_PARAMS}
+     * on the enclosing ClassLike) so reified-T references inside
+     * generic class bodies (`new T()`, `T::class`, `instanceof T`,
+     * `T::method()`) re-classify as `typeParameter`.  The token-scan
+     * pass can't make this distinction -- it sees `new T()` the same
+     * way it sees `new User()` -- so the AST walk is the only place
+     * with the scope information.
+     *
      * @param list<TokenSpec> &$out
      */
     private function newAstWalker(array &$out): NodeVisitorAbstract
     {
         $visitor = new class($out, $this) extends NodeVisitorAbstract {
+            /**
+             * Stack of in-scope type-param name sets.  Each frame is the
+             * set of names declared on an enclosing ClassLike via
+             * ATTR_GENERIC_PARAMS.  Frames are pushed in enterNode and
+             * popped in leaveNode.
+             *
+             * @var list<array<string, true>>
+             */
+            private array $typeParamStack = [];
+
             /**
              * @param list<TokenSpec> $out
              */
@@ -135,12 +257,29 @@ final class AstVisitor
 
             public function enterNode(Node $node)
             {
-                if ($node instanceof ClassLike && $node->name !== null) {
-                    $this->emitter->emitAstIdentifier(
-                        $this->out,
-                        $node->name,
-                        self::classLikeType($node),
-                    );
+                if ($node instanceof ClassLike) {
+                    $params = $node->getAttribute(\XPHP\Transpiler\Monomorphize\XphpSourceParser::ATTR_GENERIC_PARAMS);
+                    if (is_array($params) && $params !== []) {
+                        $frame = [];
+                        foreach ($params as $param) {
+                            if ($param instanceof \XPHP\Transpiler\Monomorphize\TypeParam) {
+                                $frame[$param->name] = true;
+                            }
+                        }
+                        $this->typeParamStack[] = $frame;
+                    } else {
+                        // Push an empty frame anyway so leaveNode's pop
+                        // pairs symmetrically.  Empty frame doesn't add
+                        // type-param names but maintains stack depth.
+                        $this->typeParamStack[] = [];
+                    }
+                    if ($node->name !== null) {
+                        $this->emitter->emitAstIdentifier(
+                            $this->out,
+                            $node->name,
+                            self::classLikeType($node),
+                        );
+                    }
                     return null;
                 }
                 if ($node instanceof ClassMethod) {
@@ -149,6 +288,29 @@ final class AstVisitor
                 }
                 if ($node instanceof Function_) {
                     $this->emitter->emitAstIdentifier($this->out, $node->name, 'function');
+                    return null;
+                }
+                if ($node instanceof Name) {
+                    // Reified-T detection: single-segment Name whose text
+                    // matches an in-scope type-param.  Covers `new T()`,
+                    // `instanceof T`, the class part of `T::method()` /
+                    // `T::class`, and any other use of T as a class-name
+                    // slot inside a generic body.
+                    if (!$node->isFullyQualified() && count($node->getParts()) === 1) {
+                        $name = $node->getParts()[0];
+                        if ($this->isInScopeTypeParam($name)) {
+                            $start = $node->getStartFilePos();
+                            $end = $node->getEndFilePos();
+                            if ($start >= 0 && $end >= $start) {
+                                $this->emitter->emitAstSpan(
+                                    $this->out,
+                                    $start,
+                                    $end - $start + 1,
+                                    'typeParameter',
+                                );
+                            }
+                        }
+                    }
                     return null;
                 }
                 if ($node instanceof PropertyItem) {
@@ -183,6 +345,24 @@ final class AstVisitor
                     return null;
                 }
                 return null;
+            }
+
+            public function leaveNode(Node $node)
+            {
+                if ($node instanceof ClassLike && $this->typeParamStack !== []) {
+                    array_pop($this->typeParamStack);
+                }
+                return null;
+            }
+
+            private function isInScopeTypeParam(string $name): bool
+            {
+                foreach ($this->typeParamStack as $frame) {
+                    if (isset($frame[$name])) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             private static function classLikeType(ClassLike $node): string

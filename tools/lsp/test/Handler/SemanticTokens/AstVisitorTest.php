@@ -196,6 +196,171 @@ final class AstVisitorTest extends TestCase
         $this->assertTokenSubstring($specs, $source, 'Box', 'class');
     }
 
+    // --- Slice 3: xphp generic-syntax classifications --------------------
+
+    public function testClassDeclarationTypeParamPaintsAsTypeParameter(): void
+    {
+        // Form 1: class Box<T> -- T inside <...> is typeParameter.
+        $source = "<?php\nclass Box<T> {}";
+        $specs = $this->collect($source);
+        $this->assertTokenSubstring($specs, $source, 'T', 'typeParameter');
+    }
+
+    public function testBoundTypeParamPaintsAsTypeParameter(): void
+    {
+        // Form 2: class StringableBox<T: \Stringable> -- T is typeParameter;
+        // Stringable is a class reference inside the clause (also painted
+        // as typeParameter under our broad inside-clause rule for now).
+        // The FQN `\Stringable` comes back as a single T_NAME_FULLY_QUALIFIED
+        // token from PHP 8.0+'s tokenizer, so the emitted span includes
+        // the leading backslash.
+        $source = "<?php\nclass StringableBox<T: \\Stringable> {}";
+        $specs = $this->collect($source);
+        $this->assertTokenSubstring($specs, $source, 'T', 'typeParameter');
+        $this->assertTokenSubstring($specs, $source, '\Stringable', 'typeParameter');
+    }
+
+    public function testTypeArgClausePaintsInsideBoxOfPlastic(): void
+    {
+        // Form 6: new Box<Plastic>() -- `Plastic` inside <...> is typeParameter.
+        $source = "<?php\n\$b = new Box<Plastic>();";
+        $specs = $this->collect($source);
+        $this->assertTokenSubstring($specs, $source, 'Plastic', 'typeParameter');
+    }
+
+    public function testNestedTypeArgClause(): void
+    {
+        // Nested: Box<Lst<T>> -- both `Lst` and `T` are typeParameter.
+        $source = "<?php\n\$b = new Box<Lst<T>>();";
+        $specs = $this->collect($source);
+        $this->assertTokenSubstring($specs, $source, 'Lst', 'typeParameter');
+        $this->assertTokenSubstring($specs, $source, 'T', 'typeParameter');
+    }
+
+    public function testMultipleTypeArgsSeparatedByComma(): void
+    {
+        // Form 9: Pair<K, V> -- both K and V are typeParameter.
+        $source = "<?php\nclass Pair<K, V> {}";
+        $specs = $this->collect($source);
+        $this->assertTokenSubstring($specs, $source, 'K', 'typeParameter');
+        $this->assertTokenSubstring($specs, $source, 'V', 'typeParameter');
+    }
+
+    public function testLessThanComparisonIsNotMisclassified(): void
+    {
+        // Counter-example: $a < $b -- the `<` opens nothing because the
+        // previous token is T_VARIABLE, not T_STRING.
+        $source = "<?php\nif (\$a < \$b) { return 0; }";
+        $specs = $this->collect($source);
+        // No typeParameter spec anywhere.
+        $typeParamSpecs = array_filter($specs, fn (TokenSpec $s) => $s->type === 'typeParameter');
+        self::assertEmpty($typeParamSpecs, 'comparison `$a < $b` produced typeParameter spec');
+    }
+
+    public function testNumberComparisonIsNotMisclassified(): void
+    {
+        $source = "<?php\nif (\$x < 5) { return 0; }";
+        $specs = $this->collect($source);
+        $typeParamSpecs = array_filter($specs, fn (TokenSpec $s) => $s->type === 'typeParameter');
+        self::assertEmpty($typeParamSpecs);
+    }
+
+    public function testLowercaseFunctionCallComparisonIsNotMisclassified(): void
+    {
+        // The lookahead-uppercase heuristic rejects `count(` (lowercase
+        // first char) so `< count(` doesn't open a clause.
+        $source = "<?php\nif (\$size < count(\$items)) { return 0; }";
+        $specs = $this->collect($source);
+        $typeParamSpecs = array_filter($specs, fn (TokenSpec $s) => $s->type === 'typeParameter');
+        self::assertEmpty($typeParamSpecs);
+    }
+
+    public function testReifiedNewTPaintsAsTypeParameter(): void
+    {
+        // Form 10: `new T(...)` inside a class body whose template has T.
+        // The AST's ATTR_GENERIC_PARAMS on the enclosing ClassLike puts T
+        // in scope; the Name node 'T' inside `new T()` re-classifies.
+        $source = <<<'XPHP'
+        <?php
+        namespace App;
+        class Reified<T> {
+            public function make(): T { return new T(); }
+        }
+        XPHP;
+        $specs = $this->collect($source);
+
+        // Multiple `T` references in source.  Assert at least one
+        // typeParameter at `T` (the `new T()` position).
+        $tSpecs = array_filter(
+            $specs,
+            fn (TokenSpec $s) => self::substring($source, $s) === 'T' && $s->type === 'typeParameter',
+        );
+        self::assertNotEmpty($tSpecs, 'expected at least one typeParameter at `T` in reified body');
+    }
+
+    public function testReifiedTClassPaintsAsTypeParameter(): void
+    {
+        // Form 11: `T::class` inside a generic body.
+        $source = <<<'XPHP'
+        <?php
+        namespace App;
+        class Reified<T> {
+            public function name(): string { return T::class; }
+        }
+        XPHP;
+        $specs = $this->collect($source);
+
+        // The Name 'T' before ::class must be typeParameter.  There may
+        // be multiple T's (the return type, the T::class one); assert at
+        // least one.
+        $tSpecs = array_filter(
+            $specs,
+            fn (TokenSpec $s) => self::substring($source, $s) === 'T' && $s->type === 'typeParameter',
+        );
+        self::assertNotEmpty($tSpecs);
+    }
+
+    public function testInstanceofTPaintsAsTypeParameter(): void
+    {
+        // Form 12: `instanceof T`.
+        $source = <<<'XPHP'
+        <?php
+        namespace App;
+        class Reified<T> {
+            public function check(mixed $x): bool { return $x instanceof T; }
+        }
+        XPHP;
+        $specs = $this->collect($source);
+        $tSpecs = array_filter(
+            $specs,
+            fn (TokenSpec $s) => self::substring($source, $s) === 'T' && $s->type === 'typeParameter',
+        );
+        self::assertNotEmpty($tSpecs);
+    }
+
+    public function testReifiedTOutsideGenericBodyIsNotMisclassified(): void
+    {
+        // Counter-example: `new Foo()` in a non-generic class -- the
+        // single-letter heuristic by itself would match `Foo`, but the
+        // scope-stack-based detection requires Foo to be in
+        // ATTR_GENERIC_PARAMS of an enclosing class.  Plain ClassLike
+        // without ATTR_GENERIC_PARAMS doesn't push T into scope, so
+        // `new Foo()` stays unclassified by the reified-T path.
+        $source = <<<'XPHP'
+        <?php
+        namespace App;
+        class Plain {
+            public function go(): void { $x = new Foo(); }
+        }
+        XPHP;
+        $specs = $this->collect($source);
+        $fooSpecs = array_filter(
+            $specs,
+            fn (TokenSpec $s) => self::substring($source, $s) === 'Foo' && $s->type === 'typeParameter',
+        );
+        self::assertEmpty($fooSpecs, '`Foo` outside a generic body must not be classified as typeParameter');
+    }
+
     // --- helpers -----------------------------------------------------------
 
     /**
