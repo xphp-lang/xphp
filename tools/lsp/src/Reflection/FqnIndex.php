@@ -125,6 +125,13 @@ final class FqnIndex
      */
     private ?array $filesystemGenericBounds = null;
 
+    /**
+     * Monotonic version counter bumped each {@see invalidateFilesystem}.
+     * Downstream caches (notably the per-FQN TextDocument hit-cache in
+     * {@see FilesystemSourceLocator}) consult it to know when to flush.
+     */
+    private int $filesystemVersion = 0;
+
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
@@ -332,6 +339,18 @@ final class FqnIndex
         $this->filesystemGenericBounds = null;
         $this->filesystemSymbols = null;
         $this->filesystemWalkedPaths = null;
+        $this->filesystemVersion++;
+    }
+
+    /**
+     * Monotonically-increasing counter bumped on every
+     * {@see invalidateFilesystem} call.  Downstream caches (notably
+     * {@see FilesystemSourceLocator}'s per-FQN TextDocument cache) read
+     * this to know when to drop their own memoized state.
+     */
+    public function filesystemVersion(): int
+    {
+        return $this->filesystemVersion;
     }
 
     /**

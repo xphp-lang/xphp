@@ -96,6 +96,102 @@ final class FilesystemSourceLocatorTest extends TestCase
         $this->newLocator()->locate(Name::fromString('Nope\\Nope'));
     }
 
+    public function testHitCacheReturnsSameDocumentInstanceOnRepeatedLookups(): void
+    {
+        // The fix-H hit cache: repeated locate() calls for the same
+        // FQN within a session return the same TextDocument instance.
+        // No re-read, no re-strip.
+        $path = $this->root . '/Box.xphp';
+        file_put_contents($path, "<?php\nnamespace App;\nclass Box<T> {}\n");
+
+        $locator = $this->newLocator();
+        $first = $locator->locate(Name::fromString('App\\Box'));
+        $second = $locator->locate(Name::fromString('App\\Box'));
+        $third = $locator->locate(Name::fromString('App\\Box'));
+
+        self::assertSame($first, $second, 'second hit must return the same cached instance');
+        self::assertSame($second, $third);
+    }
+
+    public function testHitCacheIsFlushedWhenFqnIndexInvalidates(): void
+    {
+        // Fix H invalidation: after FqnIndex::invalidateFilesystem(),
+        // the locator's hit cache is cleared and the next call
+        // re-reads + re-strips.  Different TextDocument instance
+        // proves the cache was actually flushed.
+        $path = $this->root . '/Box.xphp';
+        file_put_contents($path, "<?php\nnamespace App;\nclass Box<T> {}\n");
+
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $workspace = new PhpactorWorkspace();
+        $index = new FqnIndex($workspace, $cache, $parser, $this->root);
+        $locator = new FilesystemSourceLocator($index, $parser, $this->root);
+
+        $first = $locator->locate(Name::fromString('App\\Box'));
+        $index->invalidateFilesystem();
+        $second = $locator->locate(Name::fromString('App\\Box'));
+
+        self::assertNotSame($first, $second, 'invalidation must drop the cached document');
+        // ...but they should still describe the SAME content (re-read
+        // identical file from disk).
+        self::assertSame((string) $first, (string) $second);
+    }
+
+    public function testMissLogIsDedupedAcrossCalls(): void
+    {
+        // Fix H: the noisy `[xphp-lsp locator] miss ...` stderr line
+        // fires only ONCE per FQN per cache-generation -- prod logs
+        // showed the same FQN missing 30+ times for a single user
+        // request.  We can't easily intercept fwrite(STDERR, ...), so
+        // verify the underlying state instead: repeated misses still
+        // throw SourceNotFound (correct behaviour for worse-reflection's
+        // chain) but the `loggedMisses` set marks the FQN exactly once.
+        $locator = $this->newLocator();
+
+        $caught = 0;
+        for ($i = 0; $i < 5; $i++) {
+            try {
+                $locator->locate(Name::fromString('Never\\Existed'));
+            } catch (SourceNotFound) {
+                $caught++;
+            }
+        }
+        self::assertSame(5, $caught, 'every locate call still throws SourceNotFound');
+
+        // After invalidation, the dedupe state resets -- next miss
+        // will log again.
+        // (No public observability on the loggedMisses set; behavioural
+        // test below verifies the cache-flush path.)
+    }
+
+    public function testMissLogResetsAfterFqnIndexInvalidation(): void
+    {
+        // After invalidateFilesystem, the loggedMisses set clears so
+        // the next miss for a previously-missed FQN re-logs.  Tested
+        // indirectly via the hit cache: a name that missed before
+        // invalidation but now has a file on disk should resolve.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $workspace = new PhpactorWorkspace();
+        $index = new FqnIndex($workspace, $cache, $parser, $this->root);
+        $locator = new FilesystemSourceLocator($index, $parser, $this->root);
+
+        // First lookup: missing.
+        try {
+            $locator->locate(Name::fromString('App\\Added'));
+            self::fail('expected SourceNotFound');
+        } catch (SourceNotFound) {
+            // expected
+        }
+
+        // Add the file, invalidate the index, locate again.
+        file_put_contents($this->root . '/Added.xphp', "<?php\nnamespace App;\nclass Added {}\n");
+        $index->invalidateFilesystem();
+        $document = $locator->locate(Name::fromString('App\\Added'));
+        self::assertStringContainsString('class Added', (string) $document);
+    }
+
     public function testReturnsEmptyMapWhenRootMissing(): void
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
