@@ -50,9 +50,8 @@ final class XphpSemanticTokensHandlerTest extends TestCase
     {
         $handler = $this->newHandler(new PhpactorWorkspace());
 
-        $result = wait($handler->semanticTokensFull([
-            'textDocument' => ['uri' => '/never-opened.xphp'],
-        ]));
+        // Framework-style positional call shape.
+        $result = wait($handler->semanticTokensFull(['uri' => '/never-opened.xphp']));
 
         self::assertInstanceOf(SemanticTokens::class, $result);
         self::assertSame([], $result->data);
@@ -77,15 +76,36 @@ final class XphpSemanticTokensHandlerTest extends TestCase
 
         $handler = $this->newHandler($workspace);
 
-        $result = wait($handler->semanticTokensFull([
-            'textDocument' => ['uri' => '/box.xphp'],
-        ]));
+        // Framework-style positional call: HandlerMethodRunner does
+        // `array_values($params)` and splats positionally, so the
+        // handler receives the UNWRAPPED textDocument map as its
+        // first argument.  This was the production bug fixed in the
+        // post-prod-test iteration.
+        $result = wait($handler->semanticTokensFull(['uri' => '/box.xphp']));
 
         self::assertInstanceOf(SemanticTokens::class, $result);
         self::assertNotEmpty($result->data);
         // Sanity: packed array length must be a multiple of 5 (5 ints
         // per token by LSP spec).
         self::assertSame(0, count($result->data) % 5);
+    }
+
+    public function testAcceptsWrappedParamsShapeForBackwardsCompatibility(): void
+    {
+        // Some callers (early tests, future shape-tolerant code paths)
+        // may pass the full LSP params `{textDocument: {uri: ...}}`
+        // map.  The handler's extractUri tolerates both shapes.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/box.xphp', 'xphp', 1, "<?php\nclass Foo {}"));
+
+        $handler = $this->newHandler($workspace);
+
+        $result = wait($handler->semanticTokensFull([
+            'textDocument' => ['uri' => '/box.xphp'],
+        ]));
+
+        self::assertInstanceOf(SemanticTokens::class, $result);
+        self::assertNotEmpty($result->data);
     }
 
     public function testMalformedParamsReturnsEmptyTokens(): void
@@ -100,11 +120,11 @@ final class XphpSemanticTokensHandlerTest extends TestCase
         self::assertSame([], $result->data);
     }
 
-    public function testTextDocumentAsObjectIsAlsoAccepted(): void
+    public function testTextDocumentAsWrappedObjectIsAlsoAccepted(): void
     {
-        // PassThroughArgumentResolver typically hands us an associative
-        // array, but a future caller may pass an object.  Tolerate both
-        // shapes (defensive read in `extractUri`).
+        // Defensive: if some path hands the handler a stdClass at the
+        // textDocument slot (instead of an array), extractUri tolerates
+        // it.
         $workspace = new PhpactorWorkspace();
         $workspace->open(new TextDocumentItem('/empty.xphp', 'xphp', 1, '<?php'));
 

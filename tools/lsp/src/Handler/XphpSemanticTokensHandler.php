@@ -72,21 +72,26 @@ final class XphpSemanticTokensHandler implements Handler, CanRegisterCapabilitie
     }
 
     /**
-     * Params shape: `{textDocument: {uri: string}}`.
+     * Params shape from the wire: `{textDocument: {uri: string}}`.
      *
      * Phpactor's `LanguageSeverProtocolParamsResolver` only auto-binds
      * classes named `Phpactor\LanguageServerProtocol\*Params`, and
-     * `SemanticTokensParams` isn't published in their library.  Typing
-     * the parameter as `array` makes the resolver chain fall through
-     * to `PassThroughArgumentResolver`, which hands us the raw params
-     * map.  We extract `textDocument.uri` defensively.
+     * `SemanticTokensParams` isn't published in their library.  The
+     * resolver chain falls through to `PassThroughArgumentResolver`,
+     * which returns `$request->params` to be passed to the handler --
+     * but `HandlerMethodRunner` does `array_values($args)` and
+     * `$handler->$method(...$args)` to splat them positionally.  So
+     * for params `{textDocument: {uri: ...}}` the handler receives
+     * the INNER `{uri: ...}` map as its first positional argument,
+     * not the wrapper.  We document that explicitly with the param
+     * name `$textDocument` and read `uri` from it directly.
      *
-     * @param  array<string, mixed> $params
+     * @param  array<string, mixed> $textDocument the unwrapped LSP TextDocumentIdentifier
      * @return Promise<SemanticTokens>
      */
-    public function semanticTokensFull(array $params): Promise
+    public function semanticTokensFull(array $textDocument): Promise
     {
-        $uri = self::extractUri($params);
+        $uri = self::extractUri($textDocument);
         if ($uri === null || !$this->workspace->has($uri)) {
             return new Success(new SemanticTokens([]));
         }
@@ -108,14 +113,19 @@ final class XphpSemanticTokensHandler implements Handler, CanRegisterCapabilitie
     }
 
     /**
-     * `textDocument` may be either an array (from PassThroughArgumentResolver
-     * giving us raw json_decode output) or a `TextDocumentIdentifier` instance
-     * (if some future caller hydrates it).  Tolerate both shapes.
+     * Read `uri` from the passed-in `TextDocumentIdentifier` map.
+     * Tolerates both the unwrapped shape `{uri: ...}` (the production
+     * path -- HandlerMethodRunner splats positional args) and the
+     * wrapped shape `{textDocument: {uri: ...}}` (some test paths
+     * that hand the handler the full params map directly).
      *
      * @param array<string, mixed> $params
      */
     private static function extractUri(array $params): ?string
     {
+        if (isset($params['uri']) && is_string($params['uri'])) {
+            return $params['uri'];
+        }
         $textDocument = $params['textDocument'] ?? null;
         if (is_array($textDocument)) {
             $uri = $textDocument['uri'] ?? null;
