@@ -52,6 +52,7 @@ use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Handler\XphpReferencesHandler;
 use XPHP\Lsp\Handler\XphpRenameHandler;
+use XPHP\Lsp\Handler\XphpSemanticTokensHandler;
 use XPHP\Lsp\Handler\XphpWorkspaceSymbolHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Reflection\FqnIndex;
@@ -249,6 +250,7 @@ final class LspDispatcherFactory implements DispatcherFactory
                     self::clientSupportsRenameFileOp($initializeParams),
                 ),
             ),
+            new XphpSemanticTokensHandler($workspace, $cache),
         );
 
         $runner = new HandlerMethodRunner(
