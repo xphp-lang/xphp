@@ -24,6 +24,20 @@ final class AstVisitorTest extends TestCase
 {
     // --- Pass 1: tokens ---------------------------------------------------
 
+    public function testReservedWordIdentifiersAreClassifiedAsKeywords(): void
+    {
+        // PHP tokenizes null / true / false / void / int / etc as
+        // T_STRING (bareword identifiers), not as T_* keyword constants.
+        // The visitor's identifier-recognition path emits these as
+        // `keyword` regardless.
+        $source = "<?php\n\$a = null;\n\$b = true;\n\$c = false;\n\$d = NULL;";
+        $specs = $this->collect($source);
+        $this->assertTokenSubstring($specs, $source, 'null', 'keyword');
+        $this->assertTokenSubstring($specs, $source, 'true', 'keyword');
+        $this->assertTokenSubstring($specs, $source, 'false', 'keyword');
+        $this->assertTokenSubstring($specs, $source, 'NULL', 'keyword');
+    }
+
     public function testKeywordsAreClassified(): void
     {
         $source = <<<'XPHP'

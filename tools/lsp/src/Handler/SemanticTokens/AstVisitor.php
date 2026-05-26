@@ -165,6 +165,21 @@ final class AstVisitor
                     // `namespace\Foo`).
                     $type = 'typeParameter';
                 }
+                if ($type === null && $token->id === T_STRING && self::isReservedWordIdent($token->text)) {
+                    // PHP tokenizes `null`, `true`, `false`, `void`,
+                    // `mixed`, `never`, `iterable`, `self`, `parent`,
+                    // `static` (as a type), and the primitive scalar
+                    // names `int` / `string` / `bool` / `float` /
+                    // `array` / `object` as T_STRING -- not as their
+                    // own T_* constants.  Without this case they fall
+                    // through to "no classification" and the editor
+                    // paints them with the default text color.  The
+                    // user-visible effect: `null` looks like an
+                    // identifier instead of a keyword.  Lookup is
+                    // case-insensitive because PHP itself accepts
+                    // `NULL`, `Null`, `null` interchangeably.
+                    $type = 'keyword';
+                }
                 if ($type !== null) {
                     $this->emit($out, $token->pos, strlen($token->text), $type);
                 }
@@ -174,6 +189,39 @@ final class AstVisitor
                 $lastSignificantTokenId = $isNamedToken ? $token->id : null;
             }
         }
+    }
+
+    /**
+     * PHP reserved-word identifiers tokenized as T_STRING.
+     *
+     * `null`, `true`, `false` are constants treated as keywords by
+     * developer convention but emitted as bareword T_STRING by PHP's
+     * tokenizer.  Type-name primitives (`int`, `string`, etc.) follow
+     * the same pattern.  Lookup is case-insensitive because PHP
+     * accepts `NULL`/`Null`/`null` interchangeably.
+     */
+    private const RESERVED_WORD_IDENTIFIERS = [
+        'null' => true,
+        'true' => true,
+        'false' => true,
+        'void' => true,
+        'mixed' => true,
+        'never' => true,
+        'iterable' => true,
+        'self' => true,
+        'parent' => true,
+        'int' => true,
+        'string' => true,
+        'bool' => true,
+        'float' => true,
+        'array' => true,
+        'object' => true,
+        'callable' => true,
+    ];
+
+    private static function isReservedWordIdent(string $text): bool
+    {
+        return isset(self::RESERVED_WORD_IDENTIFIERS[strtolower($text)]);
     }
 
     /**
