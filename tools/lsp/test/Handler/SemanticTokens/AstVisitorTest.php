@@ -144,12 +144,12 @@ final class AstVisitorTest extends TestCase
         $this->assertTokenSubstring($specs, $source, 'greet', 'function');
     }
 
-    public function testParameterIsRelassifiedFromVariableToParameter(): void
+    public function testParameterEmitsExactlyOneParameterSpec(): void
     {
-        // Token-scan pass emits `variable` at `$name`; AST pass adds a
-        // `parameter` spec at the same position.  Assert both are
-        // present -- the client treats the later one (parameter) as
-        // canonical.
+        // Single spec at `$name`, type `parameter` -- NOT two specs
+        // (variable + parameter) at the same span.  The reclassify-map
+        // path tells the token pass to emit `parameter` instead of
+        // `variable` at the param's offset.
         $source = <<<'XPHP'
         <?php
         namespace App;
@@ -161,9 +161,13 @@ final class AstVisitorTest extends TestCase
             $specs,
             fn (TokenSpec $s) => self::substring($source, $s) === '$name',
         ));
-        self::assertNotEmpty($atName, 'expected at least one spec at `$name`');
-        $types = array_map(static fn (TokenSpec $s) => $s->type, $atName);
-        self::assertContains('parameter', $types, 'param re-classification did not fire');
+        self::assertCount(
+            1,
+            $atName,
+            'expected exactly one spec at `$name`; got ' . count($atName)
+                . ' (' . implode(',', array_map(fn (TokenSpec $s) => $s->type, $atName)) . ')',
+        );
+        self::assertSame('parameter', $atName[0]->type);
     }
 
     // --- Edge cases --------------------------------------------------------

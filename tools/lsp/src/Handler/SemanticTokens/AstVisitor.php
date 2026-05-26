@@ -79,15 +79,23 @@ final class AstVisitor
      */
     public function visit(array $stmts): array
     {
+        // AST walk runs FIRST and collects the byte-ranges where a
+        // T_VARIABLE token should re-classify as `parameter` instead of
+        // `variable`.  The token pass then SKIPS T_VARIABLE at those
+        // ranges and emits the parameter spec on the AST visitor's
+        // behalf.  This replaces the older "emit both, hope the client
+        // honours later-wins" approach -- single spec per source span,
+        // half the response size at every parameter.
         $specs = [];
-
-        $this->collectFromTokens($specs);
+        $reclassifyVariableAt = [];
 
         if ($stmts !== []) {
             $traverser = new NodeTraverser();
-            $traverser->addVisitor($this->newAstWalker($specs));
+            $traverser->addVisitor($this->newAstWalker($specs, $reclassifyVariableAt));
             $traverser->traverse($stmts);
         }
+
+        $this->collectFromTokens($specs, $reclassifyVariableAt);
 
         return $specs;
     }
@@ -98,7 +106,15 @@ final class AstVisitor
      *
      * @param list<TokenSpec> $out
      */
-    private function collectFromTokens(array &$out): void
+    /**
+     * @param array<int, string>      $reclassifyVariableAt  byte-offset -> alternative type
+     *                                                       (currently `parameter`); when a
+     *                                                       T_VARIABLE starts at that offset
+     *                                                       we emit the alternative type
+     *                                                       INSTEAD of `variable`.
+     * @param list<TokenSpec>         $out
+     */
+    private function collectFromTokens(array &$out, array $reclassifyVariableAt = []): void
     {
         // Non-strict tokenization (flags=0).  TOKEN_PARSE turns
         // PhpToken into a strict-mode tokenizer that throws ParseError
@@ -155,6 +171,12 @@ final class AstVisitor
             // Classify the token.
             if ($isNamedToken) {
                 $type = self::$tokenTypeMap[$token->id] ?? null;
+                if ($type === 'variable' && isset($reclassifyVariableAt[$token->pos])) {
+                    // AST pass marked this T_VARIABLE position as a
+                    // parameter; emit `parameter` instead of `variable`
+                    // (single spec, half the response size).
+                    $type = $reclassifyVariableAt[$token->pos];
+                }
                 if ($type === null && $genericDepth > 0 && self::isIdentInGenericClause($token->id)) {
                     // Inside a generic clause an identifier is a type
                     // name -- emit as `typeParameter` for the LSP-spec
@@ -279,11 +301,16 @@ final class AstVisitor
      * way it sees `new User()` -- so the AST walk is the only place
      * with the scope information.
      *
-     * @param list<TokenSpec> &$out
+     * @param list<TokenSpec>              &$out
+     * @param array<int, string>           &$reclassifyVariableAt  ORIGINAL-source
+     *                                                              byte-offset ->
+     *                                                              alternative type
+     *                                                              for the T_VARIABLE
+     *                                                              that starts there.
      */
-    private function newAstWalker(array &$out): NodeVisitorAbstract
+    private function newAstWalker(array &$out, array &$reclassifyVariableAt): NodeVisitorAbstract
     {
-        $visitor = new class($out, $this) extends NodeVisitorAbstract {
+        $visitor = new class($out, $reclassifyVariableAt, $this) extends NodeVisitorAbstract {
             /**
              * Stack of in-scope type-param name sets.  Each frame is the
              * set of names declared on an enclosing ClassLike via
@@ -295,10 +322,12 @@ final class AstVisitor
             private array $typeParamStack = [];
 
             /**
-             * @param list<TokenSpec> $out
+             * @param list<TokenSpec>     $out
+             * @param array<int, string>  $reclassifyVariableAt
              */
             public function __construct(
                 private array &$out,
+                private array &$reclassifyVariableAt,
                 private AstVisitor $emitter,
             ) {
             }
@@ -369,25 +398,21 @@ final class AstVisitor
                 }
                 if ($node instanceof Param && $node->var instanceof Node\Expr\Variable) {
                     // Re-classify the param variable from `variable` to
-                    // `parameter`.  Same source span, different type.
-                    // The token-scan pass already emitted `variable` here;
-                    // we add a second spec, and rely on PhpStorm/VS Code
-                    // honouring the LAST one at the same position.  In
-                    // practice both clients treat overlapping tokens as
-                    // "later wins"; tests assert this.
+                    // `parameter`.  We don't emit a separate spec here;
+                    // instead we mark the ORIGINAL-source byte offset
+                    // and the token pass picks it up, replacing its
+                    // own `variable` emit with `parameter` at that
+                    // offset.  Single spec per source span, half the
+                    // wire size vs the previous "emit both, hope
+                    // later-wins" approach.
                     $name = $node->var->name;
                     if (is_string($name)) {
-                        // Variable name is `name` (string) -- AST positions
-                        // are at the `$` of $foo.  Emit at the same offset.
-                        $start = $node->var->getStartFilePos();
-                        $end = $node->var->getEndFilePos();
-                        if ($start >= 0 && $end >= $start) {
-                            $this->emitter->emitAstSpan(
-                                $this->out,
-                                $start,
-                                $end - $start + 1,
-                                'parameter',
-                            );
+                        $strippedStart = $node->var->getStartFilePos();
+                        if ($strippedStart >= 0) {
+                            $origStart = $this->emitter->mapToOriginal($strippedStart);
+                            if ($origStart >= 0) {
+                                $this->reclassifyVariableAt[$origStart] = 'parameter';
+                            }
                         }
                     }
                     return null;
@@ -461,6 +486,16 @@ final class AstVisitor
             type: $type,
             modifiers: $modifiers,
         );
+    }
+
+    /**
+     * Translate a STRIPPED-source byte offset to the ORIGINAL source.
+     *
+     * @internal exposed for the anonymous AST visitor's reclassify map
+     */
+    public function mapToOriginal(int $strippedOffset): int
+    {
+        return $this->byteOffsetMap->toOriginal($strippedOffset);
     }
 
     /**
