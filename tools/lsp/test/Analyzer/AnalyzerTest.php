@@ -96,6 +96,66 @@ final class AnalyzerTest extends TestCase
         self::assertSame(12, $d->endCharacter, 'inclusive 1-based end + no shift = half-open 0-based end');
     }
 
+    // --- undefined-name diagnostic (fix 3/5) ---------------------------
+
+    public function testFlagsLowercaseUndefinedBarewordConstant(): void
+    {
+        // Real prod typo: `$x ?? nul` (should have been `null`).
+        // The analyzer surfaces this as a Warning so the user sees
+        // it before runtime, where PHP 8+ throws a fatal Error.
+        $result = self::buildAnalyzer()->analyzeFile("<?php\n\$x = 1 ?? nul;");
+        self::assertCount(1, $result->diagnostics);
+        $d = $result->diagnostics[0];
+        self::assertSame(DiagnosticCode::UndefinedName, $d->code);
+        self::assertSame(DiagnosticSeverity::Warning, $d->severity);
+        self::assertStringContainsString('nul', $d->message);
+    }
+
+    public function testDoesNotFlagPseudoConstants(): void
+    {
+        // `null`, `true`, `false` are PHP pseudo-constants -- silent.
+        $result = self::buildAnalyzer()->analyzeFile(
+            "<?php\n\$a = null;\n\$b = true;\n\$c = false;",
+        );
+        self::assertSame([], $result->diagnostics);
+    }
+
+    public function testDoesNotFlagUppercaseUserDefinedConstants(): void
+    {
+        // UPPER_SNAKE_CASE is the user-defined-constant convention.  The
+        // LSP doesn't yet track those across the workspace, so flagging
+        // them would false-positive on every define('FOO', ...) site.
+        // Keep them silent.
+        $result = self::buildAnalyzer()->analyzeFile(
+            "<?php\necho PHP_EOL, MY_CONST, M_PI;",
+        );
+        $codes = array_map(fn ($d) => $d->code, $result->diagnostics);
+        self::assertNotContains(DiagnosticCode::UndefinedName, $codes);
+    }
+
+    public function testDoesNotFlagQualifiedNames(): void
+    {
+        // \App\Foo style FQNs need namespace + workspace resolution we
+        // don't have yet; punt rather than false-positive.
+        $result = self::buildAnalyzer()->analyzeFile("<?php\nuse App\\Foo;\necho \\App\\Foo;");
+        $codes = array_map(fn ($d) => $d->code, $result->diagnostics);
+        self::assertNotContains(DiagnosticCode::UndefinedName, $codes);
+    }
+
+    public function testFlagsEachOccurrenceSeparately(): void
+    {
+        // Two distinct undefined names on different lines emit two
+        // diagnostics so the editor underlines each.
+        $result = self::buildAnalyzer()->analyzeFile(
+            "<?php\n\$a = nul;\n\$b = oops;",
+        );
+        $undef = array_values(array_filter(
+            $result->diagnostics,
+            fn ($d) => $d->code === DiagnosticCode::UndefinedName,
+        ));
+        self::assertCount(2, $undef);
+    }
+
     private static function buildAnalyzer(): Analyzer
     {
         return new Analyzer(new XphpSourceParser((new ParserFactory())->createForHostVersion()));

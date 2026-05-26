@@ -42,6 +42,22 @@ enum DiagnosticCode: string
     case HashCollision = 'xphp.collision';
 
     /**
+     * Bareword constant reference that doesn't resolve to a known
+     * built-in pseudo-constant (null / true / false).  Conservative:
+     * we only flag lowercase identifiers, since user-defined
+     * constants overwhelmingly use UPPER_SNAKE_CASE and the LSP
+     * doesn't yet maintain a workspace-wide constant index.
+     *
+     * Catches typos like `$x ?? nul` (PHP 8 throws a fatal
+     * `Error: Undefined constant "nul"` at runtime for these).
+     * Severity is Warning, not Error, because the heuristic is
+     * intentionally narrow -- false positives are possible for
+     * lowercase user-defined constants, and the warning level
+     * keeps them dismissable.
+     */
+    case UndefinedName = 'xphp.undefined-name';
+
+    /**
      * Map a RuntimeException raised by Registry::recordInstantiation to its
      * diagnostic code. The Registry doesn't (currently) use a typed exception
      * hierarchy, so we triage by the error message's leading phrase. The
