@@ -761,6 +761,73 @@ final class FqnIndexTest extends TestCase
         self::assertTrue($index->isTypeParamFqn('App\\Containers\\T'));
     }
 
+    public function testIsBareBuiltinFunctionFqnRecognisesNamespacedBuiltins(): void
+    {
+        // Fix 3: `gettype` inside `namespace App\Demos` becomes
+        // `App\Demos\gettype` after name resolution.  PHP's runtime
+        // falls back to global function-lookup, but the static AST
+        // view shows the prefixed form first.  Worse-reflection then
+        // asks the locator for the prefixed class, which always
+        // misses -- and pre-Fix-3 logged a stderr "miss" line.
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertTrue($index->isBareBuiltinFunctionFqn('App\\Demos\\gettype'));
+        self::assertTrue($index->isBareBuiltinFunctionFqn('XPHP\\Lsp\\Resolver\\max'));
+        self::assertTrue($index->isBareBuiltinFunctionFqn('\\App\\Demos\\gettype'), 'leading backslash tolerated');
+    }
+
+    public function testIsBareBuiltinFunctionFqnRejectsGlobalScope(): void
+    {
+        // A bare `gettype` with NO namespace prefix could legitimately
+        // be a global-class lookup (PHP allows classes named after
+        // functions, just confusingly).  Conservative: don't claim it
+        // -- the regular pathFor / miss-log path handles it.
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertFalse($index->isBareBuiltinFunctionFqn('gettype'));
+        self::assertFalse($index->isBareBuiltinFunctionFqn('max'));
+    }
+
+    public function testIsBareBuiltinFunctionFqnRejectsNonFunctionShortNames(): void
+    {
+        // Last segment isn't a function name -> obviously not a
+        // bare-builtin shape.  These should fall through to the
+        // regular miss-log path.
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertFalse($index->isBareBuiltinFunctionFqn('App\\Models\\User'));
+        self::assertFalse($index->isBareBuiltinFunctionFqn('App\\Demos\\TotallyNotAFunction'));
+    }
+
+    public function testIsBareBuiltinFunctionFqnRejectsEmptyAndBackslashOnly(): void
+    {
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertFalse($index->isBareBuiltinFunctionFqn(''));
+        self::assertFalse($index->isBareBuiltinFunctionFqn('\\'));
+    }
+
+    public function testIsBareBuiltinFunctionFqnRejectsUserDefinedFunctions(): void
+    {
+        // `ReflectionFunction::isInternal()` must come back FALSE for
+        // a user-defined function.  We declare a GLOBAL one in the
+        // test process and confirm the predicate doesn't classify it
+        // as a builtin -- otherwise a workspace that happened to load
+        // a vendor file matching a user-class short-name could
+        // accidentally suppress a legitimate class-name miss.
+        if (!function_exists('xphp_test_user_func_global')) {
+            eval('function xphp_test_user_func_global(): void {}');
+        }
+        $index = $this->index(new PhpactorWorkspace());
+
+        // function_exists('xphp_test_user_func_global') === true,
+        // ReflectionFunction(...)->isInternal() === false -> predicate
+        // must return false.
+        self::assertFalse($index->isBareBuiltinFunctionFqn(
+            'App\\Demos\\xphp_test_user_func_global',
+        ));
+    }
+
     private function index(PhpactorWorkspace $workspace): FqnIndex
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());

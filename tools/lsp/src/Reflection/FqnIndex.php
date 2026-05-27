@@ -398,6 +398,55 @@ final class FqnIndex
     }
 
     /**
+     * Is `$fqn` a namespace-resolved reference to a global PHP function
+     * rather than a class FQN?
+     *
+     * Fix 3 (extends Fix L's silent-bail pattern): when source code
+     * inside `namespace App\Demos` calls `gettype($x)`, nikic's name
+     * resolver speculatively emits `App\Demos\gettype` as the
+     * namespacedName -- PHP's actual function-lookup falls back to
+     * the global namespace at runtime, but the static AST view shows
+     * the prefixed form first.  Worse-reflection then asks our
+     * locator chain "where is `App\Demos\gettype`?", which misses and
+     * writes a `[xphp-lsp locator] miss …` line to stderr.
+     *
+     * This predicate recognises that shape: an FQN with a non-empty
+     * namespace whose last segment is the name of a PHP-internal
+     * function (case-insensitive, per PHP function semantics).  The
+     * locator uses it to suppress the miss log while still throwing
+     * SourceNotFound -- worse-reflection's chain still falls through
+     * normally; only the stderr noise goes away.
+     *
+     * Cross-checked against `ReflectionFunction::isInternal()` so a
+     * user-defined function happening to be loaded into the LSP
+     * server's process doesn't accidentally suppress a legitimate
+     * class-name lookup.
+     */
+    public function isBareBuiltinFunctionFqn(string $fqn): bool
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return false;
+        }
+        $lastBackslash = strrpos($needle, '\\');
+        if ($lastBackslash === false) {
+            // Global-namespace lookup -- can't tell apart from a
+            // legitimate global-class reference to a class named after
+            // a function.  Conservative: don't claim it.
+            return false;
+        }
+        $shortName = substr($needle, $lastBackslash + 1);
+        if ($shortName === '' || !function_exists($shortName)) {
+            return false;
+        }
+        try {
+            return (new \ReflectionFunction($shortName))->isInternal();
+        } catch (\ReflectionException) {
+            return false;
+        }
+    }
+
+    /**
      * @return array<string, true>
      */
     private function typeParamFqns(): array

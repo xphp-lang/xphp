@@ -101,6 +101,22 @@ final class FilesystemSourceLocator implements SourceCodeLocator
         $path = $this->index->pathFor($needle);
 
         if ($path === null) {
+            // Fix 3: when `$needle` is a namespace-resolved reference
+            // to a built-in PHP function (e.g. `App\Demos\gettype`,
+            // `XPHP\Lsp\Resolver\max`), suppress the stderr miss line
+            // AND differentiate the exception message so tests can
+            // observe the path.  nikic's name resolver emits the
+            // namespaced form speculatively; PHP's runtime falls back
+            // to global-scope function lookup, but the locator never
+            // gets that fallback because functions are never
+            // registered with `pathFor`.  Still throw SourceNotFound
+            // so worse-reflection's chain falls through normally.
+            if ($this->index->isBareBuiltinFunctionFqn($needle)) {
+                throw new SourceNotFound(sprintf(
+                    '"%s" is a namespace-resolved global function reference, not a class FQN',
+                    $needle,
+                ));
+            }
             if (!isset($this->loggedMisses[$needle])) {
                 $this->loggedMisses[$needle] = true;
                 Stderr::write(sprintf(

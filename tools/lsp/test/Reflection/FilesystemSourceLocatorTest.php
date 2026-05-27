@@ -233,6 +233,29 @@ final class FilesystemSourceLocatorTest extends TestCase
         $locator->locate(Name::fromString('App\\Containers\\T'));
     }
 
+    public function testBareBuiltinFunctionFqnShortCircuitsWithoutMissLog(): void
+    {
+        // Fix 3: cursor on `gettype(...)` inside `namespace App\Demos`
+        // makes worse-reflection ask the locator for
+        // `App\Demos\gettype`.  PHP's runtime would fall back to the
+        // global `gettype()` function, but the locator (class-only)
+        // can't represent that and used to log a stderr miss line.
+        // Now we recognise the shape and throw SourceNotFound with a
+        // distinct message that doesn't go through the miss-log path.
+        $locator = $this->newLocator();
+
+        try {
+            $locator->locate(Name::fromString('App\\Demos\\gettype'));
+            self::fail('expected SourceNotFound');
+        } catch (SourceNotFound $e) {
+            self::assertStringContainsString(
+                'global function reference',
+                $e->getMessage(),
+                'must use the suppressed-miss code path, not the regular pathFor miss',
+            );
+        }
+    }
+
     public function testRealClassMissStillHitsTheNormalMissPath(): void
     {
         // The short-circuit must NOT swallow legitimate unknown FQNs
