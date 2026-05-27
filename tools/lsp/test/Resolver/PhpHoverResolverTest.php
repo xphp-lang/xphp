@@ -75,10 +75,15 @@ final class PhpHoverResolverTest extends TestCase
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '->shout', 2);
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('function shout', $markdown);
-        // The class FQN appears as context above the signature.
-        self::assertStringContainsString('App\\User', $markdown);
+        // Exact-match pins the renderMethod signature: classFqn line,
+        // visibility, no static prefix, parens, return type, then the
+        // docblock body.  Catches Concat / ConcatOperandRemoval /
+        // Ternary mutants on the `$type . ' '` + `'$' . $paramName`
+        // joins in renderMethod (lines 245+).
+        self::assertSame(
+            "```php\n// App\\User\npublic function shout(): string\n```\n\nShout the name.",
+            $this->markdown($hover),
+        );
     }
 
     public function testHoversPropertyWithReceiverContext(): void
@@ -184,10 +189,15 @@ final class PhpHoverResolverTest extends TestCase
         $this->open($workspace, '/Use.xphp', $useSource);
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$users->save', strlen('$users->save'));
-        $markdown = $this->markdown($hover);
 
-        self::assertStringContainsString('save(App\\Models\\User $item)', $markdown);
-        self::assertStringNotContainsString('save(T $item)', $markdown);
+        // Exact-match pins the method signature shape AND the
+        // substitution result.  Catches Concat / ConcatOperandRemoval
+        // / Ternary mutants on the `$type . ' '` join in renderMethod
+        // line 245.
+        self::assertSame(
+            "```php\n// App\\Containers\\Collection\npublic function save(App\\Models\\User \$item): void\n```",
+            $this->markdown($hover),
+        );
     }
 
     public function testMethodHoverSubstitutesMultipleParameters(): void
@@ -206,13 +216,13 @@ final class PhpHoverResolverTest extends TestCase
         $this->open($workspace, '/Use.xphp', $useSource);
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$p->put', strlen('$p->put'));
-        $markdown = $this->markdown($hover);
 
-        // Both params substituted.
-        self::assertStringContainsString('put(string $key, App\\Models\\User $value)', $markdown);
-        // Neither placeholder leaks through.
-        self::assertStringNotContainsString('K $key', $markdown);
-        self::assertStringNotContainsString('V $value', $markdown);
+        // Exact-match pins the multi-param substitution.  Catches the
+        // implode(', ', $params) join + each per-param Concat join.
+        self::assertSame(
+            "```php\n// App\\Containers\\Pair\npublic function put(string \$key, App\\Models\\User \$value): void\n```",
+            $this->markdown($hover),
+        );
     }
 
     public function testStaticMethodHoverSubstitutesParameterTypesAtCallSite(): void
@@ -233,10 +243,11 @@ final class PhpHoverResolverTest extends TestCase
         $this->open($workspace, '/Use.xphp', $useSource);
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'Factory::make', strlen('Factory::make'));
-        $markdown = $this->markdown($hover);
 
-        self::assertStringContainsString('make(App\\Models\\User $seed)', $markdown);
-        self::assertStringNotContainsString('make(T $seed)', $markdown);
+        self::assertSame(
+            "```php\n// App\\Containers\\Factory\npublic static function make(App\\Models\\User \$seed): App\\Models\\User\n```",
+            $this->markdown($hover),
+        );
     }
 
     public function testFreeFunctionHoverSubstitutesParameterTypesAtCallSite(): void
@@ -256,12 +267,11 @@ final class PhpHoverResolverTest extends TestCase
         $this->open($workspace, '/Use.xphp', $useSource);
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'identity<User>', strlen('identity'));
-        $markdown = $this->markdown($hover);
 
-        self::assertStringContainsString('identity(App\\Models\\User $value)', $markdown);
-        self::assertStringNotContainsString('identity(T $value)', $markdown);
-        // Return type also gets substituted.
-        self::assertStringContainsString(': App\\Models\\User', $markdown);
+        self::assertSame(
+            "```php\nfunction App\\identity(App\\Models\\User \$value): App\\Models\\User\n```",
+            $this->markdown($hover),
+        );
     }
 
     public function testFunctionDeclarationHoverStripsNamespaceFromMethodScopeTemplate(): void
@@ -280,10 +290,11 @@ final class PhpHoverResolverTest extends TestCase
         // Cursor on the unqualified call `identity(...)` -- no `<T>` arg,
         // no inference path, so renderFunction runs without a substitution.
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, "\nidentity(", strlen("\nidentity"));
-        $markdown = $this->markdown($hover);
 
-        self::assertStringContainsString('identity(T $x): T', $markdown);
-        self::assertStringNotContainsString('App\\Demos\\T', $markdown);
+        self::assertSame(
+            "```php\nfunction App\\Demos\\identity(T \$x): T\n```",
+            $this->markdown($hover),
+        );
     }
 
     public function testStaticMethodDeclarationHoverStripsNamespaceFromMethodScopeTemplate(): void
@@ -304,10 +315,11 @@ final class PhpHoverResolverTest extends TestCase
         // Hover on `first` without a `<T>` type-arg -> substitution path
         // returns null, prettify fallback runs.
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'Util::first', strlen('Util::first'));
-        $markdown = $this->markdown($hover);
 
-        self::assertStringContainsString('first(array $items): ?T', $markdown);
-        self::assertStringNotContainsString('App\\Containers\\T', $markdown);
+        self::assertSame(
+            "```php\n// App\\Containers\\Util\npublic static function first(array \$items): ?T\n```",
+            $this->markdown($hover),
+        );
     }
 
     public function testMethodHoverParamsFallBackToPrettifyWhenNoBinding(): void
