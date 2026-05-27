@@ -243,21 +243,59 @@
         // the time `(string) $name` runs the leading slash is already
         // gone. The ltrim is defensive against any locator caller that
         // bypasses `Name::fromString`, but no production path does.
+        //
+        // ReferenceFinder: every UnwrapLtrim site reads either from a
+        // nikic `Name->toString()` result (which never carries a
+        // leading backslash regardless of whether the source was
+        // `Name` or `FullyQualified`) or from a `$target['fqn']` that
+        // was itself produced by `ltrim(...)` upstream in the same
+        // module.  The ltrim is defensive against direct-string FQN
+        // inputs that don't occur in any current production path.  We
+        // do exercise leading-backslash inputs via
+        // FqnIndexTest::testPublicLookupApisAcceptLeadingBackslashForm
+        // for the FqnIndex side; the ReferenceFinder ltrims are too
+        // deep inside private walks to test economically without
+        // creating fixture infrastructure for malformed callers.
         "UnwrapLtrim": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix",
-                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate"
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
             ]
         },
 
-        // XphpHoverHandler line 142: `(string) $classLike->name`. The Identifier
-        // class in nikic implements __toString, so PHP's sprintf %s coerces
-        // it without the explicit cast. The cast is defensive (covers a
-        // hypothetical future ClassLike whose name doesn't implement
-        // __toString), but unkillable today.
+        // CastString mutants on `(string) $X` expressions where the
+        // value is already a string OR where the embedding context
+        // already invokes __toString.  Method-level ignores keep the
+        // scope tight: other (string) casts in these classes that
+        // ARE load-bearing remain mutation-tested.
+        //   * XphpHoverHandler::buildHoverMarkdown: `(string) $classLike->name`
+        //     -- Identifier implements __toString.
+        //   * FqnIndex::collectGenericClasses / collectSymbolHits /
+        //     allFunctionFqns (lines 519/571/709): `(string) $uri`
+        //     where $uri is the workspace key, already a string.
+        //   * PhpHoverResolver::renderMethod / renderProperty (line
+        //     229/274): `(string) $method->visibility()` --
+        //     Visibility enum has __toString.
+        //   * ReferenceFinder::shortNameAt / findReferences /
+        //     collectReferences (107/110/145/493/498/598):
+        //     `(string) $target['<key>']` -- the internal $target
+        //     arrays are constructed with string-only values upstream.
+        //   * RenameProvider::buildFileRenameOp line 168:
+        //     `(string) $location['uri']` -- the location array's
+        //     'uri' key is always a PHP string from FqnIndex.
         "CastString": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown"
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericClasses",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::collectSymbolHits",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::allFunctionFqns",
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::renderMethod",
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::renderProperty",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::shortNameAt",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::findReferences",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
+                "XPHP\\Lsp\\Resolver\\RenameProvider::buildFileRenameOp"
             ]
         },
 

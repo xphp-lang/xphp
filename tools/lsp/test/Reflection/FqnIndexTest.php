@@ -609,6 +609,51 @@ final class FqnIndexTest extends TestCase
         );
     }
 
+    public function testPublicLookupApisAcceptLeadingBackslashForm(): void
+    {
+        // Each `public function fooFor(string $fqn)` API starts with
+        // `$needle = ltrim($fqn, '\\');` to accept both `\Foo\Bar` and
+        // `Foo\Bar`.  Pins the UnwrapLtrim mutant on each method --
+        // removing the ltrim would make the prefixed form miss the
+        // unprefixed map keys, returning null.
+        $this->writeFile('Box.xphp', "<?php\nnamespace App\\Containers;\nclass Box<T: \\Stringable> {}\n");
+        $this->writeFile('greet.xphp', "<?php\nnamespace App;\nfunction greet(): void {}\n");
+
+        $index = $this->index(new PhpactorWorkspace());
+
+        self::assertSame(
+            $index->pathFor('App\\Containers\\Box'),
+            $index->pathFor('\\App\\Containers\\Box'),
+            'pathFor must strip leading backslash',
+        );
+        self::assertEquals(
+            $index->classLikeFor('App\\Containers\\Box'),
+            $index->classLikeFor('\\App\\Containers\\Box'),
+            'classLikeFor must strip leading backslash',
+        );
+        self::assertEquals(
+            $index->functionFor('App\\greet'),
+            $index->functionFor('\\App\\greet'),
+            'functionFor must strip leading backslash',
+        );
+        self::assertSame(
+            $index->boundsForGenericClass('App\\Containers\\Box'),
+            $index->boundsForGenericClass('\\App\\Containers\\Box'),
+            'boundsForGenericClass must strip leading backslash',
+        );
+        self::assertEquals(
+            $index->locationForFqn('App\\Containers\\Box'),
+            $index->locationForFqn('\\App\\Containers\\Box'),
+            'locationForFqn must strip leading backslash',
+        );
+
+        // And the prefixed form must actually RESOLVE, not just match
+        // the unprefixed form's null.
+        self::assertNotNull($index->pathFor('\\App\\Containers\\Box'));
+        self::assertNotNull($index->classLikeFor('\\App\\Containers\\Box'));
+        self::assertNotNull($index->functionFor('\\App\\greet'));
+    }
+
     public function testHandlesUnparseableFilesGracefully(): void
     {
         // A garbage file shouldn't blow up the whole index build.
