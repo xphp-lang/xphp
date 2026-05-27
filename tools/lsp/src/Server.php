@@ -52,7 +52,7 @@ final class Server
             static fn (string $a): bool => $a !== '--lint' && !str_starts_with($a, '--'),
         ));
         if ($files === []) {
-            fwrite(STDERR, "Usage: xphp-lsp --lint <file.xphp> [<file.xphp> ...]\n");
+            Stderr::write( "Usage: xphp-lsp --lint <file.xphp> [<file.xphp> ...]\n");
             return 2;
         }
 
@@ -65,7 +65,7 @@ final class Server
         foreach ($files as $path) {
             $source = @file_get_contents($path);
             if ($source === false) {
-                fwrite(STDERR, "{$path}: cannot read\n");
+                Stderr::write( "{$path}: cannot read\n");
                 return 2;
             }
             $result = $analyzer->analyzeFile($source);

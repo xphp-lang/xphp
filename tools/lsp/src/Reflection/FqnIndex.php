@@ -21,6 +21,7 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\Stderr;
 use XPHP\Transpiler\Monomorphize\TypeParam;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -908,7 +909,7 @@ final class FqnIndex
         $symbols = [];
         $walkedPaths = [];
         if (!is_dir($this->rootPath)) {
-            @fwrite(STDERR, sprintf(
+            Stderr::write(sprintf(
                 "[xphp-lsp fqn-index] rootPath %s not a directory; filesystem index empty\n",
                 $this->rootPath,
             ));
@@ -972,7 +973,7 @@ final class FqnIndex
             }
         }
 
-        @fwrite(STDERR, sprintf(
+        Stderr::write(sprintf(
             "[xphp-lsp fqn-index] indexed %d FQNs from %d files under %s (skipped: %s)\n",
             count($map),
             $filesScanned,

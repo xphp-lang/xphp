@@ -36,6 +36,7 @@ use Phpactor\WorseReflection\Reflector;
 use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Stderr;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -882,7 +883,7 @@ final class PhpCompletionResolver
      */
     private static function trace(string $message): void
     {
-        @fwrite(STDERR, '[xphp-lsp completion] ' . $message . "\n");
+        Stderr::write('[xphp-lsp completion] ' . $message . "\n");
     }
 
     private static function oneLine(string $message): string

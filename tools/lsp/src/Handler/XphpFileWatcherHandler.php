@@ -11,6 +11,7 @@ use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\DidChangeWatchedFilesParams;
 use Phpactor\LanguageServerProtocol\FileChangeType;
 use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Lsp\Stderr;
 
 /**
  * `workspace/didChangeWatchedFiles` handler -- keeps `FqnIndex`'s lazy
@@ -84,7 +85,7 @@ final class XphpFileWatcherHandler implements Handler
         }
 
         if ($external > 0) {
-            @fwrite(STDERR, sprintf(
+            Stderr::write(sprintf(
                 "[xphp-lsp watch] invalidating filesystem index (%d external change%s, %d open-doc skipped)\n",
                 $external,
                 $external === 1 ? '' : 's',
@@ -92,7 +93,7 @@ final class XphpFileWatcherHandler implements Handler
             ));
             $this->fqnIndex->invalidateFilesystem();
         } elseif ($skippedOpen > 0) {
-            @fwrite(STDERR, sprintf(
+            Stderr::write(sprintf(
                 "[xphp-lsp watch] skipped invalidation (%d open-doc change%s already covered)\n",
                 $skippedOpen,
                 $skippedOpen === 1 ? '' : 's',

@@ -6,6 +6,7 @@ namespace XPHP\Lsp\Reflection;
 
 use Phpactor\LanguageServer\Event\Initialized;
 use Psr\EventDispatcher\ListenerProviderInterface;
+use XPHP\Lsp\Stderr;
 
 use function Amp\asyncCall;
 
@@ -64,7 +65,7 @@ class FqnIndexWarmer implements ListenerProviderInterface
             // this single call warms every cache the resolver chain
             // touches on a first hover / definition / completion.
             $count = count($this->fqnIndex->allClassFqns());
-            @fwrite(STDERR, sprintf(
+            Stderr::write(sprintf(
                 "[xphp-lsp warmer] fqn-index warmed (%d FQNs)\n",
                 $count,
             ));

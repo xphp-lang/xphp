@@ -9,6 +9,7 @@ use Phpactor\TextDocument\TextDocumentBuilder;
 use Phpactor\WorseReflection\Core\Exception\SourceNotFound;
 use Phpactor\WorseReflection\Core\Name;
 use Phpactor\WorseReflection\Core\SourceCodeLocator;
+use XPHP\Lsp\Stderr;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -102,7 +103,7 @@ final class FilesystemSourceLocator implements SourceCodeLocator
         if ($path === null) {
             if (!isset($this->loggedMisses[$needle])) {
                 $this->loggedMisses[$needle] = true;
-                @fwrite(STDERR, sprintf(
+                Stderr::write(sprintf(
                     "[xphp-lsp locator] miss %s (no declaration indexed under %s)\n",
                     $needle,
                     $this->rootPath,
