@@ -33,7 +33,15 @@
                 // $diagnosticsDebounceMs = 300 default — debounce-window jitter
                 // (300 vs 299 ms) is behaviourally identical at the unit-test
                 // level; we don't simulate timing.
-                "XPHP\\Lsp\\LspDispatcherFactory::__construct"
+                "XPHP\\Lsp\\LspDispatcherFactory::__construct",
+                // XphpFoldingRangeHandler::addRange `$node->getEndFilePos() + 1`
+                // — the +1 converts nikic's inclusive end-of-node offset into
+                // the exclusive form positionToOffset/offsetToPosition expects.
+                // Flipping `+ 1` -> `+ 0` shifts $end one byte earlier, but for
+                // a multi-line declaration the closing `}` lands on the same
+                // line regardless (the +1 only matters when the node ends
+                // mid-line, which fold-eligible bodies don't).
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
             ]
         },
         "IncrementInteger": {
@@ -105,6 +113,14 @@
                 "XPHP\\Lsp\\Reflection\\FqnIndex::functionFor",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::locationForFqn",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::boundsForGenericClass",
+                // XphpFoldingRangeHandler::collect dispatch returns
+                // (`return;` after Namespace_ / ClassLike branches).
+                // Removing the return falls through to the next
+                // `instanceof` check, which is mutually exclusive
+                // with the branch we just took (a node is either a
+                // Namespace_, ClassLike, or Function_ -- never two).
+                // Net result: no extra work, no observable difference.
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::collect",
                 // Handler-level cancel-poll early returns
                 // (`return new Success(null)` inside the
                 // `$cancel !== null && $cancel->isRequested()` guard).
@@ -214,7 +230,13 @@
                 // nodes without position info -- same equivalent-by-
                 // unreachability pattern as the AstPositionResolver
                 // LessThanOrEqualTo ignore further down.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                // XphpFoldingRangeHandler::addRange `$start < 0 || $end <= $start`
+                // -- the OR is jointly defensive; either clause's
+                // negation alone is not observable for any nikic-
+                // parsed input where $start >= 0 and $end > $start
+                // by construction.
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
             ]
         },
 
@@ -322,9 +344,17 @@
         // — defensive against synthetic nodes lacking position info. nikic's
         // default lexer always populates startFilePos/endFilePos, so neither
         // branch fires in practice. The guard is correct defensive code.
+        //
+        // XphpFoldingRangeHandler::addRange `if ($start < 0 || $end <= $start)`
+        // -- the `<= $start` side is a zero-length-range guard; flipping
+        // it to `<` would let $end == $start through, but the
+        // subsequent `$endLine <= $startLine` check rejects single-line
+        // folds anyway, so a zero-length range produces no output via
+        // either branch.
         "LessThanOrEqualTo": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\AstPositionResolver"
+                "XPHP\\Lsp\\Handler\\AstPositionResolver",
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
             ]
         },
 
@@ -335,9 +365,17 @@
         // but nikic emits startFilePos as a real byte offset (>= 0)
         // so neither LessThan nor LogicalOr clause swap is killable
         // by any nikic-parsed input.
+        //
+        // XphpFoldingRangeHandler::addRange `$start < 0` -- same
+        // pattern: a class can in principle start at byte 0 if the
+        // source has no `<?php` prefix, but xphp source always begins
+        // with `<?php`, so $start = 0 isn't reachable via any
+        // production input.  The guard is defensive against synthetic
+        // ASTs that don't appear in practice.
         "LessThan": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
             ]
         },
 
