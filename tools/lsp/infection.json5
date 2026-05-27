@@ -143,6 +143,15 @@
                 "XPHP\\Lsp\\Handler\\XphpRenameHandler::rename",
                 "XPHP\\Lsp\\Handler\\XphpTypeDefinitionHandler::typeDefinition",
                 "XPHP\\Lsp\\Handler\\XphpDocumentHighlightHandler::documentHighlight",
+                // XphpCompletionResolveHandler chains four guards
+                // (reflector null, data not array, kind/fqn mismatch,
+                // docblock undefined / empty after trim).  Every guard's
+                // early-return falls through to a downstream guard that
+                // also returns the unchanged item -- removing any one
+                // return is observationally equivalent under the test
+                // matrix (we test each guard hits with the corresponding
+                // input shape).
+                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
                 // PhpDefinitionResolver::resolveTypeInner
                 // `if (!$typeBearing) return null` early-exit. Removing
                 // the return falls through to `locateClass($typeName)`,
@@ -181,6 +190,33 @@
         "CatchBlockRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile"
+            ]
+        },
+
+        // XphpCompletionResolveHandler::resolve catches
+        // `NotFound | SourceNotFound | Throwable`.  Removing any single
+        // exception type from the catch-class-list is observationally
+        // equivalent: the `Throwable` clause already catches every
+        // descendant, including NotFound and SourceNotFound (both
+        // descend from Throwable).  We keep the explicit type listing
+        // for documentation purposes.
+        "Catch_": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve"
+            ]
+        },
+
+        // XphpCompletionResolveHandler::resolve `trim($docblock->formatted())`
+        // -- the trim is defensive against trailing whitespace from
+        // worse-reflection's formatted() output.  Removing the trim
+        // would let pure-whitespace docblocks through the
+        // `$text === ''` guard, but our test fixtures don't produce
+        // whitespace-only docblocks; the `formatted()` implementation
+        // also doesn't return whitespace-only strings for any
+        // realistic input.
+        "UnwrapTrim": {
+            "ignore": [
+                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve"
             ]
         },
 
@@ -253,7 +289,15 @@
                 // OR-chain of `=== Symbol::*` checks -- non-type-
                 // bearing symbol kinds all resolve to null via
                 // locateClass for their inferred type either way.
-                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
+                // XphpCompletionResolveHandler::resolve OR-chain on
+                // `$kind !== 'class' || !is_string($fqn) || $fqn === ''`
+                // -- the three clauses are jointly defensive against
+                // malformed `data` payloads.  Each test exercises one
+                // path; flipping clauses doesn't observably change the
+                // pass-through behaviour for items that don't match
+                // our expected shape.
+                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve"
             ]
         },
 

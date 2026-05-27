@@ -84,6 +84,13 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
         // context detected).  Including `-` would just produce noise.
         $capabilities->completionProvider = new CompletionOptions(
             triggerCharacters: ['<', ',', '>', ':'],
+            // `resolveProvider: true` opts the server into the lazy
+            // `completionItem/resolve` round-trip: items emitted here
+            // can carry a `data` payload that XphpCompletionResolveHandler
+            // uses to look up the documentation on-demand.  Cheap
+            // per-item up-front (no docblock fetch), one extra request
+            // when the user actually navigates to an item.
+            resolveProvider: true,
         );
     }
 
@@ -153,6 +160,13 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
                 kind: CompletionItemKind::CLASS_,
                 detail: $fqn,
                 insertText: $fqn,
+                // `completionItem/resolve` payload: when the user
+                // navigates to this item, the client sends the
+                // item back and XphpCompletionResolveHandler reads
+                // `data.fqn` to fetch the docblock from
+                // worse-reflection.  Cheap up-front, lazy on
+                // demand.
+                data: ['kind' => 'class', 'fqn' => $fqn],
             );
         }
 
