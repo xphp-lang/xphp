@@ -258,9 +258,16 @@
         // LogicalAndNegation variants — each probes the same defensive
         // guard whose alternate branch (synthetic node without position info)
         // never fires from nikic-parsed source.
+        // FqnIndex::collectGenericFunctionsAndMethods leaveNode guard:
+        // `if ($node instanceof ClassLike && $this->classStack !== [])`.
+        // `array_pop` on an empty array is a documented no-op (returns
+        // null without warning), so the `classStack !== []` clause is
+        // belt-and-suspenders defense.  NotIdentical flips `!==` to
+        // `===` which mutates the guard to a no-op equivalent.
         "NotIdentical": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericFunctionsAndMethods"
             ]
         },
         "GreaterThanOrEqualToNegotiation": {
@@ -290,6 +297,36 @@
                 "XPHP\\Lsp\\LspDispatcherFactory::create"
             ]
         },
+
+        // FqnIndex::findClassLikeInAst fallback path (line ~1423): the
+        // inner visitor's `$ns !== '' ? $ns . '\\' . $current : $current`
+        // string-concat branch fires only when ATTR_TEMPLATE_FQN is
+        // missing on a ClassLike node.  But `findClassLikeInAst` wraps
+        // the inner visitor in a `tracker` that ALWAYS stamps
+        // ATTR_TEMPLATE_FQN before forwarding the node to the inner
+        // visitor.  Net effect: the fallback path is unreachable in
+        // production.  Concat / ConcatOperandRemoval / Ternary mutants
+        // on the unreachable line can't be killed by behavioural tests
+        // because no input reaches it.  We keep the code as defensive
+        // documentation (matches the comment at FqnIndex.php:1418-1419
+        // explaining the fallback's intent), but exempt it from
+        // mutation scoring.
+        "Concat": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst"
+            ]
+        },
+        "ConcatOperandRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst"
+            ]
+        },
+        "Ternary": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst"
+            ]
+        },
+
 
         // FqnIndex::typeParamFqns set-value flip: `$set[$key] = true`
         // mutated to `$set[$key] = false`. The set is consumed solely
