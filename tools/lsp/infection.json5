@@ -142,6 +142,7 @@
                 "XPHP\\Lsp\\Handler\\XphpReferencesHandler::references",
                 "XPHP\\Lsp\\Handler\\XphpRenameHandler::rename",
                 "XPHP\\Lsp\\Handler\\XphpTypeDefinitionHandler::typeDefinition",
+                "XPHP\\Lsp\\Handler\\XphpDocumentHighlightHandler::documentHighlight",
                 // PhpDefinitionResolver::resolveTypeInner
                 // `if (!$typeBearing) return null` early-exit. Removing
                 // the return falls through to `locateClass($typeName)`,

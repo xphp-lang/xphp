@@ -48,6 +48,7 @@ use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
+use XPHP\Lsp\Handler\XphpDocumentHighlightHandler;
 use XPHP\Lsp\Handler\XphpFoldingRangeHandler;
 use XPHP\Lsp\Handler\XphpTypeDefinitionHandler;
 use XPHP\Lsp\Handler\XphpFileWatcherHandler;
@@ -247,6 +248,10 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpWorkspaceSymbolHandler($fqnIndex),
             new XphpFileWatcherHandler($fqnIndex, $workspace),
             new XphpReferencesHandler(
+                $workspace,
+                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
+            ),
+            new XphpDocumentHighlightHandler(
                 $workspace,
                 new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
             ),
