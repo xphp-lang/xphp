@@ -40,8 +40,25 @@ import java.io.File
 class XphpLspServerDescriptor(project: Project) :
     ProjectWideLspServerDescriptor(project, "xphp") {
 
-    override fun isSupportedFile(file: VirtualFile): Boolean =
-        file.extension == "xphp"
+    override fun isSupportedFile(file: VirtualFile): Boolean {
+        if (file.extension == "xphp") return true
+        // PHP stubs extracted by the LSP server are .php files outside
+        // the workspace -- e.g. `/tmp/xphp-lsp-extracted-stubs/<sha>/
+        // Reflection/ReflectionNamedType.php`.  When the LSP returns a
+        // Location pointing at one of them (native-class GTD,
+        // typeDefinition, etc.), PhpStorm asks every registered LSP
+        // descriptor "is this file yours?"  Without this branch our
+        // descriptor says no, the platform finds no claimant, and
+        // reports "Cannot find declaration to go to" -- even though
+        // the LSP returned the correct stub path.
+        //
+        // We claim only the well-known extraction cache root, not
+        // every .php file -- those still belong to PhpStorm's native
+        // PHP support.  The cache root is hard-coded to match
+        // PHP's sys_get_temp_dir() default + the prefix used by
+        // ReflectorFactory::extractStubsCache().
+        return file.path.contains("/xphp-lsp-extracted-stubs/")
+    }
 
     // Opt in to LSP-routed editor actions.  Server-side capability advertisement
     // (`definitionProvider: true`, `hoverProvider: true` in our `initialize`
