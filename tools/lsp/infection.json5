@@ -443,10 +443,28 @@
         // `loggedMisses` set is consumed by `!isset(...)` to dedupe the
         // stderr log; flipping `true` to `false` keeps `isset` returning
         // true so the dedupe still fires on subsequent misses.
+        //
+        // FqnIndex dedup / set-accumulator sites (allClassFqns,
+        // openDocClassFqns, openDocFunctionFqns, allFunctionFqns,
+        // iterGenericClasses, iterGenericFunctionsAndMethods,
+        // allDeclarations, locationByShortName): every
+        // `$fqns[$fqn] = true` or `$seen[$key] = true` is consumed
+        // either by `array_keys` (which yields the keys regardless
+        // of value) or by `isset($seen[$key])` (which checks
+        // null-vs-everything-else).  `true`/`false` flips are
+        // indistinguishable in both consumer patterns.
         "TrueValue": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns",
-                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate"
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::allClassFqns",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::openDocClassFqns",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::openDocFunctionFqns",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::allFunctionFqns",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::iterGenericClasses",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::iterGenericFunctionsAndMethods",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::allDeclarations",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::locationByShortName"
             ]
         },
 
