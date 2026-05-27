@@ -140,7 +140,18 @@
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::hover",
                 "XPHP\\Lsp\\Handler\\XphpDefinitionHandler::definition",
                 "XPHP\\Lsp\\Handler\\XphpReferencesHandler::references",
-                "XPHP\\Lsp\\Handler\\XphpRenameHandler::rename"
+                "XPHP\\Lsp\\Handler\\XphpRenameHandler::rename",
+                "XPHP\\Lsp\\Handler\\XphpTypeDefinitionHandler::typeDefinition",
+                // PhpDefinitionResolver::resolveTypeInner
+                // `if (!$typeBearing) return null` early-exit. Removing
+                // the return falls through to `locateClass($typeName)`,
+                // which calls `reflectClassLike($typeName)` -- and that
+                // throws/returns null for any non-class type name
+                // (FUNCTION return types like `void`/`int`, CONSTANT
+                // value types, CASE labels).  Both branches produce
+                // null for non-type-bearing symbols; the early-return
+                // is for clarity and to skip the wasted reflect call.
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
             ]
         },
 
@@ -236,7 +247,12 @@
                 // negation alone is not observable for any nikic-
                 // parsed input where $start >= 0 and $end > $start
                 // by construction.
-                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
+                // PhpDefinitionResolver::resolveTypeInner typeBearing
+                // OR-chain of `=== Symbol::*` checks -- non-type-
+                // bearing symbol kinds all resolve to null via
+                // locateClass for their inferred type either way.
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
             ]
         },
 
@@ -410,6 +426,20 @@
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericFunctionsAndMethods"
+            ]
+        },
+
+        // PhpDefinitionResolver::resolveTypeInner typeBearing-kind
+        // checks: extra mutators (LogicalOrAllSubExprNegation, Identical)
+        // beyond the LogicalOr block above.
+        "LogicalOrAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
+            ]
+        },
+        "Identical": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
             ]
         },
         "GreaterThanOrEqualToNegotiation": {

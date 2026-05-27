@@ -49,6 +49,7 @@ use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
 use XPHP\Lsp\Handler\XphpFoldingRangeHandler;
+use XPHP\Lsp\Handler\XphpTypeDefinitionHandler;
 use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Handler\XphpReferencesHandler;
@@ -239,6 +240,7 @@ final class LspDispatcherFactory implements DispatcherFactory
                 new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
                 $phpDefinitionResolver,
             ),
+            new XphpTypeDefinitionHandler($phpDefinitionResolver),
             new XphpCompletionHandler($workspace, $workspaceSymbols, $phpCompletionResolver, $fqnIndex, $reflector),
             new XphpDocumentSymbolHandler($workspace, $cache),
             new XphpFoldingRangeHandler($workspace, $cache),

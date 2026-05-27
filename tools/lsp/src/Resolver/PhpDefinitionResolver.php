@@ -86,6 +86,85 @@ final class PhpDefinitionResolver
         }
     }
 
+    /**
+     * Resolve the cursor to the definition of the symbol's INFERRED
+     * TYPE rather than the symbol's own declaration site.  Backs
+     * `textDocument/typeDefinition` -- e.g. on `$user = new User();`
+     * with the cursor on the second `$user`, regular `definition`
+     * jumps to the first `$user` (the variable's declaration), while
+     * `typeDefinition` jumps to `class User`.
+     *
+     * For a class reference (cursor on `User`), `(string) $context->type()`
+     * already yields the class FQN -- so this collapses to the same
+     * behaviour as `definition`'s CLASS_ branch.
+     *
+     * For symbol kinds with no meaningful "type" (FUNCTION /
+     * CONSTANT / CASE), returns null -- LSP clients render that as
+     * "no Go To Type Declaration target".
+     */
+    public function resolveType(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Location
+    {
+        try {
+            return $this->resolveTypeInner($uri, $line, $character, $cancel);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function resolveTypeInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Location
+    {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return null;
+        }
+        $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
+        if ($document === null) {
+            return null;
+        }
+
+        $offset = (new PositionMap($document->text))->positionToOffset($line, $character);
+        $stripped = $this->parser->strip($document->text);
+        $sourceCode = TextDocumentBuilder::create($stripped)
+            ->uri($uri)
+            ->language('php')
+            ->build();
+
+        try {
+            $reflectionOffset = $this->reflector->reflectOffset($sourceCode, ByteOffset::fromInt($offset));
+        } catch (Throwable) {
+            return null;
+        }
+
+        if ($cancel !== null && $cancel->isRequested()) {
+            return null;
+        }
+
+        $context = $reflectionOffset->nodeContext();
+        $symbol = $context->symbol();
+
+        // For VARIABLE / PROPERTY / METHOD cursors the meaningful
+        // "type" is the inferred type at the cursor position.  For
+        // CLASS_ the symbol IS the class, so $context->type() returns
+        // the same FQN.  Everything else (FUNCTION, CONSTANT, CASE)
+        // has no useful type to jump to.
+        $kind = $symbol->symbolType();
+        $typeBearing = $kind === Symbol::VARIABLE
+            || $kind === Symbol::PROPERTY
+            || $kind === Symbol::METHOD
+            || $kind === Symbol::CLASS_;
+        if (!$typeBearing) {
+            return null;
+        }
+
+        $typeName = (string) $context->type();
+        if ($typeName === '' || $typeName === '<missing>') {
+            return null;
+        }
+        // Type strings may carry leading-backslash from worse-reflection;
+        // locateClass's reflectClassLike accepts both forms but normalise
+        // for consistency with the test-asserted Location URIs.
+        return $this->locateClass(ltrim($typeName, '\\'));
+    }
+
     private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Location
     {
         if ($cancel !== null && $cancel->isRequested()) {
