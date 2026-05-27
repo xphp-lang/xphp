@@ -461,4 +461,33 @@ final class XphpDefinitionHandlerTest extends TestCase
             $referenceFinder,
         );
     }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('lastSegmentCases')]
+    public function testLastSegmentExtractsFinalIdentifier(string $input, string $expected): void
+    {
+        // `lastSegment` is private; reach it via Reflection so the cases
+        // below pin the exact `substr($identifier, $idx + 1)` index.
+        // Without these, Infection escapes four mutants on line 227 --
+        // IncrementInteger (`+ 2`), DecrementInteger (`+ 0`),
+        // Plus->Minus (`- 1`), UnwrapSubstr (returns the whole string).
+        // The leading-backslash case in particular only works with
+        // `+ 1`; `+ 0` would yield `'\\Baz'`, `+ 2` would yield `'az'`.
+        $reflection = new \ReflectionClass(XphpDefinitionHandler::class);
+        $method = $reflection->getMethod('lastSegment');
+        $method->setAccessible(true);
+
+        self::assertSame($expected, $method->invoke(null, $input));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function lastSegmentCases(): iterable
+    {
+        yield 'fully-qualified multi-segment' => ['App\\Containers\\Box', 'Box'];
+        yield 'two-segment' => ['App\\Foo', 'Foo'];
+        yield 'leading backslash, single segment' => ['\\Stringable', 'Stringable'];
+        yield 'no namespace separator' => ['Box', 'Box'];
+        yield 'empty string' => ['', ''];
+    }
 }

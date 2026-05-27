@@ -43,10 +43,23 @@ final class FqnIndexWarmerTest extends TestCase
         $listeners = $warmer->getListenersForEvent(new \stdClass());
         self::assertSame([], is_array($listeners) ? $listeners : iterator_to_array($listeners));
 
-        // Initialized event -> exactly one listener (the warm method).
+        // Initialized event -> exactly one listener.  Assert the shape
+        // is `[$warmer, 'warm']` -- bound callable on the warmer
+        // instance -- not e.g. the unbound `['warm']` string that
+        // would be returned if the listener array were a single
+        // method-name string.  Without this assertion an
+        // `ArrayItemRemoval` mutant on `[[$this, 'warm']]` -> `[['warm']]`
+        // escapes: the listener count is still 1.
         $listeners = $warmer->getListenersForEvent(new Initialized(new InitializeParams(new \Phpactor\LanguageServerProtocol\ClientCapabilities())));
         $listenerList = is_array($listeners) ? $listeners : iterator_to_array($listeners);
         self::assertCount(1, $listenerList);
+
+        $listener = $listenerList[0];
+        self::assertIsArray($listener);
+        self::assertCount(2, $listener);
+        self::assertSame($warmer, $listener[0]);
+        self::assertSame('warm', $listener[1]);
+        self::assertTrue(is_callable($listener), 'listener must be callable as-is');
     }
 
     public function testWarmHydratesFilesystemFqnIndex(): void

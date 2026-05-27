@@ -78,7 +78,20 @@
                 // scan loop which uses `$shortName = $parts[0]` and a foreach
                 // that won't match a multi-part name against any TypeParam's
                 // single-segment name. Returns null at the end either way.
-                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown"
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
+                // FqnIndex::isTypeParamFqn — `if ($needle === '') return false;`
+                // early exit. Removing it falls through to
+                // `isset($this->typeParamFqns()[''])`, and the lazy set
+                // only ever has non-empty `<ns>\<name>` keys, so isset
+                // returns false too. Both paths yield false; the
+                // early-return exists for clarity, not correctness.
+                "XPHP\\Lsp\\Reflection\\FqnIndex::isTypeParamFqn",
+                // FqnIndex::typeParamFqns — `if ($this->typeParamFqns !== null) return $this->typeParamFqns;`
+                // cache-hit shortcut. Removing it re-runs the
+                // iterGenericClasses + iterGenericFunctionsAndMethods
+                // walk on every call; the resulting set is byte-
+                // identical, only a performance regression.
+                "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns"
             ]
         },
 
@@ -203,9 +216,17 @@
         // already trims leading backslashes during type-arg parsing). The
         // ltrim is a belt-and-suspenders defense; equivalent in current
         // callers.
+        //
+        // FilesystemSourceLocator::locate `ltrim((string) $name, '\\\\')`
+        // — `Phpactor\WorseReflection\Core\Name::fromString` already
+        // normalizes its input by stripping a leading backslash, so by
+        // the time `(string) $name` runs the leading slash is already
+        // gone. The ltrim is defensive against any locator caller that
+        // bypasses `Name::fromString`, but no production path does.
         "UnwrapLtrim": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix"
+                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix",
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate"
             ]
         },
 
@@ -267,6 +288,80 @@
         "ArrayItemRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\LspDispatcherFactory::create"
+            ]
+        },
+
+        // FqnIndex::typeParamFqns set-value flip: `$set[$key] = true`
+        // mutated to `$set[$key] = false`. The set is consumed solely
+        // by `isset($set[$key])` in `isTypeParamFqn`, and `isset` is
+        // null-vs-everything-else (not truthiness) — both `true` and
+        // `false` register as set. Same observable behavior either way.
+        //
+        // FilesystemSourceLocator::locate `$this->loggedMisses[$needle] = true`
+        // — same `isset`-not-truthiness pattern as above. The
+        // `loggedMisses` set is consumed by `!isset(...)` to dedupe the
+        // stderr log; flipping `true` to `false` keeps `isset` returning
+        // true so the dedupe still fires on subsequent misses.
+        "TrueValue": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns",
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate"
+            ]
+        },
+
+        // Observability-log MethodCallRemoval entries. Each of these
+        // sites is a `Stderr::write(...)` call whose only behavior is
+        // emitting a `[xphp-lsp ...]` diagnostic line for editor hosts
+        // to capture. `XPHP_LSP_QUIET=1` (set globally for tests via
+        // phpunit.xml.dist) mutes the helper, so test assertions can't
+        // observe the write -- making `MethodCallRemoval` impossible
+        // to detect under unit-test conditions. The mutants are not
+        // equivalent in production (a regression here loses a log
+        // line), only equivalent under the test infrastructure we
+        // deliberately installed to keep Infection's stderr-stop
+        // happy. See `XPHP\Lsp\Stderr` for the mute mechanism.
+        "MethodCallRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm",
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::buildFilesystemIndex",
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler",
+                // Stderr::write itself is a one-line shim that delegates
+                // to writeTo($message, STDERR). Removing its body breaks
+                // production observability but is untestable from
+                // PHPUnit because fd-2 isn't capturable. The behavior
+                // is covered transitively by StderrTest's writeTo
+                // assertions.
+                "XPHP\\Lsp\\Stderr::write"
+            ]
+        },
+
+        // FilesystemSourceLocator::locate `if (!isset($this->loggedMisses[$needle]))`
+        // — the dedupe guard that suppresses repeated stderr writes for
+        // the same FQN miss. Flipping the negation makes the helper
+        // re-log on every call. Under XPHP_LSP_QUIET=1 the writes are
+        // muted, so tests can't observe the difference; the dedupe
+        // exists purely for production stderr hygiene. Same
+        // "observability-only under test mute" rationale as the
+        // MethodCallRemoval ignores above.
+        "LogicalNot": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate"
+            ]
+        },
+
+        // FqnIndexWarmer::warm `asyncCall(function () { ... })` —
+        // wrapping the warm body in an Amp asyncCall so it runs on the
+        // next event-loop tick rather than synchronously inside the
+        // `initialized` event handler. Removing the wrapper makes the
+        // body run synchronously. Both paths produce the same final
+        // state (FqnIndex populated) and the same observable side
+        // effect (one stderr line, muted in tests). The async-vs-sync
+        // distinction matters only for first-request latency, which
+        // isn't unit-testable.
+        "FunctionCallRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm"
             ]
         }
     }

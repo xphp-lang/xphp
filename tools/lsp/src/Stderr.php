@@ -26,9 +26,25 @@ final class Stderr
 {
     public static function write(string $message): void
     {
+        self::writeTo($message, STDERR);
+    }
+
+    /**
+     * Variant of {@see write} that takes the stream explicitly.  Exists
+     * so tests can pass a `php://memory` resource and assert on what
+     * would have hit fd-2 in production -- writing to STDERR itself
+     * from inside PHPUnit is uncapturable.  Internal; production
+     * callers should use {@see write} which delegates here with the
+     * real STDERR.
+     *
+     * @internal
+     * @param resource $stream
+     */
+    public static function writeTo(string $message, $stream): void
+    {
         if (getenv('XPHP_LSP_QUIET') === '1') {
             return;
         }
-        @fwrite(STDERR, $message);
+        @fwrite($stream, $message);
     }
 }

@@ -96,6 +96,29 @@ final class FilesystemSourceLocatorTest extends TestCase
         $this->newLocator()->locate(Name::fromString('Nope\\Nope'));
     }
 
+    public function testLeadingBackslashIsStrippedBeforeIndexLookup(): void
+    {
+        // `locate()` calls `ltrim((string) $name, '\\')` so that a
+        // fully-qualified `\App\Containers\Box` and its unprefixed form
+        // `App\Containers\Box` resolve to the same entry in the FqnIndex
+        // (which stores FQNs without leading slashes).  Without this
+        // normalization the prefixed lookup would miss and throw
+        // SourceNotFound -- but the test would also catch an
+        // `UnwrapLtrim` mutant that lets the leading slash leak through
+        // to `pathFor`.
+        $path = $this->root . '/Box.xphp';
+        file_put_contents($path, "<?php\nnamespace App\\Containers;\nclass Box<T> {}\n");
+        $locator = $this->newLocator();
+
+        $unprefixed = $locator->locate(Name::fromString('App\\Containers\\Box'));
+        $prefixed = $locator->locate(Name::fromString('\\App\\Containers\\Box'));
+
+        self::assertStringEndsWith($path, (string) $unprefixed->uri());
+        self::assertStringEndsWith($path, (string) $prefixed->uri());
+        // Same FQN after ltrim -> same cached TextDocument instance.
+        self::assertSame($unprefixed, $prefixed);
+    }
+
     public function testHitCacheReturnsSameDocumentInstanceOnRepeatedLookups(): void
     {
         // The fix-H hit cache: repeated locate() calls for the same
