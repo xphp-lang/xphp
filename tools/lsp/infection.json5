@@ -91,7 +91,27 @@
                 // iterGenericClasses + iterGenericFunctionsAndMethods
                 // walk on every call; the resulting set is byte-
                 // identical, only a performance regression.
-                "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns"
+                "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns",
+                // Handler-level cancel-poll early returns
+                // (`return new Success(null)` inside the
+                // `$cancel !== null && $cancel->isRequested()` guard).
+                // Removing the return falls through to the rest of
+                // the handler, which calls into the resolver/provider
+                // layer.  The provider methods (PhpHoverResolver,
+                // RenameProvider, ReferenceFinder) ALSO check the
+                // cancel token internally and propagate null/[] for a
+                // cancelled token -- so the handler-level early-return
+                // is a performance shortcut, not a correctness gate.
+                // Tests that pre-cancel the token still see a null
+                // result via the downstream path; the mutant is
+                // observationally equivalent under test conditions.
+                // Removing it in production wastes work (the resolver
+                // chain runs to completion before bailing) but doesn't
+                // change the observable answer.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::hover",
+                "XPHP\\Lsp\\Handler\\XphpDefinitionHandler::definition",
+                "XPHP\\Lsp\\Handler\\XphpReferencesHandler::references",
+                "XPHP\\Lsp\\Handler\\XphpRenameHandler::rename"
             ]
         },
 

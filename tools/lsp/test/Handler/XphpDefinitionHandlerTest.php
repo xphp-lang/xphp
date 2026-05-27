@@ -462,6 +462,58 @@ final class XphpDefinitionHandlerTest extends TestCase
         );
     }
 
+    public function testReturnsResultWhenCancelTokenNotRequested(): void
+    {
+        // Pins the cancel-poll guard at line 80.
+        // LogicalAndSingleSubExprNegation flipping `isRequested` would
+        // short-circuit on a fresh token and break happy-path GTD.
+        $workspace = new PhpactorWorkspace();
+        $boxSource = "<?php\nnamespace App;\nclass Box<T> {}\n";
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<int>();\n";
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, $boxSource));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $handler = $this->newHandler($workspace);
+        $byte = strpos($useSource, 'Box<int>');
+        self::assertNotFalse($byte);
+        [$line, $character] = (new PositionMap($useSource))->offsetToPosition($byte);
+        $params = new DefinitionParams(
+            new TextDocumentIdentifier('/Use.xphp'),
+            new Position($line, $character),
+        );
+
+        $cancel = new \Amp\CancellationTokenSource();
+        // Deliberately NOT cancelled.
+
+        $location = wait($handler->definition($params, $cancel->getToken()));
+        self::assertInstanceOf(Location::class, $location);
+        self::assertSame('/Box.xphp', $location->uri);
+    }
+
+    public function testReturnsNullWhenCancelTokenAlreadyRequested(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $boxSource = "<?php\nnamespace App;\nclass Box<T> {}\n";
+        $useSource = "<?php\nnamespace App;\n\$x = new Box<int>();\n";
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, $boxSource));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $handler = $this->newHandler($workspace);
+        $byte = strpos($useSource, 'Box<int>');
+        self::assertNotFalse($byte);
+        [$line, $character] = (new PositionMap($useSource))->offsetToPosition($byte);
+        $params = new DefinitionParams(
+            new TextDocumentIdentifier('/Use.xphp'),
+            new Position($line, $character),
+        );
+
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $location = wait($handler->definition($params, $cancel->getToken()));
+        self::assertNull($location);
+    }
+
     #[\PHPUnit\Framework\Attributes\DataProvider('lastSegmentCases')]
     public function testLastSegmentExtractsFinalIdentifier(string $input, string $expected): void
     {

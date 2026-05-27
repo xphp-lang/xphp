@@ -476,6 +476,54 @@ final class XphpReferencesHandlerTest extends TestCase
         self::assertSame([], wait($handler->references($params)));
     }
 
+    public function testReturnsResultWhenCancelTokenNotRequested(): void
+    {
+        // Pins the cancel-poll guards on XphpReferencesHandler
+        // (lines 52 and 64).  A LogicalAndSingleSubExprNegation mutant
+        // flipping `isRequested` to `!isRequested` would short-circuit
+        // even for fresh tokens, leaving every references call empty.
+        $workspace = new PhpactorWorkspace();
+        $source = "<?php\nnamespace App;\nclass Box<T> {}\n\$x = new Box<int>();\n";
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, $source));
+
+        $handler = $this->handler($workspace);
+        $byte = strpos($source, 'class Box') + strlen('class ');
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $params = new ReferenceParams(
+            new ReferenceContext(true),
+            new TextDocumentIdentifier('/Box.xphp'),
+            new Position($line, $character),
+        );
+
+        $cancel = new \Amp\CancellationTokenSource();
+        // Deliberately NOT cancelled.
+
+        $result = wait($handler->references($params, $cancel->getToken()));
+        self::assertIsArray($result);
+        self::assertNotEmpty($result, 'non-requested cancel must not short-circuit');
+    }
+
+    public function testReturnsEmptyArrayWhenCancelTokenAlreadyRequested(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $source = "<?php\nnamespace App;\nclass Box<T> {}\n\$x = new Box<int>();\n";
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, $source));
+
+        $handler = $this->handler($workspace);
+        $byte = strpos($source, 'class Box') + strlen('class ');
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $params = new ReferenceParams(
+            new ReferenceContext(true),
+            new TextDocumentIdentifier('/Box.xphp'),
+            new Position($line, $character),
+        );
+
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        self::assertSame([], wait($handler->references($params, $cancel->getToken())));
+    }
+
     /**
      * @return list<Location>
      */

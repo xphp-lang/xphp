@@ -479,6 +479,36 @@ final class XphpRenameHandlerTest extends TestCase
         return $result;
     }
 
+    public function testReturnsResultWhenCancelTokenNotRequested(): void
+    {
+        // Pins the cancel-poll guard at XphpRenameHandler line 61.
+        // A LogicalAndSingleSubExprNegation mutant flipping
+        // `isRequested` to `!isRequested` would short-circuit every
+        // rename call that arrived with a non-requested cancel token.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+
+        $params = self::paramsFor($workspace, '/User.xphp', 'class User', strlen('class '), 'Customer');
+        $cancel = new \Amp\CancellationTokenSource();
+        // Deliberately NOT cancelled.
+
+        $result = wait($this->handler($workspace)->rename($params, $cancel->getToken()));
+        self::assertInstanceOf(WorkspaceEdit::class, $result);
+    }
+
+    public function testReturnsNullWhenCancelTokenAlreadyRequested(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+
+        $params = self::paramsFor($workspace, '/User.xphp', 'class User', strlen('class '), 'Customer');
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $result = wait($this->handler($workspace)->rename($params, $cancel->getToken()));
+        self::assertNull($result);
+    }
+
     private static function paramsFor(
         PhpactorWorkspace $workspace,
         string $uri,

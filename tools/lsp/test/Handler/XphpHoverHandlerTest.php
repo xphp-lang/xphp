@@ -200,6 +200,74 @@ final class XphpHoverHandlerTest extends TestCase
         self::assertStringNotContainsString('`K`', $text);
     }
 
+    public function testReturnsResultWhenCancelTokenNotRequested(): void
+    {
+        // Pins the cancel-poll guards at lines 90 and 101:
+        //   if ($cancel !== null && $cancel->isRequested()) return null;
+        // Without this test, `LogicalAndSingleSubExprNegation` mutating
+        // the `isRequested` clause to `!isRequested` escapes -- a
+        // non-null + not-requested token would then trigger the
+        // early-return and the hover would come back null.  This test
+        // passes a non-null + not-requested token and asserts the
+        // handler still produces the normal hover.
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T>
+        {
+            public T $item;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+
+        $byte = strpos($source, 'public T $item');
+        self::assertNotFalse($byte);
+        $byte += strlen('public ');
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $params = new HoverParams(
+            new TextDocumentIdentifier($uri),
+            new Position($line, $character),
+        );
+
+        $cancel = new \Amp\CancellationTokenSource();
+        // Deliberately do NOT call $cancel->cancel().
+
+        $hover = wait($handler->hover($params, $cancel->getToken()));
+        self::assertNotNull($hover, 'non-requested cancel token must not short-circuit');
+    }
+
+    public function testReturnsNullWhenCancelTokenAlreadyRequested(): void
+    {
+        // The other half of the cancel-poll guard: a pre-requested
+        // token must produce a null result.  Pairs with the above to
+        // pin both observable branches of the
+        // `if ($cancel !== null && $cancel->isRequested())` guard.
+        [$handler, $workspace, $uri] = $this->prepare(<<<'XPHP'
+        <?php
+        namespace App;
+        class Box<T>
+        {
+            public T $item;
+        }
+        XPHP);
+        $source = $workspace->get($uri)->text;
+
+        $byte = strpos($source, 'public T $item');
+        self::assertNotFalse($byte);
+        $byte += strlen('public ');
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $params = new HoverParams(
+            new TextDocumentIdentifier($uri),
+            new Position($line, $character),
+        );
+
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $hover = wait($handler->hover($params, $cancel->getToken()));
+        self::assertNull($hover, 'requested cancel token must short-circuit to null');
+    }
+
     public function testTypeParamHoverIgnoresNonTypeParamEntriesInGenericParamsList(): void
     {
         // Locks `!$param instanceof TypeParam` part of the OR on line 132.
