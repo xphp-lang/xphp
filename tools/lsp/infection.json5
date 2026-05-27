@@ -57,7 +57,13 @@
                 // for cursor-equals-end-of-arg, which corresponds to
                 // "cursor immediately after the arg".  -1/0 gives
                 // the same answer in all single-arg-slot tests.
-                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter"
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
+                // XphpInlayHintHandler::hintForAssign `$varEnd + 1`
+                // -- the +1 positions the hint immediately after the
+                // variable name; -1/0 still lands on or just before
+                // the same character, which our `paddingLeft: true`
+                // makes visually indistinct.
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign"
             ]
         },
         "IncrementInteger": {
@@ -73,7 +79,8 @@
                 // pattern.
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
-                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter"
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign"
             ]
         },
         "Minus": {
@@ -185,6 +192,7 @@
                 // input shape).
                 "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::inlayHint",
                 // PhpDefinitionResolver::resolveTypeInner
                 // `if (!$typeBearing) return null` early-exit. Removing
                 // the return falls through to `locateClass($typeName)`,
@@ -376,6 +384,14 @@
                 // -- same shape as buildSignature's type-validity
                 // guard.
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::resolveClassNameAt",
+                // XphpInlayHintHandler::hintForAssign instanceof
+                // dispatch (`$rhs instanceof StaticCall && $rhs->name
+                // instanceof Node\Identifier`, etc.).  Each
+                // dispatch arm is mutually exclusive; flipping any
+                // instanceof flag lands in another arm or null,
+                // observationally indistinguishable when both arms
+                // return null for the test fixture's RHS shape.
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
                 // WorkspaceAnalyzer column-accurate range guards — see the
                 // `GreaterThanOrEqualTo` ignore above for the rationale.
                 // `($identifier !== null && $identifier->getStartFilePos() >= 0)`
@@ -530,7 +546,11 @@
                 // the name shape; flipping either instanceof gives
                 // the same null result for the unused branches.
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::calleeName",
-                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::reflectCallee"
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::reflectCallee",
+                // XphpInlayHintHandler::hintForAssign $rhs instanceof
+                // StaticCall / FuncCall arm checks -- same mutually-
+                // exclusive dispatch as the SignatureHelp variant.
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign"
             ]
         },
 

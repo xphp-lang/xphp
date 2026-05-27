@@ -51,6 +51,7 @@ use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
 use XPHP\Lsp\Handler\XphpCompletionResolveHandler;
 use XPHP\Lsp\Handler\XphpDocumentHighlightHandler;
 use XPHP\Lsp\Handler\XphpFoldingRangeHandler;
+use XPHP\Lsp\Handler\XphpInlayHintHandler;
 use XPHP\Lsp\Handler\XphpSignatureHelpHandler;
 use XPHP\Lsp\Handler\XphpTypeDefinitionHandler;
 use XPHP\Lsp\Handler\XphpFileWatcherHandler;
@@ -247,6 +248,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpCompletionHandler($workspace, $workspaceSymbols, $phpCompletionResolver, $fqnIndex, $reflector),
             new XphpCompletionResolveHandler($reflector),
             new XphpSignatureHelpHandler($workspace, $cache, $xphpParser, $reflector),
+            new XphpInlayHintHandler($workspace, $cache, $genericResolver),
             new XphpDocumentSymbolHandler($workspace, $cache),
             new XphpFoldingRangeHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),
