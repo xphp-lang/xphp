@@ -408,6 +408,61 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertLessThanOrEqual(80, $location->range->end->character - $location->range->start->character);
     }
 
+    /**
+     * @dataProvider acceptedClassFqnProvider
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('acceptedClassFqnProvider')]
+    public function testIsClassFqnAcceptsPlausibleClassNames(string $typeName): void
+    {
+        self::assertTrue(PhpDefinitionResolver::isClassFqn($typeName), $typeName);
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function acceptedClassFqnProvider(): iterable
+    {
+        yield 'simple name' => ['User'];
+        yield 'namespaced' => ['App\\Models\\User'];
+        yield 'leading backslash' => ['\\App\\Models\\User'];
+        yield 'nullable' => ['?App\\Models\\User'];
+        yield 'nullable leading backslash' => ['?\\App\\Models\\User'];
+        yield 'underscore-prefix' => ['_internal'];
+    }
+
+    /**
+     * @dataProvider rejectedClassFqnProvider
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('rejectedClassFqnProvider')]
+    public function testIsClassFqnRejectsNonClassTypeStrings(string $typeName): void
+    {
+        // worse-reflection emits these shapes for inferred non-class
+        // types -- feeding them to `reflectClassLike` causes a
+        // SourceNotFound after a wasted locator walk + a stderr miss
+        // log line.  isClassFqn must catch every shape seen in prod.
+        self::assertFalse(PhpDefinitionResolver::isClassFqn($typeName), $typeName);
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function rejectedClassFqnProvider(): iterable
+    {
+        yield 'empty' => [''];
+        yield 'missing sentinel' => ['<missing>'];
+        yield 'union' => ['App\\Foo|App\\Bar'];
+        yield 'intersection' => ['App\\Foo&App\\Bar'];
+        yield 'grouped union of intersections' => [
+            '(PhpParser\\Node\\Stmt\\ClassLike&PhpParser\\Node\\Stmt\\Class_)|(PhpParser\\Node\\Stmt\\ClassLike&PhpParser\\Node\\Stmt\\Interface_)',
+        ];
+        yield 'grouped method-call union' => [
+            '(PhpParser\\Node&PhpParser\\Node\\Expr\\MethodCall)|(PhpParser\\Node&PhpParser\\Node\\Expr\\NullsafeMethodCall)',
+        ];
+        yield 'integer literal zero' => ['0'];
+        yield 'integer literal one' => ['1'];
+        yield 'string literal' => ["'foo'"];
+    }
+
     public function testReturnsNullWhenAlreadyCancelledAtEntry(): void
     {
         // Fix D: pre-cancelled token bails at the top of resolveInner,
