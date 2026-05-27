@@ -31,9 +31,13 @@ final class PhpHoverResolverTest extends TestCase
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'new User', 4);
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('class App\\User', $markdown);
-        self::assertStringContainsString('A user.', $markdown);
+        // Exact-match on the class hover -- catches Concat /
+        // ConcatOperandRemoval mutants on `renderClass`'s
+        // `"class " . $classFqn` signature build.
+        self::assertSame(
+            "```php\nclass App\\User\n```\n\nA user.",
+            $this->markdown($hover),
+        );
     }
 
     public function testHoversUserFunctionWithSignature(): void
@@ -45,9 +49,13 @@ final class PhpHoverResolverTest extends TestCase
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, 'echo greet', strlen('echo '));
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('function App\\greet', $markdown);
-        self::assertStringContainsString('Greet someone', $markdown);
+        // Exact-match on the function hover -- catches Concat /
+        // ConcatOperandRemoval mutants on renderFunction's
+        // `"function " . $fqn . $params . ": " . $returnType` shape.
+        self::assertSame(
+            "```php\nfunction App\\greet(string \$n): string\n```\n\nGreet someone.",
+            $this->markdown($hover),
+        );
     }
 
     public function testHoversMethodWithReceiverContext(): void
@@ -89,8 +97,69 @@ final class PhpHoverResolverTest extends TestCase
 
         $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '->name', 2);
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('$name', $markdown);
+        // Exact-markdown assertion -- pins the property-hover signature
+        // format (`// <class>\n<visibility> <static><type> $<name>`)
+        // against the dense mutant cluster on line 282 (NotIdentical,
+        // LogicalAnd, Ternary, Concat, ConcatOperandRemoval on the
+        // `$type . ' '` join), and the `format()` `"```php\n..."`
+        // wrapper on line 374.
+        self::assertSame(
+            "```php\n// App\\User\npublic string \$name\n```\n\nThe displayed name.",
+            $this->markdown($hover),
+        );
+    }
+
+    public function testHoversStaticPropertyWithStaticModifier(): void
+    {
+        // Pins the `$static = $property->isStatic() ? 'static ' : ''`
+        // ternary (line ~275) AND the `$type . ' '` concat (line 282)
+        // joining static + type in the signature.  A property like
+        // `public static array $items` must render as
+        // `public static array $items`, in that order, with single
+        // spaces between each token.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Cache.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Cache {
+            public static array $items = [];
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Cache;\nCache::\$items;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '$items', 0);
+
+        self::assertSame(
+            "```php\n// App\\Cache\npublic static array \$items\n```",
+            $this->markdown($hover),
+        );
+    }
+
+    public function testFormatWrapsSignatureInFencedCodeBlock(): void
+    {
+        // `format()` (line 372-379) wraps any signature in a ```php
+        // fenced code block, with the docblock appended after a blank
+        // line if non-empty.  Pins Concat / ConcatOperandRemoval
+        // mutants on `"\`\`\`php\n" . $signature . "\n\`\`\`"` and
+        // the `"\n\n" . $docblockText` docblock join.
+        //
+        // Exercised via testHoversClassWithSignature and the property
+        // tests above with EXACT markdown asserts -- the fence pattern
+        // and "two-newline + docblock" suffix are part of those
+        // string equalities.
+        $reflection = new \ReflectionClass(PhpHoverResolver::class);
+        $method = $reflection->getMethod('format');
+        $method->setAccessible(true);
+
+        self::assertSame(
+            "```php\nfunc()\n```",
+            $method->invoke(null, 'func()', ''),
+        );
+        self::assertSame(
+            "```php\nfunc()\n```\n\ndoc",
+            $method->invoke(null, 'func()', 'doc'),
+        );
     }
 
     public function testMethodHoverSubstitutesParameterTypesAtCallSite(): void
@@ -334,15 +403,20 @@ final class PhpHoverResolverTest extends TestCase
         // because worse-reflection has no useful symbol classification
         // for the declaration name token.  AST-based fallback now
         // identifies the enclosing Function_ and renders its signature.
+        //
+        // Exact-match assertion pins the rendered signature against
+        // Concat / ConcatOperandRemoval mutants on the renderFunction
+        // body.
         $workspace = $this->workspace();
         $useSource = "<?php\nnamespace App;\n/** Counts items. */\nfunction originalCount(array \$items): int { return count(\$items); }\n";
         $this->open($workspace, '/funcs.xphp', $useSource);
 
         $hover = $this->hoverAt($workspace, '/funcs.xphp', $useSource, 'originalCount', 3);
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('originalCount', $markdown);
-        self::assertStringContainsString('Counts items', $markdown);
+        self::assertSame(
+            "```php\nfunction App\\originalCount(array \$items): int\n```\n\nCounts items.",
+            $this->markdown($hover),
+        );
     }
 
     public function testHoverOnClassDeclarationNameShowsSignature(): void
@@ -353,9 +427,15 @@ final class PhpHoverResolverTest extends TestCase
 
         $hover = $this->hoverAt($workspace, '/Widget.xphp', $useSource, 'class Widget', strlen('class '));
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('Widget', $markdown);
-        self::assertStringContainsString('A widget', $markdown);
+        // Exact-match: pins the `$this->namespace . '\\' . $short`
+        // concat in `declarationFqnAtOffset`'s visitor (line ~424)
+        // and the renderClass `class <fqn>` signature shape.
+        // Concat / ConcatOperandRemoval / Ternary mutants on the
+        // FQN-building branch would shift the rendered FQN string.
+        self::assertSame(
+            "```php\nclass App\\Widget\n```\n\nA widget.",
+            $this->markdown($hover),
+        );
     }
 
     public function testHoverOnMethodDeclarationNameShowsSignature(): void
@@ -366,9 +446,14 @@ final class PhpHoverResolverTest extends TestCase
 
         $hover = $this->hoverAt($workspace, '/Widget.xphp', $useSource, 'function shout', strlen('function '));
 
-        $markdown = $this->markdown($hover);
-        self::assertStringContainsString('shout', $markdown);
-        self::assertStringContainsString('Shouts loudly', $markdown);
+        // Exact-match: pins method signature rendering including the
+        // `// <classFqn>\n<visibility> function ...` shape.  Catches
+        // Concat / ConcatOperandRemoval / Ternary mutants on the
+        // renderMethod join.
+        self::assertSame(
+            "```php\n// App\\Widget\npublic function shout(): string\n```\n\nShouts loudly.",
+            $this->markdown($hover),
+        );
     }
 
     public function testHoverInsideUseFunctionImportShowsFunctionSignature(): void
