@@ -193,6 +193,16 @@
                 "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
                 "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::inlayHint",
+                // XphpCodeActionHandler is scaffolding -- the body
+                // always returns an empty array regardless of which
+                // guard short-circuits early.  Every ReturnRemoval
+                // / LogicalAnd / LogicalNot mutant on the guards
+                // produces the same observable result (empty list)
+                // because the only thing past every guard is also
+                // an empty list.  Future commits will replace the
+                // empty body with per-diagnostic dispatch and these
+                // ignores will need to be re-evaluated.
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
                 // PhpDefinitionResolver::resolveTypeInner
                 // `if (!$typeBearing) return null` early-exit. Removing
                 // the return falls through to `locateClass($typeName)`,
@@ -594,12 +604,14 @@
         },
         "LogicalAndAllSubExprNegation": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction"
             ]
         },
         "LogicalAndNegation": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction"
             ]
         },
 
@@ -718,7 +730,8 @@
         // MethodCallRemoval ignores above.
         "LogicalNot": {
             "ignore": [
-                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate"
+                "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction"
             ]
         },
 
