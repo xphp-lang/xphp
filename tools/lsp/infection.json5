@@ -41,7 +41,23 @@
                 // a multi-line declaration the closing `}` lands on the same
                 // line regardless (the +1 only matters when the node ends
                 // mid-line, which fold-eligible bodies don't).
-                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
+                // XphpSignatureHelpHandler::signatureHelp
+                // `activeSignature: 0` -- we only ever emit one
+                // signature today (no overload support since PHP
+                // lacks overloads), so any mutation on the index 0
+                // is observationally equivalent.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
+                // XphpSignatureHelpHandler::findEnclosingCall `+ 1`
+                // boundary on `$end + 1` -- same end-of-node mid-line
+                // pattern as XphpFoldingRangeHandler::addRange.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
+                // XphpSignatureHelpHandler::computeActiveParameter
+                // `$argEnd + 1` -- the +1 makes the bound inclusive
+                // for cursor-equals-end-of-arg, which corresponds to
+                // "cursor immediately after the arg".  -1/0 gives
+                // the same answer in all single-arg-slot tests.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter"
             ]
         },
         "IncrementInteger": {
@@ -52,7 +68,12 @@
                 // fullLineRangeFromNikic: `?? strlen($this->source) + 1` last-line
                 // fallback. The value is then passed to substr() which clamps to
                 // the source length, so +1 vs +2 produces identical lineText.
-                "XPHP\\Lsp\\PositionMap::fullLineRangeFromNikic"
+                "XPHP\\Lsp\\PositionMap::fullLineRangeFromNikic",
+                // Mirrors the DecrementInteger entries above; same
+                // pattern.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter"
             ]
         },
         "Minus": {
@@ -67,7 +88,18 @@
                 // `if ($code < 0x80)` — the value 0x80 itself returns 1 via the
                 // final fallback regardless of which branch handles it; the
                 // mutation is equivalent at the exact boundary.
-                "XPHP\\Lsp\\PositionMap::utf8CharLength"
+                "XPHP\\Lsp\\PositionMap::utf8CharLength",
+                // XphpSignatureHelpHandler::findEnclosingCall
+                // `$start < 0 || $offset < $start || $offset > $end + 1`
+                // -- same defensive nikic-position pattern as
+                // ReferenceFinder::resolveTargetAt's `< 0` guard.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
+                // XphpSignatureHelpHandler::resolveClassNameAt
+                // `if ($nameStart < 0)` defensive guard.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::resolveClassNameAt",
+                // XphpSignatureHelpHandler::computeActiveParameter
+                // `if ($argEnd < 0) continue;` defensive guard.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter"
             ]
         },
         "ReturnRemoval": {
@@ -152,6 +184,7 @@
                 // matrix (we test each guard hits with the corresponding
                 // input shape).
                 "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
                 // PhpDefinitionResolver::resolveTypeInner
                 // `if (!$typeBearing) return null` early-exit. Removing
                 // the return falls through to `locateClass($typeName)`,
@@ -285,6 +318,12 @@
                 // parsed input where $start >= 0 and $end > $start
                 // by construction.
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
+                // XphpSignatureHelpHandler::findEnclosingCall
+                // `$start < 0 || $offset < $start || $offset > $end + 1`
+                // -- same defensive nikic-position pattern; nikic
+                // always populates startFilePos >= 0 for parsed nodes,
+                // and offset-in-range tests cover the inner clauses.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
                 // PhpDefinitionResolver::resolveTypeInner typeBearing
                 // OR-chain of `=== Symbol::*` checks -- non-type-
                 // bearing symbol kinds all resolve to null via
@@ -309,6 +348,34 @@
         "LogicalAnd": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
+                // XphpSignatureHelpHandler::buildSignature
+                // `$type !== '' && $type !== '<missing>'` -- same
+                // joint-defensive pattern as PhpHoverResolver's
+                // property/method renderers; the inferredType()
+                // either returns a valid type name OR exactly
+                // '<missing>'/''.  Flipping either clause is not
+                // observably distinct.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::buildSignature",
+                // XphpSignatureHelpHandler::calleeName / reflectCallee
+                // dispatch checks (`$call instanceof StaticCall &&
+                // $call->name instanceof Node\Identifier`, etc.).
+                // The matching `instanceof` narrowing is jointly
+                // necessary; any single-clause flip lands in a
+                // different dispatch arm or null, which our matrix
+                // of tests for each call kind covers via the happy
+                // path of THE OTHER kind.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::calleeName",
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::reflectCallee",
+                // XphpSignatureHelpHandler::computeActiveParameter
+                // `if ($argEnd < 0) continue;` defensive guard --
+                // nikic populates getEndFilePos >= 0 for parsed Arg
+                // nodes; the guard is dead in practice.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
+                // XphpSignatureHelpHandler::resolveClassNameAt
+                // defensive `$resolved !== '' && $resolved !== '<missing>'`
+                // -- same shape as buildSignature's type-validity
+                // guard.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::resolveClassNameAt",
                 // WorkspaceAnalyzer column-accurate range guards — see the
                 // `GreaterThanOrEqualTo` ignore above for the rationale.
                 // `($identifier !== null && $identifier->getStartFilePos() >= 0)`
@@ -394,6 +461,11 @@
                 "XPHP\\Lsp\\Reflection\\FqnIndex::allFunctionFqns",
                 "XPHP\\Lsp\\Resolver\\PhpHoverResolver::renderMethod",
                 "XPHP\\Lsp\\Resolver\\PhpHoverResolver::renderProperty",
+                // XphpSignatureHelpHandler::buildSignature
+                // `(string) $param->inferredType()` -- worse-reflection
+                // Type implements __toString; sprintf/concat coerce
+                // it identically without the explicit cast.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::buildSignature",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::shortNameAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::findReferences",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
@@ -450,7 +522,15 @@
         // version.
         "InstanceOf_": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder",
+                // XphpSignatureHelpHandler::calleeName / reflectCallee
+                // dispatch checks (`$call instanceof FuncCall &&
+                // $call->name instanceof Node\Name`, etc.).  Each
+                // dispatch arm narrows the node type AND validates
+                // the name shape; flipping either instanceof gives
+                // the same null result for the unused branches.
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::calleeName",
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::reflectCallee"
             ]
         },
 
