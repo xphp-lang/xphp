@@ -195,7 +195,13 @@
                 // `if ($startOffset === null || $endOffset === null)` — both
                 // are set together by the inner visitor; the OR can never
                 // observe one null without the other.
-                "XPHP\\Lsp\\Handler\\XphpDefinitionHandler::findDefinitionAcrossWorkspace"
+                "XPHP\\Lsp\\Handler\\XphpDefinitionHandler::findDefinitionAcrossWorkspace",
+                // ReferenceFinder::resolveTargetAt defensive
+                // `$start < 0 || $end < 0` guard against synthetic
+                // nodes without position info -- same equivalent-by-
+                // unreachability pattern as the AstPositionResolver
+                // LessThanOrEqualTo ignore further down.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
             ]
         },
 
@@ -306,6 +312,33 @@
         "LessThanOrEqualTo": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\AstPositionResolver"
+            ]
+        },
+
+        // Same defensive `$start < 0 || $end < 0` guard pattern --
+        // ReferenceFinder::resolveTargetAt has its own copy inside an
+        // anonymous-class visitor (line 245).  LessThan flips `<` to
+        // `<=` which would also exclude `offset == 0` start positions,
+        // but nikic emits startFilePos as a real byte offset (>= 0)
+        // so neither LessThan nor LogicalOr clause swap is killable
+        // by any nikic-parsed input.
+        "LessThan": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
+            ]
+        },
+
+        // ReferenceFinder line 419: InstanceOf_ on
+        // `$best instanceof Node\VarLikeIdentifier || $best instanceof Identifier`.
+        // PropertyProperty's `name` field is a VarLikeIdentifier in
+        // some nikic versions and an Identifier in others; both
+        // branches are real but only one fires for any given nikic
+        // version.  The OR is forward-compat insurance, not a
+        // behaviour we can exercise with the currently-installed
+        // version.
+        "InstanceOf_": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
             ]
         },
 
