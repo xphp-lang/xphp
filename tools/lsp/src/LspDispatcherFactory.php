@@ -280,6 +280,14 @@ final class LspDispatcherFactory implements DispatcherFactory
         $runner = new HandlerMethodRunner(
             $handlers,
             new ChainArgumentResolver(
+                // LspObjectArgumentResolver runs BEFORE the framework's
+                // `*Params$`-only resolver so handlers whose first
+                // parameter is a non-Params LSP object (CompletionItem,
+                // CodeAction) get a properly deserialised instance
+                // instead of `array_values($params)` splatted scalars.
+                // Backs textDocument/completionItem/resolve and
+                // codeAction/resolve.
+                new \XPHP\Lsp\Dispatcher\LspObjectArgumentResolver(),
                 new LanguageSeverProtocolParamsResolver(),
                 new PassThroughArgumentResolver(),
             ),
