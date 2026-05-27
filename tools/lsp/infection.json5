@@ -92,6 +92,19 @@
                 // walk on every call; the resulting set is byte-
                 // identical, only a performance regression.
                 "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns",
+                // FqnIndex public lookup APIs share the same
+                // empty-needle early-return pattern:
+                //   $needle = ltrim($fqn, '\\');
+                //   if ($needle === '') return null;
+                // Removing the return falls through to
+                // openDocXxx('') / filesystemMap[''] / locationByShortName('')
+                // which all return null too -- the explicit early
+                // return is for clarity, not correctness.
+                "XPHP\\Lsp\\Reflection\\FqnIndex::pathFor",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::classLikeFor",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::functionFor",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::locationForFqn",
+                "XPHP\\Lsp\\Reflection\\FqnIndex::boundsForGenericClass",
                 // Handler-level cancel-poll early returns
                 // (`return new Success(null)` inside the
                 // `$cancel !== null && $cancel->isRequested()` guard).
