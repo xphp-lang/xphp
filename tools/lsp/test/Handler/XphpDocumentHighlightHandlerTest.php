@@ -85,6 +85,64 @@ final class XphpDocumentHighlightHandlerTest extends TestCase
         }
     }
 
+    public function testSkipsFilesystemScanForOpenDocOnlyRequest(): void
+    {
+        // Regression for the 2026-05-27 prod-log 2:43 documentHighlight
+        // stall: prior to Fix 2 the handler walked every indexed
+        // filesystem path looking for matches only to discard them in
+        // the cross-file filter.  This test pins down that an on-disk
+        // file with the same class reference does NOT cause any
+        // additional highlights to be emitted -- and, equivalently,
+        // that the in-file result is unaffected by what's on disk.
+        $root = sys_get_temp_dir() . '/xphp-doc-highlight-' . bin2hex(random_bytes(4));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/Other.xphp', "<?php\nnamespace App;\n\$z = new User();\n");
+
+            $workspace = new PhpactorWorkspace();
+            $source = "<?php\nnamespace App;\nclass User {}\n\$a = new User();\n";
+            $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $source));
+
+            $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+            $cache = new ParsedDocumentCache(new Analyzer($parser));
+            $fqnIndex = new FqnIndex($workspace, $cache, $parser, $root);
+            $reflector = (new ReflectorFactory(
+                $workspace,
+                $cache,
+                $parser,
+                rootPath: $root,
+                stubPath: ReflectorFactory::defaultStubPath(),
+                cacheDir: ReflectorFactory::defaultCacheDir(),
+                fqnIndex: $fqnIndex,
+            ))->build();
+            $classLikeLookup = new CompositeClassLikeLookup(
+                new WorkspaceClassLikeLookup($workspace, $cache),
+                new FilesystemClassLikeLookup($fqnIndex),
+            );
+            $generic = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
+            $finder = new ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $generic);
+            $handler = new XphpDocumentHighlightHandler($workspace, $finder);
+
+            // Cursor on `class User` -- two in-file matches (decl + new).
+            $byte = strpos($source, 'class User') + strlen('class ');
+            [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+            $params = new DocumentHighlightParams(
+                new TextDocumentIdentifier('/Use.xphp'),
+                new Position($line, $character),
+            );
+            $highlights = wait($handler->documentHighlight($params));
+
+            self::assertCount(2, $highlights, 'in-file decl + use only');
+        } finally {
+            if (is_dir($root)) {
+                foreach (glob($root . '/*') ?: [] as $f) {
+                    @unlink($f);
+                }
+                @rmdir($root);
+            }
+        }
+    }
+
     public function testReturnsEmptyArrayForUnknownDocument(): void
     {
         $workspace = new PhpactorWorkspace();

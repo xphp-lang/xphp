@@ -125,6 +125,7 @@ final class ReferenceFinder
         int $byteOffset,
         bool $includeDeclaration,
         ?\Amp\CancellationToken $cancel = null,
+        ?string $restrictToUri = null,
     ): array {
         $target = $this->resolveTargetAt($uri, $byteOffset);
         if ($target === null) {
@@ -135,6 +136,13 @@ final class ReferenceFinder
         $seenUris = [];
 
         // Open-doc pass: live state beats on-disk.
+        //
+        // `$restrictToUri` short-circuits to a single open document --
+        // documentHighlight needs only in-file results, and walking
+        // hundreds of filesystem files only to throw them away was the
+        // 2026-05-27 prod-log stall (~2.7s of single-thread work
+        // blocking 5 queued requests behind it).  With the restriction
+        // we scan exactly one URI's AST.
         foreach ($this->workspace as $docUri => $item) {
             // Cancellation poll per file: the open-doc set is typically
             // small (tens of files at most) so checking on every
@@ -142,8 +150,12 @@ final class ReferenceFinder
             if ($cancel !== null && $cancel->isRequested()) {
                 return [];
             }
-            $seenUris[(string) $docUri] = true;
-            $result = $this->cache->getOrParse((string) $docUri, $item->version, $item->text);
+            $docUriStr = (string) $docUri;
+            if ($restrictToUri !== null && $docUriStr !== $restrictToUri) {
+                continue;
+            }
+            $seenUris[$docUriStr] = true;
+            $result = $this->cache->getOrParse($docUriStr, $item->version, $item->text);
             $ast = $result->ast;
             $offsets = $result->byteOffsetMap;
             if ($ast === null) {
@@ -154,8 +166,8 @@ final class ReferenceFinder
                 $ast = $parsed->ast;
                 $offsets = $parsed->byteOffsetMap;
             }
-            foreach ($this->collectReferences($ast, $target, $item->text, (string) $docUri) as $hit) {
-                $locations[] = $this->buildLocation((string) $docUri, $item->text, $offsets, $hit);
+            foreach ($this->collectReferences($ast, $target, $item->text, $docUriStr, $cancel) as $hit) {
+                $locations[] = $this->buildLocation($docUriStr, $item->text, $offsets, $hit);
             }
         }
 
@@ -165,28 +177,33 @@ final class ReferenceFinder
         // load-bearing one for fix D -- if the user moves their cursor
         // mid-find-references, the scan abandons rather than running to
         // completion.
-        foreach ($this->fqnIndex->indexedFilesystemPaths() as $path) {
-            if ($cancel !== null && $cancel->isRequested()) {
-                return [];
-            }
-            $fsUri = 'file://' . $path;
-            if (isset($seenUris[$fsUri])) {
-                continue;
-            }
-            $source = @file_get_contents($path);
-            if ($source === false) {
-                continue;
-            }
-            try {
-                $parsed = $this->parser->parseTolerantWithMap($source);
-            } catch (Throwable) {
-                continue;
-            }
-            if ($parsed === null) {
-                continue;
-            }
-            foreach ($this->collectReferences($parsed->ast, $target, $source, $fsUri) as $hit) {
-                $locations[] = $this->buildLocation($fsUri, $source, $parsed->byteOffsetMap, $hit);
+        //
+        // Skipped entirely when `$restrictToUri` is set: a single-file
+        // request can't get matches from any other file.
+        if ($restrictToUri === null) {
+            foreach ($this->fqnIndex->indexedFilesystemPaths() as $path) {
+                if ($cancel !== null && $cancel->isRequested()) {
+                    return [];
+                }
+                $fsUri = 'file://' . $path;
+                if (isset($seenUris[$fsUri])) {
+                    continue;
+                }
+                $source = @file_get_contents($path);
+                if ($source === false) {
+                    continue;
+                }
+                try {
+                    $parsed = $this->parser->parseTolerantWithMap($source);
+                } catch (Throwable) {
+                    continue;
+                }
+                if ($parsed === null) {
+                    continue;
+                }
+                foreach ($this->collectReferences($parsed->ast, $target, $source, $fsUri, $cancel) as $hit) {
+                    $locations[] = $this->buildLocation($fsUri, $source, $parsed->byteOffsetMap, $hit);
+                }
             }
         }
 
@@ -484,8 +501,13 @@ final class ReferenceFinder
      * @param list<Node\Stmt> $ast
      * @return iterable<array{node: Node, kind: string}>
      */
-    private function collectReferences(array $ast, array $target, string $source, string $uri): iterable
-    {
+    private function collectReferences(
+        array $ast,
+        array $target,
+        string $source,
+        string $uri,
+        ?\Amp\CancellationToken $cancel = null,
+    ): iterable {
         // Alias rename is file-scoped: PHP's `use ... as <alias>` lives
         // for the rest of the current file and nowhere else.  Skip every
         // file except the one the cursor lives in.
@@ -497,6 +519,9 @@ final class ReferenceFinder
             $finder = new NodeFinder();
             $aliasName = (string) $target['aliasName'];
             foreach ($finder->find($ast, static fn (Node $n): bool => true) as $node) {
+                if ($cancel !== null && $cancel->isRequested()) {
+                    return;
+                }
                 if ($node instanceof Node\UseItem
                     && $node->alias instanceof Identifier
                     && $node->alias->toString() === $aliasName
@@ -520,6 +545,9 @@ final class ReferenceFinder
         if ($target['kind'] === 'class' || $target['kind'] === 'function') {
             $targetFqn = ltrim((string) $target['fqn'], '\\');
             foreach ($finder->find($ast, static fn (Node $n): bool => true) as $node) {
+                if ($cancel !== null && $cancel->isRequested()) {
+                    return;
+                }
                 if ($target['kind'] === 'class') {
                     if ($node instanceof Name) {
                         if (self::isFunctionNameContext($ast, $node)) {
@@ -605,6 +633,16 @@ final class ReferenceFinder
         // only want the canonical declaration site, not every
         // unrelated class that happens to use the same name.
         foreach ($finder->find($ast, static fn (Node $n): bool => true) as $node) {
+            // Cancel-poll inside the per-node loop: each iteration on
+            // a method/property target can trigger an `inferReceiverClassAt`
+            // worse-reflection round-trip, so a file with N method calls
+            // costs N reflections.  Without polling, a single mid-flight
+            // request could keep the dispatcher pinned long enough to
+            // stall every queued message behind it (the 2026-05-27
+            // prod-log 2:43 stall was 2.7s of in-loop work).
+            if ($cancel !== null && $cancel->isRequested()) {
+                return;
+            }
             if ($target['kind'] === 'method') {
                 if (($node instanceof MethodCall || $node instanceof NullsafeMethodCall)
                     && $node->name instanceof Identifier

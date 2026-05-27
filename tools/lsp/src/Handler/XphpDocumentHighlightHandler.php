@@ -76,16 +76,18 @@ final class XphpDocumentHighlightHandler implements Handler, CanRegisterCapabili
         // Always include the declaration -- the user expects every
         // mention of the symbol in the file to light up, including the
         // place they put their cursor.
-        $locations = $this->finder->findReferences($uri, $offset, true, $cancel);
+        //
+        // `restrictToUri: $uri` confines the scan to the requesting
+        // document -- documentHighlight only renders single-file
+        // results, and the prior unrestricted scan was the 2026-05-27
+        // prod-log 2:43 stall (walking every indexed filesystem path,
+        // each triggering worse-reflection on receiver-class inference,
+        // only to discard the cross-file hits below).  Cross-file
+        // matches stay available through textDocument/references.
+        $locations = $this->finder->findReferences($uri, $offset, true, $cancel, $uri);
 
         $highlights = [];
         foreach ($locations as $location) {
-            if ($location->uri !== $uri) {
-                // Subset filter: documentHighlight is the per-file
-                // view of references.  Cross-file matches stay in
-                // the references response.
-                continue;
-            }
             $highlights[] = new DocumentHighlight(
                 range: $location->range,
                 kind: DocumentHighlightKind::TEXT,
