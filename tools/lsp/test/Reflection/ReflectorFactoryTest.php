@@ -134,6 +134,143 @@ final class ReflectorFactoryTest extends TestCase
         }
     }
 
+    public function testCacheRootRespectsExplicitOverride(): void
+    {
+        $tmp = sys_get_temp_dir() . '/xphp-rf-override-' . bin2hex(random_bytes(4));
+        $prev = getenv('XPHP_LSP_CACHE_DIR');
+        putenv('XPHP_LSP_CACHE_DIR=' . $tmp);
+        try {
+            self::assertSame($tmp, ReflectorFactory::cacheRoot());
+            self::assertSame($tmp . '/extracted-stubs/', dirname(ReflectorFactory::cacheRoot() . '/extracted-stubs/sha') . '/');
+            self::assertSame($tmp . '/stub-cache', ReflectorFactory::defaultCacheDir());
+        } finally {
+            $prev === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prev);
+        }
+    }
+
+    public function testCacheRootHonoursXdgWhenNoOverride(): void
+    {
+        $tmp = sys_get_temp_dir() . '/xphp-rf-xdg-' . bin2hex(random_bytes(4));
+        $prevOverride = getenv('XPHP_LSP_CACHE_DIR');
+        $prevXdg = getenv('XDG_CACHE_HOME');
+        putenv('XPHP_LSP_CACHE_DIR');
+        putenv('XDG_CACHE_HOME=' . $tmp);
+        try {
+            self::assertSame($tmp . '/xphp-lsp', ReflectorFactory::cacheRoot());
+        } finally {
+            $prevOverride === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prevOverride);
+            $prevXdg === false ? putenv('XDG_CACHE_HOME') : putenv('XDG_CACHE_HOME=' . $prevXdg);
+        }
+    }
+
+    public function testCacheRootFallsBackToHomeWhenNoXdg(): void
+    {
+        $home = sys_get_temp_dir() . '/xphp-rf-home-' . bin2hex(random_bytes(4));
+        $prevOverride = getenv('XPHP_LSP_CACHE_DIR');
+        $prevXdg = getenv('XDG_CACHE_HOME');
+        $prevHome = getenv('HOME');
+        putenv('XPHP_LSP_CACHE_DIR');
+        putenv('XDG_CACHE_HOME');
+        putenv('HOME=' . $home);
+        try {
+            $expected = PHP_OS_FAMILY === 'Darwin'
+                ? $home . '/Library/Caches/xphp-lsp'
+                : $home . '/.cache/xphp-lsp';
+            self::assertSame($expected, ReflectorFactory::cacheRoot());
+        } finally {
+            $prevOverride === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prevOverride);
+            $prevXdg === false ? putenv('XDG_CACHE_HOME') : putenv('XDG_CACHE_HOME=' . $prevXdg);
+            $prevHome === false ? putenv('HOME') : putenv('HOME=' . $prevHome);
+        }
+    }
+
+    public function testCacheRootStripsTrailingSlashesFromOverride(): void
+    {
+        $tmp = sys_get_temp_dir() . '/xphp-rf-trim-' . bin2hex(random_bytes(4));
+        $prev = getenv('XPHP_LSP_CACHE_DIR');
+        putenv('XPHP_LSP_CACHE_DIR=' . $tmp . '////');
+        try {
+            self::assertSame($tmp, ReflectorFactory::cacheRoot());
+        } finally {
+            $prev === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prev);
+        }
+    }
+
+    public function testDefaultCacheDirNestsUnderCacheRootInStubCacheSubdir(): void
+    {
+        $tmp = sys_get_temp_dir() . '/xphp-rf-dcd-' . bin2hex(random_bytes(4));
+        $prev = getenv('XPHP_LSP_CACHE_DIR');
+        putenv('XPHP_LSP_CACHE_DIR=' . $tmp);
+        try {
+            // Locks the layout against `Concat` / `ConcatOperandRemoval`
+            // mutants that drop either side of the `cacheRoot() . '/stub-cache'`.
+            self::assertSame($tmp . '/stub-cache', ReflectorFactory::defaultCacheDir());
+        } finally {
+            $prev === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prev);
+        }
+    }
+
+    public function testCacheRootStripsTrailingSlashesFromXdgValue(): void
+    {
+        $tmp = sys_get_temp_dir() . '/xphp-rf-xdg-trim-' . bin2hex(random_bytes(4));
+        $prevOverride = getenv('XPHP_LSP_CACHE_DIR');
+        $prevXdg = getenv('XDG_CACHE_HOME');
+        putenv('XPHP_LSP_CACHE_DIR');
+        putenv('XDG_CACHE_HOME=' . $tmp . '////');
+        try {
+            self::assertSame($tmp . '/xphp-lsp', ReflectorFactory::cacheRoot());
+        } finally {
+            $prevOverride === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prevOverride);
+            $prevXdg === false ? putenv('XDG_CACHE_HOME') : putenv('XDG_CACHE_HOME=' . $prevXdg);
+        }
+    }
+
+    public function testCacheRootStripsTrailingSlashesFromHomeValue(): void
+    {
+        $tmp = sys_get_temp_dir() . '/xphp-rf-home-trim-' . bin2hex(random_bytes(4));
+        $prevOverride = getenv('XPHP_LSP_CACHE_DIR');
+        $prevXdg = getenv('XDG_CACHE_HOME');
+        $prevHome = getenv('HOME');
+        putenv('XPHP_LSP_CACHE_DIR');
+        putenv('XDG_CACHE_HOME');
+        putenv('HOME=' . $tmp . '////');
+        try {
+            $expected = PHP_OS_FAMILY === 'Darwin'
+                ? $tmp . '/Library/Caches/xphp-lsp'
+                : $tmp . '/.cache/xphp-lsp';
+            self::assertSame($expected, ReflectorFactory::cacheRoot());
+        } finally {
+            $prevOverride === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prevOverride);
+            $prevXdg === false ? putenv('XDG_CACHE_HOME') : putenv('XDG_CACHE_HOME=' . $prevXdg);
+            $prevHome === false ? putenv('HOME') : putenv('HOME=' . $prevHome);
+        }
+    }
+
+    public function testExtractStubsCacheLandsUnderCacheRootSubdirectory(): void
+    {
+        // Force a known cacheRoot and verify the extraction nests under it.
+        $tmp = sys_get_temp_dir() . '/xphp-rf-layout-' . bin2hex(random_bytes(4));
+        $prev = getenv('XPHP_LSP_CACHE_DIR');
+        putenv('XPHP_LSP_CACHE_DIR=' . $tmp);
+
+        $source = sys_get_temp_dir() . '/xphp-rf-stub-src-d-' . bin2hex(random_bytes(4));
+        mkdir($source, 0o755, true);
+        file_put_contents($source . '/x.php', "<?php\n");
+
+        try {
+            $cache = ReflectorFactory::extractStubsCache($source);
+            self::assertStringStartsWith($tmp . '/extracted-stubs/', $cache);
+            self::assertFileExists($cache . '/x.php');
+            self::assertFileExists($cache . '/.complete');
+        } finally {
+            $this->rmrf($source);
+            if (is_dir($tmp)) {
+                $this->rmrf($tmp);
+            }
+            $prev === false ? putenv('XPHP_LSP_CACHE_DIR') : putenv('XPHP_LSP_CACHE_DIR=' . $prev);
+        }
+    }
+
     private function newFactory(PhpactorWorkspace $workspace, string $rootPath): ReflectorFactory
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());

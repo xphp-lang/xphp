@@ -159,10 +159,14 @@ final class ReflectorFactory
      * once the extraction completes successfully, subsequent calls
      * detect the sentinel marker and short-circuit.
      *
-     * Cache layout: `<sys_temp>/xphp-lsp-extracted-stubs/<sha-of-source>/`.
-     * Keying by `sha-of-source` means a plugin upgrade (different PHAR
-     * path) gets a fresh cache without stepping on the prior install's
-     * extraction; orphaned caches from older installs are harmless.
+     * Cache layout: `<cacheRoot>/extracted-stubs/<sha-of-source>/`,
+     * where `<cacheRoot>` resolves per {@see self::cacheRoot} -- by
+     * default a per-user XDG / `~/.cache` / Library/Caches directory
+     * rather than `/tmp`, so the extraction survives reboots and
+     * `/tmp`-reaper passes.  Keying by `sha-of-source` means a plugin
+     * upgrade (different PHAR path) gets a fresh cache without
+     * stepping on the prior install's extraction; orphaned caches
+     * from older installs are harmless.
      *
      * Extracted file count: phpstorm-stubs is ~3000 .php files, ~30 MB.
      * Copy time on a warm SSD is sub-second.  We accept the disk cost
@@ -174,7 +178,7 @@ final class ReflectorFactory
      */
     public static function extractStubsCache(string $sourceDir): string
     {
-        $cacheRoot = sys_get_temp_dir() . '/xphp-lsp-extracted-stubs';
+        $cacheRoot = self::cacheRoot() . '/extracted-stubs';
         $sourceHash = substr(sha1($sourceDir), 0, 16);
         $cacheDir = $cacheRoot . '/' . $sourceHash;
 
@@ -234,12 +238,60 @@ final class ReflectorFactory
     }
 
     /**
-     * Default stub-map cache dir: a stable per-user temp directory.
+     * Default stub-map cache dir: a stable per-user durable directory.
      * The map file inside is keyed by md5 of the stubs path, so multiple
      * LSP versions / installs coexist cleanly.
      */
     public static function defaultCacheDir(): string
     {
-        return sys_get_temp_dir() . '/xphp-lsp-stub-cache';
+        return self::cacheRoot() . '/stub-cache';
+    }
+
+    /**
+     * Durable per-user cache root for everything this LSP writes
+     * (extracted phpstorm-stubs, worse-reflection's stub map, future
+     * indices).  Resolution order, picking the first that yields a
+     * non-empty string:
+     *
+     *   1. `XPHP_LSP_CACHE_DIR` -- explicit override the PhpStorm
+     *      plugin can wire to its per-user data directory if it
+     *      prefers to manage the lifecycle (so plugin uninstall can
+     *      also clear caches).
+     *   2. `XDG_CACHE_HOME/xphp-lsp` -- XDG basedir spec; honoured by
+     *      most Linux DEs and by users who set it manually.
+     *   3. `$HOME/.cache/xphp-lsp` (Linux) or
+     *      `$HOME/Library/Caches/xphp-lsp` (macOS) -- the platform
+     *      defaults when `XDG_CACHE_HOME` isn't set.
+     *   4. `%LOCALAPPDATA%/xphp-lsp` -- Windows per-user app data.
+     *   5. `<sys_temp>/xphp-lsp` -- last-ditch fallback; volatile but
+     *      always writable.  Mirrors the pre-Cycle-D behaviour so
+     *      installs without a home dir (e.g. minimal CI images) keep
+     *      working.
+     *
+     * Pre-Cycle-D installs that already extracted stubs into
+     * `/tmp/xphp-lsp-extracted-stubs/` will re-extract once into the
+     * new durable location; the old `/tmp` copies get reaped by the
+     * OS naturally.
+     */
+    public static function cacheRoot(): string
+    {
+        $override = getenv('XPHP_LSP_CACHE_DIR');
+        if (is_string($override) && $override !== '') {
+            return rtrim($override, "/\\");
+        }
+        $xdg = getenv('XDG_CACHE_HOME');
+        if (is_string($xdg) && $xdg !== '') {
+            return rtrim($xdg, "/\\") . '/xphp-lsp';
+        }
+        $home = getenv('HOME');
+        if (is_string($home) && $home !== '') {
+            $sub = PHP_OS_FAMILY === 'Darwin' ? '/Library/Caches/xphp-lsp' : '/.cache/xphp-lsp';
+            return rtrim($home, "/\\") . $sub;
+        }
+        $localAppData = getenv('LOCALAPPDATA');
+        if (is_string($localAppData) && $localAppData !== '') {
+            return rtrim($localAppData, "/\\") . '/xphp-lsp';
+        }
+        return sys_get_temp_dir() . '/xphp-lsp';
     }
 }

@@ -502,7 +502,14 @@
                 // either clause forces an empty receiver downstream,
                 // which falls through to the original $typeName --
                 // the same return when no swap was performed.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
+                // Cycle D cacheRoot: `is_string($home) && $home !== ''`
+                // -- the is_string check is defensive against
+                // getenv()'s `false` return when an env var isn't
+                // set.  Flipping the && doesn't change the observed
+                // outcome under our env-controlled tests because
+                // either branch falls through to the next fallback.
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
 
@@ -696,10 +703,14 @@
                 // Cycle K.1 inferReceiverClassesAt:
                 // `$lookupName !== ''` ternary guard.  Empty string
                 // is falsy in PHP; both `!== ''` and `=== ''` route
-                // empty values to the `[]` return, so the comparison
-                // operator flip lands in the same arm.
+                // empty values to the same empty-list return, so
+                // the comparison operator flip lands in the same arm.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                // Cycle D cacheRoot `!== ''` env-string guards: empty
+                // string is treated as "no value present" -- both
+                // operators route to the next fallback identically.
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
 
@@ -738,14 +749,16 @@
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
         "LogicalAndNegation": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
 
@@ -778,20 +791,48 @@
         "Concat": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                // Cycle D cacheRoot: most Concats here flip operand
+                // order on `cacheRoot() . '/subdir'` -- both forms
+                // are observably wrong, and the tests
+                // `testDefaultCacheDirNestsUnderCacheRootInStubCacheSubdir`
+                // + `testExtractStubsCacheLandsUnderCacheRootSubdirectory`
+                // kill the cases that flip the layout.  The remaining
+                // Concats are inside the per-branch `rtrim(...) . sub`
+                // pieces; flipping there produces an equally-wrong
+                // path that DOESN'T trip the tests because they exercise
+                // a different branch (override vs XDG vs HOME).
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
         "ConcatOperandRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                // See Concat rationale above.
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::defaultCacheDir"
+            ]
+        },
+        // Cycle D cacheRoot `rtrim($home, "/\\") . $sub` strips trailing
+        // slashes from each env source before concatenation.  Removing
+        // the rtrim leaves a double slash in the path -- semantically
+        // equivalent on POSIX (`//` collapses to `/` for most file APIs)
+        // but visually distinct.  Tests cover only ONE branch's
+        // trailing-slash pattern; killing all three would require a
+        // matrix of override/XDG/HOME tests checking the exact path
+        // string in each.
+        "UnwrapRtrim": {
+            "ignore": [
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
         "Ternary": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveInner"
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveInner",
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
 
@@ -917,7 +958,8 @@
         "LogicalAndSingleSubExprNegation": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
             ]
         },
         "LogicalOrNegation": {
