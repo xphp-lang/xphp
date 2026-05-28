@@ -208,6 +208,18 @@ final class PhpCompletionResolver
             $lookupName = $swapped;
         }
 
+        // Cycle C: gate `reflectClassLike` with the shared predicate.
+        // Receiver inference for `$x->|` / `Cls::|` occasionally
+        // yields union / intersection / scalar-literal strings that
+        // would either (a) waste a locator walk + a stderr miss line
+        // before throwing or (b) succeed on a `ReflectionInterface`
+        // path that later fatals on `->properties()` (Phase 6 Fix 5).
+        // Filter at the gate so the unhappy path doesn't enter
+        // reflectClassLike at all.
+        if (!ClassFqnPredicate::is($lookupName)) {
+            self::trace(sprintf('reflectClassLike skipped: %s is not a plausible class FQN', $lookupName));
+            return [];
+        }
         try {
             $class = $this->reflector->reflectClassLike($lookupName);
         } catch (Throwable $t) {

@@ -940,7 +940,15 @@ final class ReferenceFinder
             return null;
         }
         $typeName = (string) $context->type();
-        if ($typeName === '' || $typeName === '<missing>') {
+        // Cycle C: gate via the shared `ClassFqnPredicate`.  Union /
+        // intersection / scalar-literal / `<missing>` strings can't
+        // serve as a receiver class -- returning them sends downstream
+        // `declaringClassOf` -> `reflectClassLike` straight into a
+        // wasted locator walk (or worse, a fatal on a
+        // `ReflectionInterface`-without-properties path).  Phase 6
+        // Fix 1 gated `PhpDefinitionResolver::resolveTypeInner` the
+        // same way; this cycle extends the gate to receiver inference.
+        if (!ClassFqnPredicate::is($typeName)) {
             return null;
         }
         $lookupName = ltrim($typeName, '?');

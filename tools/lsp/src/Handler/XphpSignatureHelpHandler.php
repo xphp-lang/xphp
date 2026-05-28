@@ -336,6 +336,13 @@ final class XphpSignatureHelpHandler implements Handler, CanRegisterCapabilities
      */
     private function reflectMethod(string $classFqn, string $methodName, string $displayName): ?array
     {
+        // Cycle C: gate the receiver's inferred class FQN before
+        // `reflectClassLike`.  Static-call signature help on a
+        // variable receiver (`$x::foo(` where `$x` has a union type)
+        // would otherwise blow up in the locator chain.
+        if (!\XPHP\Lsp\Resolver\ClassFqnPredicate::is($classFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             $method = $class->methods()->get($methodName);

@@ -212,7 +212,18 @@
                 // value types, CASE labels).  Both branches produce
                 // null for non-type-bearing symbols; the early-return
                 // is for clarity and to skip the wasted reflect call.
-                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
+                // ClassFqnPredicate::is -- the `if ($typeName === ''
+                // || $typeName === '<missing>') return false;` early
+                // exit.  Removing it falls through to `strpbrk` (no
+                // compound chars detected for empty / `<missing>`)
+                // then `$head = ltrim(...)` then `$head === ''`
+                // returns false for the empty case, and the final
+                // `[A-Za-z_]` regex rejects `<missing>` (leading `<`
+                // is not in the character class).  Both paths
+                // ultimately return false; the early-return is for
+                // clarity, not correctness.  Cycle C.
+                "XPHP\\Lsp\\Resolver\\ClassFqnPredicate::is"
             ]
         },
 

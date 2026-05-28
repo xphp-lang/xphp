@@ -168,59 +168,18 @@ final class PhpDefinitionResolver
     /**
      * Reject non-class type strings BEFORE they reach the locator.
      *
-     * worse-reflection's `Type::__toString()` returns the canonical
-     * source-language form for the inferred type -- which for
-     * intersection / union / scalar / literal types is NOT a class FQN.
-     * Examples seen in prod logs:
-     *
-     *   (PhpParser\Node&PhpParser\Node\Expr\MethodCall)|(PhpParser\Node&...)
-     *   PhpParser\Node\Expr\MethodCall|PhpParser\Node\Expr\NullsafeMethodCall
-     *   ?App\Models\User                         (still a class -- accept)
-     *   0   1                                    (integer literal types)
-     *   ''                                       (empty string literal type)
-     *   <missing>                                (worse-reflection's "no inference")
-     *
-     * Feeding any of those to `reflectClassLike` causes a `SourceNotFound`
-     * after a wasted locator walk + a stderr `[xphp-lsp locator] miss …`
-     * line.  Filter them at this gate so the locator only ever sees
-     * something that COULD plausibly be a class FQN.
-     *
-     * Accepted shapes:
-     *   - Single PHP identifier (with optional leading `\` and `?`)
-     *   - Backslash-separated namespaced identifier
-     *
-     * Rejected shapes:
-     *   - empty / `<missing>` (worse-reflection's "no type")
-     *   - contains `|` (union)
-     *   - contains `&` (intersection)
-     *   - contains `(` `)` (compound type with explicit grouping)
-     *   - first non-`\?` char is a digit (numeric literal type)
-     *   - first non-`\?` char is a quote / dash / other non-identifier byte
+     * Backwards-compatible alias for the shared
+     * {@see ClassFqnPredicate::is}.  Originally introduced inline
+     * here in commit 4f22c4a (Phase 6 Fix 1); promoted to the shared
+     * resolver in Cycle C of the open backlog so every
+     * `reflectClassLike` caller can short-circuit on union /
+     * intersection / scalar-literal / `<missing>` strings.  Kept as a
+     * static method on this class so the test surface (and any
+     * external callers) don't have to be re-routed.
      */
     public static function isClassFqn(string $typeName): bool
     {
-        if ($typeName === '' || $typeName === '<missing>') {
-            return false;
-        }
-        // Compound types (union / intersection / grouped) -- our locator
-        // can't dispatch on them and `reflectClassLike` would throw.
-        if (strpbrk($typeName, '|&()') !== false) {
-            return false;
-        }
-        // Strip the leading nullable marker + leading backslash so the
-        // first-character check inspects the actual identifier head.
-        $head = ltrim($typeName, '\\?');
-        if ($head === '') {
-            return false;
-        }
-        // Class names must start with a letter or underscore -- never a
-        // digit, quote, or operator.  This catches numeric-literal
-        // types ("0", "1"), string-literal types ("'foo'"), and any
-        // other oddball __toString output worse-reflection might emit.
-        if (!preg_match('/^[A-Za-z_]/', $head)) {
-            return false;
-        }
-        return true;
+        return ClassFqnPredicate::is($typeName);
     }
 
     private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Location
@@ -521,6 +480,15 @@ final class PhpDefinitionResolver
 
     private function locateClass(string $fqn): ?Location
     {
+        // Cycle C: gate at the locator entry point.  `resolveInner`'s
+        // Symbol::CLASS_ dispatch funnels both inferred-type FQNs
+        // (which `resolveTypeInner` may have skipped via isClassFqn)
+        // and surface symbol names through here; ensure neither path
+        // hits the locator with a union / intersection / scalar-
+        // literal shape.
+        if (!ClassFqnPredicate::is($fqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($fqn);
             return $this->classNameRange($class, $fqn);
@@ -564,6 +532,10 @@ final class PhpDefinitionResolver
 
     private function locateMethod(string $classFqn, string $methodName): ?Location
     {
+        // Cycle C: receiver inferred type can be a union/intersection.
+        if (!ClassFqnPredicate::is($classFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             $method = $class->methods()->get($methodName);
@@ -576,6 +548,10 @@ final class PhpDefinitionResolver
     private function locateProperty(?string $classFqn, string $propertyName): ?Location
     {
         if ($classFqn === null) {
+            return null;
+        }
+        // Cycle C: same receiver-inference gate as locateMethod.
+        if (!ClassFqnPredicate::is($classFqn)) {
             return null;
         }
         try {
@@ -597,6 +573,10 @@ final class PhpDefinitionResolver
         // through to top-level reflectConstant).
         $containerName = self::containerOrNull($context);
         if ($containerName !== null) {
+            // Cycle C: gate against union/intersection container types.
+            if (!ClassFqnPredicate::is($containerName)) {
+                return null;
+            }
             try {
                 $class = $this->reflector->reflectClassLike($containerName);
                 $constant = $class->constants()->get($name);
@@ -661,6 +641,10 @@ final class PhpDefinitionResolver
 
     private function locateEnumCase(string $enumFqn, string $caseName): ?Location
     {
+        // Cycle C: gate enum's container FQN identically.
+        if (!ClassFqnPredicate::is($enumFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($enumFqn);
             if (!$class->isEnum()) {

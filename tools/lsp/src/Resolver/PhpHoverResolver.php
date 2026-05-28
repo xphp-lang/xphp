@@ -178,6 +178,14 @@ final class PhpHoverResolver
 
     private function renderClass(string $fqn): ?string
     {
+        // Cycle C: short-circuit union / intersection / scalar-literal
+        // strings before they reach the locator.  `Symbol::CLASS_`
+        // routes here for every cursor whose inferred type
+        // worse-reflection treats as class-shaped, including the
+        // pathological `(A&B)|C` shapes 2026-05-27 prod logs surfaced.
+        if (!ClassFqnPredicate::is($fqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($fqn);
         } catch (NotFound | SourceNotFound) {
@@ -222,6 +230,10 @@ final class PhpHoverResolver
 
     private function renderMethod(string $classFqn, string $methodName, ?MethodCallSubstitution $substitution = null): ?string
     {
+        // Cycle C: gate the inferred receiver class.  See renderClass.
+        if (!ClassFqnPredicate::is($classFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             $method = $class->methods()->get($methodName);
@@ -267,6 +279,10 @@ final class PhpHoverResolver
         if ($classFqn === null) {
             return null;
         }
+        // Cycle C: gate the inferred receiver class.  See renderClass.
+        if (!ClassFqnPredicate::is($classFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             $property = $class->properties()->get($propertyName);
@@ -292,6 +308,11 @@ final class PhpHoverResolver
     {
         $container = self::containerOrNull($context);
         if ($container !== null) {
+            // Cycle C: gate before the locator; same union/intersection
+            // hazard as the other renderers.
+            if (!ClassFqnPredicate::is($container)) {
+                return null;
+            }
             try {
                 $class = $this->reflector->reflectClassLike($container);
                 $constant = $class->constants()->get($name);
