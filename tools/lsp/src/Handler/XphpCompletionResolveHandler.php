@@ -11,7 +11,7 @@ use Phpactor\LanguageServerProtocol\CompletionItem;
 use Phpactor\LanguageServerProtocol\MarkupContent;
 use Phpactor\LanguageServerProtocol\MarkupKind;
 use Phpactor\WorseReflection\Core\Exception\NotFound;
-use Phpactor\WorseReflection\Core\SourceCodeLocator\Exception\SourceNotFound;
+use Phpactor\WorseReflection\Core\Exception\SourceNotFound;
 use Phpactor\WorseReflection\Reflector;
 use Throwable;
 
@@ -48,11 +48,6 @@ final class XphpCompletionResolveHandler implements Handler
     }
 
     /**
-     * Phpactor's HandlerMethodRunner deserialises the request params
-     * positionally and applies `array_values()` to them.  Accept the
-     * raw `CompletionItem` from the wire as a positional argument and
-     * return the enriched item.
-     *
      * @return Promise<CompletionItem>
      */
     public function resolve(CompletionItem $item): Promise
