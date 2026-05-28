@@ -29,16 +29,24 @@ final class AnalyzerTest extends TestCase
         self::assertNotNull($result->ast);
     }
 
-    public function testSyntaxErrorProducesDiagnosticWithNullAst(): void
+    public function testSyntaxErrorProducesDiagnosticAndTolerantFallbackAst(): void
     {
-        // Unterminated string literal — unrecoverable parse error.
+        // Unterminated string literal -- the strict parser throws but
+        // the tolerant fallback still emits an AST (possibly empty in
+        // this no-statements-before-the-error case).  The diagnostic
+        // must still surface.
         $analyzer = self::buildAnalyzer();
         $result = $analyzer->analyzeFile(<<<'PHP'
         <?php
         $broken = "unterminated
         PHP);
 
-        self::assertNull($result->ast, 'unrecoverable syntax error should null out the AST');
+        // Cycle "tolerant-locator": AST is no longer forced to null on
+        // strict-parse failure.  Tolerant recovery yields an array
+        // (may be empty when nothing parsed cleanly) so downstream
+        // consumers like WorkspaceSourceLocator can still walk what
+        // little they got.
+        self::assertIsArray($result->ast);
         self::assertCount(1, $result->diagnostics);
         self::assertSame(DiagnosticCode::Parse, $result->diagnostics[0]->code);
         self::assertSame(DiagnosticSeverity::Error, $result->diagnostics[0]->severity);
@@ -51,6 +59,74 @@ final class AnalyzerTest extends TestCase
             strlen($result->diagnostics[0]->message),
             'message must include the underlying parser detail, not just the literal prefix',
         );
+    }
+
+    public function testTrailingArrowErrorStillExposesPriorClassDeclarations(): void
+    {
+        // Reproduces the prod scenario: cursor at `$x->|` keeps the
+        // strict parser from finishing the file, but classes A and B
+        // before the broken tail must survive in the AST so the
+        // in-memory locator (WorkspaceSourceLocator) can serve their
+        // declarations to worse-reflection instead of falling through
+        // to the (stale) on-disk copy.
+        $analyzer = self::buildAnalyzer();
+        $result = $analyzer->analyzeFile(<<<'PHP'
+        <?php
+        namespace App\Demos;
+
+        class A {
+            public function foo(): string { return 'a'; }
+            public function fly(): void { }
+        }
+
+        class B {
+            public function foo(): string { return 'b'; }
+            public function run(): void { }
+        }
+
+        function pick(): A|B { return new A(); }
+
+        $x = pick();
+        $x->
+        PHP);
+
+        self::assertIsArray($result->ast);
+        self::assertCount(1, $result->diagnostics);
+        self::assertSame(DiagnosticCode::Parse, $result->diagnostics[0]->code);
+
+        // Flatten the AST and look for class A + class B declarations.
+        $classes = self::collectClassNames($result->ast);
+        self::assertContains('A', $classes, 'class A must survive tolerant parse');
+        self::assertContains('B', $classes, 'class B must survive tolerant parse');
+    }
+
+    /**
+     * @param list<\PhpParser\Node\Stmt> $ast
+     * @return list<string>
+     */
+    private static function collectClassNames(array $ast): array
+    {
+        $names = [];
+        $visitor = new class($names) extends \PhpParser\NodeVisitorAbstract {
+            /** @var list<string> */
+            public array $found = [];
+
+            public function __construct(array $_)
+            {
+            }
+
+            public function enterNode(\PhpParser\Node $node): null
+            {
+                if ($node instanceof \PhpParser\Node\Stmt\Class_ && $node->name !== null) {
+                    $this->found[] = $node->name->toString();
+                }
+                return null;
+            }
+        };
+        $traverser = new \PhpParser\NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+        return $visitor->found;
     }
 
     // Note: the `catch (RuntimeException $e)` branch in Analyzer::analyzeFile

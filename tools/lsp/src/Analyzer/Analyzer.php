@@ -39,10 +39,18 @@ class Analyzer
             $diagnostics = self::collectUndefinedNameDiagnostics($ast, $positionMap, $byteOffsetMap);
             return new ParseResult($ast, $diagnostics, $byteOffsetMap);
         } catch (PhpParserError $e) {
+            // Strict parse failed (trailing `$x->` etc).  Fall back to
+            // tolerant parsing so downstream consumers (`WorkspaceSourceLocator`,
+            // documentSymbol, etc.) can still see whatever class /
+            // function declarations parsed cleanly BEFORE the broken
+            // tail.  Without this the in-memory locator skips the doc
+            // and worse-reflection falls through to the on-disk version,
+            // which can be missing edits the user just made.
+            $tolerant = $this->parser->parseTolerantWithMap($source);
             return new ParseResult(
-                ast: null,
+                ast: $tolerant?->ast,
                 diagnostics: [self::buildParseErrorDiagnostic($positionMap, $e, $source)],
-                byteOffsetMap: ByteOffsetMap::identity(),
+                byteOffsetMap: $tolerant?->byteOffsetMap ?? ByteOffsetMap::identity(),
             );
         } catch (RuntimeException $e) {
             // XphpSourceParser also throws plain RuntimeException for "parser returned null"

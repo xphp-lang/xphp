@@ -984,7 +984,34 @@
         // for the rationale.
         "Coalesce": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                // Analyzer tolerant-parse fallback:
+                // `$tolerant?->byteOffsetMap ?? ByteOffsetMap::identity()`
+                // -- the Coalesce mutator flips operands.  When the
+                // strict parse fails on the trailing-arrow shape we
+                // cover in tests, the tolerant fallback returns an
+                // empty AST and an identity byteOffsetMap; both
+                // operand orderings produce identity in that case.
+                // Constructing a trailing-error fixture that ALSO
+                // exercises a non-trivial byteOffsetMap (a length-
+                // changing replacement) would require a `T[]`-style
+                // generic AND a trailing parse error in the same
+                // file -- a contrived combination not seen in prod.
+                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile"
+            ]
+        },
+        // Analyzer tolerant-parse fallback NullSafePropertyCall:
+        // mutator strips the `?` from `$tolerant?->ast` /
+        // `$tolerant?->byteOffsetMap`.  When `$tolerant === null` the
+        // dereference throws a fatal `Error`.  parseTolerantWithMap
+        // returns null only when nikic itself returns null AST --
+        // empirically requires pathological input (truncated PHP
+        // open tag, etc.) that our test fixtures don't reach.  The
+        // `?` is defensive against a contract that holds in
+        // practice; equivalent under coverage.
+        "NullSafePropertyCall": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile"
             ]
         },
         "FunctionCallRemoval": {

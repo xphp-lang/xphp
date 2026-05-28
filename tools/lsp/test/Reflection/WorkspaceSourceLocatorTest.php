@@ -101,6 +101,42 @@ final class WorkspaceSourceLocatorTest extends TestCase
         self::assertStringEndsWith('/Clean.xphp', (string) $document->uri());
     }
 
+    public function testReturnsClassDeclaredBeforeATrailingParseError(): void
+    {
+        // Prod-driven: cursor on `$x->|` keeps the strict parser from
+        // finishing the file but the in-memory locator still has to
+        // serve a fresh `class A` / `class B` reflection so completion
+        // fan-out doesn't fall through to (stale) on-disk content.
+        // The Analyzer's tolerant-parse fallback is what makes this
+        // possible -- without it `result->ast === null` skips the doc.
+        $source = <<<'XPHP'
+        <?php
+        namespace App\Demos;
+
+        class A { public function foo(): string { return 'a'; } }
+        class B {
+            public function foo(): string { return 'b'; }
+            public function run(): void { }
+        }
+
+        function pick(): A|B { return new A(); }
+
+        $x = pick();
+        $x->
+        XPHP;
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Probe.xphp', 'xphp', 1, $source));
+
+        $documentA = $this->newLocator($workspace)->locate(Name::fromString('App\\Demos\\A'));
+        $documentB = $this->newLocator($workspace)->locate(Name::fromString('App\\Demos\\B'));
+
+        self::assertStringEndsWith('/Probe.xphp', (string) $documentA->uri());
+        self::assertStringEndsWith('/Probe.xphp', (string) $documentB->uri());
+        // Source must include B's newly-added `run` method, proving the
+        // locator served the in-memory text rather than a stale snapshot.
+        self::assertStringContainsString('public function run', (string) $documentB);
+    }
+
     public function testHandlesLeadingBackslashOnFqn(): void
     {
         // Worse-reflection sometimes hands us names with a leading backslash
