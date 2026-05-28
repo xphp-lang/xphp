@@ -141,28 +141,40 @@ final class PhpHoverResolver
         // so a MissingType container (when worse-reflection can't infer
         // the receiver -- e.g. result of an xphp generic method call)
         // returns "no hover" instead of crashing on the absent `name()`.
+        // Cycle K: for union/intersection receiver types each
+        // constituent class gets its own rendered hover snippet,
+        // joined with markdown separators so the popup shows every
+        // possible target side-by-side.
+        $methodSubstitution = $this->genericResolver->resolveMethodCallSubstitutionAt($uri, $offset)
+            ?? $this->genericResolver->resolveStaticCallSubstitutionAt($uri, $offset);
+        $propertyReceiver = $this->genericResolver->resolvePropertyReceiverClassAt($uri, $offset)
+            ?? self::containerOrNull($context)
+            ?? '';
         $markdown = match ($symbol->symbolType()) {
-            Symbol::CLASS_    => $this->renderClass(self::preferType($context, $symbol->name())),
+            Symbol::CLASS_    => $this->fanOutRender(
+                                    self::preferType($context, $symbol->name()),
+                                    fn (string $fqn): ?string => $this->renderClass($fqn),
+                                ),
             Symbol::FUNCTION  => $this->renderFunction(
                                     $symbol->name(),
                                     $this->genericResolver->resolveFunctionCallSubstitutionAt($uri, $offset),
                                 ),
             Symbol::METHOD    => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->renderMethod(
+                                    ? $this->fanOutRender(
                                         $c,
-                                        $symbol->name(),
-                                        $this->genericResolver->resolveMethodCallSubstitutionAt($uri, $offset)
-                                            ?? $this->genericResolver->resolveStaticCallSubstitutionAt($uri, $offset),
+                                        fn (string $fqn): ?string => $this->renderMethod(
+                                            $fqn,
+                                            $symbol->name(),
+                                            $methodSubstitution,
+                                        ),
                                     )
                                     : null,
-            Symbol::PROPERTY  => $this->renderProperty(
-                                    // Resolver-first: substituted receiver wins
-                                    // when GenericResolver has a binding for
-                                    // `$x->method()?->prop` (Phase 0.7).  Falls
-                                    // back to worse-reflection's containerType.
-                                    $this->genericResolver->resolvePropertyReceiverClassAt($uri, $offset)
-                                        ?? self::containerOrNull($context),
-                                    $symbol->name(),
+            Symbol::PROPERTY  => $this->fanOutRender(
+                                    $propertyReceiver,
+                                    fn (string $fqn): ?string => $this->renderProperty(
+                                        $fqn,
+                                        $symbol->name(),
+                                    ),
                                 ),
             Symbol::CONSTANT,
             Symbol::DECLARED_CONSTANT
@@ -174,6 +186,46 @@ final class PhpHoverResolver
         return $markdown !== null
             ? new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown))
             : null;
+    }
+
+    /**
+     * Run `$singleRenderer` against every constituent class FQN of
+     * the type string and join the results with markdown separators
+     * so PhpStorm's hover popup shows every union/intersection arm
+     * side-by-side.  Single-class types short-circuit to one
+     * renderer call.  Returns null when no constituent produces a
+     * rendering (e.g. all FQNs are unindexed).
+     *
+     * @param callable(string): ?string $singleRenderer
+     */
+    private function fanOutRender(string $typeName, callable $singleRenderer): ?string
+    {
+        $typeName = ltrim($typeName, '\\');
+        // Fast path: ClassFqnPredicate-shaped FQN skips the splitter.
+        if (ClassFqnPredicate::is($typeName)) {
+            return $singleRenderer(ltrim($typeName, '?'));
+        }
+        $snippets = [];
+        $seen = [];
+        foreach (TypeUnionSplitter::split($typeName) as $intersectionArm) {
+            foreach ($intersectionArm as $componentFqn) {
+                if (isset($seen[$componentFqn])) {
+                    continue;
+                }
+                $seen[$componentFqn] = true;
+                $rendered = $singleRenderer($componentFqn);
+                if ($rendered !== null && $rendered !== '') {
+                    $snippets[] = $rendered;
+                }
+            }
+        }
+        if ($snippets === []) {
+            return null;
+        }
+        // Single arm = no separator (looks like an ordinary hover).
+        // Multi-arm: separate with `---` so PhpStorm renders a
+        // horizontal rule between each constituent's signature.
+        return implode("\n\n---\n\n", $snippets);
     }
 
     private function renderClass(string $fqn): ?string

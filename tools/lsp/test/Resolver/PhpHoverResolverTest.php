@@ -946,6 +946,40 @@ final class PhpHoverResolverTest extends TestCase
         self::assertStringContainsString('App\\User', $markdown);
     }
 
+    public function testUnionReceiverHoverShowsBothConstituents(): void
+    {
+        // Cycle K: hovering on `$x->foo()` where `$x: A|B` returns
+        // a markdown payload that includes BOTH A::foo and B::foo
+        // signatures, separated by `---` so PhpStorm renders a
+        // horizontal rule between the two constituent hovers.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class A {
+            public function foo(): string { return 'a'; }
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class B {
+            public function foo(): string { return 'b'; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @return A|B */\nfunction pick() { return new A(); }\n\$x = pick();\n\$x->foo();\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $hover = $this->hoverAt($workspace, '/Use.xphp', $useSource, '->foo', strlen('->'));
+        $markdown = $this->markdown($hover);
+
+        // Both constituent class FQNs MUST appear in the rendered
+        // hover; the separator MUST be present between them.
+        self::assertStringContainsString('App\\A', $markdown, 'A::foo signature in hover');
+        self::assertStringContainsString('App\\B', $markdown, 'B::foo signature in hover');
+        self::assertStringContainsString("---", $markdown, 'separator between constituent hovers');
+    }
+
     private function hoverAt(
         PhpactorWorkspace $workspace,
         string $uri,

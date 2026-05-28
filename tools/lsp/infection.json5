@@ -24,7 +24,8 @@
         // and exact-boundary tests proves the search behaves correctly.
         "Plus": {
             "ignore": [
-                "XPHP\\Lsp\\PositionMap::binarySearchLine"
+                "XPHP\\Lsp\\PositionMap::binarySearchLine",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "DecrementInteger": {
@@ -63,7 +64,8 @@
                 // variable name; -1/0 still lands on or just before
                 // the same character, which our `paddingLeft: true`
                 // makes visually indistinct.
-                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign"
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "IncrementInteger": {
@@ -80,12 +82,14 @@
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::signatureHelp",
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
-                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign"
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "Minus": {
             "ignore": [
-                "XPHP\\Lsp\\PositionMap::binarySearchLine"
+                "XPHP\\Lsp\\PositionMap::binarySearchLine",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "LessThan": {
@@ -106,7 +110,8 @@
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::resolveClassNameAt",
                 // XphpSignatureHelpHandler::computeActiveParameter
                 // `if ($argEnd < 0) continue;` defensive guard.
-                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter"
+                "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "ReturnRemoval": {
@@ -278,7 +283,8 @@
         // realistic input.
         "UnwrapTrim": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve"
+                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -291,7 +297,8 @@
         // timeouts, already counted).
         "GreaterThan": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect"
+                "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -305,7 +312,8 @@
                 // guards exist defensively for synthetic nodes that don't
                 // appear in this LSP's input. Same pattern + rationale as
                 // the AstPositionResolver guard already in this file.
-                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -365,7 +373,8 @@
                 // path; flipping clauses doesn't observably change the
                 // pass-through behaviour for items that don't match
                 // our expected shape.
-                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve"
+                "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -419,7 +428,9 @@
                 // and the matching guard in walkInstantiations: both clauses
                 // are jointly defensive against synthetic nodes that don't
                 // appear from nikic-parsed source.
-                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender"
             ]
         },
 
@@ -431,7 +442,8 @@
         // top of the list anyway.
         "FalseValue": {
             "ignore": [
-                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::complete"
+                "XPHP\\Lsp\\Handler\\XphpCompletionHandler::complete",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -466,7 +478,10 @@
             "ignore": [
                 "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix",
                 "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::fanOutLocate"
             ]
         },
 
@@ -524,7 +539,8 @@
         "LessThanOrEqualTo": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\AstPositionResolver",
-                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -571,7 +587,8 @@
                 // XphpInlayHintHandler::hintForAssign $rhs instanceof
                 // StaticCall / FuncCall arm checks -- same mutually-
                 // exclusive dispatch as the SignatureHelp variant.
-                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign"
+                "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -591,7 +608,8 @@
         "NotIdentical": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
-                "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericFunctionsAndMethods"
+                "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericFunctionsAndMethods",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -600,12 +618,14 @@
         // beyond the LogicalOr block above.
         "LogicalOrAllSubExprNegation": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "Identical": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner"
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "GreaterThanOrEqualToNegotiation": {
@@ -616,7 +636,8 @@
         "LogicalAndAllSubExprNegation": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
-                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction"
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
         "LogicalAndNegation": {
@@ -634,7 +655,8 @@
         // driven publishDiagnostics is the next test surface to grow.
         "ArrayItemRemoval": {
             "ignore": [
-                "XPHP\\Lsp\\LspDispatcherFactory::create"
+                "XPHP\\Lsp\\LspDispatcherFactory::create",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -663,7 +685,9 @@
         },
         "Ternary": {
             "ignore": [
-                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst"
+                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveInner"
             ]
         },
 
@@ -700,7 +724,9 @@
                 "XPHP\\Lsp\\Reflection\\FqnIndex::iterGenericClasses",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::iterGenericFunctionsAndMethods",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::allDeclarations",
-                "XPHP\\Lsp\\Reflection\\FqnIndex::locationByShortName"
+                "XPHP\\Lsp\\Reflection\\FqnIndex::locationByShortName",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender"
             ]
         },
 
@@ -727,7 +753,8 @@
                 // PHPUnit because fd-2 isn't capturable. The behavior
                 // is covered transitively by StderrTest's writeTo
                 // assertions.
-                "XPHP\\Lsp\\Stderr::write"
+                "XPHP\\Lsp\\Stderr::write",
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
             ]
         },
 
@@ -759,6 +786,74 @@
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm"
             ]
+        },
+        "LogicalAndSingleSubExprNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        "LogicalOrNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        "ReturnRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender"
+            ]
+        },
+        "Continue_": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        "Foreach_": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        "While_": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        "AssignCoalesce": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        "ArrayOneItem": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+            ]
+        },
+        // TypeUnionSplitter tail mutants (Cycle K).
+        // - UnwrapSubstr on `substr($arm, 1, -1)` paren-unwrap: with
+        //   the substr replaced by the arm itself, the next-line
+        //   `$inner === $arm` check breaks the loop, the arm stays
+        //   paren-wrapped, and the downstream split sees a single
+        //   bracketed component that bottoms out in the same empty
+        //   result for non-class atoms.  Observationally identical
+        //   in production input shapes.
+        // - Increment on `$depth++` flipped to `$depth--`: the
+        //   counter goes negative, the `&` / `|` check only splits
+        //   at `$depth === 0`, and the matching `)` arm uses
+        //   `max(0, ...)` so depth re-anchors.  Net: same split
+        //   boundaries as the original.
+        // - UnwrapStrToLower on the reserved-pseudo-type lookup:
+        //   worse-reflection's `Type::__toString()` always emits
+        //   lowercase scalar / pseudo-type names (`null`, `mixed`,
+        //   `void`, ...), so dropping the lower-case fold doesn't
+        //   change the membership check for any input we produce.
+        "UnwrapSubstr": {
+            "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
+        },
+        "Increment": {
+            "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
+        },
+        "UnwrapStrToLower": {
+            "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
         }
     }
 }

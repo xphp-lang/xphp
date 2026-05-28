@@ -72,6 +72,20 @@ final class PhpDefinitionResolver
 
     public function resolve(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Location
     {
+        // Backwards-compat wrapper: returns the FIRST location from
+        // {@see resolveAll}, or null when there are none.  Existing
+        // tests + the single-Location path of XphpDefinitionHandler
+        // keep working unchanged; the handler uses `resolveAll` for
+        // the array case Cycle K introduced.
+        $all = $this->resolveAll($uri, $line, $character, $cancel);
+        return $all === [] ? null : $all[0];
+    }
+
+    /**
+     * @return list<Location>
+     */
+    public function resolveAll(string $uri, int $line, int $character, ?CancellationToken $cancel = null): array
+    {
         // Belt-and-braces: the resolver calls into third-party
         // worse-reflection which has its own surprises on edge cases
         // (e.g. `MissingType::name()` -- the original cause of the LSP
@@ -82,7 +96,7 @@ final class PhpDefinitionResolver
         try {
             return $this->resolveInner($uri, $line, $character, $cancel);
         } catch (Throwable) {
-            return null;
+            return [];
         }
     }
 
@@ -104,21 +118,33 @@ final class PhpDefinitionResolver
      */
     public function resolveType(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Location
     {
+        $all = $this->resolveTypeAll($uri, $line, $character, $cancel);
+        return $all === [] ? null : $all[0];
+    }
+
+    /**
+     * @return list<Location>
+     */
+    public function resolveTypeAll(string $uri, int $line, int $character, ?CancellationToken $cancel = null): array
+    {
         try {
             return $this->resolveTypeInner($uri, $line, $character, $cancel);
         } catch (Throwable) {
-            return null;
+            return [];
         }
     }
 
-    private function resolveTypeInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Location
+    /**
+     * @return list<Location>
+     */
+    private function resolveTypeInner(string $uri, int $line, int $character, ?CancellationToken $cancel): array
     {
         if ($cancel !== null && $cancel->isRequested()) {
-            return null;
+            return [];
         }
         $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
         if ($document === null) {
-            return null;
+            return [];
         }
 
         $offset = (new PositionMap($document->text))->positionToOffset($line, $character);
@@ -131,11 +157,11 @@ final class PhpDefinitionResolver
         try {
             $reflectionOffset = $this->reflector->reflectOffset($sourceCode, ByteOffset::fromInt($offset));
         } catch (Throwable) {
-            return null;
+            return [];
         }
 
         if ($cancel !== null && $cancel->isRequested()) {
-            return null;
+            return [];
         }
 
         $context = $reflectionOffset->nodeContext();
@@ -152,17 +178,15 @@ final class PhpDefinitionResolver
             || $kind === Symbol::METHOD
             || $kind === Symbol::CLASS_;
         if (!$typeBearing) {
-            return null;
+            return [];
         }
 
-        $typeName = (string) $context->type();
-        if (!self::isClassFqn($typeName)) {
-            return null;
-        }
-        // Type strings may carry leading-backslash from worse-reflection;
-        // locateClass's reflectClassLike accepts both forms but normalise
-        // for consistency with the test-asserted Location URIs.
-        return $this->locateClass(ltrim($typeName, '\\'));
+        // Cycle K: typeDefinition on `$x: A|B` returns the union of
+        // type-declaration locations so PhpStorm can render a picker.
+        return $this->fanOutLocate(
+            (string) $context->type(),
+            fn (string $fqn): ?Location => $this->locateClass($fqn),
+        );
     }
 
     /**
@@ -182,14 +206,17 @@ final class PhpDefinitionResolver
         return ClassFqnPredicate::is($typeName);
     }
 
-    private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): ?Location
+    /**
+     * @return list<Location>
+     */
+    private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): array
     {
         if ($cancel !== null && $cancel->isRequested()) {
-            return null;
+            return [];
         }
         $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
         if ($document === null) {
-            return null;
+            return [];
         }
 
         $offset = (new PositionMap($document->text))->positionToOffset($line, $character);
@@ -202,14 +229,14 @@ final class PhpDefinitionResolver
         try {
             $reflectionOffset = $this->reflector->reflectOffset($sourceCode, ByteOffset::fromInt($offset));
         } catch (Throwable) {
-            return null;
+            return [];
         }
 
         if ($cancel !== null && $cancel->isRequested()) {
             // worse-reflection's reflectOffset is one of the heavier
             // ops in the chain; bail before locate-* if the user
             // moved on.
-            return null;
+            return [];
         }
 
         $context = $reflectionOffset->nodeContext();
@@ -224,7 +251,7 @@ final class PhpDefinitionResolver
         // statement.  Same logic applies to PhpHoverResolver.
         $useFunctionFqn = $this->useFunctionFqnAtOffset($uri, $offset, $symbol->name());
         if ($useFunctionFqn !== null) {
-            return $this->locateFunction($useFunctionFqn);
+            return self::asList($this->locateFunction($useFunctionFqn));
         }
 
         // For class references, worse-reflection puts the SHORT name (or
@@ -240,30 +267,98 @@ final class PhpDefinitionResolver
         // dynamic property access on unknown variables, etc.).  We funnel
         // through `containerOrNull()` so MissingType means "give up
         // gracefully" instead of "crash on undefined method name()".
+        //
+        // Cycle K: union / intersection receiver types fan out via
+        // {@see fanOutLocate}, returning one Location per constituent
+        // class.  PhpStorm renders the resulting array as a picker.
         return match ($symbol->symbolType()) {
-            Symbol::CLASS_     => $this->locateClass(self::preferType($context, $symbol->name())),
-            Symbol::FUNCTION   => $this->locateFunction($symbol->name()),
+            Symbol::CLASS_     => $this->fanOutLocate(
+                                    self::preferType($context, $symbol->name()),
+                                    fn (string $fqn): ?Location => $this->locateClass($fqn),
+                                ),
+            Symbol::FUNCTION   => self::asList($this->locateFunction($symbol->name())),
             Symbol::METHOD     => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->locateMethod($c, $symbol->name())
-                                    : null,
-            Symbol::PROPERTY   => $this->locateProperty(
+                                    ? $this->fanOutLocate(
+                                        $c,
+                                        fn (string $fqn): ?Location => $this->locateMethod($fqn, $symbol->name()),
+                                    )
+                                    : [],
+            Symbol::PROPERTY   => $this->fanOutLocate(
                                     // Resolver-first: substituted receiver wins
                                     // when GenericResolver has a binding for
                                     // `$x->method()?->prop` (Phase 0.7).  Falls
                                     // back to worse-reflection's containerType.
                                     $this->genericResolver->resolvePropertyReceiverClassAt($uri, $offset)
-                                        ?? self::containerOrNull($context),
-                                    $symbol->name(),
+                                        ?? self::containerOrNull($context)
+                                        ?? '',
+                                    fn (string $fqn): ?Location => $this->locateProperty($fqn, $symbol->name()),
                                 ),
             Symbol::CONSTANT,
             Symbol::DECLARED_CONSTANT
-                               => $this->locateConstant($context, $symbol->name()),
+                               => self::asList($this->locateConstant($context, $symbol->name())),
             Symbol::CASE       => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->locateEnumCase($c, $symbol->name())
-                                    : null,
-            Symbol::VARIABLE   => $this->locateVariable($uri, $symbol->name()),
-            default            => null,
+                                    ? $this->fanOutLocate(
+                                        $c,
+                                        fn (string $fqn): ?Location => $this->locateEnumCase($fqn, $symbol->name()),
+                                    )
+                                    : [],
+            Symbol::VARIABLE   => self::asList($this->locateVariable($uri, $symbol->name())),
+            default            => [],
         };
+    }
+
+    /**
+     * Run `$singleLocator` against every constituent class FQN of the
+     * type string.  For single-class types (the common case) this
+     * just calls the locator once with the input.  For union /
+     * intersection / `(A&B)|C` shapes (the Cycle K UX) the splitter
+     * yields each FQN in order and the per-FQN results are
+     * concatenated, then deduped by (uri, range).
+     *
+     * @param callable(string): ?Location $singleLocator
+     * @return list<Location>
+     */
+    private function fanOutLocate(string $typeName, callable $singleLocator): array
+    {
+        $typeName = ltrim($typeName, '\\');
+        // Fast path: ClassFqnPredicate-shaped FQN -- skip the splitter
+        // entirely.  The splitter's single-class case is correct but
+        // adds a string scan + regex per locate.
+        if (ClassFqnPredicate::is($typeName)) {
+            $location = $singleLocator(ltrim($typeName, '?'));
+            return $location === null ? [] : [$location];
+        }
+        $locations = [];
+        $seen = [];
+        foreach (TypeUnionSplitter::split($typeName) as $intersectionArm) {
+            foreach ($intersectionArm as $componentFqn) {
+                $location = $singleLocator($componentFqn);
+                if ($location === null) {
+                    continue;
+                }
+                $key = $location->uri . '@' . $location->range->start->line
+                    . ':' . $location->range->start->character
+                    . '-' . $location->range->end->line
+                    . ':' . $location->range->end->character;
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $locations[] = $location;
+            }
+        }
+        return $locations;
+    }
+
+    /**
+     * Promote a `?Location` into `list<Location>` for the dispatch
+     * arms that don't fan out (FUNCTION / CONSTANT / VARIABLE).
+     *
+     * @return list<Location>
+     */
+    private static function asList(?Location $location): array
+    {
+        return $location === null ? [] : [$location];
     }
 
     /**

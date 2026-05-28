@@ -162,15 +162,35 @@ final class XphpDefinitionHandler implements Handler, CanRegisterCapabilities
         // expectation of "no answer" => no "Cannot find declaration"
         // noise from us.
         if ($this->phpResolver !== null) {
-            return new Success($this->phpResolver->resolve(
+            // Cycle K: `resolveAll` returns 0..N locations.  Empty
+            // collapses to null (LSP convention), single returns a
+            // single Location, multi returns the array so PhpStorm
+            // renders a picker for union/intersection receivers.
+            $locations = $this->phpResolver->resolveAll(
                 $params->textDocument->uri,
                 $params->position->line,
                 $params->position->character,
                 $cancel,
-            ));
+            );
+            return new Success(self::collapseLocations($locations));
         }
 
         return new Success(null);
+    }
+
+    /**
+     * @param list<\Phpactor\LanguageServerProtocol\Location> $locations
+     * @return \Phpactor\LanguageServerProtocol\Location|list<\Phpactor\LanguageServerProtocol\Location>|null
+     */
+    private static function collapseLocations(array $locations)
+    {
+        if ($locations === []) {
+            return null;
+        }
+        if (count($locations) === 1) {
+            return $locations[0];
+        }
+        return $locations;
     }
 
     /**

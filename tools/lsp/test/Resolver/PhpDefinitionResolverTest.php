@@ -404,6 +404,61 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertStringEndsWith('/User.xphp', $location->uri);
     }
 
+    public function testUnionReceiverFanOutReturnsAllConstituentClassLocations(): void
+    {
+        // Cycle K: cursor on `$x->foo()` where `$x: A|B` should
+        // return Locations for BOTH A::foo and B::foo so PhpStorm
+        // renders a picker.  worse-reflection's containerType()
+        // surfaces the union; the dispatch's fanOutLocate splits
+        // it and merges per-constituent locations.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class A {
+            public function foo(): string { return 'a'; }
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class B {
+            public function foo(): string { return 'b'; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @return A|B */\nfunction pick() { return new A(); }\n\$x = pick();\n\$x->foo();\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $locations = $this->resolveAllAt($workspace, '/Use.xphp', $useSource, '->foo', strlen('->'));
+
+        // Both A::foo and B::foo must appear in the result.  The
+        // legacy `resolve()` returns the first; `resolveAll()` is
+        // the fan-out used by the Cycle K handler.
+        self::assertCount(2, $locations);
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        $endsWithA = array_filter($uris, fn (string $u): bool => str_ends_with($u, '/A.xphp'));
+        $endsWithB = array_filter($uris, fn (string $u): bool => str_ends_with($u, '/B.xphp'));
+        self::assertNotEmpty($endsWithA, 'A::foo declaration is in the picker');
+        self::assertNotEmpty($endsWithB, 'B::foo declaration is in the picker');
+    }
+
+    /**
+     * @return list<Location>
+     */
+    private function resolveAllAt(
+        PhpactorWorkspace $workspace,
+        string $uri,
+        string $source,
+        string $needle,
+        int $offsetInNeedle,
+    ): array {
+        $byte = strpos($source, $needle);
+        self::assertNotFalse($byte, "fixture needle '$needle' must exist");
+        $byte += $offsetInNeedle;
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        return $this->resolver($workspace)->resolveAll($uri, $line, $character);
+    }
+
     private function resolveAt(
         PhpactorWorkspace $workspace,
         string $uri,

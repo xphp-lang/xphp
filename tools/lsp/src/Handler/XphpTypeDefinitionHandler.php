@@ -59,19 +59,27 @@ final class XphpTypeDefinitionHandler implements Handler, CanRegisterCapabilitie
     }
 
     /**
-     * @return Promise<Location|null>
+     * @return Promise<Location|list<Location>|null>
      */
     public function typeDefinition(TypeDefinitionParams $params, ?CancellationToken $cancel = null): Promise
     {
         if ($cancel !== null && $cancel->isRequested()) {
             return new Success(null);
         }
-        $location = $this->resolver->resolveType(
+        // Cycle K: typeDefinition on `$x: A|B` returns an array of
+        // class declarations so the IDE renders a picker.
+        $locations = $this->resolver->resolveTypeAll(
             $params->textDocument->uri,
             $params->position->line,
             $params->position->character,
             $cancel,
         );
-        return new Success($location);
+        if ($locations === []) {
+            return new Success(null);
+        }
+        if (count($locations) === 1) {
+            return new Success($locations[0]);
+        }
+        return new Success($locations);
     }
 }
