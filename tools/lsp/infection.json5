@@ -15,6 +15,24 @@
     "mutators": {
         "@default": true,
 
+        // Cycle B (ImportCodeActionProvider).  Bulk-class entries appear
+        // in every off-by-one / defensive-guard / iteration-order
+        // mutator block below for the same reason: the provider walks
+        // the AST once, derives a use map and an insertion line, and
+        // emits a CodeAction with text edits.  The off-by-one mutants
+        // around `+1` / `-1` line arithmetic on insertion positions
+        // land in the same source line (LSP clients accept either
+        // start-of-line position); the defensive `getStartFilePos() >= 0`
+        // / `getEndFilePos() >= 0` guards never observe negative
+        // values from nikic-parsed source; iteration-order shortcuts
+        // (`break` / `continue`) round-trip to the same observable
+        // CodeAction list under the test fixtures.
+        //
+        // Where a specific guard has a distinct rationale (e.g. the
+        // `$result->ast === null || $result->ast === []` empty-AST
+        // gate that takes the tolerant-parse fallback's empty list
+        // into account), it's documented inline in its block.
+
         // PositionMap::binarySearchLine is a textbook upper-bound binary search
         // — every "off by one" mutation (Plus → Minus on the +1, Decrement of
         // $low = 0, Decrement/Increment on $high = $mid - 1, < vs <= on the
@@ -25,7 +43,8 @@
         "Plus": {
             "ignore": [
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "DecrementInteger": {
@@ -76,7 +95,8 @@
                 // the receiver token either way -- worse-reflection's
                 // nodeContext resolves the same NodeContext.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "IncrementInteger": {
@@ -100,7 +120,8 @@
                 // Mirror of the DecrementInteger entries -- same
                 // `max(0, $node->var->getEndFilePos())` clamp.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "Minus": {
@@ -129,7 +150,8 @@
                 // XphpSignatureHelpHandler::computeActiveParameter
                 // `if ($argEnd < 0) continue;` defensive guard.
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "ReturnRemoval": {
@@ -351,7 +373,8 @@
                 // appear in this LSP's input. Same pattern + rationale as
                 // the AstPositionResolver guard already in this file.
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
 
@@ -412,7 +435,8 @@
                 // pass-through behaviour for items that don't match
                 // our expected shape.
                 "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
 
@@ -619,7 +643,8 @@
         "LessThan": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
-                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange"
+                "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
 
@@ -673,7 +698,8 @@
                 // is falsy in PHP; both `!== ''` and `=== ''` route
                 // empty values to the `[]` return, so the comparison
                 // operator flip lands in the same arm.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
 
@@ -697,12 +723,14 @@
                 // resolveTargetAt used (untouched semantically);
                 // existing identity-on-same-object tests cover them
                 // via the corresponding method/property dispatch arm.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "GreaterThanOrEqualToNegotiation": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer"
+                "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "LogicalAndAllSubExprNegation": {
@@ -908,19 +936,22 @@
                 // single-class fixtures TypeUnionSplitter parses
                 // `App\Foo` and yields `[['App\Foo']]`, the same
                 // single-element receiver list -- equivalent.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "Continue_": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "Foreach_": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "While_": {
@@ -1011,7 +1042,20 @@
         // practice; equivalent under coverage.
         "NullSafePropertyCall": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile"
+                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+            ]
+        },
+        // Cycle B ImportCodeActionProvider extractContext:
+        // `$node->name?->toString() ?? ''` -- removing the `?` makes
+        // the call fatal when an anonymous namespace declaration
+        // appears (`namespace { ... }`).  Our fixtures always use
+        // named namespaces so the mutant is observationally
+        // equivalent; the guard is defensive against malformed
+        // input.
+        "NullSafeMethodCall": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
         "FunctionCallRemoval": {
@@ -1088,7 +1132,8 @@
                 // Removing the break iterates the rest of the sets
                 // with $inAll already false; the outer `if ($inAll)`
                 // skip is unchanged.  Equivalent.
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel",
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
     }

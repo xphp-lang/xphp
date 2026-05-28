@@ -657,6 +657,43 @@ final class FqnIndex
      *
      * @return array{uri: string, line: int, char: int, short: string}|null
      */
+    /**
+     * Return every class-like (or function) FQN whose trailing segment
+     * matches `$shortName`.  Used by the import-class code action
+     * (Cycle B) which surfaces one quick-fix per candidate so the user
+     * can disambiguate when the same short name exists in multiple
+     * namespaces.
+     *
+     * Result is sorted ascending by FQN length, then alphabetically --
+     * shorter / closer-to-root namespaces appear first in the
+     * lightbulb menu.
+     *
+     * @return list<string>
+     */
+    public function fqnsByShortName(string $shortName): array
+    {
+        if ($shortName === '') {
+            return [];
+        }
+        $tailSuffix = '\\' . $shortName;
+        $tailLen = strlen($tailSuffix);
+        $matches = [];
+        foreach ($this->allDeclarations() as $hit) {
+            $fqn = $hit['fqn'];
+            if ($fqn === $shortName
+                || (strlen($fqn) > $tailLen && substr($fqn, -$tailLen) === $tailSuffix)
+            ) {
+                $matches[$fqn] = true;
+            }
+        }
+        $sorted = array_keys($matches);
+        usort($sorted, static function (string $a, string $b): int {
+            $byLength = strlen($a) <=> strlen($b);
+            return $byLength !== 0 ? $byLength : strcmp($a, $b);
+        });
+        return $sorted;
+    }
+
     public function locationByShortName(string $shortName): ?array
     {
         if ($shortName === '') {

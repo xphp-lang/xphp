@@ -14,6 +14,8 @@ use Phpactor\LanguageServerProtocol\CodeAction;
 use Phpactor\LanguageServerProtocol\CodeActionOptions;
 use Phpactor\LanguageServerProtocol\CodeActionParams;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
+use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Resolver\ImportCodeActionProvider;
 
 /**
  * `textDocument/codeAction` handler.
@@ -42,6 +44,7 @@ final class XphpCodeActionHandler implements Handler, CanRegisterCapabilities
 {
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
+        private readonly ImportCodeActionProvider $importProvider,
     ) {
     }
 
@@ -72,12 +75,18 @@ final class XphpCodeActionHandler implements Handler, CanRegisterCapabilities
         if ($cancel !== null && $cancel->isRequested()) {
             return new Success([]);
         }
-        if (!$this->workspace->has($params->textDocument->uri)) {
+        $uri = $params->textDocument->uri;
+        if (!$this->workspace->has($uri)) {
             return new Success([]);
         }
-        // No concrete quick-fixes yet -- the capability is wired so
-        // the editor's lightbulb stays available; specific actions
-        // will land per-diagnostic in follow-up commits.
-        return new Success([]);
+        $item = $this->workspace->get($uri);
+        $positionMap = new PositionMap($item->text);
+        $offset = $positionMap->positionToOffset(
+            $params->range->start->line,
+            $params->range->start->character,
+        );
+        return new Success(
+            $this->importProvider->actionsAt($uri, $item->version, $item->text, $offset),
+        );
     }
 }
