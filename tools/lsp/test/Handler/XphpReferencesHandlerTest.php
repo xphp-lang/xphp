@@ -396,6 +396,54 @@ final class XphpReferencesHandlerTest extends TestCase
         self::assertCount(2, $useMatches);
     }
 
+    public function testFindsUsagesAcrossUnionReceiverConstituents(): void
+    {
+        // Cycle K.1: cursor on a method call where the receiver is
+        // union-typed (`$x: A|B`) should surface call sites where
+        // the receiver is typed as either A OR B (or the union
+        // itself).
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/A.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class A {
+            public function foo(): string { return 'a'; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/B.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class B {
+            public function foo(): string { return 'b'; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\A;
+        use App\B;
+        /** @return A|B */
+        function pick() { return new A(); }
+        $x = pick();
+        $x->foo();
+        $a = new A();
+        $a->foo();
+        $b = new B();
+        $b->foo();
+        XPHP));
+
+        // Cursor on `$x->foo()` -- the union-typed receiver call.
+        $source = $workspace->get('/Use.xphp')->text;
+        $byte = strpos($source, '$x->foo') + strlen('$x->');
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        $locations = $this->referencesAtPosition($workspace, '/Use.xphp', $line, $character);
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        // Three call sites in /Use.xphp: `$x->foo()`, `$a->foo()`,
+        // `$b->foo()`.  Pre-Cycle-K.1 we'd only find `$a->foo()` if
+        // target had locked to A; now ALL three surface.
+        self::assertCount(3, $useMatches, 'union-receiver cursor surfaces every constituent call site');
+    }
+
     public function testFindsInheritedPropertyAccessOnSubclassReceiver(): void
     {
         // Property variant of the inherited-member walk: Dog inherits
@@ -527,6 +575,26 @@ final class XphpReferencesHandlerTest extends TestCase
     /**
      * @return list<Location>
      */
+    /**
+     * @return list<Location>
+     */
+    private function referencesAtPosition(
+        PhpactorWorkspace $workspace,
+        string $uri,
+        int $line,
+        int $character,
+        bool $includeDeclaration = true,
+    ): array {
+        $params = new ReferenceParams(
+            new ReferenceContext($includeDeclaration),
+            new TextDocumentIdentifier($uri),
+            new Position($line, $character),
+        );
+        $result = wait($this->handler($workspace)->references($params));
+        self::assertIsArray($result);
+        return $result;
+    }
+
     private function references(
         PhpactorWorkspace $workspace,
         string $uri,

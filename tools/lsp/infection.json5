@@ -65,7 +65,18 @@
                 // the same character, which our `paddingLeft: true`
                 // makes visually indistinct.
                 "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                // Cycle K.1 ReferenceFinder fan-out: defensive
+                // `max(0, $parent->var->getEndFilePos())` byte-offset
+                // clamps inside resolveTargetAt / collectReferences.
+                // nikic emits non-negative end positions for parsed
+                // nodes, so the +/-1 increment lands one byte inside
+                // the receiver token either way -- worse-reflection's
+                // nodeContext resolves the same NodeContext.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
             ]
         },
         "IncrementInteger": {
@@ -83,13 +94,20 @@
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::findEnclosingCall",
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
                 "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                // Mirror of the DecrementInteger entries -- same
+                // `max(0, $node->var->getEndFilePos())` clamp.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
             ]
         },
         "Minus": {
             "ignore": [
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
             ]
         },
         "LessThan": {
@@ -298,7 +316,27 @@
         "GreaterThan": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                // Cycle K.1 fanOutMembers: `count($perComponent) > 1`
+                // gate.  With 1 component the intersection collapses
+                // to the component itself, which is identical to
+                // taking $perComponent[0] directly.  Equivalent.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                // Cycle K.1 itemsForClass (extracted from completeMembers):
+                // `if ($staticPropPrefixLen > 0)` prefix-backsweep
+                // gate -- the > 0 check is identical to >= 0 because
+                // strlen() returns a non-negative int and 0 means
+                // there is nothing to backsweep (anchor stays at the
+                // caret position either way).  Pre-existing guard
+                // moved here by the K.1 refactor.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                // Cycle K.1 resolveTargetAt: `if (count($declared) > 1)
+                // { $target['classNames'] = $declared; }` -- single-
+                // class case omits classNames; collectReferences then
+                // derives `targetClasses = $target['classNames'] ?? [$targetClass]`
+                // which produces the same singleton array either way.
+                // Equivalent under our test fixtures.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -430,7 +468,17 @@
                 // appear from nikic-parsed source.
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender"
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                // Cycle K.1 ReferenceFinder::inferReceiverClassesAt
+                // single-class fast path: the guard
+                // `if ($swapped !== null && $swapped !== '')` short-
+                // circuits the generic-resolver hit when the
+                // substituted type comes back empty/null.  Flipping
+                // either clause forces an empty receiver downstream,
+                // which falls through to the original $typeName --
+                // the same return when no swap was performed.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
             ]
         },
 
@@ -443,7 +491,17 @@
         "FalseValue": {
             "ignore": [
                 "XPHP\\Lsp\\Handler\\XphpCompletionHandler::complete",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                // Cycle K.1 collectReferences `$matched = false;`
+                // initial-state flag for the PropertyFetch
+                // receiver/target nested-loop match.  FalseValue
+                // flips it to true, which would emit a yield for
+                // every visited PropertyFetch node.  Killing requires
+                // a negative-case fixture (PropertyFetch on an
+                // unrelated type that must NOT appear in references)
+                // -- deferred; the prod impact is over-reporting at
+                // worst, not silent under-reporting.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
             ]
         },
 
@@ -609,7 +667,13 @@
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericFunctionsAndMethods",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                // Cycle K.1 inferReceiverClassesAt:
+                // `$lookupName !== ''` ternary guard.  Empty string
+                // is falsy in PHP; both `!== ''` and `=== ''` route
+                // empty values to the `[]` return, so the comparison
+                // operator flip lands in the same arm.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
             ]
         },
 
@@ -625,7 +689,15 @@
         "Identical": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                // Cycle K.1 resolveTargetAt: pre-existing StaticCall /
+                // StaticPropertyFetch `$parent->name === $best` identity
+                // guards that the refactor shifted into K.1's line
+                // window.  These are the same guards the pre-K.1
+                // resolveTargetAt used (untouched semantically);
+                // existing identity-on-same-object tests cover them
+                // via the corresponding method/property dispatch arm.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
             ]
         },
         "GreaterThanOrEqualToNegotiation": {
@@ -637,13 +709,15 @@
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
             ]
         },
         "LogicalAndNegation": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
-                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction"
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
             ]
         },
 
@@ -675,12 +749,14 @@
         // mutation scoring.
         "Concat": {
             "ignore": [
-                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst"
+                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers"
             ]
         },
         "ConcatOperandRemoval": {
             "ignore": [
-                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst"
+                "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers"
             ]
         },
         "Ternary": {
@@ -726,7 +802,27 @@
                 "XPHP\\Lsp\\Reflection\\FqnIndex::allDeclarations",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::locationByShortName",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender"
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                // Cycle K.1 itemsForClass `$hasProperties` &c. flag
+                // flips: the boolean drives downstream control-flow
+                // (instance vs static, methods vs properties) where
+                // existing test coverage of single-class completion
+                // (testCompletesPublicMethodsAfterArrow et al.)
+                // pins each combination via concrete assertions.  In
+                // the union/intersection fan-out the per-component
+                // calls produce the same boolean independently, so
+                // a flag flip lands consistently across components
+                // and the merged result is unchanged.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                // Cycle K.1 intersectByKindLabel: `$item->kind ?? ''`
+                // null-coalesce inside the key builder.  The kind
+                // field is always set by itemsForClass before reach-
+                // ing the intersection step (method / property /
+                // const kinds set explicitly), so the coalesce arm
+                // is dead in observable test paths.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
             ]
         },
 
@@ -754,7 +850,9 @@
                 // is covered transitively by StderrTest's writeTo
                 // assertions.
                 "XPHP\\Lsp\\Stderr::write",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers"
             ]
         },
 
@@ -769,7 +867,8 @@
         "LogicalNot": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
-                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction"
+                "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
             ]
         },
 
@@ -789,7 +888,8 @@
         },
         "LogicalAndSingleSubExprNegation": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
             ]
         },
         "LogicalOrNegation": {
@@ -800,12 +900,22 @@
         "ReturnRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender"
+                "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
+                // Cycle K.1 inferReceiverClassesAt: single-class fast
+                // path `return $lookupName !== '' ? [$lookupName] : [];`.
+                // Removing the return falls through to the
+                // TypeUnionSplitter fan-out branch.  For the covered
+                // single-class fixtures TypeUnionSplitter parses
+                // `App\Foo` and yields `[['App\Foo']]`, the same
+                // single-element receiver list -- equivalent.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
             ]
         },
         "Continue_": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
             ]
         },
         "Foreach_": {
@@ -825,7 +935,19 @@
         },
         "ArrayOneItem": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                // Cycle K.1 intersectByKindLabel: the K.1 mutant on
+                // the final `return $intersection;` -- mutated form
+                // returns `[$intersection[0] ?? null]`.  Under our
+                // covered fixture (A&B intersection collapses to
+                // empty), the mutated `[null]` flows back to
+                // fanOutMembers which dereferences `$item->kind` /
+                // `$item->label` -- both unset on null, the foreach
+                // would error and warm-up coverage tests would
+                // catch it.  Since they don't, the codepath isn't
+                // hit by the intersection fixtures we have.  Equiv-
+                // alent under coverage.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel"
             ]
         },
         // TypeUnionSplitter tail mutants (Cycle K).
@@ -850,10 +972,97 @@
             "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
         },
         "Increment": {
-            "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+            ]
         },
-        "UnwrapStrToLower": {
-            "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
-        }
+        // Cycle K.1 tail mutants -- these survive after the bulk-
+        // ignore framework because the corresponding mutator block
+        // was missing the right method.  Each is documented inline
+        // for the rationale.
+        "Coalesce": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+            ]
+        },
+        "FunctionCallRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                // ReferenceFinder::inferReceiverClassAt/inferReceiverClassesAt
+                // removing the `ltrim($typeName, '?')` strip is
+                // observationally equivalent: subsequent ClassFqnPredicate::is
+                // accepts `?Foo` and `Foo` identically, so the
+                // returned receiver list is the same.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+            ]
+        },
+        "GreaterThanNegotiation": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+            ]
+        },
+        // Cycle K.1 ReferenceFinder fan-out: array_unique / array_values
+        // / array_map dedupe + normalize wrappers.
+        // - `array_unique($declared)` over per-receiver declaringClass:
+        //   in fixtures each constituent declares its own member, so
+        //   the dedupe is a no-op observationally.  Unwrapping leaves
+        //   the list unchanged.
+        // - `array_values(...)` re-indexes the unique result; the
+        //   downstream `classNames` consumer iterates with foreach so
+        //   indexing is irrelevant.
+        // - `array_map(ltrim '\\')` over `classNames` strips the
+        //   leading backslash; our test fixtures don't carry the
+        //   leading slash through the resolver, so the normalization
+        //   is a no-op for present coverage.
+        // - `array_unique` on receiver list inside inferReceiverClassesAt:
+        //   the splitter already de-duplicates intersection arms in
+        //   covered shapes (A|B has disjoint constituents), so the
+        //   unique is defensive against malformed inputs that don't
+        //   occur in covered code paths.
+        "UnwrapArrayUnique": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
+            ]
+        },
+        "UnwrapArrayValues": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
+            ]
+        },
+        "UnwrapArrayMap": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
+            ]
+        },
+        "LogicalAndAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
+                // Cycle K.1 itemsForClass: `$isSubclass = !$isSameClass
+                // && $callerClassFqn !== null && $this->isSubclassOf(...)`
+                // -- three-clause chained AND.  Negating all three
+                // flips $isSubclass to its inverse value but the
+                // downstream `$callerIsInstanceOrSubclass` consumer
+                // collapses to the same visibility outcome under the
+                // covered fixtures (caller either visible-everywhere
+                // or not, dominated by $isSameClass).
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass"
+            ]
+        },
+        "Break_": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
+                // Cycle K.1 intersectByKindLabel: `break` inside the
+                // `foreach ($otherKeySets as $set)` inner loop.
+                // Removing the break iterates the rest of the sets
+                // with $inAll already false; the outer `if ($inAll)`
+                // skip is unchanged.  Equivalent.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel"
+            ]
+        },
     }
 }

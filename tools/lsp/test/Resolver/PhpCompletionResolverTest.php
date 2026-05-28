@@ -755,6 +755,85 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertContains('name', $labels);
     }
 
+    public function testCompletesUnionOfMembersForUnionReceiver(): void
+    {
+        // Cycle K.1: cursor on `$x->|` where `$x: A|B` shows every
+        // method from either A or B (user-spec union semantics).
+        // A-only and B-only methods both surface; the popup is the
+        // most permissive shape.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class A {
+            public function alpha(): string { return 'a'; }
+            public function common(): string { return 'c'; }
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class B {
+            public function beta(): string { return 'b'; }
+            public function common(): string { return 'c'; }
+        }
+        XPHP);
+        // Docblock @var triggers worse-reflection's union inference
+        // for local variables.  Native PHP 8 union return types from
+        // function calls aren't traced through assignments by the
+        // current worse-reflection -- the docblock annotation is the
+        // most reliable way to seed a union in a test fixture.
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @var A|B \$x */\n\$x = new A();\n\$x->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$x->', 4);
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // alpha + beta + common (common deduped to one) -- union of
+        // members across A and B.
+        self::assertContains('alpha', $labels, 'A-only method surfaces in union completion');
+        self::assertContains('beta', $labels, 'B-only method surfaces in union completion');
+        self::assertContains('common', $labels);
+        self::assertSame(1, count(array_filter($labels, fn ($l) => $l === 'common')), 'shared method deduped to one entry');
+    }
+
+    public function testCompletesIntersectionOfMembersForIntersectionReceiver(): void
+    {
+        // Cycle K.1: cursor on `$x->|` where `$x: A&B` shows ONLY
+        // members common to BOTH A and B (user-spec intersection
+        // semantics).  A-only and B-only methods are hidden.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        interface A {
+            public function alpha(): string;
+            public function common(): string;
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        interface B {
+            public function beta(): string;
+            public function common(): string;
+        }
+        XPHP);
+        // Docblock @var with intersection syntax.  See the union
+        // test above for why docblocks beat native param types in
+        // these fixtures.
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @var A&B \$x */\n\$x = null;\n\$x->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$x->', 4);
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // Only `common` -- the only method on BOTH A AND B.
+        self::assertContains('common', $labels, 'shared method surfaces');
+        self::assertNotContains('alpha', $labels, 'A-only method hidden in intersection completion');
+        self::assertNotContains('beta', $labels, 'B-only method hidden in intersection completion');
+    }
+
     public function testCompletesVariablesWhenSourceMidEditDoesNotParseStrictly(): void
     {
         // The user types `$us` with cursor on the `s` -- nikic refuses the

@@ -208,18 +208,35 @@ final class PhpCompletionResolver
             $lookupName = $swapped;
         }
 
-        // Cycle C: gate `reflectClassLike` with the shared predicate.
-        // Receiver inference for `$x->|` / `Cls::|` occasionally
-        // yields union / intersection / scalar-literal strings that
-        // would either (a) waste a locator walk + a stderr miss line
-        // before throwing or (b) succeed on a `ReflectionInterface`
-        // path that later fatals on `->properties()` (Phase 6 Fix 5).
-        // Filter at the gate so the unhappy path doesn't enter
-        // reflectClassLike at all.
+        // Cycle K.1: fan out per union arm.  Single-class types
+        // short-circuit through the existing path; union /
+        // intersection receivers split via TypeUnionSplitter and the
+        // per-arm member sets get merged per the user-specified UX:
+        //   - union arms (`A|B`)    -> UNION of members across arms
+        //   - intersection within (`A&B`) -> INTERSECTION across
+        //                                    components of that arm
+        // Members are deduped by (kind, label).
         if (!ClassFqnPredicate::is($lookupName)) {
-            self::trace(sprintf('reflectClassLike skipped: %s is not a plausible class FQN', $lookupName));
-            return [];
+            return $this->fanOutMembers($lookupName, $hit, $uri, $receiverProbe, $line, $character);
         }
+        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+        return $this->itemsForClass($lookupName, $hit, $callerClassFqn, $line, $character);
+    }
+
+    /**
+     * Build the member-completion list for a single class FQN.
+     *
+     * Extracted from `completeMembers` to support Cycle K.1's union/
+     * intersection fan-out.  Visibility (private / protected) is
+     * evaluated against the caller's enclosing class -- threaded in
+     * rather than recomputed so the union-fan-out's repeated calls
+     * agree on the caller scope.
+     *
+     * @param array{kind: string, receiverEnd: int, prefix: string} $hit
+     * @return list<CompletionItem>
+     */
+    private function itemsForClass(string $lookupName, array $hit, ?string $callerClassFqn, int $line, int $character): array
+    {
         try {
             $class = $this->reflector->reflectClassLike($lookupName);
         } catch (Throwable $t) {
@@ -277,7 +294,11 @@ final class PhpCompletionResolver
         // descendant of the receiver class) consults worse-reflection's
         // parents() walk -- protected becomes visible there too;
         // private stays gated to same-class only.
-        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+        //
+        // Cycle K.1: $callerClassFqn is now threaded in by the caller
+        // (`completeMembers` for the single-class path, `fanOutMembers`
+        // for each union/intersection constituent) so the same caller-
+        // scope decision is shared across every per-component call.
         $isSameClass = $callerClassFqn !== null && $callerClassFqn === $lookupName;
         $isSubclass = !$isSameClass
             && $callerClassFqn !== null
@@ -394,6 +415,102 @@ final class PhpCompletionResolver
 
         /** @var list<CompletionItem> $items */
         return $items;
+    }
+
+    /**
+     * Cycle K.1 union/intersection fan-out for member completion.
+     *
+     * For each union arm (one per `|`), build the per-component
+     * completion lists.  Intersect the components within the arm by
+     * (kind, label), then union across arms (also deduped by
+     * (kind, label)).  This matches the user-specified UX:
+     *
+     *   - `$x: A|B`   -> arms = [{A}, {B}], each arm yields its
+     *                    component's full member set; union shows
+     *                    everything from A OR B.
+     *   - `$x: A&B`   -> arms = [{A,B}], intersection yields only
+     *                    members common to A AND B.
+     *   - `$x: (A&B)|C` -> arms = [{A,B}, {C}], result =
+     *                      (A's members ∩ B's members) ∪ C's members.
+     *
+     * @param array{kind: string, receiverEnd: int, prefix: string} $hit
+     * @return list<CompletionItem>
+     */
+    private function fanOutMembers(string $typeName, array $hit, string $uri, int $receiverProbe, int $line, int $character): array
+    {
+        $arms = TypeUnionSplitter::split($typeName);
+        if ($arms === []) {
+            self::trace(sprintf('union split yielded no class FQNs for %s', $typeName));
+            return [];
+        }
+        // Per-call caller-class lookup: same scope for every component
+        // in the fan-out.
+        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+
+        $merged = [];
+        $mergedKeys = [];
+        foreach ($arms as $components) {
+            $perComponent = [];
+            foreach ($components as $componentFqn) {
+                $perComponent[] = $this->itemsForClass($componentFqn, $hit, $callerClassFqn, $line, $character);
+            }
+            $armItems = count($perComponent) === 1
+                ? $perComponent[0]
+                : self::intersectByKindLabel($perComponent);
+            foreach ($armItems as $item) {
+                $key = (string) ($item->kind ?? '') . '::' . $item->label;
+                if (isset($mergedKeys[$key])) {
+                    continue;
+                }
+                $mergedKeys[$key] = true;
+                $merged[] = $item;
+            }
+        }
+        self::trace(sprintf('fan-out completion: %s -> %d items across %d arm(s)', $typeName, count($merged), count($arms)));
+        return $merged;
+    }
+
+    /**
+     * Return items whose (kind, label) appears in EVERY list of
+     * `$perComponentItems`.  The returned items come from the first
+     * list (so the `detail` / `insertText` reflect that component's
+     * shape; the user-facing label/kind is what intersection
+     * promised).
+     *
+     * @param list<list<CompletionItem>> $perComponentItems
+     * @return list<CompletionItem>
+     */
+    private static function intersectByKindLabel(array $perComponentItems): array
+    {
+        if ($perComponentItems === []) {
+            return [];
+        }
+        // Build key sets for every component except the first.
+        $otherKeySets = [];
+        for ($i = 1, $n = count($perComponentItems); $i < $n; $i++) {
+            $set = [];
+            foreach ($perComponentItems[$i] as $item) {
+                $set[(string) ($item->kind ?? '') . '::' . $item->label] = true;
+            }
+            $otherKeySets[] = $set;
+        }
+        // Keep first-component items whose key appears in every
+        // other component's set.
+        $intersection = [];
+        foreach ($perComponentItems[0] as $item) {
+            $key = (string) ($item->kind ?? '') . '::' . $item->label;
+            $inAll = true;
+            foreach ($otherKeySets as $set) {
+                if (!isset($set[$key])) {
+                    $inAll = false;
+                    break;
+                }
+            }
+            if ($inAll) {
+                $intersection[] = $item;
+            }
+        }
+        return $intersection;
     }
 
     /**

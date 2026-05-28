@@ -359,19 +359,30 @@ final class ReferenceFinder
             // call site through the inheritance chain.
             if ($parent instanceof MethodCall || $parent instanceof NullsafeMethodCall) {
                 if ($parent->name === $best) {
-                    $receiverClass = $this->inferReceiverClassAt(
+                    // Cycle K.1: union receiver -> all constituents
+                    // become declaring-class candidates so call sites
+                    // typed as ANY of them match in find-references.
+                    $receivers = $this->inferReceiverClassesAt(
                         $item->text,
                         $uri,
                         max(0, $parent->var->getEndFilePos()),
                     );
-                    if ($receiverClass !== null) {
+                    if ($receivers !== []) {
                         $memberName = $best->toString();
-                        $declaring = $this->declaringClassOf($receiverClass, $memberName, true) ?? $receiverClass;
-                        return [
+                        $declared = [];
+                        foreach ($receivers as $receiverClass) {
+                            $declared[] = $this->declaringClassOf($receiverClass, $memberName, true) ?? $receiverClass;
+                        }
+                        $declared = array_values(array_unique($declared));
+                        $target = [
                             'kind' => 'method',
-                            'className' => $declaring,
+                            'className' => $declared[0],
                             'memberName' => $memberName,
                         ];
+                        if (count($declared) > 1) {
+                            $target['classNames'] = $declared;
+                        }
+                        return $target;
                     }
                 }
             }
@@ -389,19 +400,29 @@ final class ReferenceFinder
             }
             if ($parent instanceof PropertyFetch || $parent instanceof NullsafePropertyFetch) {
                 if ($parent->name === $best) {
-                    $receiverClass = $this->inferReceiverClassAt(
+                    // Cycle K.1: same union receiver fan-out as
+                    // MethodCall above.
+                    $receivers = $this->inferReceiverClassesAt(
                         $item->text,
                         $uri,
                         max(0, $parent->var->getEndFilePos()),
                     );
-                    if ($receiverClass !== null) {
+                    if ($receivers !== []) {
                         $memberName = $best->toString();
-                        $declaring = $this->declaringClassOf($receiverClass, $memberName, false) ?? $receiverClass;
-                        return [
+                        $declared = [];
+                        foreach ($receivers as $receiverClass) {
+                            $declared[] = $this->declaringClassOf($receiverClass, $memberName, false) ?? $receiverClass;
+                        }
+                        $declared = array_values(array_unique($declared));
+                        $target = [
                             'kind' => 'property',
-                            'className' => $declaring,
+                            'className' => $declared[0],
                             'memberName' => $memberName,
                         ];
+                        if (count($declared) > 1) {
+                            $target['classNames'] = $declared;
+                        }
+                        return $target;
                     }
                 }
             }
@@ -622,8 +643,18 @@ final class ReferenceFinder
         }
 
         // Member target: method or property.
+        // Cycle K.1: when the cursor's receiver was a union/
+        // intersection type, `classNames` lists every declaring
+        // class candidate.  The receiver-side match yields if the
+        // call site's receiver inherits the member from ANY of
+        // those candidates; the declaration-side match still
+        // requires exact equality with the canonical target.
         $targetClass = ltrim((string) $target['className'], '\\');
         $targetName = (string) $target['memberName'];
+        /** @var list<string> $targetClasses */
+        $targetClasses = isset($target['classNames'])
+            ? array_values(array_map(static fn (string $c): string => ltrim($c, '\\'), $target['classNames']))
+            : [$targetClass];
 
         // Item 1: receiver-side match is "does the receiver class inherit
         // this member from `$targetClass`?" -- exact-FQN match preserved
@@ -648,12 +679,24 @@ final class ReferenceFinder
                     && $node->name instanceof Identifier
                     && $node->name->toString() === $targetName
                 ) {
-                    $receiver = $this->inferReceiverClassAt(
+                    // Cycle K.1: union/intersection receiver call
+                    // sites match if ANY constituent inherits the
+                    // member from ANY target candidate.
+                    $receivers = $this->inferReceiverClassesAt(
                         $source,
                         $uri,
                         max(0, $node->var->getEndFilePos()),
                     );
-                    if ($receiver !== null && $this->inheritsMemberFromTarget($receiver, $targetName, $targetClass, true)) {
+                    $matched = false;
+                    foreach ($receivers as $receiver) {
+                        foreach ($targetClasses as $candidate) {
+                            if ($this->inheritsMemberFromTarget($receiver, $targetName, $candidate, true)) {
+                                $matched = true;
+                                break 2;
+                            }
+                        }
+                    }
+                    if ($matched) {
                         yield ['node' => $node->name, 'kind' => 'method'];
                     }
                     continue;
@@ -683,12 +726,23 @@ final class ReferenceFinder
                 && $node->name instanceof Identifier
                 && $node->name->toString() === $targetName
             ) {
-                $receiver = $this->inferReceiverClassAt(
+                // Cycle K.1: same union-receiver + union-target
+                // fan-out as methods.
+                $receivers = $this->inferReceiverClassesAt(
                     $source,
                     $uri,
                     max(0, $node->var->getEndFilePos()),
                 );
-                if ($receiver !== null && $this->inheritsMemberFromTarget($receiver, $targetName, $targetClass, false)) {
+                $matched = false;
+                foreach ($receivers as $receiver) {
+                    foreach ($targetClasses as $candidate) {
+                        if ($this->inheritsMemberFromTarget($receiver, $targetName, $candidate, false)) {
+                            $matched = true;
+                            break 2;
+                        }
+                    }
+                }
+                if ($matched) {
                     yield ['node' => $node->name, 'kind' => 'property'];
                 }
                 continue;
@@ -930,6 +984,27 @@ final class ReferenceFinder
      */
     private function inferReceiverClassAt(string $source, string $uri, int $byteOffset): ?string
     {
+        $all = $this->inferReceiverClassesAt($source, $uri, $byteOffset);
+        return $all === [] ? null : $all[0];
+    }
+
+    /**
+     * Cycle K.1: return EVERY constituent class FQN that the
+     * receiver expression at `$byteOffset` could resolve to.
+     *
+     *   - Single-class receiver -> 1-element list.
+     *   - Union receiver (`A|B`) -> 2-element list.
+     *   - Intersection (`A&B`)   -> 2-element list (both apply).
+     *   - Mixed (`(A&B)|C`)      -> 3-element list (A, B, C).
+     *
+     * Callers use this to fan out per-receiver inheritance / member
+     * lookups so call sites on union-typed variables surface in
+     * find-references / rename / documentHighlight.
+     *
+     * @return list<string>
+     */
+    private function inferReceiverClassesAt(string $source, string $uri, int $byteOffset): array
+    {
         $stripped = $this->parser->strip($source);
         $textDoc = TextDocumentBuilder::create($stripped)->uri($uri)->language('php')->build();
         try {
@@ -937,26 +1012,35 @@ final class ReferenceFinder
                 ->reflectOffset($textDoc, ByteOffset::fromInt($byteOffset))
                 ->nodeContext();
         } catch (Throwable) {
-            return null;
+            return [];
         }
         $typeName = (string) $context->type();
-        // Cycle C: gate via the shared `ClassFqnPredicate`.  Union /
-        // intersection / scalar-literal / `<missing>` strings can't
-        // serve as a receiver class -- returning them sends downstream
-        // `declaringClassOf` -> `reflectClassLike` straight into a
-        // wasted locator walk (or worse, a fatal on a
-        // `ReflectionInterface`-without-properties path).  Phase 6
-        // Fix 1 gated `PhpDefinitionResolver::resolveTypeInner` the
-        // same way; this cycle extends the gate to receiver inference.
-        if (!ClassFqnPredicate::is($typeName)) {
-            return null;
+
+        // Single-class fast path (the dominant case).  Cycle C's
+        // ClassFqnPredicate gate stays load-bearing: it accepts
+        // `?A` / `\A` / namespaced shapes and rejects literals,
+        // `<missing>`, etc.
+        if (ClassFqnPredicate::is($typeName)) {
+            $lookupName = ltrim($typeName, '?');
+            $swapped = $this->genericResolver->resolveMemberAccessReceiverClassAt($uri, $byteOffset);
+            if ($swapped !== null && $swapped !== '') {
+                $lookupName = $swapped;
+            }
+            return $lookupName !== '' ? [$lookupName] : [];
         }
-        $lookupName = ltrim($typeName, '?');
-        $swapped = $this->genericResolver->resolveMemberAccessReceiverClassAt($uri, $byteOffset);
-        if ($swapped !== null && $swapped !== '') {
-            $lookupName = $swapped;
+
+        // Cycle K.1 fan-out: union / intersection receivers split
+        // via TypeUnionSplitter.  The resulting list combines every
+        // arm's intersection components -- find-references treats
+        // them as parallel receivers (a call site on any
+        // constituent counts as a match).
+        $receivers = [];
+        foreach (TypeUnionSplitter::split($typeName) as $intersectionArm) {
+            foreach ($intersectionArm as $componentFqn) {
+                $receivers[] = $componentFqn;
+            }
         }
-        return $lookupName !== '' ? $lookupName : null;
+        return array_values(array_unique($receivers));
     }
 
     /**
