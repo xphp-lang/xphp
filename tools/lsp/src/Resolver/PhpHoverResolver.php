@@ -164,7 +164,9 @@ final class PhpHoverResolver
                                         ?? self::containerOrNull($context),
                                     $symbol->name(),
                                 ),
-            Symbol::CONSTANT  => $this->renderConstant($context, $symbol->name()),
+            Symbol::CONSTANT,
+            Symbol::DECLARED_CONSTANT
+                              => $this->renderConstant($context, $symbol->name()),
             Symbol::VARIABLE  => $this->renderVariable($uri, $offset, $context, $symbol->name()),
             default           => null,
         };

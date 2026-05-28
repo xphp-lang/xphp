@@ -203,6 +203,28 @@ final class PhpDefinitionResolverTest extends TestCase
         $this->assertResolves($location, '/Cfg.xphp', 'MAX');
     }
 
+    public function testJumpsFromNamespacedGlobalConstantToStub(): void
+    {
+        // Regression for the prod PHP_EOL bug.  A bare `PHP_EOL`
+        // referenced inside `namespace App\Demos` name-resolves to
+        // `App\Demos\PHP_EOL` -- never declared anywhere -- but PHP's
+        // runtime falls back to the global `PHP_EOL` (stub-indexed).
+        // Pre-fix, `locateConstant` only tried the namespaced form
+        // and returned null; PhpStorm then showed "Cannot find
+        // declaration to go to."
+        if (!is_dir(ReflectorFactory::defaultStubPath())) {
+            self::markTestSkipped('jetbrains/phpstorm-stubs not installed at expected path');
+        }
+        $workspace = $this->workspace();
+        $useSource = "<?php\nnamespace App\\Demos;\necho PHP_EOL;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'echo PHP_EOL', strlen('echo '));
+
+        self::assertNotNull($location, 'global-namespace fallback must resolve namespaced builtin constants');
+        self::assertStringContainsString('phpstorm-stubs', $location->uri);
+    }
+
     public function testUnknownClassReturnsNull(): void
     {
         $workspace = $this->workspace();

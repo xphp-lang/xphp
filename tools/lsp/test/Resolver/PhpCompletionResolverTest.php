@@ -434,6 +434,35 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertContains('MIN', $labels);
     }
 
+    public function testCompletesInterfaceConstantsAfterDoubleColon(): void
+    {
+        // Regression for the `Cls::|` completion fataling on interface
+        // receivers: pre-fix, `worse-reflection`'s `ReflectionInterface`
+        // omits a `properties()` method, and our completion path called
+        // `$class->properties()` unconditionally -- `Call to undefined
+        // method` propagated to the top-level catch which silently
+        // returned `[]`.  Symptom: `\DateTimeInterface::|` showed no
+        // completions while `\DateTime::|` worked fine.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Status.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        interface Status {
+            public const ACTIVE = 'active';
+            public const ARCHIVED = 'archived';
+            public function transition(): void;
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Status;\nStatus::";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'Status::', strlen('Status::'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('ACTIVE', $labels, 'interface constants must be offered');
+        self::assertContains('ARCHIVED', $labels, 'interface constants must be offered');
+    }
+
     public function testReturnsEmptyForNonMemberContext(): void
     {
         $workspace = $this->workspace();

@@ -220,8 +220,20 @@ final class PhpCompletionResolver
             return [];
         }
 
+        // Interfaces don't have properties -- in PHP, only classes,
+        // traits, and enums do.  Worse-reflection's `ReflectionInterface`
+        // omits the `properties()` method entirely; calling it throws
+        // `Error: Call to undefined method ReflectionInterface::properties()`
+        // which top-level-catches to an empty completion list.  Symptom:
+        // `\DateTimeInterface::|` returns no items, while `\DateTime::|`
+        // works fine.  Gate every `properties()` access on a method
+        // existence check rather than `instanceof ReflectionInterface`
+        // -- there are multiple TolerantParser / Core variants of the
+        // class, and `method_exists` covers them all without us having
+        // to enumerate them.
+        $hasProperties = method_exists($class, 'properties');
         $methodsAll = count($class->methods());
-        $propsAll = count($class->properties());
+        $propsAll = $hasProperties ? count($class->properties()) : 0;
         $constsAll = count($class->constants());
         self::trace(sprintf(
             'reflectClassLike(%s) ok methods=%d props=%d consts=%d',
@@ -304,38 +316,49 @@ final class PhpCompletionResolver
             if ($staticPropPrefixLen > 0) {
                 $staticPropAnchorStart = new Position($line, max(0, $character - $staticPropPrefixLen));
             }
-            foreach ($class->properties() as $property) {
-                if (!$property->isStatic()) {
-                    continue;
+            if ($hasProperties) {
+                foreach ($class->properties() as $property) {
+                    if (!$property->isStatic()) {
+                        continue;
+                    }
+                    if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                        continue;
+                    }
+                    if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                        continue;
+                    }
+                    $items[] = $this->propertyItem(
+                        $property,
+                        forStaticProp: true,
+                        textEditRange: new Range($staticPropAnchorStart, $staticPropAnchorEnd),
+                    );
                 }
-                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
-                    continue;
-                }
-                if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
-                    continue;
-                }
-                $items[] = $this->propertyItem(
-                    $property,
-                    forStaticProp: true,
-                    textEditRange: new Range($staticPropAnchorStart, $staticPropAnchorEnd),
-                );
             }
         } elseif (!$isStatic) {
-            // `$obj->|` -- only instance properties.
-            foreach ($class->properties() as $property) {
-                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
-                    continue;
+            // `$obj->|` -- only instance properties.  Interfaces have
+            // no properties so we skip the iteration when `$class` is
+            // a ReflectionInterface.  Methods on interfaces are still
+            // surfaced by the earlier `methods()` loop.
+            if ($hasProperties) {
+                foreach ($class->properties() as $property) {
+                    if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                        continue;
+                    }
+                    if ($property->isStatic()) {
+                        continue;
+                    }
+                    if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                        continue;
+                    }
+                    $items[] = self::propertyItem($property);
                 }
-                if ($property->isStatic()) {
-                    continue;
-                }
-                if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
-                    continue;
-                }
-                $items[] = self::propertyItem($property);
             }
         } else {
             // `Cls::|` -- static methods (above) + class constants.
+            // This branch runs for interface receivers too: interfaces
+            // can declare constants (e.g. `DateTimeInterface::ATOM`),
+            // and worse-reflection's `ReflectionInterface::constants()`
+            // returns them.
             foreach ($class->constants() as $constant) {
                 if (!self::matchesPrefix((string) $constant->name(), $hit['prefix'])) {
                     continue;

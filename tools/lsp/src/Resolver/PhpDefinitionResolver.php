@@ -296,7 +296,9 @@ final class PhpDefinitionResolver
                                         ?? self::containerOrNull($context),
                                     $symbol->name(),
                                 ),
-            Symbol::CONSTANT   => $this->locateConstant($context, $symbol->name()),
+            Symbol::CONSTANT,
+            Symbol::DECLARED_CONSTANT
+                               => $this->locateConstant($context, $symbol->name()),
             Symbol::CASE       => ($c = self::containerOrNull($context)) !== null
                                     ? $this->locateEnumCase($c, $symbol->name())
                                     : null,
@@ -521,10 +523,33 @@ final class PhpDefinitionResolver
     {
         try {
             $class = $this->reflector->reflectClassLike($fqn);
+            return $this->classNameRange($class, $fqn);
         } catch (NotFound | SourceNotFound) {
+            // Fall through to the constant fallback below.
+        }
+
+        // Worse-reflection classifies bare uppercase identifiers as
+        // `Symbol::CLASS_` even when they're actually constant references
+        // (`echo PHP_EOL;`, `if (DEBUG) ...`).  The dispatch routes
+        // through us; we just failed to find a class.  Before reporting
+        // null, retry as a constant -- with both the original FQN and
+        // its short-name fallback (matching PHP's global-namespace
+        // resolution for constants inside namespaced files).
+        //
+        // Prod evidence: GTD on `PHP_EOL` inside `namespace App\Demos`
+        // produced `App\Demos\PHP_EOL` as the lookup name; both the
+        // namespaced lookup and the bare lookup must be tried before
+        // we admit defeat.
+        $constant = self::tryReflectConstant($this->reflector, $fqn);
+        if ($constant === null) {
             return null;
         }
-        return $this->classNameRange($class, $fqn);
+        $position = $constant->position();
+        return $this->locationFromSource(
+            $constant->sourceCode(),
+            $position->start()->toInt(),
+            $position->end()->toInt(),
+        );
     }
 
     private function locateFunction(string $fqn): ?Location
@@ -581,14 +606,57 @@ final class PhpDefinitionResolver
             return $this->memberNameRange($constant->declaringClass()->sourceCode(), $constant->nameRange());
         }
 
-        try {
-            $constant = $this->reflector->reflectConstant($name);
-        } catch (NotFound | SourceNotFound) {
+        $constant = self::tryReflectConstant($this->reflector, $name);
+        if ($constant === null) {
             return null;
         }
         // ReflectionDeclaredConstant exposes position via AbstractReflectedNode.
         $position = $constant->position();
         return $this->locationFromSource($constant->sourceCode(), $position->start()->toInt(), $position->end()->toInt());
+    }
+
+    /**
+     * Resolve a constant via worse-reflection, with the same global-
+     * namespace fallback PHP's runtime applies at call time.
+     *
+     * Worse-reflection's NameResolver attaches the enclosing namespace
+     * to every bare constant reference -- a `PHP_EOL` mentioned inside
+     * `namespace App\Demos` becomes `App\Demos\PHP_EOL` as the symbol
+     * name worse-reflection asks the locator for.  But PHP's runtime
+     * falls back to the GLOBAL `PHP_EOL` when the namespaced form isn't
+     * defined, and the stub locator only knows the global form.  Without
+     * this retry, `\PHP_EOL` (and every other namespaced reference to a
+     * built-in constant) GTDs to null and PhpStorm reports "Cannot find
+     * declaration to go to."
+     *
+     * The retry uses the LAST segment after the trailing `\` (the
+     * short name).  We only retry when the original was namespaced --
+     * a bare `Foo` that doesn't resolve is genuinely unknown, not a
+     * global-namespace fallback candidate.
+     */
+    private static function tryReflectConstant(
+        \Phpactor\WorseReflection\Reflector $reflector,
+        string $name,
+    ): ?\Phpactor\WorseReflection\Core\Reflection\ReflectionDeclaredConstant {
+        try {
+            return $reflector->reflectConstant($name);
+        } catch (NotFound | SourceNotFound) {
+            // fall through to global retry
+        }
+        $needle = ltrim($name, '\\');
+        $lastBackslash = strrpos($needle, '\\');
+        if ($lastBackslash === false) {
+            return null;
+        }
+        $shortName = substr($needle, $lastBackslash + 1);
+        if ($shortName === '') {
+            return null;
+        }
+        try {
+            return $reflector->reflectConstant($shortName);
+        } catch (NotFound | SourceNotFound) {
+            return null;
+        }
     }
 
     private function locateEnumCase(string $enumFqn, string $caseName): ?Location
