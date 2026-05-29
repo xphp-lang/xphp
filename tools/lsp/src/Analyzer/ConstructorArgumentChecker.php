@@ -87,15 +87,103 @@ final readonly class ConstructorArgumentChecker
 
         foreach ($files as $path => $entry) {
             $positionMap = new PositionMap($entry['source']);
+            $context = self::extractNamespaceAndUseMap($entry['ast']);
             $this->walkNewExpressions(
                 $entry['ast'],
                 $ctorByFqn,
                 $hierarchy,
                 $positionMap,
+                $context['namespace'],
+                $context['useMap'],
                 $diagnosticsByFile[$path],
             );
         }
         return $diagnosticsByFile;
+    }
+
+    /**
+     * Extract the file's enclosing namespace + the `use Foo\Bar [as
+     * Baz]` map needed to resolve bare `Name` nodes to fully-qualified
+     * class names without relying on nikic's NameResolver (which the
+     * LSP's per-file Analyzer doesn't run).
+     *
+     * Handles both `Use_` and `GroupUse` (only the TYPE_NORMAL slots
+     * -- function / const uses go through separate symbol tables and
+     * don't bind class-like aliases).
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array{namespace: string, useMap: array<string, string>}
+     */
+    private static function extractNamespaceAndUseMap(array $ast): array
+    {
+        $namespace = '';
+        $useMap = [];
+        $topLevelStmts = $ast;
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Node\Stmt\Namespace_) {
+                $namespace = $stmt->name === null ? '' : $stmt->name->toString();
+                $topLevelStmts = $stmt->stmts;
+                break;
+            }
+        }
+        foreach ($topLevelStmts as $stmt) {
+            if ($stmt instanceof Node\Stmt\Use_) {
+                foreach ($stmt->uses as $useUse) {
+                    $type = $useUse->type !== Node\Stmt\Use_::TYPE_UNKNOWN
+                        ? $useUse->type
+                        : $stmt->type;
+                    if ($type !== Node\Stmt\Use_::TYPE_NORMAL) {
+                        continue;
+                    }
+                    $useMap[$useUse->getAlias()->toString()] = $useUse->name->toString();
+                }
+                continue;
+            }
+            if ($stmt instanceof Node\Stmt\GroupUse) {
+                $prefix = $stmt->prefix->toString();
+                foreach ($stmt->uses as $useUse) {
+                    $type = $useUse->type !== Node\Stmt\Use_::TYPE_UNKNOWN
+                        ? $useUse->type
+                        : $stmt->type;
+                    if ($type !== Node\Stmt\Use_::TYPE_NORMAL) {
+                        continue;
+                    }
+                    $useMap[$useUse->getAlias()->toString()] = $prefix . '\\' . $useUse->name->toString();
+                }
+            }
+        }
+        return ['namespace' => $namespace, 'useMap' => $useMap];
+    }
+
+    /**
+     * Resolve a `Name` node to an FQN given the file's namespace and
+     * use map.  Handles the three nikic-classified shapes:
+     *
+     *   - fully-qualified `\App\Foo` → strip leading slash;
+     *   - relative `namespace\Foo` → prepend file namespace;
+     *   - unqualified / qualified `Foo` / `Foo\Bar` → consult use map
+     *     for the head segment, otherwise prepend file namespace.
+     *
+     * @param array<string, string> $useMap
+     */
+    public function resolveNameToFqn(Name $name, string $namespace, array $useMap): string
+    {
+        if ($name->isFullyQualified()) {
+            return ltrim($name->toString(), '\\');
+        }
+        $parts = $name->getParts();
+        if ($parts === []) {
+            return '';
+        }
+        $head = $parts[0];
+        if (isset($useMap[$head])) {
+            $tail = array_slice($parts, 1);
+            return $tail === []
+                ? $useMap[$head]
+                : $useMap[$head] . '\\' . implode('\\', $tail);
+        }
+        $local = implode('\\', $parts);
+        return $namespace !== '' ? $namespace . '\\' . $local : $local;
     }
 
     /**
@@ -105,30 +193,38 @@ final readonly class ConstructorArgumentChecker
      * builder can read the template's ATTR_GENERIC_PARAMS without
      * re-walking.
      *
+     * FQN derivation: the LSP's per-file Analyzer does NOT run
+     * nikic's NameResolver, so `namespacedName` isn't attached.  We
+     * compute the FQN manually from the top-level `Namespace_`
+     * wrapper instead -- cheaper than running NameResolver per-file
+     * and avoids cloning the AST.
+     *
      * Anonymous classes and classes whose constructor isn't declared
      * (the implicit zero-arg ctor) are skipped -- nothing for the
      * checker to compare against.
      *
      * @param array<string, array{ast: list<Node\Stmt>, source: string}> $files
-     * @return array<string, array{ctor: ClassMethod, owner: ClassLike}>
+     * @return array<string, array{ctor: ClassMethod, owner: ClassLike, namespace: string, useMap: array<string, string>}>
      */
     private function indexConstructorsByFqn(array $files): array
     {
         $byFqn = [];
         foreach ($files as $entry) {
-            foreach (self::findClassLikes($entry['ast']) as $cls) {
+            $context = self::extractNamespaceAndUseMap($entry['ast']);
+            foreach (self::collectClassLikesWithNamespace($entry['ast']) as [$namespace, $cls]) {
                 if ($cls->name === null) {
                     continue;
                 }
-                $fqn = isset($cls->namespacedName)
-                    ? ltrim($cls->namespacedName->toString(), '\\')
-                    : $cls->name->toString();
-                if ($fqn === '') {
-                    continue;
-                }
+                $shortName = $cls->name->toString();
+                $fqn = $namespace !== '' ? $namespace . '\\' . $shortName : $shortName;
                 foreach ($cls->stmts as $member) {
                     if ($member instanceof ClassMethod && strtolower($member->name->toString()) === '__construct') {
-                        $byFqn[$fqn] = ['ctor' => $member, 'owner' => $cls];
+                        $byFqn[$fqn] = [
+                            'ctor' => $member,
+                            'owner' => $cls,
+                            'namespace' => $namespace,
+                            'useMap' => $context['useMap'],
+                        ];
                         break;
                     }
                 }
@@ -138,35 +234,39 @@ final readonly class ConstructorArgumentChecker
     }
 
     /**
-     * @param list<Node\Stmt> $ast
-     * @return list<ClassLike>
+     * Recursively walk the top-level statement list collecting every
+     * `ClassLike` paired with its enclosing namespace string (empty
+     * when the file has no `namespace` declaration).  Handles both
+     * the "bracketed" form (`namespace App { ... }`) and the
+     * "semicolon" form (`namespace App; ...`).
+     *
+     * @param list<Node\Stmt> $stmts
+     * @return list<array{0: string, 1: ClassLike}>
      */
-    private static function findClassLikes(array $ast): array
+    private static function collectClassLikesWithNamespace(array $stmts): array
     {
-        $found = [];
-        $visitor = new class($found) extends NodeVisitorAbstract {
-            /** @param list<ClassLike> $out */
-            public function __construct(public array &$out)
-            {
-            }
-
-            public function enterNode(Node $node): null
-            {
-                if ($node instanceof ClassLike) {
-                    $this->out[] = $node;
+        $out = [];
+        foreach ($stmts as $stmt) {
+            if ($stmt instanceof Node\Stmt\Namespace_) {
+                $ns = $stmt->name === null ? '' : $stmt->name->toString();
+                foreach ($stmt->stmts as $inner) {
+                    if ($inner instanceof ClassLike) {
+                        $out[] = [$ns, $inner];
+                    }
                 }
-                return null;
+                continue;
             }
-        };
-        $traverser = new NodeTraverser();
-        $traverser->addVisitor($visitor);
-        $traverser->traverse($ast);
-        return $visitor->out;
+            if ($stmt instanceof ClassLike) {
+                $out[] = ['', $stmt];
+            }
+        }
+        return $out;
     }
 
     /**
      * @param list<Node\Stmt>                                               $ast
      * @param array<string, array{ctor: ClassMethod, owner: ClassLike}>     $ctorByFqn
+     * @param array<string, string>                                         $useMap
      * @param list<Diagnostic>                                              $diagnostics
      */
     private function walkNewExpressions(
@@ -174,18 +274,23 @@ final readonly class ConstructorArgumentChecker
         array $ctorByFqn,
         TypeHierarchy $hierarchy,
         PositionMap $positionMap,
+        string $namespace,
+        array $useMap,
         array &$diagnostics,
     ): void {
         $checker = $this;
-        $visitor = new class($ctorByFqn, $hierarchy, $positionMap, $diagnostics, $checker) extends NodeVisitorAbstract {
+        $visitor = new class($ctorByFqn, $hierarchy, $positionMap, $namespace, $useMap, $diagnostics, $checker) extends NodeVisitorAbstract {
             /**
              * @param array<string, array{ctor: ClassMethod, owner: ClassLike}> $ctorByFqn
+             * @param array<string, string>                                     $useMap
              * @param list<Diagnostic>                                          $diagnostics
              */
             public function __construct(
                 private readonly array $ctorByFqn,
                 private readonly TypeHierarchy $hierarchy,
                 private readonly PositionMap $positionMap,
+                private readonly string $namespace,
+                private readonly array $useMap,
                 public array &$diagnostics,
                 private readonly ConstructorArgumentChecker $checker,
             ) {
@@ -199,8 +304,8 @@ final readonly class ConstructorArgumentChecker
                 if (!$node->class instanceof Name) {
                     return null;
                 }
-                $fqn = $this->checker->resolveTargetClassFqn($node->class);
-                if ($fqn === null || !isset($this->ctorByFqn[$fqn])) {
+                $fqn = $this->checker->resolveTargetClassFqn($node->class, $this->namespace, $this->useMap);
+                if ($fqn === '' || !isset($this->ctorByFqn[$fqn])) {
                     return null;
                 }
                 $entry = $this->ctorByFqn[$fqn];
@@ -211,6 +316,10 @@ final readonly class ConstructorArgumentChecker
                     $substitution,
                     $this->hierarchy,
                     $this->positionMap,
+                    $this->namespace,
+                    $this->useMap,
+                    $entry['namespace'],
+                    $entry['useMap'],
                     $this->diagnostics,
                     $fqn,
                 );
@@ -223,25 +332,21 @@ final readonly class ConstructorArgumentChecker
     }
 
     /**
-     * Resolve the target class FQN of a `new C(…)` expression.  Prefers
-     * the xphp-parser-attached `ATTR_TEMPLATE_FQN` (set for generic
-     * `new C<T>(…)` shapes) and falls back to nikic's `resolvedName`
-     * attribute for plain `new C(…)`.
+     * Resolve the target class FQN of a `new C(…)` expression.
+     * Prefers the xphp-parser-attached `ATTR_TEMPLATE_FQN` (set for
+     * generic `new C<T>(…)` shapes), then resolves bare names via the
+     * call site's namespace + use map.  Returns the empty string when
+     * nothing can be resolved.
+     *
+     * @param array<string, string> $useMap
      */
-    public function resolveTargetClassFqn(Name $classExpr): ?string
+    public function resolveTargetClassFqn(Name $classExpr, string $namespace, array $useMap): string
     {
         $generic = $classExpr->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
         if (is_string($generic) && $generic !== '') {
             return ltrim($generic, '\\');
         }
-        $resolved = $classExpr->getAttribute('resolvedName');
-        if ($resolved instanceof Name) {
-            return ltrim($resolved->toString(), '\\');
-        }
-        if ($classExpr->isFullyQualified()) {
-            return ltrim($classExpr->toString(), '\\');
-        }
-        return null;
+        return $this->resolveNameToFqn($classExpr, $namespace, $useMap);
     }
 
     /**
@@ -296,6 +401,8 @@ final readonly class ConstructorArgumentChecker
      * constructor parameter type.  Emits one Diagnostic per mismatch.
      *
      * @param array<string, TypeRef> $substitution
+     * @param array<string, string>  $callerUseMap
+     * @param array<string, string>  $ownerUseMap
      * @param list<Diagnostic>       $diagnostics
      */
     public function emitMismatchDiagnostics(
@@ -304,6 +411,10 @@ final readonly class ConstructorArgumentChecker
         array $substitution,
         TypeHierarchy $hierarchy,
         PositionMap $positionMap,
+        string $callerNamespace,
+        array $callerUseMap,
+        string $ownerNamespace,
+        array $ownerUseMap,
         array &$diagnostics,
         string $classFqn,
     ): void {
@@ -316,11 +427,11 @@ final readonly class ConstructorArgumentChecker
             if ($param === null) {
                 continue;
             }
-            $expectedType = self::extractParamType($param, $substitution);
+            $expectedType = $this->extractParamType($param, $substitution, $ownerNamespace, $ownerUseMap);
             if ($expectedType === null) {
                 continue;
             }
-            $actualType = self::inferArgType($arg->value);
+            $actualType = $this->inferArgType($arg->value, $callerNamespace, $callerUseMap);
             if ($actualType === null) {
                 continue;
             }
@@ -367,31 +478,37 @@ final readonly class ConstructorArgumentChecker
      * (`A|B` / `A&B`).  Nullable types are rendered with the leading
      * `?`.
      *
+     * The `$namespace` + `$useMap` are the OWNER's (the declaring
+     * class's), not the call site's -- non-generic class-type params
+     * resolve in the declaring file's import context.
+     *
      * @param array<string, TypeRef> $substitution
+     * @param array<string, string>  $useMap
      */
-    private static function extractParamType(Param $param, array $substitution): ?string
+    private function extractParamType(Param $param, array $substitution, string $namespace, array $useMap): ?string
     {
         $type = $param->type;
         if ($type === null) {
             return null;
         }
-        return self::renderType($type, $substitution);
+        return $this->renderType($type, $substitution, $namespace, $useMap);
     }
 
     /**
      * @param array<string, TypeRef> $substitution
+     * @param array<string, string>  $useMap
      */
-    private static function renderType(Node $type, array $substitution): string
+    private function renderType(Node $type, array $substitution, string $namespace, array $useMap): string
     {
         if ($type instanceof NullableType) {
-            return '?' . self::renderType($type->type, $substitution);
+            return '?' . $this->renderType($type->type, $substitution, $namespace, $useMap);
         }
         if ($type instanceof Node\UnionType) {
-            $parts = array_map(static fn (Node $t): string => self::renderType($t, $substitution), $type->types);
+            $parts = array_map(fn (Node $t): string => $this->renderType($t, $substitution, $namespace, $useMap), $type->types);
             return implode('|', $parts);
         }
         if ($type instanceof Node\IntersectionType) {
-            $parts = array_map(static fn (Node $t): string => self::renderType($t, $substitution), $type->types);
+            $parts = array_map(fn (Node $t): string => $this->renderType($t, $substitution, $namespace, $useMap), $type->types);
             return implode('&', $parts);
         }
         if ($type instanceof Node\Identifier) {
@@ -404,21 +521,38 @@ final readonly class ConstructorArgumentChecker
             if (isset($substitution[$raw])) {
                 return ltrim($substitution[$raw]->name, '\\');
             }
-            $resolved = $type->getAttribute('resolvedName');
-            if ($resolved instanceof Name) {
-                return ltrim($resolved->toString(), '\\');
+            // Bare scalar / reserved type names (`string`, `int`,
+            // `self`, etc.) stay as-is -- no FQN resolution.
+            if ($type->isUnqualified() && self::isReservedTypeName($raw)) {
+                return $raw;
             }
-            return $raw;
+            return $this->resolveNameToFqn($type, $namespace, $useMap);
         }
         return '';
+    }
+
+    /**
+     * Recognises PHP's reserved scalar / pseudo type names that
+     * shouldn't be FQN-resolved against the use map.
+     */
+    private static function isReservedTypeName(string $name): bool
+    {
+        $lower = strtolower($name);
+        return isset(self::SCALARS[$lower])
+            || isset(self::PERMISSIVE_TYPES[$lower])
+            || $lower === 'null'
+            || $lower === 'true'
+            || $lower === 'false';
     }
 
     /**
      * AST-only argument type inference.  Returns null when the static
      * type isn't visible from the expression alone (variables,
      * method-call results, etc.).
+     *
+     * @param array<string, string> $useMap
      */
-    private static function inferArgType(Expr $expr): ?string
+    private function inferArgType(Expr $expr, string $namespace, array $useMap): ?string
     {
         if ($expr instanceof New_) {
             if (!$expr->class instanceof Name) {
@@ -433,11 +567,7 @@ final readonly class ConstructorArgumentChecker
             if (is_string($templateFqn) && $templateFqn !== '') {
                 return ltrim($templateFqn, '\\');
             }
-            $resolved = $expr->class->getAttribute('resolvedName');
-            if ($resolved instanceof Name) {
-                return ltrim($resolved->toString(), '\\');
-            }
-            return ltrim($expr->class->toString(), '\\');
+            return $this->resolveNameToFqn($expr->class, $namespace, $useMap);
         }
         if ($expr instanceof String_) {
             return 'string';

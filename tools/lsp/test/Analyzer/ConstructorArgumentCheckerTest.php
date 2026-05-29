@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Test\Analyzer;
 
-use PhpParser\NodeTraverser;
-use PhpParser\NodeVisitor\NameResolver;
 use PhpParser\ParserFactory;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
@@ -312,8 +310,12 @@ final class ConstructorArgumentCheckerTest extends TestCase
     }
 
     /**
-     * Parse + run NameResolver on each fixture so the AST has
-     * `resolvedName` attributes for the checker to read.
+     * Mirror the prod path: the LSP's per-file Analyzer does NOT run
+     * nikic's NameResolver before handing ASTs to the WorkspaceAnalyzer.
+     * The checker must compute namespacedName + alias resolution from
+     * the file's `namespace` + `use` statements itself.  Tests
+     * deliberately skip NameResolver so a regression to "relies on
+     * resolvedName" surfaces here.
      *
      * @param array<string, string> $sources
      * @return array<string, array{ast: list<\PhpParser\Node\Stmt>, source: string}>
@@ -326,11 +328,7 @@ final class ConstructorArgumentCheckerTest extends TestCase
         foreach ($sources as $path => $source) {
             $result = $analyzer->analyzeFile($source);
             self::assertNotNull($result->ast, "fixture {$path} should parse");
-            $ast = $result->ast;
-            $traverser = new NodeTraverser();
-            $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
-            $traverser->traverse($ast);
-            $out[$path] = ['ast' => $ast, 'source' => $source];
+            $out[$path] = ['ast' => $result->ast, 'source' => $source];
         }
         return $out;
     }

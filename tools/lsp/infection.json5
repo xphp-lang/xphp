@@ -1167,6 +1167,19 @@
                 "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
             ]
         },
+        // Cycle ctor-arg-check PublicVisibility: helpers like
+        // `resolveNameToFqn` are public so the anonymous visitor in
+        // `walkNewExpressions` can call them via `$this->checker`.
+        // Tightening to `protected` doesn't change observable
+        // behaviour -- the visitor is defined inside the class file
+        // and would still resolve, but the public modifier
+        // communicates intent (V2 plug-in points for method-call
+        // / function-call checking that will reuse these helpers).
+        "PublicVisibility": {
+            "ignore": [
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+            ]
+        },
         "Coalesce": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
