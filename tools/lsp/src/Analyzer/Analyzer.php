@@ -84,15 +84,33 @@ class Analyzer
         if (!$e->hasColumnInfo()) {
             return self::buildLineDiagnostic($positionMap, $e->getStartLine(), DiagnosticCode::Parse, $message);
         }
+        // nikic's `getStartColumn` / `getEndColumn` validate that the
+        // attached byte position is `<= strlen($source)` and throw
+        // `RuntimeException("Invalid position information")` otherwise.
+        // The strip pass should preserve byte length, but a mid-edit
+        // buffer + tolerant-parse-recovery can land an `endFilePos`
+        // one past EOF, and the exception propagates all the way out
+        // through `documentHighlight` -- PhpStorm responds with
+        // `Diagnostic provider "xphp" errored ..., removing from pool`
+        // and stops asking us for diagnostics for the rest of the
+        // session (prod log id=122 of
+        // xphp-20260529-195706-986.log).  Fall back to a line-only
+        // range when either column lookup throws.
+        try {
+            $startCharacter = $e->getStartColumn($source) - 1;
+            $endCharacter = $e->getEndColumn($source);
+        } catch (RuntimeException) {
+            return self::buildLineDiagnostic($positionMap, $e->getStartLine(), DiagnosticCode::Parse, $message);
+        }
         $startLine = PositionMap::lspLineFromNikic($e->getStartLine());
         $endLine = PositionMap::lspLineFromNikic($e->getEndLine());
         return new Diagnostic(
             startLine: $startLine,
-            startCharacter: $e->getStartColumn($source) - 1,
+            startCharacter: $startCharacter,
             endLine: $endLine,
             // endColumn from nikic is the column of the LAST character (1-based,
             // inclusive). LSP ranges are half-open, so we don't subtract 1.
-            endCharacter: $e->getEndColumn($source),
+            endCharacter: $endCharacter,
             message: $message,
             code: DiagnosticCode::Parse,
         );

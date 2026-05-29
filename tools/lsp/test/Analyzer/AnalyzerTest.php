@@ -152,6 +152,40 @@ final class AnalyzerTest extends TestCase
         self::assertGreaterThanOrEqual($d->startLine, $d->endLine);
     }
 
+    public function testBuildParseErrorDiagnosticTolerantOfOutOfBoundsPositions(): void
+    {
+        // Prod id=122 of xphp-20260529-195706-986.log: nikic throws
+        // `RuntimeException("Invalid position information")` from
+        // `Error::getEndColumn` when the attached `endFilePos` is
+        // past `strlen($source)`.  Pre-fix the exception propagated
+        // through `documentHighlight` and PhpStorm marked our
+        // diagnostic provider as poisoned.  The catch in
+        // `buildParseErrorDiagnostic` must trap it and fall back to
+        // a line-only Diagnostic.
+        $source = '<?php $x;';
+        $error = new \PhpParser\Error('crafted: end past EOF', [
+            'startLine' => 1,
+            'endLine' => 1,
+            // hasColumnInfo requires startFilePos AND endFilePos.
+            'startFilePos' => 0,
+            // endFilePos > strlen($source) -> getEndColumn throws.
+            'endFilePos' => strlen($source) + 99,
+        ]);
+        $positionMap = new \XPHP\Lsp\PositionMap($source);
+
+        $method = new \ReflectionMethod(Analyzer::class, 'buildParseErrorDiagnostic');
+        $method->setAccessible(true);
+
+        $diagnostic = $method->invoke(null, $positionMap, $error, $source);
+
+        self::assertSame(DiagnosticCode::Parse, $diagnostic->code);
+        // The fallback path uses `buildLineDiagnostic` which spans the
+        // start line; assert the diagnostic doesn't reference a
+        // negative or past-EOF column.
+        self::assertGreaterThanOrEqual(0, $diagnostic->startCharacter);
+        self::assertGreaterThanOrEqual($diagnostic->startCharacter, $diagnostic->endCharacter);
+    }
+
     public function testSyntaxErrorRangeIsColumnAccurateWhenColumnInfoIsAvailable(): void
     {
         // Locks the `$e->getStartColumn($source) - 1` / `$e->getEndColumn($source)`
