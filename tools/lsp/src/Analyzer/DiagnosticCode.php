@@ -58,6 +58,26 @@ enum DiagnosticCode: string
     case UndefinedName = 'xphp.undefined-name';
 
     /**
+     * `new Foo(…)` (or generic `new Foo<T>(…)` after monomorphization)
+     * was called with an argument whose type doesn't satisfy the
+     * declared constructor parameter type.  Surfaces what would
+     * otherwise be a runtime `TypeError` ahead of time.
+     *
+     * V1 only flags the cases where both sides are statically known:
+     *  - param type is a class / interface / trait FQN, AND
+     *    argument is either `new ClassName(...)` (so its type is the
+     *    class FQN) or a `Stringable`-style scalar literal that
+     *    obviously can't satisfy the class param;
+     *  - param type is a scalar (string / int / float / bool / array)
+     *    AND the argument is a literal of a different scalar kind.
+     *
+     * Skips arguments whose type can't be inferred from the AST alone
+     * (variables, method-call results, ternaries, etc.) to avoid
+     * false positives.
+     */
+    case ConstructorArgumentMismatch = 'xphp.ctor-arg-mismatch';
+
+    /**
      * Map a RuntimeException raised by Registry::recordInstantiation to its
      * diagnostic code. The Registry doesn't (currently) use a typed exception
      * hierarchy, so we triage by the error message's leading phrase. The
