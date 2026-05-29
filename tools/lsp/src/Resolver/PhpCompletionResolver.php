@@ -129,7 +129,7 @@ final class PhpCompletionResolver
 
         $items = match ($hit['kind']) {
             'member', 'static', 'static-prop' => $this->completeMembers($uri, $document->text, $hit, $line, $character),
-            'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset),
+            'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset, $line, $character),
             'new'              => $this->completeClassesByPrefix($hit['prefix']),
             'expression'       => array_merge(
                 $this->completeClassesByPrefix($hit['prefix']),
@@ -536,7 +536,7 @@ final class PhpCompletionResolver
      *
      * @return list<CompletionItem>
      */
-    private function completeVariables(string $uri, string $prefix, int $cursorOffset): array
+    private function completeVariables(string $uri, string $prefix, int $cursorOffset, int $line, int $character): array
     {
         if (!$this->workspace->has($uri)) {
             return [];
@@ -599,15 +599,36 @@ final class PhpCompletionResolver
         }
 
         $items = [];
+        // Pin the replacement range to START at the typed prefix's first
+        // character (right AFTER the `$` already in source).  Without
+        // this textEdit, PhpStorm extends the implicit range backward
+        // through the `$` -- treating it as part of the same word
+        // token -- and the accept swallows it, leaving `item` instead
+        // of `$item`.  Prod log id=178 of xphp-20260529-104259-087.log
+        // captures the regression; the static-prop branch of
+        // `propertyItem()` carries the same fix.
+        $prefixLen = strlen($prefix);
+        $anchorStart = new Position($line, max(0, $character - $prefixLen));
+        $anchorEnd = new Position($line, $character);
         foreach (array_keys($visible) as $name) {
             if (!self::variableMatchesPrefix($name, $prefix)) {
                 continue;
             }
-            $items[] = new CompletionItem(
+            $completion = new CompletionItem(
                 label: '$' . $name,
                 kind: CompletionItemKind::VARIABLE,
                 insertText: $name,
+                // filterText keeps the item visible while the user
+                // types more characters AFTER `$` (PhpStorm matches
+                // the typed `$it` prefix against `filterText`, not
+                // `insertText`).
+                filterText: '$' . $name,
             );
+            $completion->textEdit = new TextEdit(
+                new Range($anchorStart, $anchorEnd),
+                $name,
+            );
+            $items[] = $completion;
         }
         return $items;
     }

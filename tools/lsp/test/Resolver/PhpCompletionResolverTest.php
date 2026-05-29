@@ -489,6 +489,42 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertSame([], $resolver->complete('/never-opened.xphp', 0, 0));
     }
 
+    public function testVariableCompletionEmitsTextEditPreservingDollar(): void
+    {
+        // Prod log id=178 of xphp-20260529-104259-087.log captured
+        // `{"label":"$item","kind":6,"insertText":"item"}` -- no textEdit,
+        // so PhpStorm extended the implicit replacement range backward
+        // through the `$` and accept dropped it.  The textEdit must
+        // anchor the replacement range to start at the typed prefix's
+        // first character (right after the `$`), so the `$` already
+        // in source survives.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$item = 1;\nif (\$ite) {}\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'if ($ite', strlen('if ($ite'));
+        $itemItem = null;
+        foreach ($items as $candidate) {
+            if ($candidate->label === '$item') {
+                $itemItem = $candidate;
+                break;
+            }
+        }
+        self::assertNotNull($itemItem, '$item must surface from a `$ite` prefix');
+        self::assertSame('item', $itemItem->insertText, 'insertText is the bare name');
+        self::assertSame('$item', $itemItem->filterText, 'filterText keeps the popup matching `$ite`');
+        self::assertNotNull($itemItem->textEdit, 'textEdit pins the replacement range');
+        // Range start = character of the typed `i` (after `$`).  Source
+        // `if ($ite` has the `i` of `ite` at column 5 (0-based) on
+        // line 2 (0-based).  Cursor sits at column 8 after `e`.  Prefix
+        // length is 3.
+        self::assertSame(2, $itemItem->textEdit->range->start->line);
+        self::assertSame(5, $itemItem->textEdit->range->start->character);
+        self::assertSame(2, $itemItem->textEdit->range->end->line);
+        self::assertSame(8, $itemItem->textEdit->range->end->character);
+        self::assertSame('item', $itemItem->textEdit->newText);
+    }
+
     public function testCompletesVariablesInScopeAfterDollar(): void
     {
         // Use an already-syntactically-valid completion site (inside an `if`

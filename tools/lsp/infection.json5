@@ -106,7 +106,13 @@
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
                 "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
                 "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
-                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType",
+                // completeVariables `max(0, $character - $prefixLen)`
+                // anchor clamp -- defensive against the
+                // never-observed `prefix > character` shape.  Same
+                // guard as the static-prop branch a few hundred
+                // lines up (`staticPropAnchorStart` arithmetic).
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::completeVariables"
             ]
         },
         "IncrementInteger": {
@@ -136,7 +142,11 @@
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // completeVariables `max(0, $character - $prefixLen)`
+                // arithmetic -- same defensive shape as the
+                // DecrementInteger entry above.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::completeVariables"
             ]
         },
         "Minus": {
