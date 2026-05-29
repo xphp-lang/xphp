@@ -104,7 +104,9 @@
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
             ]
         },
         "IncrementInteger": {
@@ -463,7 +465,9 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::classImplementsTransitively",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::interfaceExtendsTransitively",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
             ]
         },
 
@@ -539,7 +543,9 @@
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
             ]
         },
 
@@ -827,7 +833,9 @@
                 "XPHP\\Lsp\\LspDispatcherFactory::create",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
             ]
         },
 
@@ -1059,7 +1067,9 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::classImplementsTransitively",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::interfaceExtendsTransitively",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
             ]
         },
         "Continue_": {
