@@ -15,6 +15,7 @@ use Phpactor\LanguageServerProtocol\CodeActionOptions;
 use Phpactor\LanguageServerProtocol\CodeActionParams;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Resolver\DiagnosticCodeActionProvider;
 use XPHP\Lsp\Resolver\ImportCodeActionProvider;
 
 /**
@@ -45,6 +46,7 @@ final class XphpCodeActionHandler implements Handler, CanRegisterCapabilities
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ImportCodeActionProvider $importProvider,
+        private readonly DiagnosticCodeActionProvider $diagnosticProvider,
     ) {
     }
 
@@ -85,8 +87,13 @@ final class XphpCodeActionHandler implements Handler, CanRegisterCapabilities
             $params->range->start->line,
             $params->range->start->character,
         );
-        return new Success(
-            $this->importProvider->actionsAt($uri, $item->version, $item->text, $offset),
+        $importActions = $this->importProvider->actionsAt($uri, $item->version, $item->text, $offset);
+        $diagnosticActions = $this->diagnosticProvider->actionsFor(
+            $uri,
+            $item->version,
+            $item->text,
+            $params->context->diagnostics ?? [],
         );
+        return new Success(array_merge($importActions, $diagnosticActions));
     }
 }

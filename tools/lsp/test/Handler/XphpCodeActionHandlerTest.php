@@ -21,6 +21,7 @@ use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Handler\XphpCodeActionHandler;
 use XPHP\Lsp\Handler\XphpCodeActionResolveHandler;
 use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Lsp\Resolver\DiagnosticCodeActionProvider;
 use XPHP\Lsp\Resolver\ImportCodeActionProvider;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -165,6 +166,7 @@ final class XphpCodeActionHandlerTest extends TestCase
         return new XphpCodeActionHandler(
             $workspace,
             new ImportCodeActionProvider($fqnIndex, $cache),
+            new DiagnosticCodeActionProvider(),
         );
     }
 

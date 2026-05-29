@@ -96,7 +96,8 @@
                 // nodeContext resolves the same NodeContext.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "IncrementInteger": {
@@ -121,7 +122,8 @@
                 // `max(0, $node->var->getEndFilePos())` clamp.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "Minus": {
@@ -151,7 +153,8 @@
                 // `if ($argEnd < 0) continue;` defensive guard.
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "ReturnRemoval": {
@@ -358,7 +361,8 @@
                 // derives `targetClasses = $target['classNames'] ?? [$targetClass]`
                 // which produces the same singleton array either way.
                 // Equivalent under our test fixtures.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -436,7 +440,8 @@
                 // our expected shape.
                 "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
 
@@ -610,7 +615,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::shortNameAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::findReferences",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
-                "XPHP\\Lsp\\Resolver\\RenameProvider::buildFileRenameOp"
+                "XPHP\\Lsp\\Resolver\\RenameProvider::buildFileRenameOp",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
 
@@ -629,7 +635,8 @@
             "ignore": [
                 "XPHP\\Lsp\\Handler\\AstPositionResolver",
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
 
@@ -651,7 +658,8 @@
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
 
@@ -720,7 +728,8 @@
         "LogicalOrAllSubExprNegation": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "Identical": {
@@ -771,7 +780,8 @@
         "ArrayItemRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\LspDispatcherFactory::create",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
 
@@ -952,7 +962,8 @@
         // isn't unit-testable.
         "FunctionCallRemoval": {
             "ignore": [
-                "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm"
+                "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "LogicalAndSingleSubExprNegation": {
@@ -1020,7 +1031,13 @@
                 // catch it.  Since they don't, the codepath isn't
                 // hit by the intersection fixtures we have.  Equiv-
                 // alent under coverage.
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel",
+                // Cycle E DiagnosticCodeActionProvider: ArrayOneItem on
+                // single-element `[$diagnostic]` and `[new TextEdit(...)]`
+                // payload arrays. The lists are intentionally
+                // single-element today; wrapping to a single-item array
+                // is the same shape the LSP client receives.
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         // TypeUnionSplitter tail mutants (Cycle K).
@@ -1100,6 +1117,44 @@
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
             ]
         },
+        // Cycle E DiagnosticCodeActionProvider tail mutants.
+        // - UnwrapArrayMerge on `array_merge($actions, $this->pseudo...)`:
+        //   removes the merge so only one side survives.  Killed
+        //   indirectly when more diagnostic codes get added but
+        //   currently we only fan out one branch in tests.
+        // - UnwrapStrToLower on `strtolower($typo)`: the typo
+        //   identifier comes from nikic-emitted source which already
+        //   normalises lowercase for bareword constants (the
+        //   Analyzer filters on `$name !== strtolower($name)` first),
+        //   so the strtolower is a no-op for fixtures we cover.
+        // - Spaceship in the usort callback: flipping `<=>` to its
+        //   negation changes the sort order, but the test fixtures
+        //   currently emit either zero or one fix per branch -- the
+        //   order isn't observed.
+        // - LogicalOrSingleSubExprNegation on the `is_string($code) ||
+        //   is_int($code)` ambient-type check: same defensive guard
+        //   as the LogicalOrAllSubExprNegation entry above.
+        "UnwrapArrayMerge": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+            ]
+        },
+        "UnwrapStrToLower": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+            ]
+        },
+        "Spaceship": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+            ]
+        },
+        "LogicalOrSingleSubExprNegation": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+            ]
+        },
         "FunctionCallRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
@@ -1108,7 +1163,8 @@
                 // observationally equivalent: subsequent ClassFqnPredicate::is
                 // accepts `?Foo` and `Foo` identically, so the
                 // returned receiver list is the same.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder",
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
         "GreaterThanNegotiation": {

@@ -69,6 +69,7 @@ use XPHP\Lsp\Resolver\CompositeClassLikeLookup;
 use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
 use XPHP\Lsp\Resolver\GenericParamRegistry;
 use XPHP\Lsp\Resolver\GenericResolver;
+use XPHP\Lsp\Resolver\DiagnosticCodeActionProvider;
 use XPHP\Lsp\Resolver\ImportCodeActionProvider;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
 use XPHP\Lsp\Resolver\ReferenceFinder;
@@ -255,6 +256,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpCodeActionHandler(
                 $workspace,
                 new ImportCodeActionProvider($fqnIndex, $cache),
+                new DiagnosticCodeActionProvider(),
             ),
             new XphpCodeActionResolveHandler(),
             new XphpDocumentSymbolHandler($workspace, $cache),
