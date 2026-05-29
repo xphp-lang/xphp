@@ -279,6 +279,54 @@ final class PhpCompletionResolverTest extends TestCase
         }
     }
 
+    public function testBareStaticContextSurfacesStaticProperties(): void
+    {
+        // Prod scenario: `class InMemoryRepository<T> { public static
+        // string $test = '...'; }` plus `$repo::|` -- typing `::` on
+        // an instance variable should still bring up the static
+        // property `$test`.  Pre-fix the `Cls::|` branch in
+        // `itemsForClass` only iterated constants and methods; static
+        // properties were silently skipped (`$repo::$test` could only
+        // surface from the narrower `Cls::$|` branch which the user
+        // hits AFTER typing `$`).
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repo.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Repo {
+            public static string $test = '';
+            public static int $count = 0;
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Repo;\n\$r = new Repo();\necho \$r::;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Cursor sits right after `$r::` on line 3 (0-indexed).
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$r::', strlen('$r::'));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+        self::assertContains('$test', $labels, 'static property `$test` must appear on `$r::|`');
+        self::assertContains('$count', $labels, 'all static properties surface');
+
+        // Shape check: the `$test` item must self-insert the `$` so
+        // accept produces `$r::$test`, not `$r::test`.  filterText is
+        // bare so PhpStorm filters the typed prefix (which doesn't
+        // yet include `$`) against the candidate; textEdit pins the
+        // replacement range so the inserted `$` lands consistently.
+        $testItem = null;
+        foreach ($items as $candidate) {
+            if ($candidate->label === '$test') {
+                $testItem = $candidate;
+                break;
+            }
+        }
+        self::assertNotNull($testItem);
+        self::assertSame('$test', $testItem->insertText);
+        self::assertSame('test', $testItem->filterText);
+        self::assertNotNull($testItem->textEdit);
+        self::assertSame('$test', $testItem->textEdit->newText);
+    }
+
     public function testStaticPropertyCompletionFiltersByPrefix(): void
     {
         // `Cls::$la|` -- prefix filter narrows to props matching `la*`.

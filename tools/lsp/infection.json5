@@ -772,7 +772,13 @@
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // Bare-static branch's `$propType !== '' && $propType
+                // !== '<missing>'` detail-field defensive type guard.
+                // The static-prop branch's `propertyItem()` has the
+                // identical expression and is already covered via
+                // its existing class-level ignore.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass"
             ]
         },
 
@@ -912,7 +918,12 @@
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveInner",
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // Bare-static branch's `$propType !== '' && $propType
+                // !== '<missing>' ? $propType : null` detail-field
+                // type guard.  Mirrors `propertyItem()`'s existing
+                // pattern.
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass"
             ]
         },
 

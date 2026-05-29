@@ -387,11 +387,51 @@ final class PhpCompletionResolver
                 }
             }
         } else {
-            // `Cls::|` -- static methods (above) + class constants.
-            // This branch runs for interface receivers too: interfaces
-            // can declare constants (e.g. `DateTimeInterface::ATOM`),
-            // and worse-reflection's `ReflectionInterface::constants()`
-            // returns them.
+            // `Cls::|` -- static methods (above) + static properties +
+            // class constants.  Static properties used to be silently
+            // skipped here (the parallel `Cls::$|` branch handled them
+            // but the bare-static branch had only constants), so
+            // `$repo::$test` never surfaced for a `public static
+            // string $test` declared on the receiver class.
+            //
+            // Item shape mirrors `Cls::$|` (the static-prop branch
+            // above): label carries `$` for popup display; filterText
+            // is the bare name so PhpStorm filters the typed prefix
+            // (which doesn't yet include `$`) against the candidate;
+            // the textEdit replaces the typed prefix with `$<name>`
+            // so the `$` lands in source on accept regardless of
+            // how PhpStorm would otherwise pick the implicit range.
+            $bareStaticPropAnchorStart = new Position($line, max(0, $character - strlen($hit['prefix'])));
+            $bareStaticPropAnchorEnd = new Position($line, $character);
+            if ($hasProperties) {
+                foreach ($class->properties() as $property) {
+                    if (!$property->isStatic()) {
+                        continue;
+                    }
+                    if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                        $droppedVis++;
+                        continue;
+                    }
+                    if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                        $droppedPrefix++;
+                        continue;
+                    }
+                    $propType = $this->genericParams->prettify((string) $property->inferredType());
+                    $propName = $property->name();
+                    $completion = new CompletionItem(
+                        label: '$' . $propName,
+                        kind: CompletionItemKind::PROPERTY,
+                        detail: $propType !== '' && $propType !== '<missing>' ? $propType : null,
+                        insertText: '$' . $propName,
+                        filterText: $propName,
+                    );
+                    $completion->textEdit = new TextEdit(
+                        new Range($bareStaticPropAnchorStart, $bareStaticPropAnchorEnd),
+                        '$' . $propName,
+                    );
+                    $items[] = $completion;
+                }
+            }
             foreach ($class->constants() as $constant) {
                 if (!self::matchesPrefix((string) $constant->name(), $hit['prefix'])) {
                     continue;
