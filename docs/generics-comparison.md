@@ -1,6 +1,6 @@
 # Generic features xphp doesn't have yet
 
-Baseline: xphp today (post `feat/generics-expansion`) has generic classes/interfaces/traits, free + method-scoped generic functions, single upper bounds, nested generics, and a marker-interface trick for `instanceof`. The compilation model is **monomorphization** — same as Rust, opposite of Java/Kotlin's erasure. That last point matters a lot for what's easy vs hard to add.
+Baseline: xphp today has generic classes/interfaces/traits, free + method-scoped generic functions, single upper bounds, nested generics, and a marker-interface trick for `instanceof`. The compilation model is **monomorphization** — same as Rust, opposite of Java/Kotlin's erasure. That last point matters a lot for what's easy vs hard to add.
 
 Below: gaps grouped by tier, with the language(s) that have each feature. Filtered for things that make sense in a PHP-targeted language — skipping Rust lifetimes, const generics over `usize`, TS template-literal types, etc.
 

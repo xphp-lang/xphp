@@ -209,10 +209,16 @@ community and ecosystem already trust.
 
 The compiler itself lives at [core/](core/) (Composer package
 `xphp-lang/xphp`); a Language Server Protocol implementation under [tools/lsp/](tools/lsp/) delivers the full editor surface for `.xphp`
-files: live diagnostics, hover (xphp generics + PHP semantic, with parameter and return-type substitution),
-go-to-definition, find references, rename, document and workspace symbols, and rich completion (member access,
-static access, static property, type-arg positions with bound-aware filtering, scope-aware variables, visibility
-filtering across same-class and subclass contexts). The same server powers two editor integrations:
+files: live diagnostics (parse / bound / constructor-argument-type / undefined-bareword), hover (xphp generics + PHP
+semantic, with parameter and return-type substitution and generic-T → concrete substitution through property fetches),
+go-to-definition (with a per-constituent picker for union/intersection receivers), go-to type definition, find
+references (with interface-implementation walks in both directions), rename (alias-aware, with file rename when the
+client supports it), documentHighlight, documentSymbol + workspace/symbol, foldingRange, signatureHelp, inlayHint,
+rich completion (member access, static access, static property, type-arg positions with bound-aware filtering,
+scope-aware variables, union/intersection receiver fan-out, visibility filtering across same-class and subclass
+contexts; `completionItem/resolve` for lazy docblock fetch), codeAction + resolve (Import class · Simplify FQN ·
+Optimize Imports · "Did you mean null/true/false?" typo fixes), codeLens ("Show references" above every declaration),
+call hierarchy (prepare + incoming + outgoing), and semantic tokens. The same server powers two editor integrations:
 
 - **PhpStorm**: plugin at [tools/phpstorm-plugin/](tools/phpstorm-plugin/) targeting PhpStorm 2026.1+ (uses the
   IntelliJ Platform LSP API, free for all editions since 2025.2). This is the primary editor target.
@@ -220,5 +226,7 @@ filtering across same-class and subclass contexts). The same server powers two e
   iteration. Marketplace publication is deferred indefinitely.
 
 Both bind to the same TextMate grammar and the same LSP semantics, so editing experience is consistent across editors.
+
+Full LSP roadmap: [tools/lsp/roadmap.md](tools/lsp/roadmap.md).
 
 ---

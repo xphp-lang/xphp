@@ -13,15 +13,28 @@ core parser.
 | Feature | Status |
 |---|---|
 | `--lint <file>` headless mode (parse + bound checks) | shipped |
-| `textDocument/publishDiagnostics` over stdio | shipped |
-| `textDocument/hover` (xphp generics + PHP semantic: class / function / method / property / native funcs; parameter and return-type substitution at static / instance / free-function call sites) | shipped |
-| `textDocument/definition` (xphp generics + PHP semantic: class / function / method / property / `use` imports / native funcs / closed-file targets via FqnIndex) | shipped |
-| `textDocument/completion` (`<...>` type-arg positions with bound-aware filtering + `$obj->` member access + `Cls::` static access + `Cls::$` static property + scope-aware variables + visibility-aware filtering inside same class / subclass + string / comment suppression) | shipped |
-| `textDocument/references` for classes, functions, methods, properties (with inheritance walk into subclass receivers) | shipped |
+| `textDocument/publishDiagnostics` over stdio — parse errors, bound violations, duplicate templates, undefined-bareword warnings, `xphp.ctor-arg-mismatch` (post-monomorphization constructor argument-type check, `new C<T>(…)` and `new C(…)`) | shipped |
+| `textDocument/hover` (xphp generics + PHP semantic: class / function / method / property / native funcs; parameter and return-type substitution at static / instance / free-function call sites; generic-T → concrete type substituted through property fetches) | shipped |
+| `textDocument/definition` (xphp generics + PHP semantic: class / function / method / property / `use` imports / native funcs / closed-file targets via FqnIndex; union/intersection receivers fan out to a per-constituent picker) | shipped |
+| `textDocument/typeDefinition` (Go To Type Declaration through xphp generics — `$users = new Collection<User>()` jumps to `class User`, not `class Collection`) | shipped |
+| `textDocument/completion` (`<...>` type-arg positions with bound-aware filtering + `$obj->` member access + `Cls::` static access (incl. static properties + constants) + `Cls::$` static property + scope-aware variables + visibility-aware filtering inside same class / subclass + union/intersection receiver fan-out + string / comment suppression; explicit `textEdit` ranges preserve the `$` sigil on accept) | shipped |
+| `completionItem/resolve` (lazy class-docblock fetch) | shipped |
+| `textDocument/signatureHelp` (parameter list + active-arg highlight; static/instance/free-function call sites; type-arg substitution baked into the rendered signature) | shipped |
+| `textDocument/references` for classes, functions, methods, properties (with inheritance walks into subclass receivers AND interface-implementation walks in both directions: cursor on `Iface::m` matches every impl call site; cursor on `Impl::m` matches interface-typed receivers) | shipped |
 | `textDocument/rename` (alias-aware short-name rewriting; `RenameFile` gated on client `resourceOperations`) | shipped |
+| `textDocument/documentHighlight` (in-file occurrence highlighting) | shipped |
 | `textDocument/documentSymbol` (hierarchical ClassLike / function / method tree) | shipped |
+| `textDocument/foldingRange` (class / method / closure bodies + xphp `<…>` generic clauses) | shipped |
+| `textDocument/inlayHint` (inline `: <substituted type>` between variable and `=` for any `$x = …` whose RHS resolves through `GenericResolver`) | shipped |
+| `textDocument/codeAction` + `codeAction/resolve` — Import class · Simplify FQN · Optimize Imports · "Did you mean null/true/false?" typo fixes for `UndefinedName` diagnostics | shipped |
+| `textDocument/codeLens` ("Show references" lens above every class / interface / trait / enum / function / method; click forwards to `workspace/executeCommand xphp.showReferences`) | shipped |
+| `textDocument/prepareCallHierarchy` + `callHierarchy/incomingCalls` + `callHierarchy/outgoingCalls` | shipped |
+| `textDocument/semanticTokens/full` (AST-driven; type-param `T` paints with the standard `typeParameter` color) | shipped |
 | `workspace/symbol` (cross-file FQN search via FqnIndex) | shipped |
 | `workspace/didChangeWatchedFiles` (bulk invalidation of the filesystem index for long sessions) | shipped |
+| `workspace/executeCommand xphp.showReferences` (codeLens click target) | shipped |
+| Durable per-user stub cache root (`XPHP_LSP_CACHE_DIR` → XDG → `~/.cache` / `~/Library/Caches` / `%LOCALAPPDATA%` / `<sys_temp>` fallback) | shipped |
+| Tolerant-parse fallback so the in-memory locator survives mid-edit syntax errors (`$x->|` and similar) | shipped |
 | UTF-16 column counting (positions correct past supplementary-plane codepoints) | shipped |
 | PhpStorm plugin at `tools/phpstorm-plugin/` | shipped |
 | VS Code extension at `tools/vscode-extension/` (sibling package; consumer of this server) | shipped |
@@ -32,11 +45,14 @@ and [`jetbrains/phpstorm-stubs`](https://github.com/JetBrains/phpstorm-stubs).
 xphp-specific paths run FIRST (template instantiation, type-args inside
 `<…>` clauses); when those don't apply we fall through to the
 worse-reflection path so behaviour on .xphp files matches PhpStorm's PHP
-intelligence on regular .php files.
+intelligence on regular .php files. The same `PhpHoverResolver` /
+`PhpDefinitionResolver` / `PhpCompletionResolver` triad also drives
+`signatureHelp`, `inlayHint`, and `callHierarchy` so all five features
+agree on receiver / member resolution.
 
 `make -C tools/lsp test` runs the PHPUnit suite.
 
-See [`docs/roadmap.md`](/docs/roadmap.md) (Shipped → Tooling) for the broader feature inventory.
+See [`roadmap.md`](roadmap.md) for the broader feature inventory.
 
 ## Layout
 
@@ -123,11 +139,21 @@ Capabilities advertised at `initialize`:
 - `textDocumentSync: 1` (Full)
 - `hoverProvider`
 - `definitionProvider`
+- `typeDefinitionProvider`
 - `referencesProvider`
+- `documentHighlightProvider`
 - `documentSymbolProvider`
 - `workspaceSymbolProvider`
 - `renameProvider`
+- `foldingRangeProvider`
 - `completionProvider` with `triggerCharacters: ["<", ",", ">", ":"]`
+  and `resolveProvider: true`
+- `signatureHelpProvider` with `triggerCharacters: ["(", ","]`
+- `inlayHintProvider`
+- `codeActionProvider` with `resolveProvider: true`
+- `codeLensProvider`
+- `callHierarchyProvider`
+- `executeCommandProvider` for `xphp.showReferences`
 - `semanticTokensProvider` (full file; standard LSP-spec token-type
   legend including `typeParameter` for xphp `T` references in
   generic-syntax positions)
@@ -136,7 +162,7 @@ Capabilities advertised at `initialize`:
 
 ```bash
 # From the repo root:
-make -C tools/lsp test            # PHPUnit, 475 cases / 1318 assertions
+make -C tools/lsp test            # PHPUnit
 make -C tools/lsp test/mutation   # Infection, MSI under a 93 % gate
 
 # Or from this directory:
@@ -222,15 +248,21 @@ follows the same pattern.
 Each one is also documented inline at the relevant call site so a reader doing a code dive
 finds the same caveat at the source. Highlights:
 
-- **Indexer for unopened files.** Today only documents the editor has open contribute to
-  cross-file diagnostics + go-to-definition + completion. Walking `**/*.xphp` at `initialize`
-  is the obvious next pass.
 - **Cross-file diagnostic broadcast.** Editing `Box.xphp` doesn't re-publish diagnostics for
   every `Use.xphp` that instantiates it; the diagnostic catches up when those files are
   re-touched.
-- **Bound-aware completion filtering.** `Box<T: \Stringable>` still suggests non-Stringable
-  classes; the diagnostic catches the violation after selection.
 - **Use-alias short-form completion.** `insertText` is always the full FQN today.
 - **Hover/jump on bound names in template headers.** XphpSourceParser strips the `<…>` clause
   so there's no AST node positioned over the bound text.
+- **`textDocument/formatting` + `rangeFormatting` + `onTypeFormatting`.** Deferred-by-design:
+  needs an xphp formatter to exist first.
+- **`textDocument/documentColor` + `colorPresentation`.** Low value for PHP.
+- **`textDocument/prepareTypeHierarchy` + `typeHierarchy/supertypes` + `typeHierarchy/subtypes`.**
+  Deferred until `phpactor/language-server-protocol` ships the `TypeHierarchyItem` types
+  (or until we accept raw-array params through the framework's untyped path).
+- **`codeLens/resolve` with reference counts.** Today's lens carries a static "Show references"
+  title; turning it into "N references" needs per-(uri, version) cached counts so the
+  workspace walk doesn't fire per-lens on every re-render.
+- **Method / static / function-call argument-type checker.** V2 of `xphp.ctor-arg-mismatch`
+  extending the same idea from `new C(…)` to `$obj->m(…)`, `Cls::m(…)`, `freeFn(…)`.
 - **Marketplace publication** of the VS Code extension.

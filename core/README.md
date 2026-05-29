@@ -32,7 +32,7 @@ package's `XphpSourceParser` + `Registry` + `TypeHierarchy` +
 | `bin/xphp compile <source-dir> <target-dir> <cache-dir>` CLI | shipped |
 
 See [`docs/generics.md`](/docs/generics.md) for the full language
-reference and [`docs/roadmap.md`](/docs/roadmap.md) for what's next.
+reference and [`roadmap.md`](roadmap.md) for what's next.
 
 ## Install
 
@@ -94,8 +94,8 @@ core/
 ## Test
 
 ```bash
-make -C core test/unit        # PHPUnit: 184 tests / 495 assertions
-make -C core test/mutation    # Infection: 100% MSI, gate 95%
+make -C core test/unit        # PHPUnit
+make -C core test/mutation    # Infection, MSI under a 95 % gate
 ```
 
 The mutation suite finishes in ~45s on a 4-core machine; CI gates
@@ -129,7 +129,7 @@ work at runtime (T resolves to the concrete type at specialization
 time), which is something Java / Kotlin / TypeScript can't promise
 because they erase generics.  Variance annotations on this base
 become real subtype edges between specialized classes -- a roadmap
-item ([`docs/roadmap.md`](/docs/roadmap.md)).
+item ([`roadmap.md`](roadmap.md)).
 
 For the side-by-side type-system comparison see
 [`docs/generics-comparison.md`](/docs/generics-comparison.md).
