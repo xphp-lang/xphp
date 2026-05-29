@@ -44,7 +44,8 @@
             "ignore": [
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
         "DecrementInteger": {
@@ -98,7 +99,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
         "IncrementInteger": {
@@ -125,7 +127,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
         "Minus": {
@@ -445,7 +448,8 @@
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
 
@@ -666,7 +670,8 @@
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
 
@@ -1004,7 +1009,8 @@
                 // single-element receiver list -- equivalent.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
         "Continue_": {
@@ -1013,7 +1019,14 @@
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                // Cycle G XphpCodeLensHandler::collectLenses: `continue`
+                // after dispatching on Namespace_ / ClassLike.  Removing
+                // it falls through to the Function_ check, which is
+                // mutually exclusive (the stmt isn't a Function_ if it's
+                // a Namespace_/ClassLike) so the observable lens list
+                // is unchanged.
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
             ]
         },
         "Foreach_": {
