@@ -52,6 +52,7 @@ use XPHP\Lsp\Handler\XphpCodeActionHandler;
 use XPHP\Lsp\Handler\XphpCodeActionResolveHandler;
 use XPHP\Lsp\Handler\XphpCompletionResolveHandler;
 use XPHP\Lsp\Handler\XphpDocumentHighlightHandler;
+use XPHP\Lsp\Handler\XphpCallHierarchyHandler;
 use XPHP\Lsp\Handler\XphpCodeLensHandler;
 use XPHP\Lsp\Handler\XphpFoldingRangeHandler;
 use XPHP\Lsp\Handler\XphpInlayHintHandler;
@@ -263,6 +264,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             ),
             new XphpCodeActionResolveHandler(),
             new XphpDocumentSymbolHandler($workspace, $cache),
+            new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex),
             new XphpCodeLensHandler($workspace, $cache),
             new XphpFoldingRangeHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),

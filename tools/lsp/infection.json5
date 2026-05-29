@@ -45,7 +45,8 @@
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "DecrementInteger": {
@@ -100,7 +101,8 @@
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "IncrementInteger": {
@@ -128,7 +130,8 @@
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "Minus": {
@@ -384,7 +387,8 @@
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -449,7 +453,8 @@
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -523,7 +528,8 @@
                 // outcome under our env-controlled tests because
                 // either branch falls through to the next fallback.
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -584,7 +590,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
-                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::fanOutLocate"
+                "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::fanOutLocate",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -646,7 +653,8 @@
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -671,7 +679,8 @@
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -699,7 +708,8 @@
                 // exclusive dispatch as the SignatureHelp variant.
                 "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -732,7 +742,8 @@
                 // string is treated as "no value present" -- both
                 // operators route to the next fallback identically.
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -743,7 +754,8 @@
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "Identical": {
@@ -758,7 +770,8 @@
                 // existing identity-on-same-object tests cover them
                 // via the corresponding method/property dispatch arm.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "GreaterThanOrEqualToNegotiation": {
@@ -783,7 +796,8 @@
                 "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -797,7 +811,8 @@
             "ignore": [
                 "XPHP\\Lsp\\LspDispatcherFactory::create",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -828,7 +843,8 @@
                 // pieces; flipping there produces an equally-wrong
                 // path that DOESN'T trip the tests because they exercise
                 // a different branch (override vs XDG vs HOME).
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "ConcatOperandRemoval": {
@@ -837,7 +853,8 @@
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
                 // See Concat rationale above.
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::defaultCacheDir"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::defaultCacheDir",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         // Cycle D cacheRoot `rtrim($home, "/\\") . $sub` strips trailing
@@ -858,7 +875,8 @@
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveInner",
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -948,7 +966,8 @@
                 "XPHP\\Lsp\\Stderr::write",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
 
@@ -993,7 +1012,8 @@
         },
         "LogicalOrNegation": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "ReturnRemoval": {
@@ -1010,7 +1030,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "Continue_": {
@@ -1026,14 +1047,16 @@
                 // mutually exclusive (the stmt isn't a Function_ if it's
                 // a Namespace_/ClassLike) so the observable lens list
                 // is unchanged.
-                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler"
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "Foreach_": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "While_": {
@@ -1067,7 +1090,8 @@
                 // single-element today; wrapping to a single-item array
                 // is the same shape the LSP client receives.
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         // TypeUnionSplitter tail mutants (Cycle K).
@@ -1117,7 +1141,8 @@
                 // changing replacement) would require a `T[]`-style
                 // generic AND a trailing parse error in the same
                 // file -- a contrived combination not seen in prod.
-                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile"
+                "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         // Analyzer tolerant-parse fallback NullSafePropertyCall:
@@ -1132,7 +1157,8 @@
         "NullSafePropertyCall": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         // Cycle B ImportCodeActionProvider extractContext:
@@ -1144,7 +1170,8 @@
         // input.
         "NullSafeMethodCall": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         // Cycle E DiagnosticCodeActionProvider tail mutants.
@@ -1250,7 +1277,8 @@
                 // covered fixtures (caller either visible-everywhere
                 // or not, dominated by $isSameClass).
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
         },
         "Break_": {
