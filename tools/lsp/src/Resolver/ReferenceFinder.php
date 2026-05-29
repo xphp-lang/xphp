@@ -715,7 +715,9 @@ final class ReferenceFinder
                     && $node->name->toString() === $targetName
                 ) {
                     $declClass = self::enclosingClassFqn($ast, $node);
-                    if ($declClass !== null && ltrim($declClass, '\\') === $targetClass) {
+                    if ($declClass !== null
+                        && $this->declarationMatchesTarget($declClass, $targetName, $targetClass, true)
+                    ) {
                         yield ['node' => $node->name, 'kind' => 'method-decl'];
                     }
                 }
@@ -765,7 +767,9 @@ final class ReferenceFinder
                     continue;
                 }
                 $declClass = self::enclosingClassFqn($ast, $propStmt);
-                if ($declClass !== null && ltrim($declClass, '\\') === $targetClass) {
+                if ($declClass !== null
+                    && $this->declarationMatchesTarget($declClass, $targetName, $targetClass, false)
+                ) {
                     yield ['node' => $node->name, 'kind' => 'property-decl'];
                 }
             }
@@ -1109,7 +1113,169 @@ final class ReferenceFinder
             return true;
         }
         $declaring = $this->declaringClassOf($receiverNorm, $memberName, $isMethod);
-        return $declaring !== null && $declaring === $targetNorm;
+        if ($declaring !== null && $declaring === $targetNorm) {
+            return true;
+        }
+        // Interface-up: receiver class transitively implements the target
+        // interface AND the interface declares the member.  Restores
+        // Cycle A (#116) interface walks that were accidentally removed
+        // during the Cycle C `isClassFqn` refactor.
+        if ($this->classImplementsTransitively($receiverNorm, $targetNorm)
+            && $this->declaresMember($targetNorm, $memberName, $isMethod)
+        ) {
+            return true;
+        }
+        // Interface-down: target class transitively implements the
+        // receiver interface AND the receiver interface declares the
+        // member.  Mirror of the above.
+        if ($this->classImplementsTransitively($targetNorm, $receiverNorm)
+            && $this->declaresMember($receiverNorm, $memberName, $isMethod)
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Declaration-side mirror of {@see inheritsMemberFromTarget}.
+     * "Should we treat the declaration in `$declClassFqn` as a
+     * declaration of the same logical symbol as `$targetClass::$memberName`?"
+     *
+     * Yields:
+     *   - exact match (the existing canonical-declaration site)
+     *   - impl decls when the target is an interface method (we want
+     *     `interface Iface { function m(); }` AND every
+     *     `class Impl implements Iface { function m() {…} }` to surface)
+     *   - the interface decl when the target is a concrete impl method
+     *     (symmetric to interface-down in the receiver-side check).
+     */
+    private function declarationMatchesTarget(
+        string $declClassFqn,
+        string $memberName,
+        string $targetClass,
+        bool $isMethod,
+    ): bool {
+        $declNorm = ltrim($declClassFqn, '\\');
+        $targetNorm = ltrim($targetClass, '\\');
+        if ($declNorm === $targetNorm) {
+            return true;
+        }
+        if ($this->classImplementsTransitively($declNorm, $targetNorm)
+            && $this->declaresMember($targetNorm, $memberName, $isMethod)
+        ) {
+            return true;
+        }
+        if ($this->classImplementsTransitively($targetNorm, $declNorm)
+            && $this->declaresMember($declNorm, $memberName, $isMethod)
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Does `$classFqn` implement (or extend, for interfaces) `$ifaceFqn`
+     * transitively?
+     *
+     * For a class receiver: worse-reflection's `ReflectionClass::interfaces()`
+     * already returns the FULL transitive set (parent classes' implements
+     * clauses + interface-extends-interface chains), so a single membership
+     * check is enough.
+     *
+     * For an interface receiver: `ReflectionInterface::parents()` is SHALLOW
+     * (only direct `extends` clauses), so we walk transitively here.
+     */
+    private function classImplementsTransitively(string $classFqn, string $ifaceFqn): bool
+    {
+        $lookup = ltrim($classFqn, '\\');
+        $needle = ltrim($ifaceFqn, '\\');
+        if ($lookup === '' || $needle === '') {
+            return false;
+        }
+        try {
+            $class = $this->reflector->reflectClassLike($lookup);
+        } catch (Throwable) {
+            return false;
+        }
+        if ($class instanceof \Phpactor\WorseReflection\Core\Reflection\ReflectionClass) {
+            try {
+                foreach ($class->interfaces() as $iface) {
+                    if (ltrim((string) $iface->name(), '\\') === $needle) {
+                        return true;
+                    }
+                }
+            } catch (Throwable) {
+            }
+            return false;
+        }
+        if ($class instanceof \Phpactor\WorseReflection\Core\Reflection\ReflectionInterface) {
+            return $this->interfaceExtendsTransitively($class, $needle, []);
+        }
+        return false;
+    }
+
+    /**
+     * Transitive walk for `interface X extends Y, Z`.  worse-reflection's
+     * `parents()` only returns the direct `extends` clause; we recurse
+     * to cover multi-hop chains like `interface K extends J extends I`.
+     *
+     * @param array<string,true> $visited
+     */
+    private function interfaceExtendsTransitively(
+        \Phpactor\WorseReflection\Core\Reflection\ReflectionInterface $iface,
+        string $needle,
+        array $visited,
+    ): bool {
+        try {
+            foreach ($iface->parents() as $parent) {
+                $name = ltrim((string) $parent->name(), '\\');
+                if ($name === $needle) {
+                    return true;
+                }
+                if (isset($visited[$name])) {
+                    continue;
+                }
+                $visited[$name] = true;
+                if ($this->interfaceExtendsTransitively($parent, $needle, $visited)) {
+                    return true;
+                }
+            }
+        } catch (Throwable) {
+        }
+        return false;
+    }
+
+    /**
+     * Is `$memberName` declared directly on `$classFqn` (not just
+     * inherited)?  Used to confirm the interface side of an interface
+     * walk actually owns the method/property we're linking through --
+     * a class implementing an unrelated interface shouldn't match.
+     */
+    private function declaresMember(string $classFqn, string $memberName, bool $isMethod): bool
+    {
+        $lookup = ltrim($classFqn, '\\');
+        if ($lookup === '' || $memberName === '') {
+            return false;
+        }
+        try {
+            $class = $this->reflector->reflectClassLike($lookup);
+        } catch (Throwable) {
+            return false;
+        }
+        try {
+            if ($isMethod) {
+                return $class->methods()->has($memberName);
+            }
+            // Interfaces don't have properties; method_exists guards
+            // against `Call to undefined method ReflectionInterface::
+            // properties()`.
+            if (!method_exists($class, 'properties')) {
+                return false;
+            }
+            return $class->properties()->has($memberName);
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /**

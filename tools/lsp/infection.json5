@@ -454,7 +454,11 @@
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
-                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inheritsMemberFromTarget",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::classImplementsTransitively",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::interfaceExtendsTransitively",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember"
             ]
         },
 
@@ -936,7 +940,11 @@
                 // is dead in observable test paths.
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
-                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inheritsMemberFromTarget",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::classImplementsTransitively",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::interfaceExtendsTransitively",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember"
             ]
         },
 
@@ -1031,7 +1039,11 @@
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
-                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inheritsMemberFromTarget",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::classImplementsTransitively",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::interfaceExtendsTransitively",
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember"
             ]
         },
         "Continue_": {

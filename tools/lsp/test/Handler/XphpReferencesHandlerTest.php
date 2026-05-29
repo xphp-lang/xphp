@@ -444,6 +444,284 @@ final class XphpReferencesHandlerTest extends TestCase
         self::assertCount(3, $useMatches, 'union-receiver cursor surfaces every constituent call site');
     }
 
+    public function testFindsImplementorReceiverFromInterfaceMethod(): void
+    {
+        // #116 interface-up: cursor on `Iface::save` finds calls
+        // on impl-typed receivers.  Pre-fix the receiver-side check
+        // returned false because worse-reflection's `declaringClass`
+        // for `Impl::save` resolves to `Impl` (the body lives there),
+        // never to `Iface`, so the exact-FQN comparison rejected the
+        // call site.  The new interface walk catches this.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Iface.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface Repo {
+            public function save(string $item): void;
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Impl.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class InMemoryRepo implements Repo {
+            public function save(string $item): void {}
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\InMemoryRepo;
+        $r = new InMemoryRepo();
+        $r->save('a');
+        $r->save('b');
+        XPHP));
+
+        // Cursor on the interface method declaration `function save`
+        // inside `interface Repo`.
+        $locations = $this->references($workspace, '/Iface.xphp', 'function save', strlen('function '));
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/Iface.xphp', $uris, 'interface decl is a match');
+        self::assertContains('/Impl.xphp', $uris, '#116: impl decl surfaces too');
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(2, $useMatches, '#116: impl-typed receiver calls are matched');
+    }
+
+    public function testFindsInterfaceTypedReceiverFromConcreteMethod(): void
+    {
+        // #116 interface-down: cursor on `Impl::save` should also
+        // match `$x->save()` where `$x` is typed as the interface.
+        // This is the symmetric case to the test above.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Iface.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface Repo {
+            public function save(string $item): void;
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Impl.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class InMemoryRepo implements Repo {
+            public function save(string $item): void {}
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Repo;
+        function persist(Repo $r): void {
+            $r->save('hello');
+        }
+        XPHP));
+
+        // Cursor on the impl method declaration `function save`
+        // inside `class InMemoryRepo`.
+        $locations = $this->references($workspace, '/Impl.xphp', 'function save', strlen('function '));
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/Impl.xphp', $uris, 'concrete decl is a match');
+        self::assertContains('/Iface.xphp', $uris, '#116: interface decl also surfaces');
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(1, $useMatches, '#116: interface-typed parameter call matches');
+    }
+
+    public function testInterfaceWalkSpansClassInheritanceAndInterfaceExtends(): void
+    {
+        // #116 transitive walk: `class Dog extends Animal implements
+        // Speaker` finds calls on Dog when cursor is on Speaker::speak.
+        // Also: `interface Loud extends Speaker { … }` -- a Repo
+        // implementing Loud must surface for cursor on Speaker::speak.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Iface.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface Speaker {
+            public function speak(): string;
+        }
+        interface Loud extends Speaker {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        abstract class Animal {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Dog.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Dog extends Animal implements Loud {
+            public function speak(): string { return 'woof'; }
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Dog;
+        $d = new Dog();
+        $d->speak();
+        XPHP));
+
+        // Cursor on Speaker::speak in the interface.
+        $locations = $this->references($workspace, '/Iface.xphp', 'function speak', strlen('function '));
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(1, $useMatches, '#116: Dog->speak() matches via Loud extends Speaker');
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains('/Dog.xphp', $uris, '#116: Dog::speak impl decl surfaces too');
+    }
+
+    public function testInterfaceWalkDoesNotMatchUnrelatedSameNameMethod(): void
+    {
+        // #116 negative: a class that does NOT implement the interface
+        // but happens to declare a same-named method must not match.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Iface.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface Repo {
+            public function save(string $item): void;
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Unrelated.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class Diary {
+            public function save(string $entry): void {}
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Diary;
+        $d = new Diary();
+        $d->save('dear journal');
+        XPHP));
+
+        $locations = $this->references($workspace, '/Iface.xphp', 'function save', strlen('function '));
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(0, $useMatches, '#116: unrelated same-name method must not match');
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertNotContains('/Unrelated.xphp', $uris, '#116: unrelated class decl must not match');
+    }
+
+    public function testInterfaceWalkAcrossMultiHopInterfaceExtends(): void
+    {
+        // #116 multi-hop: `interface K extends J extends I`.
+        // worse-reflection's `ReflectionInterface::parents()` is shallow
+        // (returns direct `extends` only), so the helper walks
+        // transitively.  Without that walk, cursor on `I::m` would miss
+        // calls on `K`-typed parameters.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Ifaces.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface I { public function m(): void; }
+        interface J extends I {}
+        interface K extends J {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Impl.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        class C implements K {
+            public function m(): void {}
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\K;
+        function call(K $x): void {
+            $x->m();
+        }
+        XPHP));
+
+        $locations = $this->references($workspace, '/Ifaces.xphp', 'function m', strlen('function '));
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(1, $useMatches, '#116: multi-hop K extends J extends I reaches I::m');
+    }
+
+    public function testInterfaceWalkReachesAncestorWhenChildRedeclaresMethod(): void
+    {
+        // #116 specifically exercises the ReflectionInterface arm of
+        // `classImplementsTransitively`: when `J extends I` and J
+        // redeclares `m`, worse-reflection's `K::methods()->get('m')->
+        // declaringClass()` returns J (the closest declarer), not I.
+        // Cursor on `I::m` should still match calls on `$x: K extends J
+        // extends I` -- that requires walking K.parents() -> J ->
+        // I.parents() transitively via `interfaceExtendsTransitively`.
+        // Without it the find-references pass would stop at J and miss
+        // K-typed call sites.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Ifaces.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface I { public function m(): void; }
+        interface J extends I { public function m(): void; }
+        interface K extends J {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\K;
+        function call(K $x): void {
+            $x->m();
+        }
+        XPHP));
+
+        // Cursor on I's `function m` (the ancestor declaration).
+        $source = $workspace->get('/Ifaces.xphp')->text;
+        $byte = strpos($source, 'function m') + strlen('function ');
+        $iLineCount = substr_count(substr($source, 0, $byte), "\n");
+        // Belt + braces: confirm we picked the I-declared one (the first
+        // `function m` byte-offset in the file, which is on the I line).
+        self::assertSame(2, $iLineCount, 'sanity-check cursor lands on I::m');
+
+        $locations = $this->references($workspace, '/Ifaces.xphp', 'function m', strlen('function '));
+
+        $useMatches = array_filter($locations, fn (Location $l): bool => $l->uri === '/Use.xphp');
+        self::assertCount(1, $useMatches, '#116: I::m must match $k->m() despite J redeclaring m');
+
+        // Also assert J::m declaration surfaces -- the interface-walk's
+        // identical-needle check is what links J back to I.  Without
+        // declarationMatchesTarget reaching through J.parents() -> I,
+        // we'd only see the I::m line.
+        $declMatches = array_filter(
+            $locations,
+            fn (Location $l): bool => $l->uri === '/Ifaces.xphp',
+        );
+        // Both `function m` decls (lines 2 and 3 -- the I and J ones)
+        // must be in the result; the K interface has no `function m`
+        // declaration of its own.
+        self::assertCount(2, $declMatches, '#116: J::m re-decl surfaces via interface-walk transitive needle match');
+        $declLines = array_map(fn (Location $l): int => $l->range->start->line, array_values($declMatches));
+        sort($declLines);
+        self::assertSame([2, 3], $declLines, 'lines 2 + 3 are I::m and J::m respectively');
+    }
+
+    public function testInterfaceWalkSurvivesUnknownReceiverClass(): void
+    {
+        // #116 defensive: when worse-reflection can't reflect the
+        // receiver (e.g. closed-source vendor class missing from the
+        // workspace index), the interface walk must bail gracefully
+        // rather than fataling.  Symptom pre-defensive-guard:
+        // ReflectionException on closed-source receivers killed the
+        // entire find-references pass.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Iface.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App;
+        interface Repo {
+            public function save(string $item): void;
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        $r = $unknownFactory();
+        $r->save('a');
+        XPHP));
+
+        // Should not throw; should return at least the decl.
+        $locations = $this->references($workspace, '/Iface.xphp', 'function save', strlen('function '));
+        self::assertNotEmpty($locations, 'declaration always surfaces');
+    }
+
     public function testFindsInheritedPropertyAccessOnSubclassReceiver(): void
     {
         // Property variant of the inherited-member walk: Dog inherits
