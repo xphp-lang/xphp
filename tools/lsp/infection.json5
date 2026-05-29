@@ -97,7 +97,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "IncrementInteger": {
@@ -123,7 +124,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "Minus": {
@@ -378,7 +380,8 @@
                 // the AstPositionResolver guard already in this file.
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -441,7 +444,8 @@
                 "XPHP\\Lsp\\Handler\\XphpCompletionResolveHandler::resolve",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -514,7 +518,8 @@
                 // set.  Flipping the && doesn't change the observed
                 // outcome under our env-controlled tests because
                 // either branch falls through to the next fallback.
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -636,7 +641,8 @@
                 "XPHP\\Lsp\\Handler\\AstPositionResolver",
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -659,7 +665,8 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -686,7 +693,8 @@
                 // StaticCall / FuncCall arm checks -- same mutually-
                 // exclusive dispatch as the SignatureHelp variant.
                 "XPHP\\Lsp\\Handler\\XphpInlayHintHandler::hintForAssign",
-                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter"
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -718,7 +726,8 @@
                 // Cycle D cacheRoot `!== ''` env-string guards: empty
                 // string is treated as "no value present" -- both
                 // operators route to the next fallback identically.
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -750,7 +759,8 @@
         "GreaterThanOrEqualToNegotiation": {
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "LogicalAndAllSubExprNegation": {
@@ -767,7 +777,8 @@
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -901,7 +912,8 @@
                 // const kinds set explicitly), so the coalesce arm
                 // is dead in observable test paths.
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
 
@@ -970,7 +982,8 @@
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
-                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot"
+                "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "LogicalOrNegation": {
@@ -990,7 +1003,8 @@
                 // `App\Foo` and yields `[['App\Foo']]`, the same
                 // single-element receiver list -- equivalent.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "Continue_": {
@@ -998,13 +1012,15 @@
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "Foreach_": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "While_": {
@@ -1037,7 +1053,8 @@
                 // payload arrays. The lists are intentionally
                 // single-element today; wrapping to a single-item array
                 // is the same shape the LSP client receives.
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         // TypeUnionSplitter tail mutants (Cycle K).
@@ -1219,7 +1236,8 @@
                 // collapses to the same visibility outcome under the
                 // covered fixtures (caller either visible-everywhere
                 // or not, dominated by $isSameClass).
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::itemsForClass",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
         "Break_": {
@@ -1231,7 +1249,8 @@
                 // with $inAll already false; the outer `if ($inAll)`
                 // skip is unchanged.  Equivalent.
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::intersectByKindLabel",
-                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
+                "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider"
             ]
         },
     }

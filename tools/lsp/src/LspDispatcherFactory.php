@@ -71,6 +71,7 @@ use XPHP\Lsp\Resolver\GenericParamRegistry;
 use XPHP\Lsp\Resolver\GenericResolver;
 use XPHP\Lsp\Resolver\DiagnosticCodeActionProvider;
 use XPHP\Lsp\Resolver\ImportCodeActionProvider;
+use XPHP\Lsp\Resolver\OptimizeImportsCodeActionProvider;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
 use XPHP\Lsp\Resolver\ReferenceFinder;
 use XPHP\Lsp\Resolver\RenameProvider;
@@ -257,6 +258,7 @@ final class LspDispatcherFactory implements DispatcherFactory
                 $workspace,
                 new ImportCodeActionProvider($fqnIndex, $cache),
                 new DiagnosticCodeActionProvider(),
+                new OptimizeImportsCodeActionProvider($cache),
             ),
             new XphpCodeActionResolveHandler(),
             new XphpDocumentSymbolHandler($workspace, $cache),

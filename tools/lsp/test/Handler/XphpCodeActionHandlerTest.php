@@ -23,6 +23,7 @@ use XPHP\Lsp\Handler\XphpCodeActionResolveHandler;
 use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Lsp\Resolver\DiagnosticCodeActionProvider;
 use XPHP\Lsp\Resolver\ImportCodeActionProvider;
+use XPHP\Lsp\Resolver\OptimizeImportsCodeActionProvider;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 use function Amp\Promise\wait;
@@ -167,6 +168,7 @@ final class XphpCodeActionHandlerTest extends TestCase
             $workspace,
             new ImportCodeActionProvider($fqnIndex, $cache),
             new DiagnosticCodeActionProvider(),
+            new OptimizeImportsCodeActionProvider($cache),
         );
     }
 
