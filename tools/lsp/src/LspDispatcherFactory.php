@@ -6,6 +6,7 @@ namespace XPHP\Lsp;
 
 use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Adapter\Psr\AggregateEventDispatcher;
+use Phpactor\LanguageServer\Core\Command\ClosureCommand;
 use Phpactor\LanguageServer\Core\Command\CommandDispatcher;
 use Phpactor\LanguageServer\Core\Dispatcher\ArgumentResolver\ChainArgumentResolver;
 use Phpactor\LanguageServer\Core\Dispatcher\ArgumentResolver\LanguageSeverProtocolParamsResolver;
@@ -240,7 +241,21 @@ final class LspDispatcherFactory implements DispatcherFactory
         $handlers = new Handlers(
             new XphpTextDocumentHandler($eventDispatcher),
             new ServiceHandler($serviceManager, $clientApi),
-            new CommandHandler(new CommandDispatcher([])),
+            new CommandHandler(new CommandDispatcher([
+                // Cycle G: codeLens emits this command above every class /
+                // function / method declaration; PhpStorm forwards the
+                // click to `workspace/executeCommand`.  The server-side
+                // dispatch must succeed (CommandDispatcher throws on
+                // unknown commands and the framework turns that into a
+                // JSON-RPC error toast).  V1 behaviour is a no-op
+                // returning `null`; a follow-up cycle wires this to run
+                // the references resolver and ship the result back via
+                // `workspace/applyEdit` or a custom notification so the
+                // editor can navigate.
+                XphpCodeLensHandler::COMMAND_NAME => new ClosureCommand(
+                    static fn (...$args): \Amp\Promise => new \Amp\Success(null),
+                ),
+            ])),
             new ExitHandler(),
             new XphpHoverHandler($workspace, $cache, $phpHoverResolver),
             new XphpDefinitionHandler(

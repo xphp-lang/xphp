@@ -183,6 +183,29 @@ final class LspDispatcherFactoryTest extends TestCase
         yield 'resourceOperations includes "rename"' => [$renameAndCreate, true];
     }
 
+    public function testXphpShowReferencesCommandIsDispatchableViaExecuteCommand(): void
+    {
+        // Prod regression (xphp-20260529-061522-011): PhpStorm
+        // clicks the codeLens above a declaration; the client sends
+        // `workspace/executeCommand` with command name
+        // `xphp.showReferences`; phpactor's CommandDispatcher errors
+        // with `Command "xphp.showReferences" not found, known
+        // commands: ""` and bubbles a JSON-RPC error toast.  The
+        // dispatcher must have the command registered (V1 returns
+        // null; a follow-up cycle wires the actual references).
+        $tester = $this->buildTester();
+        $tester->initialize();
+
+        $response = \Amp\Promise\wait(
+            $tester->workspace()->executeCommand(
+                \XPHP\Lsp\Handler\XphpCodeLensHandler::COMMAND_NAME,
+                ['file:///x.xphp', ['line' => 0, 'character' => 0]],
+            ),
+        );
+
+        self::assertNull($response->error, 'no JSON-RPC error from executeCommand');
+    }
+
     private function buildTester(): LanguageServerTester
     {
         return new LanguageServerTester(

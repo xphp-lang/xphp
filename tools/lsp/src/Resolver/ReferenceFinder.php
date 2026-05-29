@@ -791,7 +791,20 @@ final class ReferenceFinder
         // php-parser nodes implement neither __clone-deep nor a copy
         // constructor.  serialize() preserves position info on every node.
         $clone = unserialize(serialize($ast));
-        $resolver = new NameResolver(null, ['replaceNodes' => false]);
+        // Pass a Collecting handler instead of the default Throwing one:
+        // the tolerant parse fallback in Analyzer (the "$x->" / `a` /
+        // similar recovery cases) sometimes yields an AST whose use
+        // statements look like duplicates to NameContext, even though
+        // the SOURCE has no duplicate use.  Without the collecting
+        // handler, NameResolver's `Cannot use ... as ... because the
+        // name is already in use` ripples up through documentHighlight
+        // / references and PhpStorm renders an error toast.  Collecting
+        // the errors keeps the (partially resolved) AST usable; any
+        // Name nodes that DID resolve carry the `resolvedName`
+        // attribute, the rest just lack it.  References / highlight
+        // still work for the well-formed subset of the file.
+        $errorHandler = new \PhpParser\ErrorHandler\Collecting();
+        $resolver = new NameResolver($errorHandler, ['replaceNodes' => false]);
         $traverser = new NodeTraverser();
         $traverser->addVisitor($resolver);
         $traverser->traverse($clone);

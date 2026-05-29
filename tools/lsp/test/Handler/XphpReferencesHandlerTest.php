@@ -572,6 +572,51 @@ final class XphpReferencesHandlerTest extends TestCase
         self::assertSame([], wait($handler->references($params, $cancel->getToken())));
     }
 
+    public function testReferencesDoesNotThrowWhenNameResolverRejectsTolerantParseAst(): void
+    {
+        // Repro from prod log xphp-20260529-061522-011: file has
+        // valid use statements + a typed-mid-statement bareword (`a`
+        // alone, no terminator) that makes the strict parse fail and
+        // the tolerant fallback produce an AST that nikic's
+        // NameResolver rejects with `Cannot use ... as ... because
+        // the name is already in use`.  Pre-fix the exception
+        // propagated through the references handler and bubbled to
+        // the client as a JSON-RPC error toast.  The Collecting
+        // error handler in `cloneWithResolvedNames` must swallow it.
+        //
+        // Exact shape from the captured file content: four use
+        // statements and a bareword `a` mid-file.  Strict parse
+        // fails on the bareword (no terminator); the tolerant
+        // fallback's recovery sometimes yields a use stmt that
+        // looks duplicated to nikic's NameContext.
+        $callee = "<?php\nnamespace App\\Containers;\nclass Repository { public function save(\$x): void {} }\n";
+        $broken = <<<'PHP'
+        <?php
+
+        declare(strict_types=1);
+
+        namespace App\Demos;
+
+        use App\Containers\InMemoryRepository;
+        use App\Containers\Repository;
+        use App\Models\User;
+        use ReflectionMethod;
+
+        a
+
+        $repo = new Repository();
+        $repo->save(new User('alice'));
+        PHP;
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Repository.xphp', 'xphp', 1, $callee));
+        $workspace->open(new TextDocumentItem('/Demos/uses.xphp', 'xphp', 1, $broken));
+
+        // No exception even with the tolerant-parse + duplicate-alias
+        // recovery shape.
+        $result = $this->references($workspace, '/Demos/uses.xphp', '$repo->save', 7);
+        self::assertIsArray($result);
+    }
+
     /**
      * @return list<Location>
      */
