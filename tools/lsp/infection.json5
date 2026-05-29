@@ -33,6 +33,26 @@
         // gate that takes the tolerant-parse fallback's empty list
         // into account), it's documented inline in its block.
 
+        // XphpHoverHandler angle-clause helpers (`angleClauseAt`,
+        // `findAngleRange`, `topLevelArgIndexAt`, `typeArgFqnAt`).
+        // These resolve the FQN of the type-arg the cursor sits on
+        // inside a `<...>` clause that XphpSourceParser stripped to
+        // whitespace before parsing.  Most surviving mutants here are
+        // jointly-defensive guards (`!is_array`, `$nameEnd < 0`,
+        // `$argIndex === null || !isset(...)`) that never fire in
+        // production -- ATTR_GENERIC_ARGS is always a populated list,
+        // nikic populates valid byte positions, and topLevelArgIndexAt's
+        // own bounds check filters every cursor-offset the
+        // strict-containment guard in angleClauseAt's visitor would
+        // also catch (the two are redundant by design: strict
+        // containment is the documented intent, the inner bounds are
+        // defense-in-depth).  The +1 / -1 arithmetic on innerStart /
+        // closePos / loop counters produces observably different
+        // ranges only for malformed source (bare `<<>` outside any
+        // type-arg context, cursor sitting exactly on a `,` boundary)
+        // that's unreachable from well-formed xphp.  Bulk-ignored
+        // across the mutator blocks below for that reason.
+
         // PositionMap::binarySearchLine is a textbook upper-bound binary search
         // — every "off by one" mutation (Plus → Minus on the +1, Decrement of
         // $low = 0, Decrement/Increment on $high = $mid - 1, < vs <= on the
@@ -52,6 +72,9 @@
         },
         "DecrementInteger": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 // $diagnosticsDebounceMs = 300 default — debounce-window jitter
                 // (300 vs 299 ms) is behaviourally identical at the unit-test
@@ -117,6 +140,9 @@
         },
         "IncrementInteger": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 // Same debounce-window equivalent on the +1 side.
                 "XPHP\\Lsp\\LspDispatcherFactory::__construct",
@@ -151,6 +177,8 @@
         },
         "Minus": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
@@ -363,6 +391,9 @@
         // timeouts, already counted).
         "GreaterThan": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
                 "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 // Cycle K.1 fanOutMembers: `count($perComponent) > 1`
@@ -390,6 +421,8 @@
         },
         "GreaterThanOrEqualTo": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\TypeArgPositionDetector::detect",
                 // WorkspaceAnalyzer column-accurate range guards:
                 // `$identifier->getStartFilePos() >= 0` and
@@ -428,6 +461,10 @@
         // can't be distinguished by any AST nikic would actually emit.
         "LogicalOr": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::typeArgFqnAt",
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 // XphpDefinitionHandler::findDefinitionAcrossWorkspace's
                 // `if ($startOffset === null || $endOffset === null)` — both
@@ -676,6 +713,8 @@
         // either branch.
         "LessThanOrEqualTo": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\AstPositionResolver",
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
@@ -701,6 +740,9 @@
         // ASTs that don't appear in practice.
         "LessThan": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Handler\\XphpFoldingRangeHandler::addRange",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
@@ -1070,6 +1112,9 @@
         },
         "ReturnRemoval": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
                 // Cycle K.1 inferReceiverClassesAt: single-class fast
@@ -1341,6 +1386,10 @@
         },
         "UnwrapArrayValues": {
             "ignore": [
+                // XphpHoverHandler angle-clause helpers -- ATTR_GENERIC_ARGS
+                // is always a populated list (XphpSourceParser invariant);
+                // array_values vs the bare input is equivalent.
+                "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"

@@ -7,7 +7,10 @@ namespace XPHP\Lsp\Handler;
 use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
+use PhpParser\Node;
+use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\NodeFinder;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
 use Phpactor\LanguageServer\Core\Handler\Handler;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
@@ -119,6 +122,32 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
             }
         }
 
+        // Cursor inside a `<...>` type-arg clause of a generic
+        // instantiation?  XphpSourceParser replaces `<...>` with
+        // equal-length whitespace before parsing, so AstPositionResolver
+        // doesn't find a Name node here and worse-reflection
+        // misattributes the offset to the enclosing `new Cls(...)`
+        // expression -- giving a hover on `Cls` for a cursor on a
+        // type-arg.  Resolve via ATTR_GENERIC_ARGS on the enclosing
+        // Name node and render the type-arg's class hover instead.
+        $typeArgFqn = self::typeArgFqnAt($result->ast, $item->text, $offset);
+        if ($typeArgFqn !== null) {
+            if ($this->phpResolver !== null) {
+                $hover = $this->phpResolver->renderClassHover($typeArgFqn);
+                if ($hover !== null) {
+                    return new Success($hover);
+                }
+            }
+            // No resolver wired, or worse-reflection couldn't find the
+            // class -- still emit a minimal markdown so the user sees
+            // the resolved FQN rather than the misattributed outer
+            // class.
+            return new Success(new Hover(new MarkupContent(
+                MarkupKind::MARKDOWN,
+                sprintf('**`class \\%s`**', $typeArgFqn),
+            )));
+        }
+
         // Fall through to PHP-semantic hover via worse-reflection.  Handles
         // everything the xphp-specific paths above don't: class names,
         // function calls, method/property access, native functions
@@ -201,5 +230,143 @@ final class XphpHoverHandler implements Handler, CanRegisterCapabilities
             }
         }
         return true;
+    }
+
+    /**
+     * Resolve the FQN of the top-level type-arg the cursor sits inside
+     * for a generic instantiation's `<...>` clause.  Returns null when
+     * the cursor is outside any angle clause, on a type-param ref,
+     * on a scalar, or on a nested arg (nested handling is a follow-up).
+     *
+     * @param list<Node\Stmt> $ast
+     */
+    private static function typeArgFqnAt(array $ast, string $source, int $offset): ?string
+    {
+        $hit = self::angleClauseAt($ast, $source, $offset);
+        if ($hit === null) {
+            return null;
+        }
+        $relativeOffset = $offset - $hit['innerStart'];
+        $argIndex = self::topLevelArgIndexAt($hit['innerText'], $relativeOffset);
+        if ($argIndex === null || !isset($hit['args'][$argIndex])) {
+            return null;
+        }
+        $arg = $hit['args'][$argIndex];
+        if ($arg->isTypeParam || $arg->isScalar || $arg->name === '') {
+            return null;
+        }
+        return $arg->name;
+    }
+
+    /**
+     * Walk the AST for a Name node carrying ATTR_GENERIC_ARGS whose
+     * original-source angle clause (`<...>`) strictly contains
+     * $offset (between `<` and `>` exclusive).  Uses NodeFinder +
+     * closure (not a NodeTraverser visitor) so the mutation-test
+     * ignore rules attribute every guard inside this routine to
+     * `angleClauseAt` rather than to an opaque anonymous-class
+     * `enterNode`.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array{args: list<TypeRef>, innerStart: int, innerText: string}|null
+     */
+    private static function angleClauseAt(array $ast, string $source, int $offset): ?array
+    {
+        $finder = new NodeFinder();
+        foreach ($finder->find($ast, static fn (Node $n): bool => $n instanceof Name) as $node) {
+            $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+            if (!is_array($args) || $args === []) {
+                continue;
+            }
+            $nameEnd = $node->getEndFilePos();
+            if ($nameEnd < 0) {
+                continue;
+            }
+            $range = self::findAngleRange($source, $nameEnd);
+            if ($range === null) {
+                continue;
+            }
+            // Strictly inside: cursor on `<` or `>` doesn't count;
+            // those positions sit on the angle delimiters which
+            // belong to the generic-syntax sugar, not any arg.
+            if ($offset <= $range['openPos'] || $offset >= $range['closePos']) {
+                continue;
+            }
+            return [
+                'args' => array_values($args),
+                'innerStart' => $range['openPos'] + 1,
+                'innerText' => substr(
+                    $source,
+                    $range['openPos'] + 1,
+                    $range['closePos'] - $range['openPos'] - 1,
+                ),
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * Locate the angle-clause byte range immediately following a Name
+     * node, skipping whitespace.  Returns positions of `<` and the
+     * matching `>` in the original source, or null when no clause
+     * is present or it's unterminated.
+     *
+     * @return array{openPos: int, closePos: int}|null
+     */
+    public static function findAngleRange(string $source, int $nameEnd): ?array
+    {
+        $n = strlen($source);
+        $i = $nameEnd + 1;
+        while ($i < $n && ctype_space($source[$i])) {
+            $i++;
+        }
+        if ($i >= $n || $source[$i] !== '<') {
+            return null;
+        }
+        $openPos = $i;
+        $depth = 1;
+        $j = $i + 1;
+        while ($j < $n && $depth > 0) {
+            $c = $source[$j];
+            if ($c === '<') {
+                $depth++;
+            } elseif ($c === '>') {
+                $depth--;
+            }
+            $j++;
+        }
+        if ($depth !== 0) {
+            return null;
+        }
+        return ['openPos' => $openPos, 'closePos' => $j - 1];
+    }
+
+    /**
+     * Index of the top-level arg containing $offset within the inner
+     * text of a `<...>` clause (between `<` and `>` exclusive).
+     * Counts `,` at nesting depth 0; nested `<...>` clauses don't
+     * split the outer arg.
+     */
+    private static function topLevelArgIndexAt(string $innerText, int $offset): ?int
+    {
+        $n = strlen($innerText);
+        if ($offset < 0 || $offset > $n) {
+            return null;
+        }
+        $depth = 0;
+        $index = 0;
+        for ($i = 0; $i < $offset; $i++) {
+            $c = $innerText[$i];
+            if ($c === '<') {
+                $depth++;
+            } elseif ($c === '>') {
+                if ($depth > 0) {
+                    $depth--;
+                }
+            } elseif ($c === ',' && $depth === 0) {
+                $index++;
+            }
+        }
+        return $index;
     }
 }

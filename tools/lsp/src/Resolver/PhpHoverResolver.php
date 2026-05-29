@@ -53,6 +53,27 @@ final class PhpHoverResolver
     ) {
     }
 
+    /**
+     * Render a class-shaped hover (signature + docblock) for an
+     * already-resolved FQN.  Used by XphpHoverHandler when the cursor
+     * sits inside a `<...>` type-arg clause: at that offset the
+     * stripped source is whitespace and worse-reflection would
+     * misattribute the cursor to the enclosing `new Cls(...)`
+     * expression, so the handler resolves the type-arg via
+     * ATTR_GENERIC_ARGS and asks us to render it directly.
+     */
+    public function renderClassHover(string $fqn): ?Hover
+    {
+        try {
+            $markdown = $this->renderClass($fqn);
+        } catch (Throwable) {
+            return null;
+        }
+        return $markdown !== null
+            ? new Hover(new MarkupContent(MarkupKind::MARKDOWN, $markdown))
+            : null;
+    }
+
     public function resolve(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Hover
     {
         // Top-level safety net -- see the matching pattern in
