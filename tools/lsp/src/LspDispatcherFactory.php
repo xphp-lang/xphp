@@ -63,6 +63,7 @@ use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Handler\XphpReferencesHandler;
 use XPHP\Lsp\Handler\XphpRenameHandler;
+use XPHP\Lsp\Handler\XphpImplementationHandler;
 use XPHP\Lsp\Handler\XphpPullDiagnosticsHandler;
 use XPHP\Lsp\Handler\XphpSemanticTokensHandler;
 use XPHP\Lsp\Handler\XphpTypeHierarchyHandler;
@@ -306,6 +307,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpSemanticTokensHandler($workspace, $cache),
             new XphpPullDiagnosticsHandler($workspace, $diagnosticsProvider),
             new XphpTypeHierarchyHandler($workspace, $cache, $xphpParser, $fqnIndex),
+            new XphpImplementationHandler($workspace, $cache, $xphpParser, $fqnIndex),
         );
 
         $runner = new HandlerMethodRunner(

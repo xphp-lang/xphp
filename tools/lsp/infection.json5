@@ -240,7 +240,10 @@
                 "XPHP\\Lsp\\Handler\\XphpSignatureHelpHandler::computeActiveParameter",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::buildLocation",
             ]
         },
         "ReturnRemoval": {
@@ -453,7 +456,9 @@
                 // which produces the same singleton array either way.
                 // Equivalent under our test fixtures.
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -557,7 +562,11 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember",
                 "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
                 "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
-                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::implementation",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::buildLocation",
             ]
         },
 
@@ -660,7 +669,9 @@
                 // unrelated type that must NOT appear in references)
                 // -- deferred; the prod impact is over-reporting at
                 // worst, not silent under-reporting.
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::cloneWithResolvedNames",
             ]
         },
 
@@ -704,7 +715,10 @@
                 "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::fanOutLocate",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::extendsOrImplementsDirectly",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::nameOf",
             ]
         },
 
@@ -750,7 +764,11 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::findReferences",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::collectReferences",
                 "XPHP\\Lsp\\Resolver\\RenameProvider::buildFileRenameOp",
-                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
+                "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::forEachClassLikeInWorkspace",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::visitClassLikes",
             ]
         },
 
@@ -805,7 +823,10 @@
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
-                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::buildLocation",
             ]
         },
 
@@ -954,7 +975,9 @@
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
                 "XPHP\\Lsp\\Resolver\\GenericResolver::resolvePropertyFetch",
-                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType"
+                "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::cloneWithResolvedNames",
             ]
         },
 
@@ -989,7 +1012,10 @@
                 // a different branch (override vs XDG vs HOME).
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::implementation",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::visitClassLikes",
             ]
         },
         "ConcatOperandRemoval": {
@@ -1003,7 +1029,10 @@
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::defaultCacheDir",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::implementation",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::visitClassLikes",
             ]
         },
         // Cycle D cacheRoot `rtrim($home, "/\\") . $sub` strips trailing
@@ -1021,6 +1050,8 @@
         },
         "Ternary": {
             "ignore": [
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::visitClassLikes",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveInner",
@@ -1098,7 +1129,10 @@
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inheritsMemberFromTarget",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::classImplementsTransitively",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::interfaceExtendsTransitively",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::declaresMember",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::implementation",
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::forEachClassLikeInWorkspace",
             ]
         },
 
@@ -1223,6 +1257,8 @@
         },
         "Continue_": {
             "ignore": [
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder",
@@ -1247,7 +1283,9 @@
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::forEachClassLikeInWorkspace",
             ]
         },
         "While_": {
@@ -1285,7 +1323,9 @@
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpImplementationHandler::cloneWithResolvedNames",
             ]
         },
         // TypeUnionSplitter tail mutants (Cycle K).
