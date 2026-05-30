@@ -135,6 +135,15 @@ class XphpFileRenameListener : AsyncFileListener {
      * -- the server doesn't emit those for `workspace/willRenameFiles`
      * (the client is performing the file move) but defensively
      * ignoring them keeps the code robust to future protocol drift.
+     *
+     * Threading: `AsyncFileListener.afterVfsChange` runs off-EDT with
+     * a read lock held.  Calling `WriteCommandAction.runWriteCommandAction`
+     * directly from there deadlocks (read lock blocks write lock
+     * acquisition) and PhpStorm logs "Cannot execute background
+     * write action in 10 seconds" after the timeout, dropping the
+     * edits silently.  Schedule the apply onto the EDT via
+     * `invokeLater` so the write action runs after VFS-change
+     * processing has released its read lock.
      */
     private fun applyWorkspaceEdit(project: Project, edit: WorkspaceEdit, renames: List<FileRename>) {
         val docChanges = edit.documentChanges ?: run {
@@ -147,11 +156,13 @@ class XphpFileRenameListener : AsyncFileListener {
             return
         }
 
-        WriteCommandAction.runWriteCommandAction(project, "Rename xphp Class to Match File", null, {
-            for (docEdit in textEdits) {
-                applyTextDocumentEdit(docEdit)
-            }
-        })
+        ApplicationManager.getApplication().invokeLater {
+            WriteCommandAction.runWriteCommandAction(project, "Rename xphp Class to Match File", null, {
+                for (docEdit in textEdits) {
+                    applyTextDocumentEdit(docEdit)
+                }
+            })
+        }
     }
 
     private fun applyTextDocumentEdit(docEdit: TextDocumentEdit) {
