@@ -3,6 +3,8 @@ package com.xphp.lsp
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
@@ -13,6 +15,7 @@ import com.intellij.platform.lsp.api.LspServer
 import com.intellij.platform.lsp.api.customization.LspCommandsSupport
 import com.intellij.ui.ColoredListCellRenderer
 import com.intellij.ui.SimpleTextAttributes
+import com.intellij.ui.awt.RelativePoint
 import org.eclipse.lsp4j.Command
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.Position
@@ -68,6 +71,15 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
             LOG.debug("editor.action.showReferences: missing arguments")
             return
         }
+        // Pull the lens-side position out of the command arguments so
+        // the multi-location popup can anchor THERE, not at the
+        // editor caret (which may be off in a method body while the
+        // user clicks the class-declaration lens above).  arguments[0]
+        // is the URI; arguments[1] is the position the lens
+        // dispatches.  Both shapes (3-arg VS Code, 2-arg LSP4IJ)
+        // carry this same prefix.
+        val anchorUri = if (args.size >= 1) parseString(args[0]) else null
+        val anchorPosition = if (args.size >= 2) parsePosition(args[1]) else null
         // Two emission shapes we accept:
         //  - VS Code path (spec-compliant viewport-aware resolve):
         //    `[uri, position, locations]` -- locations baked in by
@@ -93,7 +105,7 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
             items[0].navigate(server.project)
             return
         }
-        showChooserPopup(server.project, items)
+        showChooserPopup(server.project, items, anchorUri, anchorPosition)
     }
 
     /**
@@ -169,7 +181,34 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
         }
     }
 
-    private fun showChooserPopup(project: Project, items: List<UsageItem>) {
+    /**
+     * Show the multi-location chooser anchored at the lens position
+     * when we can resolve it -- not at the editor caret.
+     *
+     * Prior behaviour used `popup.showInBestPositionFor(editor)`,
+     * which anchors at the CURRENT caret.  In practice the caret is
+     * almost never on the same line as the clicked lens (lenses
+     * stack on top of class / method declarations; the caret is
+     * usually in a method body) so the popup appeared far from
+     * where the user clicked.
+     *
+     * Resolution order:
+     *   1. If we have BOTH the lens URI (`anchorUri`) and an open
+     *      editor for that URI, AND a Position to anchor on, convert
+     *      `(line, character)` -> editor pixel coordinates and show
+     *      the popup at that point, offset by one line height so it
+     *      lands just below the lens line rather than overlapping
+     *      the identifier itself.
+     *   2. Fall back to `showInBestPositionFor` against the selected
+     *      editor (legacy behaviour) if anything in (1) is missing.
+     *   3. Last resort: centred in the project window.
+     */
+    private fun showChooserPopup(
+        project: Project,
+        items: List<UsageItem>,
+        anchorUri: String?,
+        anchorPosition: Position?,
+    ) {
         val popup = JBPopupFactory.getInstance()
             .createPopupChooserBuilder(items)
             .setTitle("Usages")
@@ -179,11 +218,60 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
             .setNamerForFiltering { "${it.vfile.name}:${it.line + 1} ${it.preview}" }
             .setRequestFocus(true)
             .createPopup()
-        val editor = FileEditorManager.getInstance(project).selectedTextEditor
-        if (editor != null) {
-            popup.showInBestPositionFor(editor)
+        val anchorEditor = anchorUri?.let { editorForUri(project, it) }
+        val anchorPoint = if (anchorEditor != null && anchorPosition != null) {
+            computeAnchorPoint(anchorEditor, anchorPosition)
         } else {
-            popup.showCenteredInCurrentWindow(project)
+            null
+        }
+        when {
+            anchorPoint != null -> popup.show(anchorPoint)
+            else -> {
+                val fallback = anchorEditor ?: FileEditorManager.getInstance(project).selectedTextEditor
+                if (fallback != null) {
+                    popup.showInBestPositionFor(fallback)
+                } else {
+                    popup.showCenteredInCurrentWindow(project)
+                }
+            }
+        }
+    }
+
+    /**
+     * Look up the open editor showing `uri`, or null if the file
+     * isn't open.  Lens clicks always come from a file the user has
+     * open (you can't see a lens in a closed file), so this
+     * resolves except in corner cases like the editor being closed
+     * mid-resolve.
+     */
+    private fun editorForUri(project: Project, uri: String): Editor? {
+        val vfile = VirtualFileManager.getInstance().findFileByUrl(uri) ?: return null
+        val editors = FileEditorManager.getInstance(project).getEditors(vfile)
+        for (e in editors) {
+            val text = (e as? com.intellij.openapi.fileEditor.TextEditor)?.editor
+            if (text != null) return text
+        }
+        return null
+    }
+
+    /**
+     * LSP `Position` (0-based line + 0-based UTF-16 char column) ->
+     * editor pixel-space `RelativePoint`.  Translate down by one
+     * line height so the popup lands BELOW the line containing the
+     * identifier rather than overlapping it (which would obscure
+     * the source the user just clicked next to).  Returns null on
+     * any conversion failure (e.g. position past EOF after a fast
+     * edit between lens render and click).
+     */
+    private fun computeAnchorPoint(editor: Editor, position: Position): RelativePoint? {
+        return try {
+            val logical = LogicalPosition(position.line, position.character)
+            val xy = editor.logicalPositionToXY(logical)
+            xy.translate(0, editor.lineHeight)
+            RelativePoint(editor.contentComponent, xy)
+        } catch (e: Exception) {
+            LOG.debug("editor.action.showReferences: anchor-point conversion failed", e)
+            null
         }
     }
 
