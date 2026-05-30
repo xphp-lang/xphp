@@ -97,9 +97,28 @@ final class NamespaceMoveProvider
         string $basenameStem,
         ?CancellationToken $cancel = null,
     ): ?WorkspaceEdit {
-        $source = $this->sourceFor($oldUri) ?? $this->sourceFor($newUri);
+        // Track WHICH URI yielded the source.  IntelliJ's post-hoc
+        // dispatch (the file's already been moved when willRenameFiles
+        // fires) means the OLD URI is often dead and only the NEW URI
+        // is reachable.  Hardcoding the source edit against $oldUri
+        // (the prior implementation) made the edit silently fail when
+        // the client tried to apply it to a path that no longer
+        // existed; the cross-file reference edits still landed because
+        // their URIs didn't move, but the source's own namespace
+        // declaration stayed unchanged.  Prod log
+        // `xphp-20260530-182553` showed this clearly: id=10 succeeded
+        // for Models→Containers but only the Demos files actually
+        // changed on disk; every subsequent Containers→Models undo
+        // then PSR-4-inferred against a stale `namespace App\Models;`
+        // and returned null.
+        $source = $this->sourceFor($oldUri);
+        $sourceEditUri = $oldUri;
         if ($source === null) {
-            return null;
+            $source = $this->sourceFor($newUri);
+            if ($source === null) {
+                return null;
+            }
+            $sourceEditUri = $newUri;
         }
 
         // Find the single ClassLike + Namespace_ in the source.
@@ -119,8 +138,9 @@ final class NamespaceMoveProvider
 
         $documentChanges = [];
 
-        // 1. Source file: edit the namespace declaration.
-        $sourceEditUri = $oldUri;  // client applies after the file move; URI re-targeting is its job.
+        // 1. Source file: edit the namespace declaration.  Target the
+        //    URI we actually read from (see the post-hoc-dispatch
+        //    comment above).
         $sourceEdit = $this->buildNamespaceDeclarationEdit($source, $namespaceNameStart, $namespaceNameEnd, $newNamespace);
         if ($sourceEdit !== null) {
             $documentChanges[] = new TextDocumentEdit(
@@ -133,7 +153,11 @@ final class NamespaceMoveProvider
         //    to the old FQN to use the new namespace prefix.  Source
         //    file's own internal `use App\Models\Other` etc. don't
         //    point at the moved class so they don't need editing.
-        $seenUris = [$sourceEditUri => true];
+        //    Mark BOTH old and new URIs as seen -- under IntelliJ's
+        //    post-hoc dispatch the source might appear in either the
+        //    workspace or the filesystem walk under either URI, and
+        //    we've already handled the source-side edit above.
+        $seenUris = [$oldUri => true, $newUri => true];
         foreach ($this->workspace as $docUri => $item) {
             if ($cancel !== null && $cancel->isRequested()) {
                 return null;
