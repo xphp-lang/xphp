@@ -109,8 +109,11 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
      */
     private fun fetchLocations(server: LspServer, args: List<Any?>): List<Location> {
         if (args.size < 2) return emptyList()
-        val uri = args[0] as? String ?: run {
-            LOG.warn("editor.action.showReferences: arguments[0] is not a String uri")
+        val uri = parseString(args[0]) ?: run {
+            LOG.warn(
+                "editor.action.showReferences: arguments[0] is not a String uri " +
+                    "(was ${args[0]?.javaClass?.simpleName})"
+            )
             return emptyList()
         }
         val position = parsePosition(args[1]) ?: run {
@@ -138,6 +141,29 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
         if (raw == null) return null
         return try {
             Gson().fromJson(Gson().toJsonTree(raw), Position::class.java)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Extract a String from a `Command.arguments[i]` slot.  lsp4j
+     * deserialises argument entries as `JsonElement` (more precisely
+     * `JsonPrimitive` for strings/numbers/bools), not raw Kotlin types
+     * -- a direct `as? String` cast returns null and the call fails
+     * silently.  Round-trip via Gson so any input shape that
+     * represents a JSON string normalises to a Kotlin `String`.
+     */
+    private fun parseString(raw: Any?): String? {
+        if (raw == null) return null
+        if (raw is String) return raw
+        return try {
+            val element = Gson().toJsonTree(raw)
+            if (element.isJsonPrimitive && element.asJsonPrimitive.isString) {
+                element.asString
+            } else {
+                null
+            }
         } catch (e: Exception) {
             null
         }
