@@ -222,10 +222,21 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * Emit one UNRESOLVED lens: range + placeholder title + data.
-     * No `command.command`, no arguments -- those get filled in by
-     * `resolve()` only when the client asks (typically when the lens
-     * enters the editor viewport).
+     * Emit one UNRESOLVED lens: range + placeholder title + 2-element
+     * arguments + data.  The arguments shape is `[uri, position]`
+     * (locations slot deliberately absent) so the client-side plugin
+     * handler can fall back to a fresh `textDocument/references`
+     * fetch when it sees the locations missing.
+     *
+     * Why not the LSP-canonical "omit command, let the client call
+     * `codeLens/resolve` before render" pattern?  PhpStorm's LSP4IJ
+     * adapter doesn't implement viewport-aware resolve -- it renders
+     * unresolved lenses as-is and dispatches whatever `command.command`
+     * happens to be set (including the empty string, which then errors
+     * inside phpactor's CommandDispatcher).  Setting the command name
+     * up front sidesteps that whole class of failure; clients that DO
+     * implement resolve (VS Code) still get the count + baked
+     * locations via the `resolve()` handler below.
      *
      * `data` carries `{uri, line, character}` so `resolve()` can
      * re-derive the byte offset and run findReferences without
@@ -252,10 +263,11 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
 
         $lens = new CodeLens(
             new Range(new Position($startLine, $startChar), new Position($endLine, $endChar)),
-            // Placeholder command -- title only.  Without
-            // `command.command` set, the LSP spec requires the client
-            // to call codeLens/resolve before invoking on click.
-            new Command(title: self::PLACEHOLDER_TITLE, command: ''),
+            new Command(
+                title: self::PLACEHOLDER_TITLE,
+                command: self::COMMAND_NAME,
+                arguments: [$uri, ['line' => $startLine, 'character' => $startChar]],
+            ),
         );
         $lens->data = [
             'uri' => $uri,

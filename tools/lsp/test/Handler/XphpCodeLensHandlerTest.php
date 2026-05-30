@@ -58,13 +58,18 @@ final class XphpCodeLensHandlerTest extends TestCase
 
         self::assertCount(1, $lenses);
         self::assertSame(2, $lenses[0]->range->start->line);
-        // Initial emission carries a placeholder title and NO
-        // `command.command` -- per LSP spec that signals the client
-        // to call `codeLens/resolve` before invoking.  The "N usages"
-        // title + arguments get filled in lazily by the resolve
-        // handler when the lens actually enters the viewport.
+        // Initial emission carries a placeholder title and a
+        // 2-element `arguments` slot (uri, position) with NO
+        // locations.  The client-side plugin handler fetches
+        // locations on demand via textDocument/references when it
+        // sees args.size < 3.  Spec-compliant clients (VS Code)
+        // can still call codeLens/resolve to get the count + baked
+        // locations up front.
         self::assertSame('Show references', $lenses[0]->command?->title);
-        self::assertSame('', $lenses[0]->command?->command);
+        self::assertSame('editor.action.showReferences', $lenses[0]->command?->command);
+        self::assertCount(2, $lenses[0]->command?->arguments);
+        self::assertSame('/Foo.xphp', $lenses[0]->command?->arguments[0]);
+        self::assertSame(['line' => 2, 'character' => 6], $lenses[0]->command?->arguments[1]);
         // `data` carries the position so resolve() can re-run
         // findReferences without server-side state held between calls.
         self::assertIsArray($lenses[0]->data);

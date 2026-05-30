@@ -15,6 +15,10 @@ import com.intellij.ui.ColoredListCellRenderer
 import com.intellij.ui.SimpleTextAttributes
 import org.eclipse.lsp4j.Command
 import org.eclipse.lsp4j.Location
+import org.eclipse.lsp4j.Position
+import org.eclipse.lsp4j.ReferenceContext
+import org.eclipse.lsp4j.ReferenceParams
+import org.eclipse.lsp4j.TextDocumentIdentifier
 import javax.swing.JList
 
 /**
@@ -60,12 +64,23 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
 
     private fun handleShowReferences(server: LspServer, command: Command) {
         val args = command.arguments
-        if (args == null || args.size < 3) {
-            LOG.debug("editor.action.showReferences: missing arguments[2] (locations)")
+        if (args == null || args.isEmpty()) {
+            LOG.debug("editor.action.showReferences: missing arguments")
             return
         }
-        val locations = parseLocations(args[2])
-        if (locations.isNullOrEmpty()) {
+        // Two emission shapes we accept:
+        //  - VS Code path (spec-compliant viewport-aware resolve):
+        //    `[uri, position, locations]` -- locations baked in by
+        //    the server's codeLens/resolve handler before render.
+        //  - PhpStorm/LSP4IJ path (no resolve, fires the raw command):
+        //    `[uri, position]` -- locations slot absent.  We fetch
+        //    them on demand via `textDocument/references` against the
+        //    same server connection that just dispatched us.
+        val locations: List<Location> = when {
+            args.size >= 3 -> parseLocations(args[2]) ?: fetchLocations(server, args)
+            else -> fetchLocations(server, args)
+        }
+        if (locations.isEmpty()) {
             LOG.debug("editor.action.showReferences: zero locations to navigate to")
             return
         }
@@ -79,6 +94,53 @@ class XphpShowReferencesCommandsSupport : LspCommandsSupport() {
             return
         }
         showChooserPopup(server.project, items)
+    }
+
+    /**
+     * Lazy fetch path: send `textDocument/references` over the live
+     * LSP connection.  Triggered when the codeLens click carries
+     * `[uri, position]` only (PhpStorm/LSP4IJ -- no
+     * codeLens/resolve).  Runs synchronously on the EDT because
+     * `LspCommandsSupport.executeCommand` is `@RequiresEdt`;
+     * `LspServer.sendRequestSync` uses the LSP server's
+     * default-timeout cap so a hung server can't block the UI
+     * indefinitely.  Typical latency is the same as Alt+F7 since
+     * the server-side path is identical.
+     */
+    private fun fetchLocations(server: LspServer, args: List<Any?>): List<Location> {
+        if (args.size < 2) return emptyList()
+        val uri = args[0] as? String ?: run {
+            LOG.warn("editor.action.showReferences: arguments[0] is not a String uri")
+            return emptyList()
+        }
+        val position = parsePosition(args[1]) ?: run {
+            LOG.warn("editor.action.showReferences: arguments[1] is not a Position")
+            return emptyList()
+        }
+        val params = ReferenceParams(
+            TextDocumentIdentifier(uri),
+            position,
+            ReferenceContext(false),  // includeDeclaration: false -- match codeLens count semantics
+        )
+        return try {
+            val raw = server.sendRequestSync<List<Location>>(LspServer.DEFAULT_REQUEST_TIMEOUT_MS) { ls ->
+                @Suppress("UNCHECKED_CAST")
+                ls.textDocumentService.references(params) as java.util.concurrent.CompletableFuture<List<Location>>
+            }
+            raw ?: emptyList()
+        } catch (e: Exception) {
+            LOG.warn("editor.action.showReferences: textDocument/references fetch failed", e)
+            emptyList()
+        }
+    }
+
+    private fun parsePosition(raw: Any?): Position? {
+        if (raw == null) return null
+        return try {
+            Gson().fromJson(Gson().toJsonTree(raw), Position::class.java)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun showChooserPopup(project: Project, items: List<UsageItem>) {
