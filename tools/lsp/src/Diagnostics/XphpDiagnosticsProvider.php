@@ -44,8 +44,7 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
 
     public function provideDiagnostics(TextDocumentItem $textDocument, CancellationToken $cancel): Promise
     {
-        $diagnostics = $this->analyze($textDocument);
-        return new Success($diagnostics);
+        return new Success($this->analyzeSync($textDocument));
     }
 
     public function name(): string
@@ -54,9 +53,13 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
     }
 
     /**
+     * Sync entry-point shared by the push-mode `provideDiagnostics`
+     * (above) and the pull-mode `textDocument/diagnostic` handler.
+     * Both flows want the same analysis without the Promise wrap.
+     *
      * @return list<LspDiagnostic>
      */
-    private function analyze(TextDocumentItem $textDocument): array
+    public function analyzeSync(TextDocumentItem $textDocument): array
     {
         $currentUri = $textDocument->uri;
 

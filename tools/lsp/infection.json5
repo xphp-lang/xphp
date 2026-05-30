@@ -1115,6 +1115,14 @@
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
+                // XphpPullDiagnosticsHandler::extractUri `if (!is_array($textDocument)) return null;`
+                // -- removing the return falls through to the next line, which
+                // does `$textDocument['uri'] ?? null` on a non-array.  PHP 8.4
+                // coerces null-index on non-arrays to null, then the trailing
+                // `is_string($uri) ? $uri : null` returns null too.  Identical
+                // observable behaviour either way; the early-return is for
+                // clarity.
+                "XPHP\\Lsp\\Handler\\XphpPullDiagnosticsHandler::extractUri",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpHoverResolver::fanOutRender",
                 // Cycle K.1 inferReceiverClassesAt: single-class fast
