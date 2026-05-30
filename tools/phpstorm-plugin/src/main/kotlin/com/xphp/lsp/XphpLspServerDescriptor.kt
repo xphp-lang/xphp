@@ -86,7 +86,19 @@ class XphpLspServerDescriptor(project: Project) :
     // empty anonymous subclass satisfies the contract: we're EXTENDING
     // the class (the documented use case), not constructing it from
     // outside, and we inherit every default the no-arg path provides.
-    override val lspCustomization: LspCustomization = object : LspCustomization() {}
+    override val lspCustomization: LspCustomization = object : LspCustomization() {
+        // Client-side handler for the `editor.action.showReferences`
+        // command that XphpCodeLensHandler emits with pre-baked
+        // Location[].  Without this override PhpStorm's default
+        // LspCommandsSupport round-trips every command to the server
+        // via `workspace/executeCommand`; our server-side no-op
+        // returns null, the click silently fails.  The override
+        // intercepts the specific command client-side and navigates
+        // directly to the first location.  See
+        // XphpShowReferencesCommandsSupport for the rationale and
+        // multi-location follow-up note.
+        override val commandsCustomizer = XphpShowReferencesCommandsSupport()
+    }
 
     // IntelliJ's LSP framework dedupes "is this server already running?"
     // by descriptor equality.  Our `XphpLspServerSupportProvider.fileOpened`
