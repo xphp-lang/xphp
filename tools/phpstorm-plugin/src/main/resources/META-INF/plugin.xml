@@ -169,16 +169,24 @@
             implementation="com.xphp.lsp.textmate.XphpBundleRegistrar"/>
 
         <!--
-          Cycle L Half B: PhpStorm dispatches `workspace/willRenameFiles`
-          natively when the server advertises
-          `workspace.fileOperations.willRename` (our
-          XphpWillRenameFilesHandler does this on `initialize`), so
-          no plugin-side AsyncFileListener is required.  The earlier
-          XphpFileRenameListener implementation was removed once
-          prod-test (xphp-20260530-161814 log id=59) confirmed
-          PhpStorm sends the request itself on every .xphp/.php
-          rename in the project tree.
+          Cycle L Half B: VFS rename listener for `.xphp` / `.php`
+          files.  Sends `workspace/willRenameFiles` to the xphp LSP
+          server on each rename; the response carries text edits
+          renaming the in-source class to match the new basename,
+          applied via WriteCommandAction.
+
+          NOTE on why this is needed: an earlier prod-test (log id=59)
+          showed a willRenameFiles request being sent to the server,
+          which I initially attributed to PhpStorm's native dispatch
+          based on the server's `workspace.fileOperations.willRename`
+          capability advertisement.  A subsequent prod-test
+          (xphp-20260530-164821) with the listener removed confirmed
+          that was wrong: PhpStorm 2026.1's LSP4IJ does NOT
+          dispatch willRenameFiles natively; the earlier traffic was
+          this listener doing the work.  Restored.
         -->
+        <vfs.asyncListener
+            implementation="com.xphp.lsp.XphpFileRenameListener"/>
 
         <!--
           NOTE: we deliberately do NOT register a
