@@ -127,12 +127,18 @@ final class PhpCompletionResolver
             $cursorOffset,
         ));
 
+        // Class-name completion needs the file's namespace + use map to
+        // pick the right insertText shape (bare short name when imported
+        // or same-namespace, leading-backslash FQ otherwise). Computed
+        // once per request and shared across both class-completion arms.
+        $importContext = ClassNameImportContext::extractFromSource($document->text);
+
         $items = match ($hit['kind']) {
             'member', 'static', 'static-prop' => $this->completeMembers($uri, $document->text, $hit, $line, $character),
             'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset, $line, $character),
-            'new'              => $this->completeClassesByPrefix($hit['prefix']),
+            'new'              => $this->completeClassesByPrefix($hit['prefix'], $importContext),
             'expression'       => array_merge(
-                $this->completeClassesByPrefix($hit['prefix']),
+                $this->completeClassesByPrefix($hit['prefix'], $importContext),
                 $this->completeFunctionsByPrefix($hit['prefix']),
             ),
         };
@@ -803,7 +809,7 @@ final class PhpCompletionResolver
     /**
      * @return list<CompletionItem>
      */
-    private function completeClassesByPrefix(string $prefix): array
+    private function completeClassesByPrefix(string $prefix, ClassNameImportContext $importContext): array
     {
         // Empty prefix in `new ` or bare-expression position would dump the
         // entire workspace + ~1000 stub classes into the popup.  Require
@@ -823,7 +829,12 @@ final class PhpCompletionResolver
                 label: $short,
                 kind: CompletionItemKind::CLASS_,
                 detail: $fqn,
-                insertText: $fqn,
+                // Scope-aware insertText: bare short name when the FQN is
+                // already imported (or same-namespace), leading-backslash
+                // FQ otherwise. Prevents the qualified-but-not-FQ form
+                // (e.g. inserting `App\Models\Tag` inside `namespace App\Demos`)
+                // from namespace-prepending to a non-existent class.
+                insertText: $importContext->chooseInsertText($fqn),
             );
         }
         return $items;

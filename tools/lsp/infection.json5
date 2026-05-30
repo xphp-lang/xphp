@@ -1681,7 +1681,17 @@
                 // is unchanged.
                 "XPHP\\Lsp\\Handler\\XphpCodeLensHandler",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // ClassNameImportContext::extract -- the inner `continue`
+                // skipping non-NORMAL items in a non-group `Use_` statement
+                // (function / const imports). PHP syntactically disallows
+                // mixed-type items in a single comma-separated `use` (the
+                // statement-level `function` / `const` keyword applies to
+                // all items), so the branch is unreachable in well-formed
+                // source. The mixed-types-in-one-stmt case for `GroupUse`
+                // IS reachable and is covered by
+                // ClassNameImportContextTest::testExtractKeepsAllItemsInGroupUseEvenWithFunctionMixedIn.
+                "XPHP\\Lsp\\Resolver\\ClassNameImportContext"
             ]
         },
         "Foreach_": {

@@ -71,9 +71,9 @@ final class ImportCodeActionProvider
         }
         $name = $hit['name'];
 
-        $context = self::extractContext($result->ast);
-        $useMap = $context['useMap'];
-        $namespace = $context['namespace'];
+        $context = ClassNameImportContext::extract($result->ast);
+        $useMap = $context->useMap;
+        $namespace = $context->namespace;
         $positionMap = new PositionMap($source);
         $insertion = $this->computeInsertionPosition($result->ast, $positionMap);
 
@@ -86,59 +86,6 @@ final class ImportCodeActionProvider
             return [];
         }
         return $this->importClassActions($uri, $version, $name, $useMap, $namespace, $insertion);
-    }
-
-    /**
-     * Walk the top-level AST stmts and return the active `use` map
-     * (alias -> FQN) plus the enclosing namespace name (empty string
-     * when none).  Top-level walk is sufficient because PHP rejects
-     * `use` statements outside the file/namespace top-level.
-     *
-     * @param list<Node\Stmt> $ast
-     * @return array{useMap: array<string, string>, namespace: string}
-     */
-    private static function extractContext(array $ast): array
-    {
-        $namespace = '';
-        $useMap = [];
-        // Either the file has a `namespace App\Foo;` declaration whose
-        // body contains the top-level statements, or it's namespace-
-        // less and the stmts are the top-level array directly.
-        $stmts = $ast;
-        foreach ($ast as $stmt) {
-            if ($stmt instanceof Namespace_) {
-                $namespace = $stmt->name === null ? '' : $stmt->name->toString();
-                $stmts = $stmt->stmts;
-                break;
-            }
-        }
-        foreach ($stmts as $stmt) {
-            if ($stmt instanceof Use_) {
-                foreach ($stmt->uses as $useUse) {
-                    $type = $useUse->type !== Use_::TYPE_UNKNOWN
-                        ? $useUse->type
-                        : $stmt->type;
-                    if ($type !== Use_::TYPE_NORMAL) {
-                        continue;
-                    }
-                    $useMap[$useUse->getAlias()->toString()] = $useUse->name->toString();
-                }
-                continue;
-            }
-            if ($stmt instanceof GroupUse) {
-                $prefix = $stmt->prefix->toString();
-                foreach ($stmt->uses as $useUse) {
-                    $type = $useUse->type !== Use_::TYPE_UNKNOWN
-                        ? $useUse->type
-                        : $stmt->type;
-                    if ($type !== Use_::TYPE_NORMAL) {
-                        continue;
-                    }
-                    $useMap[$useUse->getAlias()->toString()] = $prefix . '\\' . $useUse->name->toString();
-                }
-            }
-        }
-        return ['useMap' => $useMap, 'namespace' => $namespace];
     }
 
     /**

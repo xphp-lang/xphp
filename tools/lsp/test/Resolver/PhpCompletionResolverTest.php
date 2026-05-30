@@ -703,6 +703,86 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertNotContains(\Phpactor\LanguageServerProtocol\CompletionItemKind::FUNCTION, $kinds);
     }
 
+    public function testClassCompletionInsertTextIsFqWithLeadingBackslashWhenNotImported(): void
+    {
+        // Different namespace, no `use App\Models\User;` → must be FQ
+        // with leading backslash, otherwise the inserted bare
+        // `App\Models\User` would namespace-prepend to `App\Demos\App\Models\User`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('\\App\\Models\\User', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextIsShortNameWhenAlreadyImported(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Models\\User;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('User', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextIsShortNameWhenSameNamespace(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        // Same namespace as User → bare short name (no use statement needed).
+        $useSource = "<?php\nnamespace App\\Models;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('User', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextRespectsAliasedUse(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Models\\User as Account;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // The label remains the FQN's last segment (`User`) — completion
+        // doesn't currently index aliases by label, so prefix-matching
+        // goes via the short name. The relevant assertion is on
+        // insertText, which must use the file's bound alias `Account`.
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('Account', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextFallsBackToFqOnConflictingShortName(): void
+    {
+        // Two `User`s in the workspace; the file imports App\Other\User.
+        // Completing App\Models\User cannot emit bare `User` (would
+        // resolve to the imported other one) — must emit the FQ form.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Models_User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $this->open($workspace, '/Other_User.xphp', "<?php\nnamespace App\\Other;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Other\\User;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $modelsItem = self::findFirstWithDetail($items, 'App\\Models\\User');
+        $otherItem = self::findFirstWithDetail($items, 'App\\Other\\User');
+        self::assertNotNull($modelsItem);
+        self::assertNotNull($otherItem);
+        self::assertSame('\\App\\Models\\User', $modelsItem->insertText);
+        self::assertSame('User', $otherItem->insertText);
+    }
+
     public function testNewWithEmptyPrefixReturnsEmpty(): void
     {
         // Empty prefix in `new ` would otherwise dump every class FQN in
@@ -1114,5 +1194,31 @@ final class PhpCompletionResolverTest extends TestCase
     private function open(PhpactorWorkspace $workspace, string $uri, string $source): void
     {
         $workspace->open(new TextDocumentItem($uri, 'xphp', 1, $source));
+    }
+
+    /**
+     * @param list<CompletionItem> $items
+     */
+    private static function findFirstWithLabel(array $items, string $label): ?CompletionItem
+    {
+        foreach ($items as $item) {
+            if ($item->label === $label) {
+                return $item;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param list<CompletionItem> $items
+     */
+    private static function findFirstWithDetail(array $items, string $detail): ?CompletionItem
+    {
+        foreach ($items as $item) {
+            if ($item->detail === $detail) {
+                return $item;
+            }
+        }
+        return null;
     }
 }
