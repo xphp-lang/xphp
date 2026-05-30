@@ -33,10 +33,11 @@ final readonly class WorkspaceAnalyzer
     /**
      * @param array<string, array{ast: list<Node\Stmt>, source: string}> $files keyed by URI/path
      * @param array<string, list<Node\Stmt>>                              $hierarchyAsts AST-only entries that
-     *        enrich the bound-check hierarchy but are NOT walked for diagnostics. Use this to feed
-     *        filesystem-indexed dependency classes (parsed by the cache warmer) so the bound check sees
-     *        the full project, not just open buffers. Source isn't needed since these URIs never get a
-     *        PositionMap. Open-doc entries in `$files` take precedence on URI conflict.
+     *        enrich the bound-check hierarchy AND register their template definitions so
+     *        `Registry::validateBounds` can find them. NOT walked for instantiations: any diagnostics
+     *        the definition pass would produce on these URIs (e.g. duplicate-template against an open
+     *        file that already won) are routed into a throwaway sink. Source isn't needed since the
+     *        PositionMap for these entries is degenerate and unused.
      * @return array<string, list<Diagnostic>> diagnostics keyed by URI/path
      */
     public function analyze(array $files, array $hierarchyAsts = []): array
@@ -57,9 +58,26 @@ final readonly class WorkspaceAnalyzer
 
         // First pass: definitions. Catch duplicate-declaration RuntimeExceptions and pin
         // them on the second declaration's file (which is what the compiler also reports).
+        // Open files first — their declarations win on URI collision.
         foreach ($files as $path => $entry) {
             $positionMap = new PositionMap($entry['source']);
             $this->walkDefinitions($entry['ast'], $registry, $path, $positionMap, $diagnosticsByFile[$path]);
+        }
+        // Filesystem-only definitions are silently registered so the
+        // bound-check lookup in `Registry::validateBounds` succeeds even
+        // when the template's defining file isn't currently open. Any
+        // duplicate-template throws (whether against an open file already
+        // registered or against another filesystem entry) land in a sink
+        // no caller reads — they aren't actionable for the user since
+        // the offending file isn't on screen.
+        $definitionSink = [];
+        foreach ($hierarchyAsts as $uri => $ast) {
+            if (isset($files[$uri])) {
+                continue;
+            }
+            // Degenerate PositionMap is fine: any diagnostic constructed here
+            // is discarded via the sink, so the bogus offsets never surface.
+            $this->walkDefinitions($ast, $registry, $uri, new PositionMap(''), $definitionSink);
         }
 
         // Second pass: instantiations. Bound violations fire here.

@@ -289,6 +289,70 @@ final class XphpDiagnosticsProviderTest extends TestCase
         }
     }
 
+    public function testBoundCheckFiresOnFilesystemOnlyTemplateAgainstFilesystemOnlyBadTypeArg(): void
+    {
+        // The exact prod scenario from
+        // `playground/src/Demos/Bounds.xphp`: the user opens only
+        // Bounds.xphp; the template (StringableBox) and the type-arg
+        // class (User, which doesn't implement \Stringable) BOTH live
+        // on disk. Before the filesystem-definition registration:
+        //   - hierarchy was open-only → User unknown → "not in source set"
+        //   - registry was open-only → StringableBox template missing →
+        //     validateBounds skipped silently → no diagnostic at all
+        // After: warmer-fed hierarchy + filesystem-walked definitions
+        // mean both sides resolve → bound violation surfaces correctly.
+
+        $root = sys_get_temp_dir() . '/xphp-diag-prod-bounds-' . bin2hex(random_bytes(6));
+        mkdir($root, 0o755, true);
+        try {
+            file_put_contents($root . '/StringableBox.xphp', <<<'PHP'
+            <?php
+            namespace App\Containers;
+            class StringableBox<T: \Stringable>
+            {
+                public function __construct(public T $item) {}
+            }
+            PHP);
+            file_put_contents($root . '/User.xphp', <<<'PHP'
+            <?php
+            namespace App\Models;
+            final class User
+            {
+                public function __construct(public readonly string $name) {}
+            }
+            PHP);
+
+            $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+            $cache = new ParsedDocumentCache(new Analyzer($parser));
+            $workspace = new PhpactorWorkspace();
+            $fqnIndex = new FqnIndex($workspace, $cache, $parser, $root);
+            $warmer = new \XPHP\Lsp\Analyzer\ParsedDocumentCacheWarmer($fqnIndex, $cache, $workspace);
+            $warmer->warmNow();
+
+            $useUri = 'file://' . $root . '/Bounds.xphp';
+            $useDoc = $this->openDoc($workspace, $useUri, <<<'XPHP'
+            <?php
+            namespace App\Demos;
+            use App\Containers\StringableBox;
+            use App\Models\User;
+            $bad = new StringableBox<User>(new User('x'));
+            XPHP);
+
+            $provider = new XphpDiagnosticsProvider($cache, new WorkspaceAnalyzer(), $workspace, $fqnIndex);
+            $cancel = (new CancellationTokenSource())->getToken();
+            $diagnostics = wait($provider->provideDiagnostics($useDoc, $cancel));
+            $diagnostics = is_array($diagnostics) ? array_values($diagnostics) : [];
+
+            self::assertCount(1, $diagnostics);
+            self::assertSame('xphp.bound', $diagnostics[0]->code);
+            self::assertStringContainsString('does not extend/implement', $diagnostics[0]->message);
+        } finally {
+            @unlink($root . '/StringableBox.xphp');
+            @unlink($root . '/User.xphp');
+            @rmdir($root);
+        }
+    }
+
     public function testBoundCheckFiresOnFilesystemOnlyTypeArgThatDoesNotSatisfyBound(): void
     {
         // The enrichment branch must keep TRUE bound violations visible

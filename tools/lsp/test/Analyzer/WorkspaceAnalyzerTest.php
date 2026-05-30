@@ -286,6 +286,66 @@ final class WorkspaceAnalyzerTest extends TestCase
         self::assertSame([], $diagnostics['/Use.xphp'], 'live /Tag.xphp wins over stale hierarchy entry');
     }
 
+    public function testHierarchyAstsLoopContinuesPastSameUriSkipToRegisterLaterTemplates(): void
+    {
+        // Locks the `continue` in the filesystem-definitions loop against
+        // `break`. With `break`, the very first overlap with $files would
+        // short-circuit, leaving Box's template unregistered → bound-check
+        // verdict skipped → bound violation NOT surfaced.
+        //
+        // Scenario: $hierarchyAsts iterates a URI also in $files FIRST
+        // (must `continue`), then a Box template that needs to register
+        // (only reachable if the loop continues). $files has a `new
+        // Box<User>(...)` call where User lacks \Stringable. With the
+        // template registered, validateBounds runs → diagnostic fires.
+        $files = $this->parseFiles([
+            '/User.xphp' => <<<'PHP'
+            <?php
+            namespace App\Models;
+            class User {}  // no \Stringable
+            PHP,
+            '/Use.xphp' => <<<'PHP'
+            <?php
+            namespace App;
+            use App\Models\User;
+            $bad = new Box<User>(new User());
+            PHP,
+        ]);
+        $hierarchyAsts = $this->parseAstOnly([
+            // Same URI as $files → must hit the `continue` branch.
+            '/User.xphp' => <<<'PHP'
+            <?php
+            namespace App\Models;
+            class User implements \Stringable
+            {
+                public function __toString(): string { return ''; }
+            }
+            PHP,
+            // Box's template: only registered if the loop continues past
+            // the overlap above. Without registration, `Box<User>` skips
+            // validateBounds silently and no diagnostic fires.
+            '/Box.xphp' => <<<'PHP'
+            <?php
+            namespace App;
+            class Box<T: \Stringable>
+            {
+                public function __construct(public T $item) {}
+            }
+            PHP,
+        ]);
+
+        $diagnostics = (new WorkspaceAnalyzer())->analyze($files, $hierarchyAsts);
+
+        // Bound violation must fire: live User in $files (no Stringable)
+        // can't satisfy Box's \Stringable bound. If the loop broke at the
+        // first iteration, Box would be unregistered and this would be [].
+        self::assertCount(1, $diagnostics['/Use.xphp']);
+        self::assertStringContainsString(
+            'Generic bound violated',
+            $diagnostics['/Use.xphp'][0]->message,
+        );
+    }
+
     /**
      * @param array<string, string> $sources keyed by path → source
      * @return array<string, array{ast: list<\PhpParser\Node\Stmt>, source: string}>
