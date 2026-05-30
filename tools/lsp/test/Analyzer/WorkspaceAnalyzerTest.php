@@ -204,6 +204,88 @@ final class WorkspaceAnalyzerTest extends TestCase
         self::assertSame(3, $d->endCharacter - $d->startCharacter, 'range must span just the `Box` identifier');
     }
 
+    public function testHierarchyAstsEnrichBoundCheckWithoutBeingWalked(): void
+    {
+        $files = $this->parseFiles([
+            '/Use.xphp' => <<<'PHP'
+            <?php
+            namespace App;
+            use App\Models\Tag;
+            $x = new Box<Tag>(new Tag('hi'));
+            PHP,
+        ]);
+        $hierarchyAsts = $this->parseAstOnly([
+            '/Box.xphp' => <<<'PHP'
+            <?php
+            namespace App;
+            class Box<T: \Stringable>
+            {
+                public function __construct(public T $item) {}
+            }
+            PHP,
+            '/Tag.xphp' => <<<'PHP'
+            <?php
+            namespace App\Models;
+            class Tag implements \Stringable
+            {
+                public function __construct(public string $name) {}
+                public function __toString(): string { return $this->name; }
+            }
+            PHP,
+        ]);
+
+        $diagnostics = (new WorkspaceAnalyzer())->analyze($files, $hierarchyAsts);
+
+        // Bound is satisfied via the hierarchy contribution: Tag → \Stringable.
+        self::assertSame([], $diagnostics['/Use.xphp'], 'no bound violation when hierarchy includes Tag → \\Stringable');
+        // Hierarchy-only entries are NOT walked, so they don't get a diagnostics slot.
+        self::assertArrayNotHasKey('/Box.xphp', $diagnostics);
+        self::assertArrayNotHasKey('/Tag.xphp', $diagnostics);
+    }
+
+    public function testHierarchyAstsAreSkippedWhenSameUriAlreadyInFiles(): void
+    {
+        // Open-doc entries in $files take precedence over hierarchyAsts entries
+        // with the same URI — even when the AST differs (live > stale on-disk).
+        // Stale AST claims Tag implements nothing; the live AST has it
+        // implementing \Stringable, so the bound check must use the live one.
+        $files = $this->parseFiles([
+            '/Tag.xphp' => <<<'PHP'
+            <?php
+            namespace App\Models;
+            class Tag implements \Stringable
+            {
+                public function __toString(): string { return ''; }
+            }
+            PHP,
+            '/Use.xphp' => <<<'PHP'
+            <?php
+            namespace App;
+            use App\Models\Tag;
+            $x = new Box<Tag>(new Tag());
+            PHP,
+        ]);
+        $hierarchyAsts = $this->parseAstOnly([
+            '/Tag.xphp' => <<<'PHP'
+            <?php
+            namespace App\Models;
+            class Tag {}
+            PHP,
+            '/Box.xphp' => <<<'PHP'
+            <?php
+            namespace App;
+            class Box<T: \Stringable>
+            {
+                public function __construct(public T $item) {}
+            }
+            PHP,
+        ]);
+
+        $diagnostics = (new WorkspaceAnalyzer())->analyze($files, $hierarchyAsts);
+
+        self::assertSame([], $diagnostics['/Use.xphp'], 'live /Tag.xphp wins over stale hierarchy entry');
+    }
+
     /**
      * @param array<string, string> $sources keyed by path → source
      * @return array<string, array{ast: list<\PhpParser\Node\Stmt>, source: string}>
@@ -217,6 +299,23 @@ final class WorkspaceAnalyzerTest extends TestCase
             $result = $analyzer->analyzeFile($source);
             self::assertNotNull($result->ast, "fixture {$path} should parse without syntax errors");
             $out[$path] = ['ast' => $result->ast, 'source' => $source];
+        }
+        return $out;
+    }
+
+    /**
+     * @param array<string, string> $sources keyed by URI → source
+     * @return array<string, list<\PhpParser\Node\Stmt>>
+     */
+    private function parseAstOnly(array $sources): array
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $analyzer = new Analyzer($parser);
+        $out = [];
+        foreach ($sources as $uri => $source) {
+            $result = $analyzer->analyzeFile($source);
+            self::assertNotNull($result->ast, "fixture {$uri} should parse without syntax errors");
+            $out[$uri] = $result->ast;
         }
         return $out;
     }

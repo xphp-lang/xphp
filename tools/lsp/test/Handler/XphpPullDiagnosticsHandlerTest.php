@@ -15,6 +15,7 @@ use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
 use XPHP\Lsp\Diagnostics\XphpDiagnosticsProvider;
 use XPHP\Lsp\Handler\XphpPullDiagnosticsHandler;
+use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 use function Amp\Promise\wait;
@@ -131,7 +132,12 @@ final class XphpPullDiagnosticsHandlerTest extends TestCase
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
-        $provider = new XphpDiagnosticsProvider($cache, new WorkspaceAnalyzer(), $workspace);
+        $provider = new XphpDiagnosticsProvider(
+            $cache,
+            new WorkspaceAnalyzer(),
+            $workspace,
+            new FqnIndex($workspace, $cache, $parser, ''),
+        );
         return new XphpPullDiagnosticsHandler($workspace, $provider);
     }
 }

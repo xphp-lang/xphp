@@ -181,6 +181,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             $cache,
             new WorkspaceAnalyzer(),
             $workspace,
+            $fqnIndex,
         );
 
         $diagnosticsEngine = new DiagnosticsEngine(

@@ -32,15 +32,25 @@ final readonly class WorkspaceAnalyzer
 {
     /**
      * @param array<string, array{ast: list<Node\Stmt>, source: string}> $files keyed by URI/path
+     * @param array<string, list<Node\Stmt>>                              $hierarchyAsts AST-only entries that
+     *        enrich the bound-check hierarchy but are NOT walked for diagnostics. Use this to feed
+     *        filesystem-indexed dependency classes (parsed by the cache warmer) so the bound check sees
+     *        the full project, not just open buffers. Source isn't needed since these URIs never get a
+     *        PositionMap. Open-doc entries in `$files` take precedence on URI conflict.
      * @return array<string, list<Diagnostic>> diagnostics keyed by URI/path
      */
-    public function analyze(array $files): array
+    public function analyze(array $files, array $hierarchyAsts = []): array
     {
         $diagnosticsByFile = array_fill_keys(array_keys($files), []);
 
         $astPerFile = [];
         foreach ($files as $path => $entry) {
             $astPerFile[$path] = $entry['ast'];
+        }
+        foreach ($hierarchyAsts as $uri => $ast) {
+            if (!isset($astPerFile[$uri])) {
+                $astPerFile[$uri] = $ast;
+            }
         }
         $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
         $registry = new Registry(hierarchy: $hierarchy);
