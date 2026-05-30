@@ -94,14 +94,20 @@ class XphpFileRenameListener : AsyncFileListener {
                 continue
             }
             if (ev is VFileMoveEvent && ev.file.isXphpLike()) {
-                // VFileMoveEvent.file is the moved file referenced at
-                // its NEW location; oldParent / newParent give the
-                // before/after directory.  Construct oldUri from
-                // oldParent + basename, newUri from file.url directly.
+                // VFileMoveEvent's `file.url` reflects the file's
+                // CURRENT location, which during prepareChange() is
+                // still the OLD path (the VFS change hasn't applied
+                // yet).  Construct BOTH URIs from the parents +
+                // file.name explicitly so we capture the actual
+                // (oldUri, newUri) pair rather than (oldUri, oldUri).
+                // Prod-test 2026-05-30 18:17 log id=8/18/25 surfaced
+                // this: every willRenameFiles request carried
+                // identical old/new URIs and the server's move path
+                // saw same-dir/same-name and skipped.
                 val basename = ev.file.name
                 val oldParentUrl = ev.oldParent.url
-                val newUri = ev.file.url
-                renames.add(FileRename("$oldParentUrl/$basename", newUri))
+                val newParentUrl = ev.newParent.url
+                renames.add(FileRename("$oldParentUrl/$basename", "$newParentUrl/$basename"))
             }
         }
 
