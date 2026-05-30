@@ -1,10 +1,34 @@
 # xphp
 
-`xphp` is a superset of `php` that compiles directly into zero-overhead native, opcache-friendly `php` and gives
-developers **runtime safety without runtime penalty**.
+`xphp` is a superset of `php` that compiles -- actually transpiles -- directly
+into zero-overhead native, opcache-friendly `php` and gives developers
+**runtime safety without runtime penalty**.
 
-`xphp` contributes to the community in a pragmatic way. With that in mind, it works around the current Zend Engine
-limitations by moving the heavy lifting to an Ahead-of-Time (`AOT`) compilation step.
+The first use case is generics, but that's just the beginning of `xphp`. The
+ultimate goal is a continuously better type system and design that can be
+experimented and delivered as soon as possible by the `php` community for the
+`php` community.
+
+---
+
+## Ecosystem and community first
+
+Ideally a project should first show how it works, but ecosystem and community
+are too much important to be mentioned only at the bottom of the main document.
+This project **CAN NOT** be successful without their support.
+
+The single biggest asset of any programming language is the community and
+ecosystem around it, much more than its syntax and features. We believe that
+meeting a community where it is, respecting their culture, history and work
+compounds far better than asking them to leave all of that behind.
+
+As `xphp` is simply a superset of `php`, existing `php` code can be easily
+converted into `xphp` and `xphp` code can seamlessly consume `php` -- little to
+zero effort either way.
+
+The design choice to compile to vanilla `php` is a deliberate commitment to
+contribute to the `php` community and its ecosystem, **not** to compete against
+them.
 
 ---
 
@@ -32,6 +56,8 @@ class Collection<T> {
 }
 
 // src/main.xphp
+namespace App;
+
 $users = new Collection<User>(
     new User('Alice'),
     new User('Bob')
@@ -52,7 +78,7 @@ $users = new Collection<User>(
 
 p.s. you can `gitignore` files in `<target>` and `<cache>` as they can be generated in your CI/CD pipeline.
 
-### 3. The compiled native php
+### 3. The generated php
 
 The compiler monomorphizes the generic `Collection<T>` class into a concrete `Collection_User` class. No impact on
 the runtime, it's native `php` code.
@@ -127,20 +153,6 @@ your-project/
 
 ---
 
-## Ecosystem and community matter much more than syntax and features
-
-The single biggest asset of any programming language is the community and ecosystem around it, much more than its
-syntax and features. We believe that meeting a community where it is, respecting their culture, history and work
-compounds far better than asking them to leave all of that behind.
-
-As `xphp` is simply a superset of `php`, existing `php` code can be easily converted into `xphp` and `xphp` code can
-seamlessly consume `php` -- little to zero effort either way.
-
-The design choice to compile to vanilla `php` is a deliberate commitment to contribute to the `php` community and its
-ecosystem, **not** to compete against them.
-
----
-
 ## Turning static illusions into runtime reality
 
 For years, we've relied on a shared agreement to keep our `php` codebases safe: we use docblocks to tell our IDEs and
@@ -199,9 +211,8 @@ features are on the [roadmap](docs/roadmap.md): type aliases, literal types, map
 `xphp` doesn't wait for `php` internals to ship these features. It delivers them today, on top of the runtime the
 community and ecosystem already trust.
 
-- Full generics reference: [docs/generics.md](docs/generics.md)
-- Side-by-side comparison against TypeScript, Kotlin, and Rust (what's there, what's missing, what's uniquely possible
-  with monomorphization): [docs/generics-comparison.md](docs/generics-comparison.md)
+- [Type-system comparison](core/docs/type-system/comparison.md)
+- [Full generics reference](core/docs/type-system/generics/index.md)
 
 ---
 
@@ -218,7 +229,8 @@ filename rename sync end-to-end: Shift+F6 on a class renames the file, and renam
 updates the class declaration plus every reference), documentHighlight, documentSymbol + workspace/symbol,
 foldingRange, signatureHelp, inlayHint, rich completion (member access, static access, static property, type-arg
 positions with bound-aware filtering, scope-aware variables, union/intersection receiver fan-out, visibility filtering
-across same-class and subclass contexts; `completionItem/resolve` for lazy docblock fetch), codeAction + resolve
+across same-class and subclass contexts, scope-aware class-name `insertText` — short name when imported or
+same-namespace, leading-backslash FQN otherwise; `completionItem/resolve` for lazy docblock fetch), codeAction + resolve
 (Import class · Simplify FQN · Optimize Imports · "Did you mean null/true/false?" typo fixes), codeLens + resolve
 ("Show references" lens with lazy reference count above every declaration; click opens a chooser popup anchored at the
 lens position), call hierarchy (prepare + incoming + outgoing), type hierarchy (prepare + supertypes + subtypes), and
@@ -231,6 +243,6 @@ semantic tokens. The same server powers two editor integrations:
 
 Both bind to the same TextMate grammar and the same LSP semantics, so editing experience is consistent across editors.
 
-Full LSP roadmap: [tools/lsp/roadmap.md](tools/lsp/roadmap.md).
+Full LSP roadmap: [tools/lsp/docs/roadmap.md](tools/lsp/docs/roadmap.md).
 
 ---

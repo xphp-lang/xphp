@@ -1,12 +1,6 @@
-# core roadmap
+# xphp roadmap
 
-Compiler, type system, runtime semantics, and the developer-experience
-features that live in `core/` (PSR-4 fixtures, the `--lint` CLI,
-composer-side integration, source maps).
-
-For the LSP roadmap see [`../tools/lsp/roadmap.md`](../tools/lsp/roadmap.md).
-Cross-language comparison data lives at
-[`../docs/generics-comparison.md`](../docs/generics-comparison.md).
+## Overview
 
 ```mermaid
 timeline
@@ -26,6 +20,7 @@ timeline
                 : free generic functions at namespace scope
         Type-parameter bounds
                 : single upper bound (e.g. T must extend Stringable) validated at compile time
+                : enforced at class instantiation AND method / free-function call sites
                 : built-in interface whitelist (Stringable / Countable / Iterator / …)
                 : error messages reference the source-level instantiation, not the hash
         Runtime semantics
@@ -46,7 +41,6 @@ timeline
                 : F-bounded recursion (T bounded by a generic of itself)
         Generic surface
                 : instance-method generic calls on a typed receiver
-                : bound validation on method-level type-params
                 : generic type aliases
         Compiler
                 : Real cycle detection (replaces depth-cap heuristic)
@@ -74,3 +68,5 @@ timeline
                 : Decorators-as-attributes interop
                 : Whatever the community need or wants to explore
 ```
+
+See [Type-system comparison](./type-system/comparison.md) for more details.
