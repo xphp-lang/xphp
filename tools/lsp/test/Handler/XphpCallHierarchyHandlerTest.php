@@ -9,9 +9,12 @@ use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\CallHierarchyIncomingCall;
 use Phpactor\LanguageServerProtocol\CallHierarchyItem;
 use Phpactor\LanguageServerProtocol\CallHierarchyOutgoingCall;
+use Phpactor\LanguageServerProtocol\Position;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\SymbolKind;
+use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
+use Phpactor\LanguageServerProtocol\TextDocumentPositionParams;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
@@ -36,10 +39,10 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         $workspace->open(new TextDocumentItem('/Foo.xphp', 'xphp', 1, $source));
         $handler = $this->newHandler($workspace);
 
-        $params = [
-            'textDocument' => ['uri' => '/Foo.xphp'],
-            'position' => ['line' => 3, 'character' => 22],
-        ];
+        $params = new TextDocumentPositionParams(
+            new TextDocumentIdentifier('/Foo.xphp'),
+            new Position(3, 22),
+        );
         $items = wait($handler->prepare($params));
 
         self::assertCount(1, $items);
@@ -54,10 +57,10 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         $workspace->open(new TextDocumentItem('/g.xphp', 'xphp', 1, $source));
         $handler = $this->newHandler($workspace);
 
-        $params = [
-            'textDocument' => ['uri' => '/g.xphp'],
-            'position' => ['line' => 1, 'character' => 10],
-        ];
+        $params = new TextDocumentPositionParams(
+            new TextDocumentIdentifier('/g.xphp'),
+            new Position(1, 10),
+        );
         $items = wait($handler->prepare($params));
 
         self::assertCount(1, $items);
@@ -68,10 +71,10 @@ final class XphpCallHierarchyHandlerTest extends TestCase
     public function testPrepareReturnsEmptyForUnknownDocument(): void
     {
         $handler = $this->newHandler(new PhpactorWorkspace());
-        $items = wait($handler->prepare([
-            'textDocument' => ['uri' => '/never-opened.xphp'],
-            'position' => ['line' => 0, 'character' => 0],
-        ]));
+        $items = wait($handler->prepare(new TextDocumentPositionParams(
+            new TextDocumentIdentifier('/never-opened.xphp'),
+            new Position(0, 0),
+        )));
         self::assertSame([], $items);
     }
 
@@ -96,13 +99,11 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         $workspace->open(new TextDocumentItem('/persist.xphp', 'xphp', 1, $caller));
         $handler = $this->newHandler($workspace);
 
-        $params = [
-            'item' => [
-                'uri' => '/Repository.xphp',
-                'data' => ['classFqn' => 'App\\Repository', 'name' => 'save'],
-            ],
+        $item = [
+            'uri' => '/Repository.xphp',
+            'data' => ['classFqn' => 'App\\Repository', 'name' => 'save'],
         ];
-        $incoming = wait($handler->incomingCalls($params));
+        $incoming = wait($handler->incomingCalls($item));
 
         self::assertNotEmpty($incoming);
         self::assertContainsOnlyInstancesOf(CallHierarchyIncomingCall::class, $incoming);
@@ -126,13 +127,11 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         $workspace->open(new TextDocumentItem('/Foo.xphp', 'xphp', 1, $source));
         $handler = $this->newHandler($workspace);
 
-        $params = [
-            'item' => [
-                'uri' => '/Foo.xphp',
-                'data' => ['classFqn' => 'App\\Foo', 'name' => 'bar'],
-            ],
+        $item = [
+            'uri' => '/Foo.xphp',
+            'data' => ['classFqn' => 'App\\Foo', 'name' => 'bar'],
         ];
-        $outgoing = wait($handler->outgoingCalls($params));
+        $outgoing = wait($handler->outgoingCalls($item));
 
         self::assertContainsOnlyInstancesOf(CallHierarchyOutgoingCall::class, $outgoing);
         $calleeNames = array_map(static fn (CallHierarchyOutgoingCall $c): string => $c->to->name, $outgoing);
@@ -142,8 +141,11 @@ final class XphpCallHierarchyHandlerTest extends TestCase
 
     public function testIncomingCallsReturnsEmptyForMissingItem(): void
     {
+        // incomingCalls(array $item) is type-hinted; non-array would
+        // TypeError.  Exercise the empty-name defensive guard with
+        // an array that has the right shape but no useful name.
         $handler = $this->newHandler(new PhpactorWorkspace());
-        self::assertSame([], wait($handler->incomingCalls(['item' => 'not-an-array'])));
+        self::assertSame([], wait($handler->incomingCalls(['data' => ['name' => '']])));
         self::assertSame([], wait($handler->incomingCalls([])));
     }
 
@@ -154,10 +156,8 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         $handler = $this->newHandler($workspace);
 
         $outgoing = wait($handler->outgoingCalls([
-            'item' => [
-                'uri' => '/x.xphp',
-                'data' => ['classFqn' => '', 'name' => 'doesnotexist'],
-            ],
+            'uri' => '/x.xphp',
+            'data' => ['classFqn' => '', 'name' => 'doesnotexist'],
         ]));
         self::assertSame([], $outgoing);
     }

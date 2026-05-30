@@ -26,6 +26,7 @@ use Phpactor\LanguageServerProtocol\Position;
 use Phpactor\LanguageServerProtocol\Range;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\SymbolKind;
+use Phpactor\LanguageServerProtocol\TextDocumentPositionParams;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Lsp\Reflection\FqnIndex;
@@ -86,17 +87,20 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * @param array<string, mixed> $params
+     * `prepareCallHierarchy` params are `{textDocument, position}`,
+     * matching `TextDocumentPositionParams`.  Typed so phpactor's
+     * `LanguageSeverProtocolParamsResolver` deserializes the JSON
+     * into a real Params object -- the framework's
+     * PassThroughArgumentResolver splats untyped `array $params`
+     * into positional args and the handler would silently receive
+     * only the textDocument value, never the full params.
+     *
      * @return Promise<list<CallHierarchyItem>>
      */
-    public function prepare(array $params): Promise
+    public function prepare(TextDocumentPositionParams $params): Promise
     {
-        $uri = self::extractUri($params);
-        if ($uri === null || !$this->workspace->has($uri)) {
-            return new Success([]);
-        }
-        $position = self::extractPosition($params);
-        if ($position === null) {
+        $uri = $params->textDocument->uri;
+        if (!$this->workspace->has($uri)) {
             return new Success([]);
         }
         $item = $this->workspace->get($uri);
@@ -105,7 +109,10 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
             return new Success([]);
         }
         $positionMap = new PositionMap($item->text);
-        $offset = $positionMap->positionToOffset($position[0], $position[1]);
+        $offset = $positionMap->positionToOffset(
+            $params->position->line,
+            $params->position->character,
+        );
 
         $located = self::findEnclosingCallable($result->ast, $offset);
         if ($located === null) {
@@ -118,16 +125,17 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * @param array<string, mixed> $params
+     * `callHierarchy/incomingCalls` params are `{item}`.  The
+     * framework splats the params object into positional args, so
+     * the first positional argument is the inner `item` dict --
+     * NOT a wrapper.  Signature reflects that splat order.
+     *
+     * @param array<string, mixed> $item the inner CallHierarchyItem dict
      * @return Promise<list<CallHierarchyIncomingCall>>
      */
-    public function incomingCalls(array $params): Promise
+    public function incomingCalls(array $item): Promise
     {
-        $itemData = $params['item'] ?? null;
-        if (!is_array($itemData)) {
-            return new Success([]);
-        }
-        $targetName = $itemData['data']['name'] ?? null;
+        $targetName = $item['data']['name'] ?? null;
         if (!is_string($targetName) || $targetName === '') {
             return new Success([]);
         }
@@ -151,26 +159,24 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * @param array<string, mixed> $params
+     * `callHierarchy/outgoingCalls` -- same splat shape as incomingCalls.
+     *
+     * @param array<string, mixed> $item the inner CallHierarchyItem dict
      * @return Promise<list<CallHierarchyOutgoingCall>>
      */
-    public function outgoingCalls(array $params): Promise
+    public function outgoingCalls(array $item): Promise
     {
-        $itemData = $params['item'] ?? null;
-        if (!is_array($itemData)) {
-            return new Success([]);
-        }
-        $uri = $itemData['uri'] ?? null;
+        $uri = $item['uri'] ?? null;
         if (!is_string($uri) || !$this->workspace->has($uri)) {
             return new Success([]);
         }
-        $classFqn = $itemData['data']['classFqn'] ?? '';
-        $methodName = $itemData['data']['name'] ?? '';
+        $classFqn = $item['data']['classFqn'] ?? '';
+        $methodName = $item['data']['name'] ?? '';
         if (!is_string($classFqn) || !is_string($methodName) || $methodName === '') {
             return new Success([]);
         }
-        $item = $this->workspace->get($uri);
-        $result = $this->cache->getOrParse($uri, $item->version, $item->text);
+        $document = $this->workspace->get($uri);
+        $result = $this->cache->getOrParse($uri, $document->version, $document->text);
         if ($result->ast === null || $result->ast === []) {
             return new Success([]);
         }
@@ -178,7 +184,7 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
         if ($body === null) {
             return new Success([]);
         }
-        $positionMap = new PositionMap($item->text);
+        $positionMap = new PositionMap($document->text);
         $calls = self::collectOutgoingFromBody($body, $uri, $positionMap);
         return new Success($calls);
     }
@@ -566,34 +572,4 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
         );
     }
 
-    /**
-     * @param array<string, mixed> $params
-     */
-    private static function extractUri(array $params): ?string
-    {
-        $textDocument = $params['textDocument'] ?? null;
-        if (!is_array($textDocument)) {
-            return null;
-        }
-        $uri = $textDocument['uri'] ?? null;
-        return is_string($uri) ? $uri : null;
-    }
-
-    /**
-     * @param array<string, mixed> $params
-     * @return ?array{0: int, 1: int}
-     */
-    private static function extractPosition(array $params): ?array
-    {
-        $position = $params['position'] ?? null;
-        if (!is_array($position)) {
-            return null;
-        }
-        $line = $position['line'] ?? null;
-        $character = $position['character'] ?? null;
-        if (!is_int($line) || !is_int($character)) {
-            return null;
-        }
-        return [$line, $character];
-    }
 }
