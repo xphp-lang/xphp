@@ -522,30 +522,25 @@ final class NamespaceMoveProvider
 
     /**
      * Resolve the source text for a URI, preferring the workspace's
-     * live copy.  Mirrors {@see XphpWillRenameFilesHandler::sourceFor}
-     * but adds a brief retry loop for the file-rename race window.
+     * live copy.  Mirrors {@see XphpWillRenameFilesHandler::sourceFor}.
      *
-     * Background (prod log xphp-20260530-183636 id=13): under rapid
-     * back-to-back file moves PhpStorm fires events in this order
-     * within a 1-2 ms window:
+     * Race window: when PhpStorm dispatches willRenameFiles, neither
+     * URI is guaranteed to be available -- the OLD URI just received
+     * didClose, the NEW URI's didOpen is typically ~20 ms behind,
+     * and the OS-level rename can have a brief in-flight window
+     * where neither path exists on disk.  The xphp PhpStorm plugin
+     * pre-empts this by reading source bytes in `prepareChange`
+     * (where the file is GUARANTEED at its old location and VFS
+     * content is available) and seeding the server's workspace via
+     * a synthetic `textDocument/didOpen` for the NEW URI BEFORE
+     * sending willRenameFiles.  By the time we run, `workspace.has(
+     * newUri)` is true and the lookup hits deterministically -- no
+     * sleep/retry needed.
      *
-     *   t+0   didClose(old URI)  -- workspace removes the entry
-     *   t+1   didChangeWatchedFiles  -- VFS knows about the move
-     *   t+1   willRenameFiles  -- our handler runs here
-     *   t+23  didOpen(new URI)  -- workspace re-acquires the entry
-     *
-     * At t+1, NEITHER workspace.has(oldUri) NOR workspace.has(newUri)
-     * is true, AND the OS-level file system can still be in flux
-     * (IntelliJ's `afterVfsChange` guarantees VFS-abstraction
-     * consistency, not disk-level flush).  Both branches of the
-     * naive sourceFor return null and we erroneously short-circuit
-     * the entire move.
-     *
-     * The 22 ms gap until didOpen lands is the window we ride out.
-     * 4 retries × 25 ms backoff = 100 ms max, well above the
-     * observed gap, well below human-perceptible latency.  Only
-     * fires when BOTH the workspace check AND the disk read return
-     * null on the first attempt -- happy path stays single-shot.
+     * For VS Code (which does honour LSP-spec timing -- willRenameFiles
+     * fires BEFORE the move actually happens) sourceFor(oldUri) hits
+     * via filesystem before falling back.  Either client path leaves
+     * us with a deterministic source lookup.
      */
     private function sourceFor(string $uri): ?string
     {
@@ -556,27 +551,8 @@ final class NamespaceMoveProvider
             return null;
         }
         $path = substr($uri, strlen('file://'));
-        // First read: fast path, no sleep.
         $bytes = @file_get_contents($path);
-        if ($bytes !== false) {
-            return $bytes;
-        }
-        // Retry briefly: caller might catch the file-rename race
-        // window where the move has registered with the VFS but the
-        // OS file system hasn't fully settled yet.  Re-check the
-        // workspace each iteration too -- a didOpen for the new URI
-        // could land between iterations.
-        for ($attempt = 0; $attempt < 4; $attempt++) {
-            usleep(25000); // 25 ms
-            if ($this->workspace->has($uri)) {
-                return $this->workspace->get($uri)->text;
-            }
-            $bytes = @file_get_contents($path);
-            if ($bytes !== false) {
-                return $bytes;
-            }
-        }
-        return null;
+        return $bytes !== false ? $bytes : null;
     }
 
     /**

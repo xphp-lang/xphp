@@ -17,11 +17,13 @@ import com.intellij.openapi.vfs.newvfs.events.VFileMoveEvent
 import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent
 import com.intellij.platform.lsp.api.LspServer
 import com.intellij.platform.lsp.api.LspServerManager
+import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.FileRename
 import org.eclipse.lsp4j.Position
 import org.eclipse.lsp4j.RenameFilesParams
 import org.eclipse.lsp4j.ResourceOperation
 import org.eclipse.lsp4j.TextDocumentEdit
+import org.eclipse.lsp4j.TextDocumentItem
 import org.eclipse.lsp4j.TextEdit
 import org.eclipse.lsp4j.WorkspaceEdit
 import org.eclipse.lsp4j.jsonrpc.messages.Either
@@ -81,6 +83,17 @@ class XphpFileRenameListener : AsyncFileListener {
         //     NamespaceMoveProvider and combined cases through the
         //     existing rename pipeline.
         val renames = mutableListOf<FileRename>()
+        // Source bytes pre-captured per (oldUri, newUri).  We read in
+        // prepareChange where the file is GUARANTEED to be at its old
+        // location with content available via VFS; the alternative is
+        // a race against afterVfsChange's window where neither the
+        // workspace nor the OS file system has settled to the new
+        // path (prod log xphp-20260530-183636 id=13: 1 ms null
+        // response because both sides of sourceFor came back empty).
+        // We feed these bytes to the server as a synthetic didOpen
+        // for the NEW URI before sending willRenameFiles, so the
+        // server's workspace lookup hits deterministically.
+        val sourcesByNewUri = mutableMapOf<String, String>()
         for (ev in events) {
             if (ev is VFilePropertyChangeEvent
                 && ev.propertyName == VirtualFile.PROP_NAME
@@ -90,7 +103,9 @@ class XphpFileRenameListener : AsyncFileListener {
                 val newName = ev.newValue as? String ?: continue
                 if (oldName == newName) continue
                 val parentUrl = ev.file.parent?.url ?: continue
-                renames.add(FileRename("$parentUrl/$oldName", "$parentUrl/$newName"))
+                val newUri = "$parentUrl/$newName"
+                renames.add(FileRename("$parentUrl/$oldName", newUri))
+                ev.file.readContents()?.let { sourcesByNewUri[newUri] = it }
                 continue
             }
             if (ev is VFileMoveEvent && ev.file.isXphpLike()) {
@@ -100,14 +115,12 @@ class XphpFileRenameListener : AsyncFileListener {
                 // yet).  Construct BOTH URIs from the parents +
                 // file.name explicitly so we capture the actual
                 // (oldUri, newUri) pair rather than (oldUri, oldUri).
-                // Prod-test 2026-05-30 18:17 log id=8/18/25 surfaced
-                // this: every willRenameFiles request carried
-                // identical old/new URIs and the server's move path
-                // saw same-dir/same-name and skipped.
                 val basename = ev.file.name
                 val oldParentUrl = ev.oldParent.url
                 val newParentUrl = ev.newParent.url
-                renames.add(FileRename("$oldParentUrl/$basename", "$newParentUrl/$basename"))
+                val newUri = "$newParentUrl/$basename"
+                renames.add(FileRename("$oldParentUrl/$basename", newUri))
+                ev.file.readContents()?.let { sourcesByNewUri[newUri] = it }
             }
         }
 
@@ -118,19 +131,79 @@ class XphpFileRenameListener : AsyncFileListener {
                 // VFS rename is now applied; ask each active xphp LSP
                 // for the corresponding class-rename WorkspaceEdit and
                 // commit it under a single undoable WriteCommandAction.
-                applyRenames(renames)
+                applyRenames(renames, sourcesByNewUri)
             }
         }
     }
 
-    private fun applyRenames(renames: List<FileRename>) {
+    /**
+     * Read the file's current bytes via VFS, returning null on any
+     * read failure.  Only called from `prepareChange`, where the VFS
+     * read lock is held and the file is still at its pre-change
+     * location.
+     */
+    private fun VirtualFile.readContents(): String? {
+        return try {
+            String(contentsToByteArray(), charset)
+        } catch (e: Exception) {
+            LOG.warn("xphp file-rename: failed to pre-read source from ${this.url}", e)
+            null
+        }
+    }
+
+    private fun applyRenames(renames: List<FileRename>, sourcesByNewUri: Map<String, String>) {
         // Find the xphp LSP server for each project that has one
         // running.  ProjectManager.openProjects scans every open
         // project window -- typically one, occasionally more.
         for (project in ProjectManager.getInstance().openProjects) {
             val server = findXphpServer(project) ?: continue
+            // Seed the server's workspace with each renamed file's
+            // pre-captured source under its NEW URI before sending
+            // willRenameFiles.  This bridges the
+            // didClose(old)→didOpen(new) gap deterministically:
+            // when the server's `sourceFor(newUri)` runs, workspace
+            // has the entry already so the lookup hits without
+            // needing a filesystem read against an in-flight rename.
+            // Without this seed, sourceFor would race against the
+            // OS-level rename completion and PhpStorm's own delayed
+            // didOpen (which arrives ~22 ms later) -- prod log
+            // xphp-20260530-183636 id=13 showed the failure mode.
+            seedWorkspaceWithPreReadSources(server, renames, sourcesByNewUri)
             val edit = requestWillRenameFiles(server, renames) ?: continue
             applyWorkspaceEdit(project, edit, renames)
+        }
+    }
+
+    /**
+     * Send a synthetic `textDocument/didOpen` to the LSP server for
+     * each rename's new URI, with the source bytes captured in
+     * `prepareChange`.  Version sentinel `0` -- when PhpStorm's
+     * natural `didOpen` lands (typically ~20 ms later) it ships
+     * version 1 and the server's workspace replaces our entry
+     * cleanly (PhpactorWorkspace.open is a hash assignment, no
+     * version-conflict path to mishandle).
+     *
+     * Fire-and-forget (notification, not request) -- `sendNotification`
+     * returns void; no need to await an ack before the willRenameFiles
+     * request follows on the same connection.  Notifications are
+     * processed in order on the server side, so by the time
+     * willRenameFiles handling reads `workspace.has(newUri)`, our
+     * seeded entry is in place.
+     */
+    private fun seedWorkspaceWithPreReadSources(
+        server: LspServer,
+        renames: List<FileRename>,
+        sourcesByNewUri: Map<String, String>,
+    ) {
+        for (rename in renames) {
+            val source = sourcesByNewUri[rename.newUri] ?: continue
+            server.sendNotification { ls ->
+                ls.textDocumentService.didOpen(
+                    DidOpenTextDocumentParams(
+                        TextDocumentItem(rename.newUri, "xphp", 0, source),
+                    ),
+                )
+            }
         }
     }
 
