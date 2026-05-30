@@ -209,16 +209,20 @@ community and ecosystem already trust.
 
 The compiler itself lives at [core/](core/) (Composer package
 `xphp-lang/xphp`); a Language Server Protocol implementation under [tools/lsp/](tools/lsp/) delivers the full editor surface for `.xphp`
-files: live diagnostics (parse / bound / constructor-argument-type / undefined-bareword), hover (xphp generics + PHP
-semantic, with parameter and return-type substitution and generic-T → concrete substitution through property fetches),
-go-to-definition (with a per-constituent picker for union/intersection receivers), go-to type definition, find
-references (with interface-implementation walks in both directions), rename (alias-aware, with file rename when the
-client supports it), documentHighlight, documentSymbol + workspace/symbol, foldingRange, signatureHelp, inlayHint,
-rich completion (member access, static access, static property, type-arg positions with bound-aware filtering,
-scope-aware variables, union/intersection receiver fan-out, visibility filtering across same-class and subclass
-contexts; `completionItem/resolve` for lazy docblock fetch), codeAction + resolve (Import class · Simplify FQN ·
-Optimize Imports · "Did you mean null/true/false?" typo fixes), codeLens ("Show references" above every declaration),
-call hierarchy (prepare + incoming + outgoing), and semantic tokens. The same server powers two editor integrations:
+files: live diagnostics (parse / bound / constructor-argument-type / undefined-bareword) in both push and LSP 3.17 pull
+modes, hover (xphp generics + PHP semantic, with parameter and return-type substitution and generic-T → concrete
+substitution through property fetches), go-to-definition (with a per-constituent picker for union/intersection
+receivers), go-to type definition, find implementations (interface implementors + abstract overrides + subclass walks),
+find references (with interface-implementation walks in both directions), rename (alias-aware, with PSR-4 class ↔
+filename rename sync end-to-end: Shift+F6 on a class renames the file, and renaming the file in the project tree
+updates the class declaration plus every reference), documentHighlight, documentSymbol + workspace/symbol,
+foldingRange, signatureHelp, inlayHint, rich completion (member access, static access, static property, type-arg
+positions with bound-aware filtering, scope-aware variables, union/intersection receiver fan-out, visibility filtering
+across same-class and subclass contexts; `completionItem/resolve` for lazy docblock fetch), codeAction + resolve
+(Import class · Simplify FQN · Optimize Imports · "Did you mean null/true/false?" typo fixes), codeLens + resolve
+("Show references" lens with lazy reference count above every declaration; click opens a chooser popup anchored at the
+lens position), call hierarchy (prepare + incoming + outgoing), type hierarchy (prepare + supertypes + subtypes), and
+semantic tokens. The same server powers two editor integrations:
 
 - **PhpStorm**: plugin at [tools/phpstorm-plugin/](tools/phpstorm-plugin/) targeting PhpStorm 2026.1+ (uses the
   IntelliJ Platform LSP API, free for all editions since 2025.2). This is the primary editor target.

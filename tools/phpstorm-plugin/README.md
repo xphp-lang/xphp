@@ -8,11 +8,14 @@ TextMate grammar, two editor integrations.
 
 | Feature | How |
 |---|---|
-| Diagnostics (parse errors, generic-bound violations, duplicate templates) | LSP `textDocument/publishDiagnostics` |
+| Diagnostics (parse errors, generic-bound violations, duplicate templates) | LSP `textDocument/publishDiagnostics` + `textDocument/diagnostic` (LSP 3.17 pull-mode) |
 | Hover (specialized FQN + bound info) | LSP `textDocument/hover` |
-| Go-to-definition (across files, into specialized classes) | LSP `textDocument/definition` |
-| Completion (class names inside `<...>` type-arg positions) | LSP `textDocument/completion` |
-| File-type recognition (`.xphp`) | IntelliJ `com.intellij.fileType` extension |
+| Go-to-definition / Go-to-type / Find implementations / Find references | LSP `textDocument/definition` + `typeDefinition` + `implementation` + `references` |
+| Completion (class names inside `<...>` type-arg positions, member access, scope-aware variables) | LSP `textDocument/completion` + `completionItem/resolve` |
+| Call hierarchy + type hierarchy | LSP `prepareCallHierarchy` / `prepareTypeHierarchy` |
+| Inline "Show references" code lens above every declaration | LSP `textDocument/codeLens` + `codeLens/resolve` + client-side `editor.action.showReferences` chooser popup |
+| PSR-4 class ↔ filename rename sync | Shift+F6 on a class also renames the file; renaming the file in the project tree updates the class declaration + every reference (LSP `workspace/willRenameFiles` + plugin `BulkFileListener`) |
+| File-type recognition (`.xphp`) | bundled TextMate grammar |
 | Zero-config server install | Bundled PHAR auto-extracted on first plugin load |
 
 ## Requirements

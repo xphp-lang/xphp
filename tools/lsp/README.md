@@ -21,18 +21,22 @@ core parser.
 | `completionItem/resolve` (lazy class-docblock fetch) | shipped |
 | `textDocument/signatureHelp` (parameter list + active-arg highlight; static/instance/free-function call sites; type-arg substitution baked into the rendered signature) | shipped |
 | `textDocument/references` for classes, functions, methods, properties (with inheritance walks into subclass receivers AND interface-implementation walks in both directions: cursor on `Iface::m` matches every impl call site; cursor on `Impl::m` matches interface-typed receivers) | shipped |
-| `textDocument/rename` (alias-aware short-name rewriting; `RenameFile` gated on client `resourceOperations`) | shipped |
+| `textDocument/rename` (alias-aware short-name rewriting; PSR-4 class ↔ filename rename sync closed end-to-end on PhpStorm by the plugin: Shift+F6 on a class also renames the file, and renaming the file in the project tree updates the class declaration + every reference) | shipped |
 | `textDocument/documentHighlight` (in-file occurrence highlighting) | shipped |
 | `textDocument/documentSymbol` (hierarchical ClassLike / function / method tree) | shipped |
 | `textDocument/foldingRange` (class / method / closure bodies + xphp `<…>` generic clauses) | shipped |
 | `textDocument/inlayHint` (inline `: <substituted type>` between variable and `=` for any `$x = …` whose RHS resolves through `GenericResolver`) | shipped |
 | `textDocument/codeAction` + `codeAction/resolve` — Import class · Simplify FQN · Optimize Imports · "Did you mean null/true/false?" typo fixes for `UndefinedName` diagnostics | shipped |
-| `textDocument/codeLens` ("Show references" lens above every class / interface / trait / enum / function / method; click forwards to `workspace/executeCommand xphp.showReferences`) | shipped |
+| `textDocument/codeLens` + `codeLens/resolve` ("Show references" lens above every class / interface / trait / enum / function / method; resolve returns lazy reference count and locations; click dispatches `editor.action.showReferences` client-side — VS Code natively, PhpStorm via plugin handler that opens a chooser popup anchored at the lens position) | shipped |
+| `textDocument/diagnostic` (LSP 3.17 pull-mode, complements the existing push channel) | shipped |
 | `textDocument/prepareCallHierarchy` + `callHierarchy/incomingCalls` + `callHierarchy/outgoingCalls` | shipped |
+| `textDocument/prepareTypeHierarchy` + `typeHierarchy/supertypes` + `typeHierarchy/subtypes` | shipped |
+| `textDocument/implementation` (jump to interface implementors + abstract-method overrides + subclass walks) | shipped |
 | `textDocument/semanticTokens/full` (AST-driven; type-param `T` paints with the standard `typeParameter` color) | shipped |
 | `workspace/symbol` (cross-file FQN search via FqnIndex) | shipped |
 | `workspace/didChangeWatchedFiles` (bulk invalidation of the filesystem index for long sessions) | shipped |
-| `workspace/executeCommand xphp.showReferences` (codeLens click target) | shipped |
+| `workspace/willRenameFiles` (file rename → class declaration + reference text edits; client owns the file move itself) | shipped |
+| `workspace/executeCommand editor.action.showReferences` (codeLens click target; both clients dispatch this client-side, so the server-side command is a no-op safety net) | shipped |
 | Durable per-user stub cache root (`XPHP_LSP_CACHE_DIR` → XDG → `~/.cache` / `~/Library/Caches` / `%LOCALAPPDATA%` / `<sys_temp>` fallback) | shipped |
 | Tolerant-parse fallback so the in-memory locator survives mid-edit syntax errors (`$x->|` and similar) | shipped |
 | UTF-16 column counting (positions correct past supplementary-plane codepoints) | shipped |
@@ -257,12 +261,6 @@ finds the same caveat at the source. Highlights:
 - **`textDocument/formatting` + `rangeFormatting` + `onTypeFormatting`.** Deferred-by-design:
   needs an xphp formatter to exist first.
 - **`textDocument/documentColor` + `colorPresentation`.** Low value for PHP.
-- **`textDocument/prepareTypeHierarchy` + `typeHierarchy/supertypes` + `typeHierarchy/subtypes`.**
-  Deferred until `phpactor/language-server-protocol` ships the `TypeHierarchyItem` types
-  (or until we accept raw-array params through the framework's untyped path).
-- **`codeLens/resolve` with reference counts.** Today's lens carries a static "Show references"
-  title; turning it into "N references" needs per-(uri, version) cached counts so the
-  workspace walk doesn't fire per-lens on every re-render.
 - **Method / static / function-call argument-type checker.** V2 of `xphp.ctor-arg-mismatch`
   extending the same idea from `new C(…)` to `$obj->m(…)`, `Cls::m(…)`, `freeFn(…)`.
 - **Marketplace publication** of the VS Code extension.

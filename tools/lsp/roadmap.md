@@ -23,25 +23,26 @@ timeline
                 : LSP -- signatureHelp (active-parameter highlight, type-arg substitution)
                 : LSP -- inlayHint (inline substituted return / parameter types)
                 : LSP -- codeAction + resolve (Import class, Simplify FQN, Optimize Imports, typo fixes)
-                : LSP -- codeLens (Show references above every declaration)
+                : LSP -- codeLens + resolve (Show references above every declaration, lazy reference count title)
                 : LSP -- prepareCallHierarchy + incoming/outgoing
+                : LSP -- prepareTypeHierarchy + supertypes/subtypes
+                : LSP -- implementation (interface implementors + abstract overrides + subclass walks)
+                : LSP -- diagnostic (LSP 3.17 pull-mode, alongside the push channel)
                 : LSP -- semantic tokens (typeParameter color for xphp T references)
                 : LSP -- workspace/symbol + didChangeWatchedFiles
-                : LSP -- workspace/executeCommand xphp.showReferences (codeLens click target)
+                : LSP -- workspace/willRenameFiles (file rename triggers in-source class rename text edits)
                 : LSP -- durable per-user stub cache (XDG / Library/Caches / LOCALAPPDATA / tmp fallback)
                 : LSP -- tolerant-parse fallback (in-memory locator survives mid-edit syntax errors)
                 : LSP -- UTF-16 column counting (correct positions past supplementary-plane chars)
                 : LSP -- short-name tie-break (canonical src/ wins over tests / fixtures / vendor)
+                : LSP -- ParsedDocumentCache warm-up + raw-text short-name pre-filter (cold first find-references drops from seconds to sub-200ms)
+                : PhpStorm plugin -- PSR-4 class <-> filename rename sync (Shift+F6 on class renames file; project-tree file rename updates class + every reference)
     section Long-term
         LSP capabilities -- low effort
-                : Implementation (list implementors of an interface / abstract method)
                 : prepareRename (pre-fill the Shift+F6 dialog with current symbol)
                 : selectionRange (Ctrl+W expand selection walks AST scopes)
                 : documentLink (clickable URLs in comments / docblocks)
-                : Pull-mode diagnostics (LSP 3.17 modernization)
         LSP capabilities -- medium effort
-                : codeLens/resolve with reference counts (N references / 0 references)
-                : prepareTypeHierarchy + super/subtypes
                 : Method / static / function-call argument-type checker V2
         LSP capabilities -- xphp-unique
                 : Show generated PHP at any specialization site (lowering preview)
