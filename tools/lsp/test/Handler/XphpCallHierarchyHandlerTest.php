@@ -213,6 +213,61 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         self::assertSame(['describe', 'speak'], $names);
     }
 
+    public function testIncomingCallsScansFilesystemPathsNotJustOpenDocuments(): void
+    {
+        // Prod scenario: user has only the callee class open
+        // (`Animal.xphp`); the file with the calls (`Inheritance.xphp`)
+        // sits on disk but is closed.  Without the filesystem walk
+        // the Callers view always comes back empty.  Locks the
+        // FqnIndex::indexedFilesystemPaths() iteration in
+        // collectCallSites.
+        $root = sys_get_temp_dir() . '/xphp-callhier-fs-' . bin2hex(random_bytes(4));
+        mkdir($root, 0o755, true);
+        try {
+            $animalSource = <<<'PHP'
+            <?php
+            namespace App;
+            class Animal {
+                public function speak(): string { return 'noise'; }
+            }
+            PHP;
+            $demoSource = <<<'PHP'
+            <?php
+            namespace App\Demos;
+            $a = new \App\Animal();
+            $a->speak();
+            PHP;
+            file_put_contents($root . '/Animal.xphp', $animalSource);
+            file_put_contents($root . '/demo.xphp', $demoSource);
+
+            // Only Animal.xphp is OPEN in the workspace.  demo.xphp
+            // lives on disk only -- the workspace iteration alone
+            // would never see it.
+            $workspace = new PhpactorWorkspace();
+            $workspace->open(new TextDocumentItem(
+                'file://' . $root . '/Animal.xphp',
+                'xphp',
+                1,
+                $animalSource,
+            ));
+            $handler = $this->newHandler($workspace, $root);
+
+            $item = [
+                'uri' => 'file://' . $root . '/Animal.xphp',
+                'data' => ['classFqn' => 'App\\Animal', 'name' => 'speak'],
+            ];
+            $incoming = wait($handler->incomingCalls($item));
+
+            self::assertNotEmpty($incoming, 'closed-file call site must surface via FS walk');
+            $uris = array_map(static fn (CallHierarchyIncomingCall $c): string => $c->from->uri, $incoming);
+            self::assertContains('file://' . $root . '/demo.xphp', $uris);
+        } finally {
+            @unlink($root . '/Animal.xphp');
+            @unlink($root . '/demo.xphp');
+            @rmdir($root);
+        }
+    }
+
     public function testIncomingCallsReturnsEmptyForMissingItem(): void
     {
         // incomingCalls(array $item) is type-hinted; non-array would
@@ -253,13 +308,15 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         self::assertArrayHasKey('callHierarchy/outgoingCalls', $methods);
     }
 
-    private function newHandler(PhpactorWorkspace $workspace): XphpCallHierarchyHandler
+    private function newHandler(PhpactorWorkspace $workspace, ?string $root = null): XphpCallHierarchyHandler
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $cache = new ParsedDocumentCache(new Analyzer($parser));
-        $root = sys_get_temp_dir() . '/xphp-callhier-' . bin2hex(random_bytes(4));
-        @mkdir($root, 0o755, true);
+        if ($root === null) {
+            $root = sys_get_temp_dir() . '/xphp-callhier-' . bin2hex(random_bytes(4));
+            @mkdir($root, 0o755, true);
+        }
         $fqnIndex = new FqnIndex($workspace, $cache, $parser, $root);
-        return new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex);
+        return new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex, $parser);
     }
 }

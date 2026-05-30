@@ -27,9 +27,11 @@ use Phpactor\LanguageServerProtocol\Range;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\SymbolKind;
 use Phpactor\LanguageServerProtocol\TextDocumentPositionParams;
+use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
 use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
  * Cycle H — Call hierarchy.
@@ -69,6 +71,7 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
         private readonly FqnIndex $fqnIndex,
+        private readonly XphpSourceParser $parser,
     ) {
     }
 
@@ -227,22 +230,54 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * Scan every open document for call sites whose call-target name
+     * Scan every open document AND every filesystem-indexed
+     * .xphp / .php path for call sites whose call-target name
      * matches.  Returns an array of {uri, range, enclosingFqn,
      * enclosingName, enclosingItem}.
+     *
+     * Filesystem walk mirrors `ReferenceFinder::collectReferences`
+     * -- in prod the user typically has only the *callee* file
+     * open, so without the FS pass the Callers view would always
+     * be empty for callers that live in closed files.
      *
      * @return list<array{uri: string, range: Range, enclosingFqn: ?string, enclosingName: string, enclosingItem: CallHierarchyItem}>
      */
     private function collectCallSites(string $targetName): array
     {
         $hits = [];
+        $seenUris = [];
         foreach ($this->workspace as $uri => $document) {
-            $result = $this->cache->getOrParse($uri, $document->version, $document->text);
+            $uriStr = (string) $uri;
+            $seenUris[$uriStr] = true;
+            $result = $this->cache->getOrParse($uriStr, $document->version, $document->text);
             if ($result->ast === null || $result->ast === []) {
                 continue;
             }
             $positionMap = new PositionMap($document->text);
-            $localHits = self::collectCallSitesInAst($result->ast, $targetName, (string) $uri, $positionMap);
+            $localHits = self::collectCallSitesInAst($result->ast, $targetName, $uriStr, $positionMap);
+            foreach ($localHits as $hit) {
+                $hits[] = $hit;
+            }
+        }
+        foreach ($this->fqnIndex->indexedFilesystemPaths() as $path) {
+            $uri = 'file://' . $path;
+            if (isset($seenUris[$uri])) {
+                continue;
+            }
+            try {
+                $source = file_get_contents($path);
+            } catch (Throwable) {
+                continue;
+            }
+            if ($source === false) {
+                continue;
+            }
+            $ast = $this->parser->parseTolerant($source);
+            if ($ast === null || $ast === []) {
+                continue;
+            }
+            $positionMap = new PositionMap($source);
+            $localHits = self::collectCallSitesInAst($ast, $targetName, $uri, $positionMap);
             foreach ($localHits as $hit) {
                 $hits[] = $hit;
             }

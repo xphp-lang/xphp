@@ -744,6 +744,10 @@
         //     'uri' key is always a PHP string from FqnIndex.
         "CastString": {
             "ignore": [
+                // XphpCallHierarchyHandler::collectCallSites
+                // `$uriStr = (string) $uri;` -- $uri is already
+                // string-coercible (phpactor Workspace iter values).
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler::collectCallSites",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::locateClassLike",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",
@@ -1103,6 +1107,11 @@
         // indistinguishable in both consumer patterns.
         "TrueValue": {
             "ignore": [
+                // XphpCallHierarchyHandler::collectCallSites
+                // `$seenUris[$uriStr] = true;` -- only checked via
+                // `isset($seenUris[$uri])`, which keys on existence
+                // not value; true->false is equivalent.
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler::collectCallSites",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",

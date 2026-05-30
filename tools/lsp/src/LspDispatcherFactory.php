@@ -282,7 +282,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             ),
             new XphpCodeActionResolveHandler(),
             new XphpDocumentSymbolHandler($workspace, $cache),
-            new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex),
+            new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex, $xphpParser),
             new XphpCodeLensHandler($workspace, $cache),
             new XphpFoldingRangeHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),
