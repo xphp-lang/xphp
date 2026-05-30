@@ -201,4 +201,22 @@
           `TextMateLanguage` by the platform) handles them automatically.
         -->
     </extensions>
+
+    <!--
+      Cycle L Half A (file-rename half): when the user renames an
+      xphp class via Shift+F6, LSP4IJ applies the text edits but
+      silently drops `RenameFile` resource ops, so the FILE stays
+      at its old name even though the class is renamed.  This
+      BulkFileListener watches `VFileContentChangeEvent`s for
+      .xphp/.php files and, when a single-declaration PSR-4 file's
+      class short name no longer matches the basename stem,
+      renames the file to match.  See [XphpClassFileSync] for the
+      regex-based heuristic and cycle-interaction notes (it plays
+      symmetrically with Half B's file → class flow).
+    -->
+    <applicationListeners>
+        <listener
+            class="com.xphp.lsp.XphpClassFileSync"
+            topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+    </applicationListeners>
 </idea-plugin>
