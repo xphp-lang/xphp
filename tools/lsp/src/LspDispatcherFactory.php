@@ -63,6 +63,7 @@ use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Handler\XphpReferencesHandler;
 use XPHP\Lsp\Handler\XphpRenameHandler;
+use XPHP\Lsp\Handler\XphpWillRenameFilesHandler;
 use XPHP\Lsp\Handler\XphpImplementationHandler;
 use XPHP\Lsp\Handler\XphpPullDiagnosticsHandler;
 use XPHP\Lsp\Handler\XphpSemanticTokensHandler;
@@ -310,12 +311,23 @@ final class LspDispatcherFactory implements DispatcherFactory
             ),
             new XphpRenameHandler(
                 $workspace,
-                new RenameProvider(
+                $renameProvider = new RenameProvider(
                     $workspace,
                     new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
                     $fqnIndex,
                     self::clientSupportsRenameFileOp($initializeParams),
                 ),
+            ),
+            // Cycle L Half B: workspace/willRenameFiles -- file-rename
+            // -> class-rename text edits.  Pairs with the plugin's
+            // AsyncFileListener which sends the request on .xphp/.php
+            // file moves.  Shares the rename machinery with
+            // textDocument/rename via the just-bound $renameProvider.
+            new XphpWillRenameFilesHandler(
+                $workspace,
+                $cache,
+                $xphpParser,
+                $renameProvider,
             ),
             new XphpSemanticTokensHandler($workspace, $cache),
             new XphpPullDiagnosticsHandler($workspace, $diagnosticsProvider),
@@ -355,15 +367,24 @@ final class LspDispatcherFactory implements DispatcherFactory
     /**
      * Per LSP spec: when the client advertises
      * `workspace.workspaceEdit.resourceOperations`, the server must
-     * only emit ops in that list.  PhpStorm currently lists `["create"]`
-     * only (no `rename`/`delete`), so any `RenameFile` we send is
-     * silently dropped on the client side and the user sees a partial
-     * apply.  We detect support up-front and elide RenameFile when the
-     * client doesn't claim it.  VS Code advertises all three and gets
-     * the full behavior.
+     * only emit ops in that list.  PhpStorm lists `["create"]` only
+     * (no `rename`/`delete`), so any `RenameFile` we send is silently
+     * dropped on the client side and the user sees a partial apply.
+     *
+     * **Cycle L override**: the xphp PhpStorm plugin applies
+     * `RenameFile` ops manually (its own write-action against the
+     * VFS), and opts in via `initializationOptions.xphpAcceptsRenameFile
+     * = true`.  When set, we emit the ops regardless of the standard
+     * `resourceOperations` advertisement.  This keeps spec-compliant
+     * clients (VS Code) on the standard path and unlocks PhpStorm
+     * without lying about its capabilities.
      */
     private static function clientSupportsRenameFileOp(InitializeParams $initializeParams): bool
     {
+        $opts = $initializeParams->initializationOptions ?? null;
+        if (is_array($opts) && ($opts['xphpAcceptsRenameFile'] ?? false) === true) {
+            return true;
+        }
         $ops = $initializeParams->capabilities?->workspace?->workspaceEdit?->resourceOperations ?? null;
         if (!is_array($ops)) {
             return false;

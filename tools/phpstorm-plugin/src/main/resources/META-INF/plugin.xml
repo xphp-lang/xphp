@@ -169,6 +169,17 @@
             implementation="com.xphp.lsp.textmate.XphpBundleRegistrar"/>
 
         <!--
+          Cycle L Half B: VFS rename listener for `.xphp` / `.php`
+          files.  Sends `workspace/willRenameFiles` to the xphp LSP
+          server on each rename; the response carries text edits
+          renaming the in-source class to match the new basename,
+          applied via WriteCommandAction.  See [XphpFileRenameListener]
+          for the safety guard around non-PSR-4 files.
+        -->
+        <vfs.asyncListener
+            implementation="com.xphp.lsp.XphpFileRenameListener"/>
+
+        <!--
           NOTE: we deliberately do NOT register a
           `<lang.syntaxHighlighterFactory language="xphp" ...>`.  Without
           an `XphpLanguage` for the LSP-only model (see the longer

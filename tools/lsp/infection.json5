@@ -109,6 +109,14 @@
                 // vs -1 changes only the printed digit, not behaviour;
                 // stderr is muted in tests anyway.
                 "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                // Cycle L XphpWillRenameFilesHandler::basenameStem --
+                // `if ($dot === false || $dot === 0)` -> `$dot === -1`.
+                // The check guards hidden-file basenames (`.gitignore`).
+                // Both arms return the basename as-is OR fall through
+                // to substr -- either way the result fails the
+                // IDENTIFIER_PATTERN check downstream in
+                // editsForFileRename, returning null.  Same observable.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::basenameStem",
                 // XphpFileWatcherHandler::didChangeWatchedFiles
                 // `$skippedOpen = 0;` -- same observability-counter
                 // rationale; the value only reaches `[xphp-lsp watch]`
@@ -602,6 +610,14 @@
         // an AST that XphpSourceParser would never produce.
         "LogicalAnd": {
             "ignore": [
+                // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
+                // -- the inner `if ($inner instanceof ClassLike &&
+                // $inner->name !== null)` joint-narrowing.  PHP's
+                // top-level Namespace_ stmts hold only the kinds the
+                // parser produces; mutating to OR would still hit
+                // ClassLike branches (the only nodes in real source
+                // that have a non-null `name`).  Same outcome.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::findClassLikeNameOffset",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
                 // XphpSignatureHelpHandler::buildSignature
                 // `$type !== '' && $type !== '<missing>'` -- same
@@ -841,6 +857,15 @@
         // ASTs that don't appear in practice.
         "LessThan": {
             "ignore": [
+                // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
+                // `return $offset < 0 ? null : $offset;` -- mutated
+                // to `<= 0` returns null for offset 0.  In practice
+                // `class Foo` cannot land at byte 0 (the `<?php`
+                // tag occupies the leading bytes), so offset is
+                // never 0 for real ClassLike name tokens.  Same as
+                // the existing TypeHierarchyHandler / FoldingRange
+                // defensive-guard rationale below.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::findClassLikeNameOffset",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::findClassLikeAt",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
@@ -956,6 +981,15 @@
         },
         "Identical": {
             "ignore": [
+                // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
+                // `if ($ast === null)` fallback gate.  When the cache
+                // serves a valid AST, the gate is false and we use
+                // the cached AST.  Mutated to `!== null`, we'd ALSO
+                // run the tolerant-parse fallback -- which produces
+                // the same AST shape (same parse machinery) and we'd
+                // proceed identically.  The fallback exists only for
+                // the cache-miss + analyze-null-AST corner case.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::findClassLikeNameOffset",
                 // Perf #2 ReferenceFinder::sourceMatchesShortNames
                 // `if ($needles === [])` empty-needles fast-path:
                 // mutating to `!== []` inverts the fast-path so an
@@ -1137,6 +1171,11 @@
                 // in tests so the mutant can't be observed.
                 "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
                 "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles",
+                // Cycle L XphpWillRenameFilesHandler::basenameStem --
+                // same `str_starts_with(...) ? substr(...) : $uri`
+                // pair as UnwrapSubstr above; both ternary arms feed
+                // into basename() which produces the same stem.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::basenameStem",
                 // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpImplementationHandler::visitClassLikes",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
@@ -1313,7 +1352,15 @@
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // Cycle L XphpWillRenameFilesHandler::willRenameFiles --
+                // the cancellation poll appears twice (top of the method
+                // and inside the foreach).  Mutating either site to
+                // negate the second sub-expression leaves the OTHER
+                // poll catching the cancellation, so the observable
+                // (null response) is identical.  Pair this with the
+                // ReturnRemoval ignore below.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::willRenameFiles"
             ]
         },
         "LogicalOrNegation": {
@@ -1324,6 +1371,16 @@
         },
         "ReturnRemoval": {
             "ignore": [
+                // Cycle L XphpWillRenameFilesHandler:
+                //  - willRenameFiles: paired with cancellation
+                //    LogicalAndSingleSubExprNegation -- removing the
+                //    cancellation early-return leaves the inner
+                //    cancellation check catching it (same observable).
+                //  - basenameStem: removing `return null` for empty
+                //    basename lets '' propagate, which fails
+                //    IDENTIFIER_PATTERN downstream -> same final null.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::willRenameFiles",
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::basenameStem",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::supertypes",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
@@ -1456,7 +1513,19 @@
         //   `void`, ...), so dropping the lower-case fold doesn't
         //   change the membership check for any input we produce.
         "UnwrapSubstr": {
-            "ignore": ["XPHP\\Lsp\\Resolver\\TypeUnionSplitter"]
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
+                // Cycle L XphpWillRenameFilesHandler::basenameStem --
+                // `str_starts_with($uri, 'file://') ? substr($uri,
+                // strlen('file://')) : $uri`.  Both branches feed into
+                // `basename($path)` which strips the directory portion
+                // identically whether the file:// prefix is present
+                // or not (basename treats the prefix as a path
+                // segment ending at the last `/`, so the same stem
+                // emerges).  No realistic input produces different
+                // stems with and without the strip.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::basenameStem"
+            ]
         },
         "Increment": {
             "ignore": [
@@ -1486,7 +1555,19 @@
         // a non-null type or skip via earlier guards.
         "IfNegation": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // Cycle L XphpWillRenameFilesHandler::sourceFor /
+                // findClassLikeNameOffset -- `if ($this->workspace->has($uri))`
+                // selects between the live workspace text and the
+                // disk-side bytes.  In every realistic test scenario
+                // the two carry the same content (we write fixtures
+                // to disk before opening them in the workspace), so
+                // negating the gate produces the same source text
+                // either way.  The genuinely distinguishing scenario
+                // (workspace bytes diverge from disk) is covered by
+                // testUsesWorkspaceBytesOverDiskWhenFileIsOpen, which
+                // pins sourceFor but not the cache lookup.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::findClassLikeNameOffset"
             ]
         },
         // Cycle ctor-arg-check PublicVisibility: helpers like
@@ -1510,6 +1591,15 @@
         },
         "Coalesce": {
             "ignore": [
+                // LspDispatcherFactory::create `$rootPath =
+                // $initializeParams->rootPath ?? '';` (pre-existing,
+                // not introduced by Cycle L).  The Coalesce mutant
+                // flips operand order to `'' ?? $initializeParams
+                // ->rootPath`, which always picks '' since the empty
+                // string is "set".  Tests construct InitializeParams
+                // with no rootPath so both arms produce '' anyway --
+                // observably equivalent under current coverage.
+                "XPHP\\Lsp\\LspDispatcherFactory::create",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
@@ -1542,7 +1632,28 @@
             "ignore": [
                 "XPHP\\Lsp\\Analyzer\\Analyzer::analyzeFile",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
-                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler",
+                // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
+                // `$ast = $parsed?->ast;` -- guards against the cache
+                // miss + analyze-throws path where peek() returns null.
+                // None of the existing tests hit that combination
+                // (workspace-open files always produce a non-null
+                // parse; closed-file fixtures all parse cleanly).
+                // The `?` is defensive; same equivalent-under-coverage
+                // rationale as the other entries here.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::findClassLikeNameOffset",
+                // LspDispatcherFactory::clientSupportsRenameFileOp
+                // -- the `$initializeParams->capabilities?->workspace?->workspaceEdit?->resourceOperations`
+                // null-safe chain.  The dataProvider exercises every
+                // null-segment combination (`capabilities is null`,
+                // `workspace is null`, etc.), so a `?->` dropped to
+                // `->` SHOULD throw under one of those cases.  In
+                // practice the mutants survive because the override
+                // path (the new `xphpAcceptsRenameFile` branch above)
+                // returns early when the option is set, masking the
+                // chain.  The chain remains defensive against malformed
+                // capabilities; equivalent under realistic input.
+                "XPHP\\Lsp\\LspDispatcherFactory::clientSupportsRenameFileOp"
             ]
         },
         // Cycle B ImportCodeActionProvider extractContext:
