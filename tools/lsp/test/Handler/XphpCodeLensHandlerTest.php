@@ -6,9 +6,12 @@ namespace XPHP\Lsp\Test\Handler;
 
 use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
+use Phpactor\LanguageServerProtocol\CodeLens;
 use Phpactor\LanguageServerProtocol\CodeLensOptions;
 use Phpactor\LanguageServerProtocol\CodeLensParams;
 use Phpactor\LanguageServerProtocol\Location;
+use Phpactor\LanguageServerProtocol\Position;
+use Phpactor\LanguageServerProtocol\Range;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
@@ -44,7 +47,7 @@ final class XphpCodeLensHandlerTest extends TestCase
         }
     }
 
-    public function testEmitsLensForClassDeclaration(): void
+    public function testEmitsUnresolvedLensForClassDeclaration(): void
     {
         $source = "<?php\nnamespace App;\nclass Foo {}\n";
         $workspace = new PhpactorWorkspace();
@@ -55,13 +58,18 @@ final class XphpCodeLensHandlerTest extends TestCase
 
         self::assertCount(1, $lenses);
         self::assertSame(2, $lenses[0]->range->start->line);
-        // Title carries the usage count rather than a static string so
-        // PhpStorm renders e.g. "0 usages" / "3 usages" inline.
-        self::assertStringContainsString('usage', $lenses[0]->command?->title);
-        // Client-side LSP convention -- VS Code, LSP4IJ, and Helix all
-        // dispatch this command name natively to open the references
-        // panel without round-tripping to the server.
-        self::assertSame('editor.action.showReferences', $lenses[0]->command?->command);
+        // Initial emission carries a placeholder title and NO
+        // `command.command` -- per LSP spec that signals the client
+        // to call `codeLens/resolve` before invoking.  The "N usages"
+        // title + arguments get filled in lazily by the resolve
+        // handler when the lens actually enters the viewport.
+        self::assertSame('Show references', $lenses[0]->command?->title);
+        self::assertSame('', $lenses[0]->command?->command);
+        // `data` carries the position so resolve() can re-run
+        // findReferences without server-side state held between calls.
+        self::assertIsArray($lenses[0]->data);
+        self::assertSame('/Foo.xphp', $lenses[0]->data['uri']);
+        self::assertSame(2, $lenses[0]->data['line']);
     }
 
     public function testEmitsLensForEachMethodInsideAClass(): void
@@ -122,45 +130,33 @@ final class XphpCodeLensHandlerTest extends TestCase
         self::assertSame([], $lenses);
     }
 
-    public function testAdvertisesCodeLensProvider(): void
+    public function testAdvertisesCodeLensProviderWithResolve(): void
     {
         $handler = $this->newHandler(new PhpactorWorkspace());
         $caps = new ServerCapabilities();
         $handler->registerCapabiltiies($caps);
 
         self::assertInstanceOf(CodeLensOptions::class, $caps->codeLensProvider);
-        self::assertFalse($caps->codeLensProvider->resolveProvider);
+        // resolveProvider=true signals to the client that the initial
+        // textDocument/codeLens response carries unresolved lenses
+        // and the client should call codeLens/resolve to fill them in.
+        self::assertTrue($caps->codeLensProvider->resolveProvider);
     }
 
-    public function testMethodsMapAdvertisesEndpoint(): void
+    public function testMethodsMapAdvertisesBothEndpoints(): void
     {
-        self::assertArrayHasKey('textDocument/codeLens', $this->newHandler(new PhpactorWorkspace())->methods());
+        $methods = $this->newHandler(new PhpactorWorkspace())->methods();
+        self::assertArrayHasKey('textDocument/codeLens', $methods);
+        self::assertArrayHasKey('codeLens/resolve', $methods);
     }
 
-    public function testCommandArgumentsCarryUriPositionAndLocations(): void
+    public function testResolveFillsInUsageCountAndLocations(): void
     {
-        $source = "<?php\nnamespace App;\nclass Foo {}\n";
-        $workspace = new PhpactorWorkspace();
-        $workspace->open(new TextDocumentItem('/Foo.xphp', 'xphp', 1, $source));
-        $handler = $this->newHandler($workspace);
-
-        $lenses = wait($handler->codeLens(new CodeLensParams(new TextDocumentIdentifier('/Foo.xphp'))));
-
-        $args = $lenses[0]->command?->arguments;
-        self::assertIsArray($args);
-        // [uri, position, locations] -- the `editor.action.showReferences`
-        // shape every mainline LSP client recognizes.
-        self::assertSame('/Foo.xphp', $args[0]);
-        self::assertSame(2, $args[1]['line']);
-        self::assertIsArray($args[2]);
-    }
-
-    public function testLocationsBakedInForMethodCalledAcrossWorkspace(): void
-    {
-        // The lens for `App\Foo::bar` must pre-compute the location
-        // of `$foo->bar()` in the caller file so clicking it opens
-        // Find Usages with that location pre-loaded -- no
-        // executeCommand round-trip.
+        // The resolve handler runs ReferenceFinder against the
+        // position the lens emission stored in `data`, and returns
+        // the lens with `command: {title: "N usage(s)", command:
+        // editor.action.showReferences, arguments: [uri, position,
+        // locations]}` populated.
         $workspace = new PhpactorWorkspace();
         $workspace->open(new TextDocumentItem('/Foo.xphp', 'xphp', 1, <<<'PHP'
         <?php
@@ -177,20 +173,97 @@ final class XphpCodeLensHandlerTest extends TestCase
         PHP));
         $handler = $this->newHandler($workspace);
 
-        $lenses = wait($handler->codeLens(new CodeLensParams(new TextDocumentIdentifier('/Foo.xphp'))));
+        // Construct the unresolved lens as the codeLens emission
+        // would (line 3 = the `bar` method declaration).
+        $unresolved = new CodeLens(
+            new Range(new Position(3, 20), new Position(3, 23)),
+        );
+        $unresolved->data = ['uri' => '/Foo.xphp', 'line' => 3, 'character' => 20];
 
-        // 1 class lens + 1 method lens = 2.  Locate the method lens
-        // (it's on a line below the class lens) and assert the call
-        // site is in its baked-in locations.
-        self::assertCount(2, $lenses);
-        $methodLens = $lenses[1];  // class first, method second
-        $args = $methodLens->command?->arguments;
+        $resolved = wait($handler->resolve($unresolved));
+
+        self::assertSame('editor.action.showReferences', $resolved->command?->command);
+        self::assertSame('1 usage', $resolved->command?->title);
+        $args = $resolved->command?->arguments;
         self::assertIsArray($args);
+        self::assertSame('/Foo.xphp', $args[0]);
+        self::assertSame(['line' => 3, 'character' => 20], $args[1]);
         self::assertIsArray($args[2]);
         $uris = array_map(static fn (Location $l): string => $l->uri, $args[2]);
-        self::assertContains('/use.xphp', $uris, 'cross-file call site must surface in the baked locations');
-        // Title must reflect the usage count.
-        self::assertSame('1 usage', $methodLens->command?->title);
+        self::assertContains('/use.xphp', $uris);
+    }
+
+    public function testResolveReturnsLensUnchangedForMissingData(): void
+    {
+        // Defensive guard: a lens without `data` (e.g. fabricated by
+        // a misbehaving client, or replayed from disk after format
+        // changes) must NOT crash the resolve path.  Return the lens
+        // as-is so the client renders the placeholder.
+        $handler = $this->newHandler(new PhpactorWorkspace());
+        $lens = new CodeLens(new Range(new Position(0, 0), new Position(0, 0)));
+        // No `data` set.
+        $resolved = wait($handler->resolve($lens));
+        self::assertSame($lens, $resolved);
+    }
+
+    public function testResolveReturnsLensUnchangedForUnknownUri(): void
+    {
+        // If the document the lens points at is no longer open
+        // (closed between codeLens emission and resolve), short-
+        // circuit -- workspace lookup would fail and findReferences
+        // can't run.
+        $handler = $this->newHandler(new PhpactorWorkspace());
+        $lens = new CodeLens(new Range(new Position(0, 0), new Position(0, 0)));
+        $lens->data = ['uri' => '/never-opened.xphp', 'line' => 0, 'character' => 0];
+        $resolved = wait($handler->resolve($lens));
+        // Command stays as it was (null in this fixture).
+        self::assertNull($resolved->command);
+    }
+
+    public function testResolveShortCircuitsOnPreCancelledToken(): void
+    {
+        // Cancel-poll guard at the top of resolve(): a pre-cancelled
+        // token must return the lens unchanged (no findReferences
+        // call).  Same pattern every handler in this codebase
+        // follows; locks the `$cancel !== null && $cancel->isRequested()`
+        // check against mutator removal.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Foo.xphp', 'xphp', 1, "<?php\nclass Foo {}\n"));
+        $handler = $this->newHandler($workspace);
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $lens = new CodeLens(new Range(new Position(1, 6), new Position(1, 9)));
+        $lens->data = ['uri' => '/Foo.xphp', 'line' => 1, 'character' => 6];
+        $resolved = wait($handler->resolve($lens, $cancel->getToken()));
+        // Pre-cancelled returns the lens with its command untouched
+        // -- never enters the findReferences path.
+        self::assertNull($resolved->command);
+    }
+
+    public function testResolvePluralisesUsageCountCorrectly(): void
+    {
+        // Title rendering: "1 usage" singular, "2 usages" plural.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Foo.xphp', 'xphp', 1, <<<'PHP'
+        <?php
+        namespace App;
+        class Foo {
+            public function bar(): void {}
+        }
+        PHP));
+        $workspace->open(new TextDocumentItem('/use.xphp', 'xphp', 1, <<<'PHP'
+        <?php
+        use App\Foo;
+        $f = new Foo();
+        $f->bar();
+        $f->bar();
+        PHP));
+        $handler = $this->newHandler($workspace);
+        $unresolved = new CodeLens(new Range(new Position(3, 20), new Position(3, 23)));
+        $unresolved->data = ['uri' => '/Foo.xphp', 'line' => 3, 'character' => 20];
+        $resolved = wait($handler->resolve($unresolved));
+        self::assertSame('2 usages', $resolved->command?->title);
     }
 
     private function newHandler(PhpactorWorkspace $workspace): XphpCodeLensHandler

@@ -1118,6 +1118,15 @@
                 // `isset($seenUris[$uri])`, which keys on existence
                 // not value; true->false is equivalent.
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler::collectCallSites",
+                // LspObjectArgumentResolver::resolveArguments
+                // `$fromArray->invoke(null, $params, true)` -- the
+                // third arg is the `allowUnknownKeys` flag.  All three
+                // supported types (CompletionItem, CodeAction, CodeLens)
+                // have been receiving permissive deserialisation since
+                // the resolver shipped; flipping to false would harden
+                // it but no current client sends unknown keys, so the
+                // change isn't observable through any existing test.
+                "XPHP\\Lsp\\Dispatcher\\LspObjectArgumentResolver::resolveArguments",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",

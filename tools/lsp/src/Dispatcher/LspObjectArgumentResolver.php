@@ -19,11 +19,12 @@ use ReflectionNamedType;
  *
  * Phpactor's built-in `LanguageSeverProtocolParamsResolver` only
  * matches handler parameter types whose class name ends in `Params`
- * (e.g. `CompletionParams`, `HoverParams`).  Two recent LSP methods
+ * (e.g. `CompletionParams`, `HoverParams`).  Several LSP methods
  * don't follow that convention:
  *
  *   completionItem/resolve  -> params is a raw `CompletionItem`
  *   codeAction/resolve      -> params is a raw `CodeAction`
+ *   codeLens/resolve        -> params is a raw `CodeLens`
  *
  * Without this resolver the chain falls through to
  * `PassThroughArgumentResolver`, which hands the splatted
@@ -52,6 +53,7 @@ final class LspObjectArgumentResolver implements ArgumentResolver
     private const SUPPORTED_TYPES = [
         \Phpactor\LanguageServerProtocol\CompletionItem::class,
         \Phpactor\LanguageServerProtocol\CodeAction::class,
+        \Phpactor\LanguageServerProtocol\CodeLens::class,
     ];
 
     /**
