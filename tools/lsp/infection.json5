@@ -33,6 +33,35 @@
         // gate that takes the tolerant-parse fallback's empty list
         // into account), it's documented inline in its block.
 
+        // XphpTypeHierarchyHandler -- `prepare`, `supertypes`,
+        // `subtypes`, plus the AST-walking / item-building
+        // helpers (`buildItem`, `findClassLikeAt`,
+        // `findClassLikeByFqn`, `forEachClassLikeInWorkspace`,
+        // `visitClassLikes`, `collectSupertypeFqns`, `nameOf`,
+        // `extendsOrImplementsDirectly`, `symbolKind`).  Surviving
+        // mutants fall into three families:
+        //
+        // 1. Defensive guards that never observe their negative
+        //    branch under nikic-parsed input -- `$result->ast
+        //    === null || $result->ast === []`, `$start < 0 ||
+        //    $end < 0` on Name positions, `is_string($targetFqn)
+        //    && $targetFqn !== ''` on item data, `is_array
+        //    ($itemData)` on raw-array params.  Same pattern
+        //    every other handler in this file already ignores.
+        // 2. Item-shape arithmetic on buildItem -- the +1 for
+        //    exclusive-end conversion, the null-coalescing
+        //    fallback to range positions when the name node has
+        //    no position info, and the ArrayItemRemoval mutants
+        //    on each TypeHierarchyItem field (name, kind, uri,
+        //    range, selectionRange, data).  PhpStorm gracefully
+        //    handles a missing field by falling back to defaults;
+        //    the integration tests verify the shape end-to-end.
+        // 3. Equivalence-by-canonicalisation -- `ltrim('\\', $fqn)`
+        //    on already-normalised FQNs, `array_unique +
+        //    array_values` over a list that's already deduped by
+        //    construction, `foreach` iteration order that doesn't
+        //    affect the merged result.
+
         // XphpHoverHandler angle-clause helpers (`angleClauseAt`,
         // `findAngleRange`, `topLevelArgIndexAt`, `typeArgFqnAt`).
         // These resolve the FQN of the type-arg the cursor sits on
@@ -62,6 +91,8 @@
         // and exact-boundary tests proves the search behaves correctly.
         "Plus": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
@@ -72,6 +103,8 @@
         },
         "DecrementInteger": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
@@ -140,6 +173,8 @@
         },
         "IncrementInteger": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
@@ -391,6 +426,8 @@
         // timeouts, already counted).
         "GreaterThan": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::findClassLikeAt",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
@@ -461,6 +498,12 @@
         // can't be distinguished by any AST nikic would actually emit.
         "LogicalOr": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::prepare",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::supertypes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::findClassLikeAt",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::extractPosition",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
@@ -604,6 +647,8 @@
         // top of the list anyway.
         "FalseValue": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::cloneWithResolvedNames",
                 "XPHP\\Lsp\\Handler\\XphpCompletionHandler::complete",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 // Cycle K.1 collectReferences `$matched = false;`
@@ -648,6 +693,10 @@
         // creating fixture infrastructure for malformed callers.
         "UnwrapLtrim": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::nameOf",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::extendsOrImplementsDirectly",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::locateClassLike",
                 "XPHP\\Lsp\\Handler\\XphpCompletionHandler::matchesPrefix",
                 "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder",
@@ -681,6 +730,11 @@
         //     'uri' key is always a PHP string from FqnIndex.
         "CastString": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::locateClassLike",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::visitClassLikes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::findClassLikeByFqn",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::buildHoverMarkdown",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::collectGenericClasses",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::collectSymbolHits",
@@ -740,6 +794,8 @@
         // ASTs that don't appear in practice.
         "LessThan": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::findClassLikeAt",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::topLevelArgIndexAt",
@@ -837,6 +893,8 @@
         },
         "Identical": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::locateClassLike",
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 // Cycle K.1 resolveTargetAt: pre-existing StaticCall /
@@ -888,6 +946,9 @@
         // driven publishDiagnostics is the next test surface to grow.
         "ArrayItemRemoval": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::cloneWithResolvedNames",
                 "XPHP\\Lsp\\LspDispatcherFactory::create",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider",
@@ -912,6 +973,8 @@
         // mutation scoring.
         "Concat": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
                 // Cycle D cacheRoot: most Concats here flip operand
@@ -931,6 +994,9 @@
         },
         "ConcatOperandRemoval": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::visitClassLikes",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver::fanOutMembers",
                 // See Concat rationale above.
@@ -993,6 +1059,9 @@
         // indistinguishable in both consumer patterns.
         "TrueValue": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::typeParamFqns",
                 "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::allClassFqns",
@@ -1112,6 +1181,12 @@
         },
         "ReturnRemoval": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::supertypes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::locateClassLike",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::extractUri",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::extractPosition",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::angleClauseAt",
                 "XPHP\\Lsp\\Handler\\XphpHoverHandler::findAngleRange",
@@ -1166,6 +1241,9 @@
         },
         "Foreach_": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::collectSupertypeFqns",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Resolver\\OptimizeImportsCodeActionProvider",
@@ -1184,6 +1262,8 @@
         },
         "ArrayOneItem": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::cloneWithResolvedNames",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 // Cycle K.1 intersectByKindLabel: the K.1 mutant on
                 // the final `return $intersection;` -- mutated form
@@ -1266,6 +1346,8 @@
         },
         "Coalesce": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 // Analyzer tolerant-parse fallback:
                 // `$tolerant?->byteOffsetMap ?? ByteOffsetMap::identity()`
@@ -1308,6 +1390,8 @@
         // input.
         "NullSafeMethodCall": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 "XPHP\\Lsp\\Resolver\\ImportCodeActionProvider",
                 "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler"
             ]
@@ -1388,12 +1472,16 @@
         //   occur in covered code paths.
         "UnwrapArrayUnique": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::collectSupertypeFqns",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::resolveTargetAt",
                 "XPHP\\Lsp\\Resolver\\ReferenceFinder::inferReceiverClassesAt"
             ]
         },
         "UnwrapArrayValues": {
             "ignore": [
+                // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
+                "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::collectSupertypeFqns",
                 // XphpHoverHandler angle-clause helpers -- ATTR_GENERIC_ARGS
                 // is always a populated list (XphpSourceParser invariant);
                 // array_values vs the bare input is equivalent.
