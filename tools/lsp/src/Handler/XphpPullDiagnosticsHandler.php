@@ -61,16 +61,25 @@ final class XphpPullDiagnosticsHandler implements Handler, CanRegisterCapabiliti
     }
 
     /**
-     * @param array<string, mixed> $params raw `DocumentDiagnosticParams`
+     * `DocumentDiagnosticParams` is `{textDocument}` -- the framework's
+     * PassThroughArgumentResolver splits the JSON-RPC params object
+     * into positional arguments (one per top-level key) and spreads
+     * them via `(...$args)` in HandlerMethodRunner.  The first
+     * positional value is therefore the textDocument dict, NOT the
+     * full params object.  Signature mirrors that splat order so PHP
+     * receives the right value.
+     *
+     * @param array{uri?: string, ...} $textDocument the inner
+     *                                  TextDocumentIdentifier dict
      * @return Promise<array{kind: string, items: list<\Phpactor\LanguageServerProtocol\Diagnostic>}>
      */
-    public function diagnostic(array $params, ?CancellationToken $cancel = null): Promise
+    public function diagnostic(array $textDocument, ?CancellationToken $cancel = null): Promise
     {
         if ($cancel !== null && $cancel->isRequested()) {
             return new Success(['kind' => 'full', 'items' => []]);
         }
-        $uri = self::extractUri($params);
-        if ($uri === null || !$this->workspace->has($uri)) {
+        $uri = $textDocument['uri'] ?? null;
+        if (!is_string($uri) || !$this->workspace->has($uri)) {
             return new Success(['kind' => 'full', 'items' => []]);
         }
         $item = $this->workspace->get($uri);
@@ -81,18 +90,5 @@ final class XphpPullDiagnosticsHandler implements Handler, CanRegisterCapabiliti
             $item->text,
         ));
         return new Success(['kind' => 'full', 'items' => $diagnostics]);
-    }
-
-    /**
-     * @param array<string, mixed> $params
-     */
-    private static function extractUri(array $params): ?string
-    {
-        $textDocument = $params['textDocument'] ?? null;
-        if (!is_array($textDocument)) {
-            return null;
-        }
-        $uri = $textDocument['uri'] ?? null;
-        return is_string($uri) ? $uri : null;
     }
 }

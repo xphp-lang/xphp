@@ -19,6 +19,7 @@ use Phpactor\LanguageServer\Core\Handler\Handler;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\SymbolKind;
+use Phpactor\LanguageServerProtocol\TextDocumentPositionParams;
 use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
@@ -78,17 +79,22 @@ final class XphpTypeHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * @param array<string, mixed> $params
+     * `prepareTypeHierarchy` params are `{textDocument, position}`,
+     * the same shape `TextDocumentPositionParams` describes.  Using
+     * the typed class lets phpactor's `LanguageSeverProtocolParamsResolver`
+     * deserialize the JSON into real `TextDocumentIdentifier` /
+     * `Position` instances and pass them as a single typed arg --
+     * the framework's PassThroughArgumentResolver splats raw arrays,
+     * so an untyped `array $params` would only receive the
+     * textDocument value (not the full params), and the handler
+     * would silently return empty.
+     *
      * @return Promise<list<array<string, mixed>>>
      */
-    public function prepare(array $params): Promise
+    public function prepare(TextDocumentPositionParams $params): Promise
     {
-        $uri = self::extractUri($params);
-        if ($uri === null || !$this->workspace->has($uri)) {
-            return new Success([]);
-        }
-        $position = self::extractPosition($params);
-        if ($position === null) {
+        $uri = $params->textDocument->uri;
+        if (!$this->workspace->has($uri)) {
             return new Success([]);
         }
         $item = $this->workspace->get($uri);
@@ -97,7 +103,10 @@ final class XphpTypeHierarchyHandler implements Handler, CanRegisterCapabilities
             return new Success([]);
         }
         $positionMap = new PositionMap($item->text);
-        $offset = $positionMap->positionToOffset($position[0], $position[1]);
+        $offset = $positionMap->positionToOffset(
+            $params->position->line,
+            $params->position->character,
+        );
 
         $located = self::findClassLikeAt($result->ast, $offset);
         if ($located === null) {
@@ -110,16 +119,17 @@ final class XphpTypeHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * @param array<string, mixed> $params
+     * `typeHierarchy/supertypes` params are `{item}`.  The framework
+     * splats the params object into positional args, so the first
+     * positional argument is the inner `item` dict -- NOT a wrapper.
+     * Signature reflects that splat order.
+     *
+     * @param array<string, mixed> $item the inner TypeHierarchyItem dict
      * @return Promise<list<array<string, mixed>>>
      */
-    public function supertypes(array $params): Promise
+    public function supertypes(array $item): Promise
     {
-        $itemData = $params['item'] ?? null;
-        if (!is_array($itemData)) {
-            return new Success([]);
-        }
-        $targetFqn = $itemData['data']['fqn'] ?? null;
+        $targetFqn = $item['data']['fqn'] ?? null;
         if (!is_string($targetFqn) || $targetFqn === '') {
             return new Success([]);
         }
@@ -147,16 +157,14 @@ final class XphpTypeHierarchyHandler implements Handler, CanRegisterCapabilities
     }
 
     /**
-     * @param array<string, mixed> $params
+     * `typeHierarchy/subtypes` -- same splat shape as supertypes.
+     *
+     * @param array<string, mixed> $item the inner TypeHierarchyItem dict
      * @return Promise<list<array<string, mixed>>>
      */
-    public function subtypes(array $params): Promise
+    public function subtypes(array $item): Promise
     {
-        $itemData = $params['item'] ?? null;
-        if (!is_array($itemData)) {
-            return new Success([]);
-        }
-        $targetFqn = $itemData['data']['fqn'] ?? null;
+        $targetFqn = $item['data']['fqn'] ?? null;
         if (!is_string($targetFqn) || $targetFqn === '') {
             return new Success([]);
         }
@@ -519,36 +527,5 @@ final class XphpTypeHierarchyHandler implements Handler, CanRegisterCapabilities
         $traverser->addVisitor($resolver);
         $traverser->traverse($clone);
         return $clone;
-    }
-
-    /**
-     * @param array<string, mixed> $params
-     */
-    private static function extractUri(array $params): ?string
-    {
-        $textDocument = $params['textDocument'] ?? null;
-        if (!is_array($textDocument)) {
-            return null;
-        }
-        $uri = $textDocument['uri'] ?? null;
-        return is_string($uri) ? $uri : null;
-    }
-
-    /**
-     * @param array<string, mixed> $params
-     * @return ?array{0: int, 1: int}
-     */
-    private static function extractPosition(array $params): ?array
-    {
-        $position = $params['position'] ?? null;
-        if (!is_array($position)) {
-            return null;
-        }
-        $line = $position['line'] ?? null;
-        $character = $position['character'] ?? null;
-        if (!is_int($line) || !is_int($character)) {
-            return null;
-        }
-        return [$line, $character];
     }
 }

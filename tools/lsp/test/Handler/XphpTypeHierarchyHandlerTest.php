@@ -6,9 +6,12 @@ namespace XPHP\Lsp\Test\Handler;
 
 use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
+use Phpactor\LanguageServerProtocol\Position;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\SymbolKind;
+use Phpactor\LanguageServerProtocol\TextDocumentIdentifier;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
+use Phpactor\LanguageServerProtocol\TextDocumentPositionParams;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\Analyzer\Analyzer;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
@@ -56,23 +59,11 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
     public function testPrepareReturnsEmptyForUnknownUri(): void
     {
         $handler = $this->handler(new PhpactorWorkspace());
-        $items = wait($handler->prepare([
-            'textDocument' => ['uri' => '/never-opened.xphp'],
-            'position' => ['line' => 0, 'character' => 0],
-        ]));
+        $items = wait($handler->prepare(new TextDocumentPositionParams(
+            new TextDocumentIdentifier('/never-opened.xphp'),
+            new Position(0, 0),
+        )));
         self::assertSame([], $items);
-    }
-
-    public function testPrepareReturnsEmptyForMalformedParams(): void
-    {
-        $handler = $this->handler(new PhpactorWorkspace());
-        // Missing textDocument.
-        self::assertSame([], wait($handler->prepare([])));
-        // Missing position.
-        $workspace = new PhpactorWorkspace();
-        $workspace->open(new TextDocumentItem('/A.xphp', 'xphp', 1, "<?php\nclass A {}\n"));
-        $handler = $this->handler($workspace);
-        self::assertSame([], wait($handler->prepare(['textDocument' => ['uri' => '/A.xphp']])));
     }
 
     public function testPrepareReturnsItemForClassAtCursor(): void
@@ -89,10 +80,10 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         self::assertNotFalse($byte);
         [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
 
-        $items = wait($handler->prepare([
-            'textDocument' => ['uri' => '/User.xphp'],
-            'position' => ['line' => $line, 'character' => $character],
-        ]));
+        $items = wait($handler->prepare(new TextDocumentPositionParams(
+            new TextDocumentIdentifier('/User.xphp'),
+            new Position($line, $character),
+        )));
 
         self::assertCount(1, $items);
         self::assertSame('User', $items[0]['name']);
@@ -118,10 +109,10 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         $byte = strpos($source, 'interface Speaker') + strlen('interface ');
         [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
 
-        $items = wait($handler->prepare([
-            'textDocument' => ['uri' => '/Speaker.xphp'],
-            'position' => ['line' => $line, 'character' => $character],
-        ]));
+        $items = wait($handler->prepare(new TextDocumentPositionParams(
+            new TextDocumentIdentifier('/Speaker.xphp'),
+            new Position($line, $character),
+        )));
         self::assertCount(1, $items);
         self::assertSame(SymbolKind::INTERFACE, $items[0]['kind']);
     }
@@ -141,11 +132,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->supertypes([
-            'item' => [
-                'data' => ['fqn' => 'App\\Dog'],
-            ],
-        ]));
+        $items = wait($handler->supertypes(['data' => ['fqn' => 'App\\Dog']]));
 
         self::assertCount(1, $items);
         self::assertSame('Animal', $items[0]['name']);
@@ -173,9 +160,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->supertypes([
-            'item' => ['data' => ['fqn' => 'App\\Dog']],
-        ]));
+        $items = wait($handler->supertypes(['data' => ['fqn' => 'App\\Dog']]));
 
         $names = array_map(static fn (array $i): string => $i['name'], $items);
         sort($names);
@@ -197,9 +182,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->supertypes([
-            'item' => ['data' => ['fqn' => 'App\\Loud']],
-        ]));
+        $items = wait($handler->supertypes(['data' => ['fqn' => 'App\\Loud']]));
         self::assertCount(1, $items);
         self::assertSame('Speaker', $items[0]['name']);
     }
@@ -208,9 +191,9 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
     {
         $handler = $this->handler(new PhpactorWorkspace());
         self::assertSame([], wait($handler->supertypes([])));
-        self::assertSame([], wait($handler->supertypes(['item' => 'not-an-array'])));
-        self::assertSame([], wait($handler->supertypes(['item' => ['data' => ['fqn' => '']]])));
-        self::assertSame([], wait($handler->supertypes(['item' => ['data' => ['fqn' => 'App\\NonExistent']]])));
+        self::assertSame([], wait($handler->supertypes(['data' => []])));
+        self::assertSame([], wait($handler->supertypes(['data' => ['fqn' => '']])));
+        self::assertSame([], wait($handler->supertypes(['data' => ['fqn' => 'App\\NonExistent']])));
     }
 
     public function testSubtypesReturnsImplementersOfAnInterface(): void
@@ -238,9 +221,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->subtypes([
-            'item' => ['data' => ['fqn' => 'App\\Speaker']],
-        ]));
+        $items = wait($handler->subtypes(['data' => ['fqn' => 'App\\Speaker']]));
 
         $names = array_map(static fn (array $i): string => $i['name'], $items);
         sort($names);
@@ -267,9 +248,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->subtypes([
-            'item' => ['data' => ['fqn' => 'App\\Speaker']],
-        ]));
+        $items = wait($handler->subtypes(['data' => ['fqn' => 'App\\Speaker']]));
         self::assertCount(1, $items);
         self::assertSame('Loud', $items[0]['name']);
     }
@@ -289,9 +268,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->subtypes([
-            'item' => ['data' => ['fqn' => 'App\\Animal']],
-        ]));
+        $items = wait($handler->subtypes(['data' => ['fqn' => 'App\\Animal']]));
         self::assertCount(1, $items);
         self::assertSame('Dog', $items[0]['name']);
         self::assertSame('App\\Dog', $items[0]['data']['fqn']);
@@ -301,10 +278,10 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
     {
         $handler = $this->handler(new PhpactorWorkspace());
         self::assertSame([], wait($handler->subtypes([])));
-        self::assertSame([], wait($handler->subtypes(['item' => 'not-an-array'])));
-        self::assertSame([], wait($handler->subtypes(['item' => ['data' => ['fqn' => '']]])));
+        self::assertSame([], wait($handler->subtypes(['data' => []])));
+        self::assertSame([], wait($handler->subtypes(['data' => ['fqn' => '']])));
         // Unknown FQN with no subclasses → empty.
-        self::assertSame([], wait($handler->subtypes(['item' => ['data' => ['fqn' => 'App\\Nope']]])));
+        self::assertSame([], wait($handler->subtypes(['data' => ['fqn' => 'App\\Nope']])));
     }
 
     public function testSubtypesReturnsOnlyDirectChildrenNotGrandchildren(): void
@@ -332,9 +309,7 @@ final class XphpTypeHierarchyHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $items = wait($handler->subtypes([
-            'item' => ['data' => ['fqn' => 'App\\Animal']],
-        ]));
+        $items = wait($handler->subtypes(['data' => ['fqn' => 'App\\Animal']]));
         $names = array_map(static fn (array $i): string => $i['name'], $items);
         self::assertSame(['Dog'], $names, 'subtypes is one-hop -- Pup surfaces only when client recurses on Dog');
     }

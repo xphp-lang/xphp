@@ -45,18 +45,15 @@ final class XphpPullDiagnosticsHandlerTest extends TestCase
     public function testReturnsFullReportWithEmptyItemsForUnknownUri(): void
     {
         $handler = $this->handler(new PhpactorWorkspace());
-        $report = wait($handler->diagnostic([
-            'textDocument' => ['uri' => '/never-opened.xphp'],
-        ]));
+        $report = wait($handler->diagnostic(['uri' => '/never-opened.xphp']));
         self::assertSame('full', $report['kind']);
         self::assertSame([], $report['items']);
     }
 
-    public function testReturnsFullReportWithEmptyItemsForMissingTextDocument(): void
+    public function testReturnsFullReportWithEmptyItemsForMissingUri(): void
     {
-        // Locks the `$uri === null` guard on the params extractor.
-        // A malformed params object (no textDocument key) must still
-        // get a well-formed empty report, not an exception.
+        // Malformed textDocument dict (no uri key) must still get a
+        // well-formed empty report, not an exception.
         $handler = $this->handler(new PhpactorWorkspace());
         $report = wait($handler->diagnostic([]));
         self::assertSame('full', $report['kind']);
@@ -65,13 +62,11 @@ final class XphpPullDiagnosticsHandlerTest extends TestCase
 
     public function testReturnsFullReportWithEmptyItemsForNonStringUri(): void
     {
-        // Locks the `is_string($uri)` guard in extractUri.  An invalid
-        // params object (uri is an int, etc.) still produces a
-        // well-formed empty report.
+        // Locks the `is_string($uri)` guard.  An invalid textDocument
+        // (uri is an int, etc.) still produces a well-formed empty
+        // report.
         $handler = $this->handler(new PhpactorWorkspace());
-        $report = wait($handler->diagnostic([
-            'textDocument' => ['uri' => 42],
-        ]));
+        $report = wait($handler->diagnostic(['uri' => 42]));
         self::assertSame('full', $report['kind']);
         self::assertSame([], $report['items']);
     }
@@ -88,7 +83,7 @@ final class XphpPullDiagnosticsHandlerTest extends TestCase
         $cancel->cancel();
 
         $report = wait($handler->diagnostic(
-            ['textDocument' => ['uri' => '/parse-error.xphp']],
+            ['uri' => '/parse-error.xphp'],
             $cancel->getToken(),
         ));
         self::assertSame('full', $report['kind']);
@@ -108,9 +103,7 @@ final class XphpPullDiagnosticsHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $report = wait($handler->diagnostic([
-            'textDocument' => ['uri' => '/parse-error.xphp'],
-        ]));
+        $report = wait($handler->diagnostic(['uri' => '/parse-error.xphp']));
         self::assertSame('full', $report['kind']);
         self::assertNotEmpty($report['items'], 'parse-error document must surface at least one diagnostic');
         self::assertContainsOnlyInstancesOf(Diagnostic::class, $report['items']);
@@ -129,9 +122,7 @@ final class XphpPullDiagnosticsHandlerTest extends TestCase
         XPHP));
         $handler = $this->handler($workspace);
 
-        $report = wait($handler->diagnostic([
-            'textDocument' => ['uri' => '/clean.xphp'],
-        ]));
+        $report = wait($handler->diagnostic(['uri' => '/clean.xphp']));
         self::assertSame('full', $report['kind']);
         self::assertSame([], $report['items']);
     }
