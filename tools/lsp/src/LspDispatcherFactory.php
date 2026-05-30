@@ -328,6 +328,12 @@ final class LspDispatcherFactory implements DispatcherFactory
                 $cache,
                 $xphpParser,
                 $renameProvider,
+                new \XPHP\Lsp\Resolver\NamespaceMoveProvider(
+                    $workspace,
+                    $cache,
+                    $fqnIndex,
+                    $xphpParser,
+                ),
             ),
             new XphpSemanticTokensHandler($workspace, $cache),
             new XphpPullDiagnosticsHandler($workspace, $diagnosticsProvider),

@@ -13,6 +13,7 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.vfs.AsyncFileListener
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
+import com.intellij.openapi.vfs.newvfs.events.VFileMoveEvent
 import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent
 import com.intellij.platform.lsp.api.LspServer
 import com.intellij.platform.lsp.api.LspServerManager
@@ -64,22 +65,45 @@ import java.util.concurrent.CompletableFuture
 class XphpFileRenameListener : AsyncFileListener {
 
     override fun prepareChange(events: List<VFileEvent>): AsyncFileListener.ChangeApplier? {
-        // Filter to .xphp/.php rename events; collect (oldUri, newUri)
-        // pairs.  Off-EDT phase: safe to read VFS attributes, not safe
-        // to apply writes (write actions must run on the EDT in the
-        // committer below).
-        val renames = events
-            .asSequence()
-            .filterIsInstance<VFilePropertyChangeEvent>()
-            .filter { it.propertyName == VirtualFile.PROP_NAME && it.file.isXphpLike() }
-            .mapNotNull { ev ->
-                val oldName = ev.oldValue as? String ?: return@mapNotNull null
-                val newName = ev.newValue as? String ?: return@mapNotNull null
-                if (oldName == newName) return@mapNotNull null
-                val parentUrl = ev.file.parent?.url ?: return@mapNotNull null
-                FileRename("$parentUrl/$oldName", "$parentUrl/$newName")
+        // Filter to .xphp/.php rename + move events; collect (oldUri,
+        // newUri) pairs.  Off-EDT phase: safe to read VFS attributes,
+        // not safe to apply writes (write actions must run on the EDT
+        // in the committer below).
+        //
+        // Two event shapes feed into the same FileRename pair:
+        //   - VFilePropertyChangeEvent (PROP_NAME) -- in-place rename
+        //     (same parent dir, different basename).  Drives Half B's
+        //     class-name update.
+        //   - VFileMoveEvent -- cross-directory move (different parent
+        //     dir, same OR different basename).  Drives Cycle L.1's
+        //     namespace update.  Reuses the same willRenameFiles
+        //     dispatch; the server routes pure moves through
+        //     NamespaceMoveProvider and combined cases through the
+        //     existing rename pipeline.
+        val renames = mutableListOf<FileRename>()
+        for (ev in events) {
+            if (ev is VFilePropertyChangeEvent
+                && ev.propertyName == VirtualFile.PROP_NAME
+                && ev.file.isXphpLike()
+            ) {
+                val oldName = ev.oldValue as? String ?: continue
+                val newName = ev.newValue as? String ?: continue
+                if (oldName == newName) continue
+                val parentUrl = ev.file.parent?.url ?: continue
+                renames.add(FileRename("$parentUrl/$oldName", "$parentUrl/$newName"))
+                continue
             }
-            .toList()
+            if (ev is VFileMoveEvent && ev.file.isXphpLike()) {
+                // VFileMoveEvent.file is the moved file referenced at
+                // its NEW location; oldParent / newParent give the
+                // before/after directory.  Construct oldUri from
+                // oldParent + basename, newUri from file.url directly.
+                val basename = ev.file.name
+                val oldParentUrl = ev.oldParent.url
+                val newUri = ev.file.url
+                renames.add(FileRename("$oldParentUrl/$basename", newUri))
+            }
+        }
 
         if (renames.isEmpty()) return null
 

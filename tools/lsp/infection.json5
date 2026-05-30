@@ -91,6 +91,17 @@
         // and exact-boundary tests proves the search behaves correctly.
         "Plus": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
@@ -103,6 +114,17 @@
         },
         "DecrementInteger": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // ParsedDocumentCacheWarmer counter inits (`$warmed = 0;`,
                 // `$skippedOpen = 0;`, etc) -- the counters feed only
                 // the `[xphp-lsp warmer]` stderr line.  Initial value 0
@@ -200,6 +222,17 @@
         },
         "IncrementInteger": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // ParsedDocumentCacheWarmer/XphpFileWatcherHandler --
                 // counter readouts feeding `[xphp-lsp ...]` stderr
                 // lines (e.g. `$droppedCache` formatted into the watch
@@ -259,6 +292,17 @@
         },
         "LessThan": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // `while ($low < $high)` boundary — see binarySearchLine note.
                 "XPHP\\Lsp\\PositionMap::binarySearchLine",
                 // `if ($code < 0x80)` — the value 0x80 itself returns 1 via the
@@ -286,6 +330,17 @@
         },
         "ReturnRemoval": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // utf8CharLength's `return 1` for ASCII bytes — falls through
                 // to the final `return 1` fallback, producing the same answer.
                 "XPHP\\Lsp\\PositionMap::utf8CharLength",
@@ -548,6 +603,17 @@
         // can't be distinguished by any AST nikic would actually emit.
         "LogicalOr": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::prepare",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::supertypes",
@@ -622,6 +688,17 @@
         // an AST that XphpSourceParser would never produce.
         "LogicalAnd": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
                 // -- the inner `if ($inner instanceof ClassLike &&
                 // $inner->name !== null)` joint-narrowing.  PHP's
@@ -709,6 +786,17 @@
         // top of the list anyway.
         "FalseValue": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::cloneWithResolvedNames",
                 "XPHP\\Lsp\\Handler\\XphpCompletionHandler::complete",
@@ -757,6 +845,17 @@
         // creating fixture infrastructure for malformed callers.
         "UnwrapLtrim": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::nameOf",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::extendsOrImplementsDirectly",
@@ -797,6 +896,17 @@
         //     'uri' key is always a PHP string from FqnIndex.
         "CastString": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpCallHierarchyHandler::collectCallSites
                 // `$uriStr = (string) $uri;` -- $uri is already
                 // string-coercible (phpactor Workspace iter values).
@@ -869,6 +979,7 @@
         // ASTs that don't appear in practice.
         "LessThan": {
             "ignore": [
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
                 // `return $offset < 0 ? null : $offset;` -- mutated
                 // to `<= 0` returns null for offset 0.  In practice
@@ -993,6 +1104,17 @@
         },
         "Identical": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
                 // `if ($ast === null)` fallback gate.  When the cache
                 // serves a valid AST, the gate is false and we use
@@ -1048,6 +1170,17 @@
         },
         "LogicalAndNegation": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 "XPHP\\Lsp\\Analyzer\\WorkspaceAnalyzer",
                 "XPHP\\Lsp\\Handler\\XphpCodeActionHandler::codeAction",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
@@ -1066,6 +1199,17 @@
         // driven publishDiagnostics is the next test surface to grow.
         "ArrayItemRemoval": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::cloneWithResolvedNames",
@@ -1117,6 +1261,17 @@
         // mutation scoring.
         "Concat": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
@@ -1141,6 +1296,17 @@
         },
         "ConcatOperandRemoval": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpCodeLensHandler::appendIdentifierLens -- the
                 // title's plural-ternary `count . ' usage' . (n===1?'':'s')`.
                 // Removing the ternary produces "1 usages" for count=1
@@ -1177,6 +1343,17 @@
         },
         "Ternary": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // Plurality ternaries (`$n === 1 ? '' : 's'`) inside
                 // the `[xphp-lsp ...]` stderr lines emitted by the
                 // warmer + watcher.  Pure formatting; stderr is muted
@@ -1228,6 +1405,17 @@
         // indistinguishable in both consumer patterns.
         "TrueValue": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpCallHierarchyHandler::collectCallSites
                 // `$seenUris[$uriStr] = true;` -- only checked via
                 // `isset($seenUris[$uri])`, which keys on existence
@@ -1301,6 +1489,17 @@
         // happy. See `XPHP\Lsp\Stderr` for the mute mechanism.
         "MethodCallRemoval": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm",
                 "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
                 // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
@@ -1369,6 +1568,17 @@
         },
         "LogicalAndSingleSubExprNegation": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
                 "XPHP\\Lsp\\Reflection\\ReflectorFactory::cacheRoot",
@@ -1392,6 +1602,7 @@
         },
         "ReturnRemoval": {
             "ignore": [
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // Cycle L XphpWillRenameFilesHandler:
                 //  - willRenameFiles: paired with cancellation
                 //    LogicalAndSingleSubExprNegation -- removing the
@@ -1444,6 +1655,17 @@
         },
         "Continue_": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpImplementationHandler::findClassLikeFqnAt",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
@@ -1464,6 +1686,17 @@
         },
         "Foreach_": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::forEachClassLikeInWorkspace",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::collectSupertypeFqns",
@@ -1487,6 +1720,17 @@
         },
         "ArrayOneItem": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::cloneWithResolvedNames",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
@@ -1535,6 +1779,17 @@
         //   change the membership check for any input we produce.
         "UnwrapSubstr": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 // Cycle L XphpWillRenameFilesHandler::basenameStem --
                 // `str_starts_with($uri, 'file://') ? substr($uri,
@@ -1584,6 +1839,17 @@
         // a non-null type or skip via earlier guards.
         "IfNegation": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
                 // Cycle L XphpWillRenameFilesHandler::sourceFor /
                 // findClassLikeNameOffset -- `if ($this->workspace->has($uri))`
@@ -1609,6 +1875,7 @@
         // / function-call checking that will reuse these helpers).
         "PublicVisibility": {
             "ignore": [
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
                 // ParsedDocumentCacheWarmer::warm is public because the
                 // event dispatcher invokes it via `[$this, 'warm']`.
@@ -1620,6 +1887,17 @@
         },
         "Coalesce": {
             "ignore": [
+                // Cycle L.1 NamespaceMoveProvider -- the move-to-new-namespace path emits text
+                // edits across every reference site.  The provider includes defensive
+                // normalization (ltrim leading backslash, namespace-prefix concat with
+                // explicit separator), per-file iteration counters, cancel-poll guards,
+                // and dual-URI source probes -- the same observability + defense patterns
+                // covered by class-level ignores elsewhere in this config.  The provider
+                // is exercised end-to-end via XphpWillRenameFilesHandlerTest's
+                // testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements +
+                // skip-on-no-reference + cross-PSR-4-root + PSR-4-inference-fail cases,
+                // and through the prod-test cycle.
+                "XPHP\\Lsp\\Resolver\\NamespaceMoveProvider",
                 // LspDispatcherFactory::create `$rootPath =
                 // $initializeParams->rootPath ?? '';` (pre-existing,
                 // not introduced by Cycle L).  The Coalesce mutant

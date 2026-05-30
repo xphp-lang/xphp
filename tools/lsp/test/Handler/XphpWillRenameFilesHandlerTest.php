@@ -114,10 +114,134 @@ final class XphpWillRenameFilesHandlerTest extends TestCase
         self::assertContains('file://' . $this->root . '/Consumer.xphp', $uris);
     }
 
-    public function testReturnsNullWhenBasenameStemEqualsAcrossRename(): void
+    public function testCrossDirectoryMoveRenamesNamespaceAndUpdatesUseStatements(): void
     {
-        // Move-without-rename: same basename, different directory.
-        // The class declaration is unchanged; no edits to emit.
+        // Cycle L.1: moving Models/User.xphp -> Containers/User.xphp
+        // should derive new namespace App\Containers and update:
+        //  - the namespace declaration in the source file
+        //  - every `use App\Models\User;` import across the workspace
+        //  - every fully-qualified `\App\Models\User` reference
+        //  - bare `User` references after a `use` stay alone (the use
+        //    statement above carries the change).
+        mkdir($this->root . '/Models', 0o755, true);
+        mkdir($this->root . '/Containers', 0o755, true);
+        mkdir($this->root . '/Demos', 0o755, true);
+
+        $declSource = "<?php\nnamespace App\\Models;\nclass User {}\n";
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Models\\User;\n\$u = new User();\n";
+        $fqnSource = "<?php\nnamespace App\\Demos;\n\$u = new \\App\\Models\\User();\n";
+        file_put_contents($this->root . '/Models/User.xphp', $declSource);
+        file_put_contents($this->root . '/Demos/UseImport.xphp', $useSource);
+        file_put_contents($this->root . '/Demos/FullyQualified.xphp', $fqnSource);
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('file://' . $this->root . '/Models/User.xphp', 'xphp', 1, $declSource));
+        $workspace->open(new TextDocumentItem('file://' . $this->root . '/Demos/UseImport.xphp', 'xphp', 1, $useSource));
+        $workspace->open(new TextDocumentItem('file://' . $this->root . '/Demos/FullyQualified.xphp', 'xphp', 1, $fqnSource));
+
+        $edit = $this->dispatch($workspace, [
+            new FileRename(
+                'file://' . $this->root . '/Models/User.xphp',
+                'file://' . $this->root . '/Containers/User.xphp',
+            ),
+        ]);
+
+        self::assertNotNull($edit, 'cross-directory move must produce namespace edits');
+        $changes = $edit->documentChanges ?? [];
+        $byUri = [];
+        foreach ($changes as $change) {
+            self::assertInstanceOf(TextDocumentEdit::class, $change);
+            $byUri[$change->textDocument->uri] = $change->edits;
+        }
+
+        // Source file: namespace declaration edited from App\Models -> App\Containers.
+        $sourceUri = 'file://' . $this->root . '/Models/User.xphp';
+        self::assertArrayHasKey($sourceUri, $byUri, 'source file must have the namespace edit');
+        self::assertCount(1, $byUri[$sourceUri], 'exactly one edit on the source file');
+        self::assertSame('App\\Containers', $byUri[$sourceUri][0]->newText);
+
+        // Use-import file: `App\Models\User` -> `App\Containers\User` on the use-statement name.
+        $useUri = 'file://' . $this->root . '/Demos/UseImport.xphp';
+        self::assertArrayHasKey($useUri, $byUri);
+        self::assertGreaterThanOrEqual(1, count($byUri[$useUri]));
+        $newTexts = array_map(fn ($e) => $e->newText, $byUri[$useUri]);
+        self::assertContains('App\\Containers\\User', $newTexts, 'use statement must point at new namespace');
+
+        // Fully-qualified-reference file: `\App\Models\User` -> `\App\Containers\User`.
+        $fqnUri = 'file://' . $this->root . '/Demos/FullyQualified.xphp';
+        self::assertArrayHasKey($fqnUri, $byUri);
+        $newTexts = array_map(fn ($e) => $e->newText, $byUri[$fqnUri]);
+        self::assertContains('\\App\\Containers\\User', $newTexts);
+    }
+
+    public function testCrossDirectoryMoveSkipsFilesWithoutTheClassReference(): void
+    {
+        // Files that don't reference the moved class shouldn't show
+        // up in the WorkspaceEdit.  Pins the pre-filter that skips
+        // files without the short-name OR namespace-head text hint.
+        mkdir($this->root . '/Models', 0o755, true);
+        mkdir($this->root . '/Containers', 0o755, true);
+        $declSource = "<?php\nnamespace App\\Models;\nclass User {}\n";
+        $unrelated = "<?php\nnamespace App\\Other;\nclass Unrelated {}\n";
+        file_put_contents($this->root . '/Models/User.xphp', $declSource);
+        file_put_contents($this->root . '/Models/Unrelated.xphp', $unrelated);
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('file://' . $this->root . '/Models/User.xphp', 'xphp', 1, $declSource));
+        $workspace->open(new TextDocumentItem('file://' . $this->root . '/Models/Unrelated.xphp', 'xphp', 1, $unrelated));
+
+        $edit = $this->dispatch($workspace, [
+            new FileRename(
+                'file://' . $this->root . '/Models/User.xphp',
+                'file://' . $this->root . '/Containers/User.xphp',
+            ),
+        ]);
+
+        self::assertNotNull($edit);
+        $changes = $edit->documentChanges ?? [];
+        $uris = array_map(fn ($c) => $c->textDocument->uri, $changes);
+        self::assertContains('file://' . $this->root . '/Models/User.xphp', $uris);
+        self::assertNotContains('file://' . $this->root . '/Models/Unrelated.xphp', $uris);
+    }
+
+    public function testCrossDirectoryMoveAcrossPsr4RootsReturnsNull(): void
+    {
+        // Move outside the inferred PSR-4 prefix root.  Source's
+        // namespace `App\Models` ↔ path `<root>/Models/` means PSR-4
+        // prefix is `<root>/` <-> `App\`.  Moving to a path outside
+        // `<root>/` is an across-prefix move; we can't derive the
+        // new namespace, so return null safely.
+        mkdir($this->root . '/Models', 0o755, true);
+        mkdir($this->root . '/elsewhere/Containers', 0o755, true);
+        $declSource = "<?php\nnamespace App\\Models;\nclass User {}\n";
+        file_put_contents($this->root . '/Models/User.xphp', $declSource);
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('file://' . $this->root . '/Models/User.xphp', 'xphp', 1, $declSource));
+
+        // NOTE: this test relies on the inference seeing the path
+        // prefix mismatch.  With a single-segment namespace
+        // (`Models`), the PSR-4 root is just the immediate parent
+        // dir; moving to a sibling directory whose path doesn't
+        // share that root triggers the early-return.
+        $edit = $this->dispatch($workspace, [
+            new FileRename(
+                'file://' . $this->root . '/Models/User.xphp',
+                'file://' . dirname($this->root) . '/somewhere-else/User.xphp',
+            ),
+        ]);
+
+        self::assertNull($edit);
+    }
+
+    public function testReturnsNullWhenPsr4InferenceCannotDeriveNamespace(): void
+    {
+        // Cross-directory move (same basename) routes to
+        // NamespaceMoveProvider, which derives the new namespace from
+        // the source's existing namespace declaration + path delta.
+        // When the namespace doesn't end with any trailing path
+        // segments (here: `namespace App;` while the file sits at
+        // `${tmp}/Foo.xphp`), the inference fails -> null.
         $source = "<?php\nnamespace App;\nclass Foo {}\n";
         mkdir($this->root . '/sub', 0o755, true);
         file_put_contents($this->root . '/Foo.xphp', $source);
@@ -553,7 +677,8 @@ final class XphpWillRenameFilesHandlerTest extends TestCase
         $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
         $finder = new ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $genericResolver);
         $renameProvider = new RenameProvider($workspace, $finder, $fqnIndex, false);
-        return new XphpWillRenameFilesHandler($workspace, $cache, $parser, $renameProvider);
+        $namespaceMoveProvider = new \XPHP\Lsp\Resolver\NamespaceMoveProvider($workspace, $cache, $fqnIndex, $parser);
+        return new XphpWillRenameFilesHandler($workspace, $cache, $parser, $renameProvider, $namespaceMoveProvider);
     }
 
     private function rmrf(string $dir): void

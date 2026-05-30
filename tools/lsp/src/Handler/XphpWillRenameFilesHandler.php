@@ -21,6 +21,7 @@ use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use Phpactor\LanguageServerProtocol\WorkspaceEdit;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\Resolver\NamespaceMoveProvider;
 use XPHP\Lsp\Resolver\RenameProvider;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -65,6 +66,7 @@ final class XphpWillRenameFilesHandler implements Handler, CanRegisterCapabiliti
         private readonly ParsedDocumentCache $cache,
         private readonly XphpSourceParser $parser,
         private readonly RenameProvider $renameProvider,
+        private readonly NamespaceMoveProvider $namespaceMoveProvider,
     ) {
     }
 
@@ -158,9 +160,13 @@ final class XphpWillRenameFilesHandler implements Handler, CanRegisterCapabiliti
             return null;
         }
         if ($oldStem === $newStem) {
-            // Move-without-rename (different directory, same basename).
-            // The class declaration doesn't change.
-            return null;
+            // Cycle L.1: pure move (same basename, different parent
+            // directory).  Class short name doesn't change but the
+            // namespace prefix follows PSR-4 to the new path.
+            // Delegate to NamespaceMoveProvider which builds the
+            // namespace-declaration edit + use-statement edits +
+            // FQN-reference edits across the workspace.
+            return $this->namespaceMoveProvider->move($oldUri, $newUri, $oldStem, $cancel);
         }
         if (
             preg_match(self::IDENTIFIER_PATTERN, $oldStem) !== 1
