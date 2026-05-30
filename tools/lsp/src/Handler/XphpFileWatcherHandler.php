@@ -10,6 +10,7 @@ use Phpactor\LanguageServer\Core\Handler\Handler;
 use Phpactor\LanguageServer\Core\Workspace\Workspace as PhpactorWorkspace;
 use Phpactor\LanguageServerProtocol\DidChangeWatchedFilesParams;
 use Phpactor\LanguageServerProtocol\FileChangeType;
+use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Reflection\FqnIndex;
 use XPHP\Lsp\Stderr;
 
@@ -58,6 +59,7 @@ final class XphpFileWatcherHandler implements Handler
     public function __construct(
         private readonly FqnIndex $fqnIndex,
         private readonly PhpactorWorkspace $workspace,
+        private readonly ParsedDocumentCache $parsedDocumentCache,
     ) {
     }
 
@@ -85,11 +87,24 @@ final class XphpFileWatcherHandler implements Handler
         }
 
         if ($external > 0) {
+            // Drop warmed AST cache entries alongside the FQN-index
+            // invalidation: ParsedDocumentCacheWarmer seeded an entry
+            // per indexed file at version 0, and a Changed/Created/
+            // Deleted notification means the on-disk source diverged
+            // from whatever the warmer parsed.  Without this, a stale
+            // AST would survive in ParsedDocumentCache and the next
+            // ReferenceFinder filesystem pass would serve outdated
+            // results.  Open-doc entries (version >= 1) are left
+            // alone -- the existing didChange version-bump path
+            // handles those.
+            $droppedCache = $this->parsedDocumentCache->forgetFilesystem();
             Stderr::write(sprintf(
-                "[xphp-lsp watch] invalidating filesystem index (%d external change%s, %d open-doc skipped)\n",
+                "[xphp-lsp watch] invalidating filesystem index (%d external change%s, %d open-doc skipped, %d cached AST%s dropped)\n",
                 $external,
                 $external === 1 ? '' : 's',
                 $skippedOpen,
+                $droppedCache,
+                $droppedCache === 1 ? '' : 's',
             ));
             $this->fqnIndex->invalidateFilesystem();
         } elseif ($skippedOpen > 0) {

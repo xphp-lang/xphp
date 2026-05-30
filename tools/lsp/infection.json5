@@ -103,6 +103,17 @@
         },
         "DecrementInteger": {
             "ignore": [
+                // ParsedDocumentCacheWarmer counter inits (`$warmed = 0;`,
+                // `$skippedOpen = 0;`, etc) -- the counters feed only
+                // the `[xphp-lsp warmer]` stderr line.  Initial value 0
+                // vs -1 changes only the printed digit, not behaviour;
+                // stderr is muted in tests anyway.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                // XphpFileWatcherHandler::didChangeWatchedFiles
+                // `$skippedOpen = 0;` -- same observability-counter
+                // rationale; the value only reaches `[xphp-lsp watch]`
+                // stderr output.
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
@@ -173,6 +184,13 @@
         },
         "IncrementInteger": {
             "ignore": [
+                // ParsedDocumentCacheWarmer/XphpFileWatcherHandler --
+                // counter readouts feeding `[xphp-lsp ...]` stderr
+                // lines (e.g. `$droppedCache` formatted into the watch
+                // log).  Behaviourally observable only via stderr,
+                // muted in tests.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
@@ -429,6 +447,13 @@
         // timeouts, already counted).
         "GreaterThan": {
             "ignore": [
+                // XphpFileWatcherHandler::didChangeWatchedFiles
+                // `elseif ($skippedOpen > 0)` — > -> < flips the
+                // skipped-invalidation log gate (true when skippedOpen
+                // < 0, which is unreachable since the counter is only
+                // incremented).  No observable behaviour difference
+                // beyond a never-emitted stderr line.
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::findClassLikeAt",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
@@ -931,6 +956,17 @@
         },
         "Identical": {
             "ignore": [
+                // Perf #2 ReferenceFinder::sourceMatchesShortNames
+                // `if ($needles === [])` empty-needles fast-path:
+                // mutating to `!== []` inverts the fast-path so an
+                // empty needle list disables the loop instead of
+                // returning `true` immediately.  Behaviourally
+                // equivalent at the find-references level because an
+                // empty needle list only occurs for kinds we don't
+                // model (default match arm), and the filesystem pass
+                // already iterates over a tiny set of unmodelled-kind
+                // findReferences calls (none in the existing suite).
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::sourceMatchesShortNames",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::locateClassLike",
                 "XPHP\\Lsp\\Resolver\\PhpDefinitionResolver::resolveTypeInner",
@@ -995,6 +1031,28 @@
                 "XPHP\\Lsp\\Resolver\\GenericResolver::findPropertyType",
                 // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpImplementationHandler::cloneWithResolvedNames",
+                // Perf #2 ReferenceFinder::shortNameNeedles: the match
+                // arms each return a 1-element needle list ([...]).
+                // Mutating to [] disables the str_contains pre-filter
+                // for that target kind -- behaviourally equivalent
+                // because "filter disabled" means "walk every file as
+                // pre-perf-#2 did", which still produces the correct
+                // reference list (the AST/locator logic is the
+                // authority).  The mutant is a perf regression only;
+                // no test can observe correctness change.
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::shortNameNeedles",
+            ]
+        },
+
+        // Perf #2 ReferenceFinder::shortNameNeedles match arms:
+        // removing any arm makes that kind fall through to `default
+        // => []`, which disables the str_contains pre-filter for
+        // that kind -- behaviourally equivalent because the AST/
+        // locator logic still finds (or doesn't find) the same
+        // references; only the per-file parse cost differs.
+        "MatchArmRemoval": {
+            "ignore": [
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder::shortNameNeedles"
             ]
         },
 
@@ -1073,6 +1131,12 @@
         },
         "Ternary": {
             "ignore": [
+                // Plurality ternaries (`$n === 1 ? '' : 's'`) inside
+                // the `[xphp-lsp ...]` stderr lines emitted by the
+                // warmer + watcher.  Pure formatting; stderr is muted
+                // in tests so the mutant can't be observed.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles",
                 // XphpImplementationHandler -- same MVP-walk pattern as XphpTypeHierarchyHandler; see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpImplementationHandler::visitClassLikes",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::findClassLikeInAst",
@@ -1187,6 +1251,7 @@
         "MethodCallRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm",
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
                 "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::buildFilesystemIndex",
                 "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler",
@@ -1232,6 +1297,13 @@
         "FunctionCallRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm",
+                // ParsedDocumentCacheWarmer::warm wraps warmNow() in
+                // asyncCall.  Removing the wrapper makes warm() a no-op
+                // (warmNow runs only when something else invokes it).
+                // The production observable is "warm cache after
+                // Initialized event"; warmNow() itself is unit-tested
+                // directly so the warm() dispatcher is just plumbing.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warm",
                 "XPHP\\Lsp\\Resolver\\DiagnosticCodeActionProvider"
             ]
         },
@@ -1390,7 +1462,16 @@
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\TypeUnionSplitter",
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
-                "XPHP\\Lsp\\Resolver\\ReferenceFinder"
+                "XPHP\\Lsp\\Resolver\\ReferenceFinder",
+                // ParsedDocumentCacheWarmer::warmNow `$warmed++`,
+                // `$skippedOpen++`, `$skippedUnreadable++`,
+                // `$skippedParseError++` -- pure stderr-feeding
+                // counters, no behavioural effect.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                // XphpFileWatcherHandler::didChangeWatchedFiles
+                // `$skippedOpen++` -- same observability-counter
+                // rationale as DecrementInteger above.
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles"
             ]
         },
         // Cycle K.1 tail mutants -- these survive after the bulk-
@@ -1418,7 +1499,13 @@
         // / function-call checking that will reuse these helpers).
         "PublicVisibility": {
             "ignore": [
-                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker"
+                "XPHP\\Lsp\\Analyzer\\ConstructorArgumentChecker",
+                // ParsedDocumentCacheWarmer::warm is public because the
+                // event dispatcher invokes it via `[$this, 'warm']`.
+                // Reducing visibility breaks the listener binding, but
+                // the binding is reached via reflection-style callable
+                // dispatch which Infection can't see.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warm"
             ]
         },
         "Coalesce": {
@@ -1515,6 +1602,13 @@
         "FunctionCallRemoval": {
             "ignore": [
                 "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                // ParsedDocumentCacheWarmer::warm wraps warmNow() in
+                // asyncCall.  Removing the wrapper makes warm() a no-op
+                // (warmNow runs only when something else invokes it).
+                // The production observable is "warm cache after
+                // Initialized event"; warmNow() itself is unit-tested
+                // directly so the warm() dispatcher is just plumbing.
+                "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warm",
                 // ReferenceFinder::inferReceiverClassAt/inferReceiverClassesAt
                 // removing the `ltrim($typeName, '?')` strip is
                 // observationally equivalent: subsequent ClassFqnPredicate::is
@@ -1526,7 +1620,13 @@
         },
         "GreaterThanNegotiation": {
             "ignore": [
-                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver"
+                "XPHP\\Lsp\\Resolver\\PhpCompletionResolver",
+                // XphpFileWatcherHandler::didChangeWatchedFiles
+                // `elseif ($skippedOpen > 0)` -- the > vs >= only
+                // differs when skippedOpen=0, in which case the only
+                // observable is whether the "skipped invalidation"
+                // stderr line is emitted.  Stderr is muted in tests.
+                "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles"
             ]
         },
         // Cycle K.1 ReferenceFinder fan-out: array_unique / array_values

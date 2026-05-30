@@ -181,6 +181,15 @@ final class ReferenceFinder
         // Skipped entirely when `$restrictToUri` is set: a single-file
         // request can't get matches from any other file.
         if ($restrictToUri === null) {
+            // Perf #2: cheap-bail short-name pre-filter.  Most class /
+            // function / method targets have a unique short name that
+            // textually appears in only a small fraction of workspace
+            // files; for those the raw-text `str_contains` check costs
+            // microseconds per file vs the ~30ms parse + walk it
+            // avoids.  Build the set of short names that count as a
+            // textual hit; if none of them appears in $source, skip
+            // parsing entirely.
+            $shortNameNeedles = self::shortNameNeedles($target);
             foreach ($this->fqnIndex->indexedFilesystemPaths() as $path) {
                 if ($cancel !== null && $cancel->isRequested()) {
                     return [];
@@ -193,16 +202,37 @@ final class ReferenceFinder
                 if ($source === false) {
                     continue;
                 }
-                try {
-                    $parsed = $this->parser->parseTolerantWithMap($source);
-                } catch (Throwable) {
+                if (!self::sourceMatchesShortNames($source, $shortNameNeedles)) {
                     continue;
                 }
-                if ($parsed === null) {
-                    continue;
+                // Perf #1: consult ParsedDocumentCache before re-parsing
+                // -- ParsedDocumentCacheWarmer pre-seeds every
+                // filesystem-indexed URI at the sentinel version 0, and
+                // anyone who's opened this file since pushed a
+                // versioned entry that we can also reuse here.  On
+                // miss (rare after warm-up), fall back to the tolerant
+                // parser path and seed for the next call.
+                $cachedAst = null;
+                $cachedOffsets = null;
+                $cachedParse = $this->cache->peek($fsUri);
+                if ($cachedParse !== null && $cachedParse->ast !== null) {
+                    $cachedAst = $cachedParse->ast;
+                    $cachedOffsets = $cachedParse->byteOffsetMap;
                 }
-                foreach ($this->collectReferences($parsed->ast, $target, $source, $fsUri, $cancel) as $hit) {
-                    $locations[] = $this->buildLocation($fsUri, $source, $parsed->byteOffsetMap, $hit);
+                if ($cachedAst === null) {
+                    try {
+                        $parsed = $this->parser->parseTolerantWithMap($source);
+                    } catch (Throwable) {
+                        continue;
+                    }
+                    if ($parsed === null) {
+                        continue;
+                    }
+                    $cachedAst = $parsed->ast;
+                    $cachedOffsets = $parsed->byteOffsetMap;
+                }
+                foreach ($this->collectReferences($cachedAst, $target, $source, $fsUri, $cancel) as $hit) {
+                    $locations[] = $this->buildLocation($fsUri, $source, $cachedOffsets, $hit);
                 }
             }
         }
@@ -516,6 +546,72 @@ final class ReferenceFinder
         $trimmed = ltrim($name, '\\');
         $idx = strrpos($trimmed, '\\');
         return $idx === false ? $trimmed : substr($trimmed, $idx + 1);
+    }
+
+    /**
+     * Build the textual-hint set for {@see sourceMatchesShortNames}.
+     * One short name per identifier we'd accept as a reference --
+     * the trailing `\`-segment of an FQN target, or the member name
+     * for method/property targets, or the alias text for aliases.
+     *
+     * Trusts the descriptor shape produced by {@see resolveTargetAt}:
+     * every kind always carries its corresponding key.  Defensive
+     * null-coalesce + string casts here just generated mutation noise
+     * for code paths that can't fire in production.  An empty list
+     * disables the filter (returned for kinds we don't model);
+     * filter-disabled means "walk every file" -- safe-but-slow,
+     * never silently drops references.
+     *
+     * @param array{kind: string, fqn?: string, className?: string, memberName?: string, aliasName?: string, classNames?: list<string>} $target
+     * @return list<string>
+     */
+    private static function shortNameNeedles(array $target): array
+    {
+        return match ($target['kind']) {
+            'alias' => [$target['aliasName']],
+            'class', 'function' => [self::shortSegment($target['fqn'])],
+            'method', 'property' => [$target['memberName']],
+            default => [],
+        };
+    }
+
+    /**
+     * Perf #2: raw-text short-name pre-filter.  Decide whether a
+     * file's source text contains ANY of the target's short names
+     * as a substring; if not, no reference to that symbol can exist
+     * in this file and we skip the parse + AST walk entirely.
+     *
+     * False positives are fine (we parse, find nothing, move on --
+     * the existing per-node match logic is the authority).  False
+     * negatives would silently drop real references, so the rules
+     * are conservative:
+     *
+     *   - Empty needle set -> always return true (filter disabled).
+     *   - `str_contains` rather than word-boundary regex; PHP
+     *     identifiers can sit inside `->`, `::`, `$`, etc. with no
+     *     whitespace, and Boyer-Moore-style substring is what the
+     *     `strpos` family compiles to.
+     *
+     * Aliased imports (`use App\Foo as Bar`) DO get false negatives
+     * here -- the file references `Bar`, not `Foo`'s short name --
+     * but the surrounding architecture already routes aliases
+     * through a separate scoped path ({@see collectReferences}'s
+     * alias branch returns early before reaching the filesystem
+     * pass), so this isn't a real correctness gap in V1.
+     *
+     * @param list<string> $needles
+     */
+    private static function sourceMatchesShortNames(string $source, array $needles): bool
+    {
+        if ($needles === []) {
+            return true;
+        }
+        foreach ($needles as $needle) {
+            if (str_contains($source, $needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

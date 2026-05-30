@@ -22,6 +22,7 @@ use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Resolver\CompositeClassLikeLookup;
 use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
 use XPHP\Lsp\Resolver\GenericResolver;
+use XPHP\Lsp\Analyzer\ParsedDocumentCacheWarmer;
 use XPHP\Lsp\Resolver\ReferenceFinder;
 use XPHP\Lsp\Resolver\WorkspaceClassLikeLookup;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
@@ -901,6 +902,145 @@ final class XphpReferencesHandlerTest extends TestCase
     /**
      * @return list<Location>
      */
+    public function testShortNamePreFilterSkipsFilesWithoutTextualMention(): void
+    {
+        // Perf #2 correctness: the str_contains short-name pre-filter
+        // must not produce false negatives.  Set up two filesystem
+        // files: one that DOES textually contain "User" (real
+        // reference) and one that doesn't.  The pre-filter should
+        // skip the second file but still surface the first.
+        file_put_contents($this->root . '/User.xphp', "<?php\nnamespace App;\nclass User {}\n");
+        file_put_contents($this->root . '/Consumer.xphp', "<?php\nnamespace App\\X;\nuse App\\User;\n\$u = new User();\n");
+        file_put_contents($this->root . '/Unrelated.xphp', "<?php\nnamespace App\\X;\nclass Widget {}\n");
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem($this->root . '/User.xphp', 'xphp', 1, file_get_contents($this->root . '/User.xphp')));
+
+        $locations = $this->references(
+            $workspace,
+            $this->root . '/User.xphp',
+            'class User',
+            strlen('class '),
+        );
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains($this->root . '/User.xphp', $uris, 'declaration site survives the filter');
+        self::assertContains('file://' . $this->root . '/Consumer.xphp', $uris, 'Consumer textually mentions User so it must be scanned');
+        // The unrelated file is correctly NOT in results.  This passes
+        // both with and without the pre-filter, but combined with the
+        // negative-shape `Widget` check below it pins the assertion that
+        // a missing-mention file contributes zero hits.
+        self::assertNotContains('file://' . $this->root . '/Unrelated.xphp', $uris);
+    }
+
+    public function testShortNamePreFilterAllowsSubstringMatchesThenAstWalkRejects(): void
+    {
+        // The pre-filter is intentionally permissive: str_contains
+        // matches "User" inside "UserController" or string literals,
+        // so files containing the substring still get parsed.  The
+        // existing per-node AST/locator logic is the source of truth
+        // and rejects non-references.  This test pins that contract.
+        file_put_contents($this->root . '/User.xphp', "<?php\nnamespace App;\nclass User {}\n");
+        file_put_contents($this->root . '/UserController.xphp', "<?php\nnamespace App;\nclass UserController {}\n");
+        file_put_contents($this->root . '/StringMention.xphp', "<?php\nnamespace App\\X;\nclass Marketing {\n    public function msg(): string { return 'Hello User'; }\n}\n");
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem($this->root . '/User.xphp', 'xphp', 1, file_get_contents($this->root . '/User.xphp')));
+
+        $locations = $this->references(
+            $workspace,
+            $this->root . '/User.xphp',
+            'class User',
+            strlen('class '),
+        );
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertNotContains('file://' . $this->root . '/UserController.xphp', $uris, 'substring inside another identifier is not a real ref');
+        self::assertNotContains('file://' . $this->root . '/StringMention.xphp', $uris, 'string-literal mention is not a real ref');
+        // The declaration site is still surfaced -- the pre-filter
+        // doesn't accidentally drop the open doc.
+        self::assertContains($this->root . '/User.xphp', $uris);
+    }
+
+    public function testWarmedFilesystemCacheIsConsultedByReferenceFinder(): void
+    {
+        // Perf #1 integration: pre-seed the AST cache via the warmer,
+        // then mutate the on-disk source to a no-ref version.  The
+        // filesystem pass MUST still find the original reference --
+        // proving it walked the cached AST and skipped the on-disk
+        // re-parse.
+        //
+        // We use the warmer as the producer (rather than directly
+        // calling cache->seedIfAbsent) so this also asserts the warmer
+        // hooks the right URI.  If the warmer keyed entries under the
+        // wrong URI shape, the pre-mutation parse would land in the
+        // cache but the filesystem pass would peek a different URI,
+        // hit miss, re-parse from disk, and surface 0 references.
+        file_put_contents($this->root . '/User.xphp', "<?php\nnamespace App;\nclass User {}\n");
+        file_put_contents($this->root . '/Consumer.xphp', "<?php\nnamespace App\\X;\nuse App\\User;\n\$u = new User();\n");
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem($this->root . '/User.xphp', 'xphp', 1, file_get_contents($this->root . '/User.xphp')));
+
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $cache = new ParsedDocumentCache(new Analyzer($parser));
+        $fqnIndex = new FqnIndex($workspace, $cache, $parser, $this->root);
+
+        // Drive the warmer synchronously via its extracted warmNow()
+        // entry point -- avoids the asyncCall + Delayed race that
+        // surfaces as false-positive Infection mutant escapes.
+        $warmer = new ParsedDocumentCacheWarmer($fqnIndex, $cache, $workspace);
+        $warmer->warmNow();
+
+        // Sanity: cache holds the original Consumer.xphp AST.
+        $cachedConsumer = $cache->peek('file://' . $this->root . '/Consumer.xphp');
+        self::assertNotNull($cachedConsumer, 'warmer must have seeded Consumer.xphp');
+
+        // Now corrupt the on-disk source so it contains NO reference to
+        // User.  If the filesystem pass re-reads disk, it'll see no
+        // hits.  If it serves the cached AST, the original `new User()`
+        // ref still surfaces.  The pre-filter's str_contains check uses
+        // the on-disk source bytes (intentional -- a true post-warmup
+        // disk change should still be detectable via the watch path,
+        // but in the absence of a `didChangeWatchedFiles` notification
+        // the cached AST stays authoritative).
+        //
+        // The pre-filter still passes because the corrupted file
+        // contains "Garbage", not "User"... so we need to keep "User"
+        // textually present on disk while removing the actual ref.
+        // A comment mention works: filter passes, AST walk finds no
+        // ref, and we'd see 0 hits from Consumer -- UNLESS the cache
+        // served the original AST.
+        file_put_contents($this->root . '/Consumer.xphp', "<?php\n// User mentioned in comment only\nnamespace App\\X;\nclass Disconnected {}\n");
+
+        $reflector = (new ReflectorFactory(
+            $workspace,
+            $cache,
+            $parser,
+            rootPath: $this->root,
+            stubPath: ReflectorFactory::defaultStubPath(),
+            cacheDir: ReflectorFactory::defaultCacheDir(),
+            fqnIndex: $fqnIndex,
+        ))->build();
+        $classLikeLookup = new CompositeClassLikeLookup(
+            new WorkspaceClassLikeLookup($workspace, $cache),
+            new FilesystemClassLikeLookup($fqnIndex),
+        );
+        $genericResolver = new GenericResolver($workspace, $cache, $classLikeLookup, $parser, $fqnIndex);
+        $finder = new ReferenceFinder($workspace, $cache, $fqnIndex, $parser, $reflector, $genericResolver);
+
+        $item = $workspace->get($this->root . '/User.xphp');
+        $cursorByte = strpos($item->text, 'class User') + strlen('class ');
+        $locations = $finder->findReferences($this->root . '/User.xphp', $cursorByte, true);
+
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        self::assertContains(
+            'file://' . $this->root . '/Consumer.xphp',
+            $uris,
+            'cached AST must be served -- otherwise the post-mutation disk text would yield 0 hits from Consumer',
+        );
+    }
+
     private function referencesAtPosition(
         PhpactorWorkspace $workspace,
         string $uri,
