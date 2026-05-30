@@ -24,36 +24,45 @@ use Phpactor\LanguageServerProtocol\Range;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Resolver\ReferenceFinder;
 
 /**
- * Cycle G — `textDocument/codeLens` handler.
+ * `textDocument/codeLens` handler.
  *
  * Emits a "Show references" lens above every class, interface, trait,
- * enum, function, and method declaration in the active document.  Each
- * lens carries a `Command` whose name (`xphp.showReferences`) the
- * client can route to its native find-usages action; the arguments
- * pass the document URI and the LSP Position of the declaration's
- * identifier token, so the client (or a follow-up `codeLens/resolve`)
- * can dispatch to `textDocument/references` without re-walking the
- * AST.
+ * enum, function, and method declaration in the active document.
+ * Each lens carries an `editor.action.showReferences` Command -- the
+ * de-facto LSP client-side convention (VS Code / LSP4IJ / Helix all
+ * recognize the name) -- with pre-computed Location[] baked into the
+ * arguments.  Clicking the lens opens the Find Usages panel directly
+ * without round-tripping through `workspace/executeCommand`, which
+ * the IDE plugin's LSP transport can't surface as a UI action.
+ *
+ * Command arguments shape: `[uri: string, position: Position,
+ * locations: Location[]]`.  PhpStorm's LSP4IJ adapter (and VS
+ * Code's built-in handler) interpret this triple natively.
  *
  * Lens placement: the lens range covers just the identifier token,
  * matching the convention IntelliJ / VS Code use to anchor a single-
  * line gutter clickable.
  *
- * V1 deliberately does NOT pre-compute reference counts -- that's a
- * workspace-wide walk per lens which would block the initial
- * codeLens response on large workspaces.  Count enrichment is a
- * follow-up (codeLens/resolve, currently not wired) -- the V1 title
- * is the static string "Show references".
+ * Cost: one full ReferenceFinder walk per declaration at lens-
+ * emission time.  Acceptable for small workspaces; a follow-up can
+ * thread `codeLens/resolve` for lazy on-click resolution at large
+ * scale.
  */
 final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
 {
-    public const COMMAND_NAME = 'xphp.showReferences';
+    /**
+     * Client-side command name -- recognized by VS Code, PhpStorm
+     * LSP4IJ, Helix, and every other mainline LSP client.
+     */
+    public const COMMAND_NAME = 'editor.action.showReferences';
 
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
         private readonly ParsedDocumentCache $cache,
+        private readonly ReferenceFinder $finder,
     ) {
     }
 
@@ -66,10 +75,7 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
 
     public function registerCapabiltiies(ServerCapabilities $capabilities): void
     {
-        // resolveProvider is false until a follow-up wires reference-
-        // count enrichment.  Setting it true today would imply the
-        // server fills in a Command via codeLens/resolve, but the
-        // initial response already carries one.
+        // Locations baked in upfront; no codeLens/resolve flow needed.
         $capabilities->codeLensProvider = new CodeLensOptions(resolveProvider: false);
     }
 
@@ -91,7 +97,7 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
             return new Success([]);
         }
         $positionMap = new PositionMap($item->text);
-        return new Success(self::buildLenses($uri, $result->ast, $positionMap));
+        return new Success($this->buildLenses($uri, $result->ast, $positionMap));
     }
 
     /**
@@ -104,10 +110,10 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
      * @param list<Node\Stmt> $ast
      * @return list<CodeLens>
      */
-    private static function buildLenses(string $uri, array $ast, PositionMap $positionMap): array
+    private function buildLenses(string $uri, array $ast, PositionMap $positionMap): array
     {
         $lenses = [];
-        self::collectLenses($ast, $uri, $positionMap, $lenses);
+        $this->collectLenses($ast, $uri, $positionMap, $lenses);
         return $lenses;
     }
 
@@ -115,24 +121,24 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
      * @param list<Node\Stmt>|array<Node\Stmt> $stmts
      * @param list<CodeLens>                   $lenses
      */
-    private static function collectLenses(array $stmts, string $uri, PositionMap $positionMap, array &$lenses): void
+    private function collectLenses(array $stmts, string $uri, PositionMap $positionMap, array &$lenses): void
     {
         foreach ($stmts as $stmt) {
             if ($stmt instanceof Namespace_) {
-                self::collectLenses($stmt->stmts, $uri, $positionMap, $lenses);
+                $this->collectLenses($stmt->stmts, $uri, $positionMap, $lenses);
                 continue;
             }
             if ($stmt instanceof ClassLike) {
-                self::appendIdentifierLens($stmt->name, $uri, $positionMap, $lenses);
+                $this->appendIdentifierLens($stmt->name, $uri, $positionMap, $lenses);
                 foreach ($stmt->stmts as $member) {
                     if ($member instanceof ClassMethod) {
-                        self::appendIdentifierLens($member->name, $uri, $positionMap, $lenses);
+                        $this->appendIdentifierLens($member->name, $uri, $positionMap, $lenses);
                     }
                 }
                 continue;
             }
             if ($stmt instanceof Function_) {
-                self::appendIdentifierLens($stmt->name, $uri, $positionMap, $lenses);
+                $this->appendIdentifierLens($stmt->name, $uri, $positionMap, $lenses);
             }
         }
     }
@@ -140,7 +146,7 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
     /**
      * @param list<CodeLens> $lenses
      */
-    private static function appendIdentifierLens(
+    private function appendIdentifierLens(
         ?Node\Identifier $identifier,
         string $uri,
         PositionMap $positionMap,
@@ -156,12 +162,21 @@ final class XphpCodeLensHandler implements Handler, CanRegisterCapabilities
         }
         [$startLine, $startChar] = $positionMap->offsetToPosition($start);
         [$endLine, $endChar] = $positionMap->offsetToPosition($end + 1);
+        $position = ['line' => $startLine, 'character' => $startChar];
+
+        // Pre-compute references so the lens click opens Find Usages
+        // immediately via client-side dispatch -- no executeCommand
+        // round-trip required.  `includeDeclaration: false` so the
+        // panel only lists actual call sites, not the declaration
+        // itself.
+        $locations = $this->finder->findReferences($uri, $start, false);
+
         $lenses[] = new CodeLens(
             new Range(new Position($startLine, $startChar), new Position($endLine, $endChar)),
             new Command(
-                title: 'Show references',
+                title: count($locations) . ' usage' . (count($locations) === 1 ? '' : 's'),
                 command: self::COMMAND_NAME,
-                arguments: [$uri, ['line' => $startLine, 'character' => $startChar]],
+                arguments: [$uri, $position, $locations],
             ),
         );
     }

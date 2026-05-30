@@ -245,16 +245,18 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpTextDocumentHandler($eventDispatcher),
             new ServiceHandler($serviceManager, $clientApi),
             new CommandHandler(new CommandDispatcher([
-                // Cycle G: codeLens emits this command above every class /
-                // function / method declaration; PhpStorm forwards the
-                // click to `workspace/executeCommand`.  The server-side
-                // dispatch must succeed (CommandDispatcher throws on
-                // unknown commands and the framework turns that into a
-                // JSON-RPC error toast).  V1 behaviour is a no-op
-                // returning `null`; a follow-up cycle wires this to run
-                // the references resolver and ship the result back via
-                // `workspace/applyEdit` or a custom notification so the
-                // editor can navigate.
+                // CodeLens emits `editor.action.showReferences` with
+                // locations baked in -- VS Code, PhpStorm LSP4IJ, and
+                // Helix all dispatch this name client-side and open
+                // the Find Usages panel without round-tripping.
+                // Register a server-side no-op as a safety net: any
+                // client that doesn't recognize the convention will
+                // fall back to `workspace/executeCommand`, and the
+                // CommandDispatcher would throw on an unknown
+                // command name -- phpactor's framework would surface
+                // that as a JSON-RPC error toast.  Returning null
+                // here makes the unhandled-by-client path silently
+                // do nothing instead.
                 XphpCodeLensHandler::COMMAND_NAME => new ClosureCommand(
                     static fn (...$args): \Amp\Promise => new \Amp\Success(null),
                 ),
@@ -283,7 +285,11 @@ final class LspDispatcherFactory implements DispatcherFactory
             new XphpCodeActionResolveHandler(),
             new XphpDocumentSymbolHandler($workspace, $cache),
             new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex, $xphpParser),
-            new XphpCodeLensHandler($workspace, $cache),
+            new XphpCodeLensHandler(
+                $workspace,
+                $cache,
+                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
+            ),
             new XphpFoldingRangeHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),
             new XphpFileWatcherHandler($fqnIndex, $workspace),

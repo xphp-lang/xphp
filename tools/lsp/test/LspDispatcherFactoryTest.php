@@ -183,23 +183,26 @@ final class LspDispatcherFactoryTest extends TestCase
         yield 'resourceOperations includes "rename"' => [$renameAndCreate, true];
     }
 
-    public function testXphpShowReferencesCommandIsDispatchableViaExecuteCommand(): void
+    public function testCodeLensCommandIsDispatchableViaExecuteCommandFallback(): void
     {
-        // Prod regression (xphp-20260529-061522-011): PhpStorm
-        // clicks the codeLens above a declaration; the client sends
-        // `workspace/executeCommand` with command name
-        // `xphp.showReferences`; phpactor's CommandDispatcher errors
-        // with `Command "xphp.showReferences" not found, known
-        // commands: ""` and bubbles a JSON-RPC error toast.  The
-        // dispatcher must have the command registered (V1 returns
-        // null; a follow-up cycle wires the actual references).
+        // CodeLens emits `editor.action.showReferences` with
+        // locations baked in; well-behaved clients (VS Code, LSP4IJ,
+        // Helix) dispatch the command client-side and open Find
+        // Usages directly -- no executeCommand request reaches the
+        // server.  Any client that doesn't recognize the
+        // convention falls back to `workspace/executeCommand` --
+        // phpactor's CommandDispatcher would throw `Command "..."
+        // not found` on an unregistered name and surface that as a
+        // JSON-RPC error toast.  The dispatcher registers a
+        // server-side no-op for the command name as a safety net so
+        // the fallback path is silent.
         $tester = $this->buildTester();
         $tester->initialize();
 
         $response = \Amp\Promise\wait(
             $tester->workspace()->executeCommand(
                 \XPHP\Lsp\Handler\XphpCodeLensHandler::COMMAND_NAME,
-                ['file:///x.xphp', ['line' => 0, 'character' => 0]],
+                ['file:///x.xphp', ['line' => 0, 'character' => 0], []],
             ),
         );
 

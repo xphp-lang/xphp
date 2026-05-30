@@ -1037,6 +1037,12 @@
         },
         "ConcatOperandRemoval": {
             "ignore": [
+                // XphpCodeLensHandler::appendIdentifierLens -- the
+                // title's plural-ternary `count . ' usage' . (n===1?'':'s')`.
+                // Removing the ternary produces "1 usages" for count=1
+                // (vs the correct "1 usage"); cosmetic difference only,
+                // the click target's locations array is unaffected.
+                "XPHP\\Lsp\\Handler\\XphpCodeLensHandler::appendIdentifierLens",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::subtypes",
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::visitClassLikes",
