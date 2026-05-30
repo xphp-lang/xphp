@@ -120,29 +120,25 @@ final class LspDispatcherFactoryTest extends TestCase
     }
 
     /**
-     * @param mixed $initializationOptions
      * @dataProvider clientSupportsRenameFileOpCases
      */
     #[\PHPUnit\Framework\Attributes\DataProvider('clientSupportsRenameFileOpCases')]
     public function testClientSupportsRenameFileOpDetection(
         ?ClientCapabilities $capabilities,
-        $initializationOptions,
         bool $expected,
     ): void {
         // Pins the `$initializeParams->capabilities?->workspace?->workspaceEdit?->resourceOperations ?? null`
         // chain plus the `is_array` / `in_array('rename', ...)` filter
-        // against NullSafePropertyCall / FalseValue mutants, AND the
-        // Cycle L override that consults `initializationOptions
-        // .xphpAcceptsRenameFile` when the plugin opts in regardless
-        // of standard resourceOperations advertisement.
+        // against NullSafePropertyCall / FalseValue mutants.  See the
+        // helper's docblock for the Cycle L init-option override that
+        // was reverted after prod-test proved it self-defeating
+        // (PhpStorm aborts the whole WorkspaceEdit when it sees an
+        // unsupported resource op due to `failureHandling: "abort"`).
         $reflection = new \ReflectionClass(LspDispatcherFactory::class);
         $method = $reflection->getMethod('clientSupportsRenameFileOp');
         $method->setAccessible(true);
 
-        $params = new InitializeParams(
-            $capabilities ?? new ClientCapabilities(),
-            initializationOptions: $initializationOptions,
-        );
+        $params = new InitializeParams($capabilities ?? new ClientCapabilities());
         // Force the capabilities to null when the case requests it
         // (InitializeParams' constructor doesn't accept null).
         if ($capabilities === null) {
@@ -153,7 +149,7 @@ final class LspDispatcherFactoryTest extends TestCase
     }
 
     /**
-     * @return iterable<string, array{ClientCapabilities|null, mixed, bool}>
+     * @return iterable<string, array{ClientCapabilities|null, bool}>
      */
     public static function clientSupportsRenameFileOpCases(): iterable
     {
@@ -181,70 +177,13 @@ final class LspDispatcherFactoryTest extends TestCase
         $renameAndCreate->workspace->workspaceEdit = new WorkspaceEditClientCapabilities();
         $renameAndCreate->workspace->workspaceEdit->resourceOperations = ['create', 'rename', 'delete'];
 
-        // Standard resourceOperations-driven cases (no init-option
-        // override).  These cover every rung of the null-safe ?->
-        // chain plus the resourceOperations array check.
-        yield 'capabilities is null' => [null, null, false];
-        yield 'workspace is null' => [$bareCaps, null, false];
-        yield 'workspaceEdit is null' => [$emptyWorkspace, null, false];
-        yield 'resourceOperations is null' => [$emptyWorkspaceEdit, null, false];
-        yield 'resourceOperations is ["rename"]' => [$renameSupported, null, true];
-        yield 'resourceOperations is ["create"] only' => [$createOnly, null, false];
-        yield 'resourceOperations includes "rename"' => [$renameAndCreate, null, true];
-
-        // Cycle L Half A: init-option override.  The plugin opts in
-        // via `initializationOptions.xphpAcceptsRenameFile: true`
-        // even though PhpStorm advertises only ["create"].
-        yield 'init-option true overrides missing rename op' => [
-            $createOnly,
-            ['xphpAcceptsRenameFile' => true],
-            true,
-        ];
-        yield 'init-option true overrides null capabilities entirely' => [
-            null,
-            ['xphpAcceptsRenameFile' => true],
-            true,
-        ];
-        yield 'init-option false does NOT override anything' => [
-            $createOnly,
-            ['xphpAcceptsRenameFile' => false],
-            false,
-        ];
-        yield 'init-option string "true" is rejected (strict bool)' => [
-            $createOnly,
-            ['xphpAcceptsRenameFile' => 'true'],
-            false,
-        ];
-        yield 'init-option integer 1 is rejected (strict bool)' => [
-            $createOnly,
-            ['xphpAcceptsRenameFile' => 1],
-            false,
-        ];
-        yield 'init-option missing flag falls through to resourceOperations' => [
-            $renameSupported,
-            ['otherFlag' => true],
-            true,
-        ];
-        // Catch the FalseValue mutant on `($opts[...] ?? false) ===
-        // true`: with an init-options array that doesn't carry the
-        // flag, the override must NOT fire.  Pair with a
-        // resourceOperations set that DOESN'T include rename so
-        // override-firing-vs-not produces a distinguishable result.
-        yield 'init-option without flag does NOT enable override when resourceOps lack rename' => [
-            $createOnly,
-            ['otherFlag' => true],
-            false,
-        ];
-        yield 'init-option empty array does NOT enable override when resourceOps lack rename' => [
-            $createOnly,
-            [],
-            false,
-        ];
-        yield 'init-option is non-array (mixed)' => [
-            $createOnly,
-            'not-an-array',
-            false,
-        ];
+        yield 'capabilities is null' => [null, false];
+        yield 'workspace is null' => [$bareCaps, false];
+        yield 'workspaceEdit is null' => [$emptyWorkspace, false];
+        yield 'resourceOperations is null' => [$emptyWorkspaceEdit, false];
+        yield 'resourceOperations is ["rename"]' => [$renameSupported, true];
+        yield 'resourceOperations is ["create"] only' => [$createOnly, false];
+        yield 'resourceOperations includes "rename"' => [$renameAndCreate, true];
     }
 
     public function testCodeLensCommandIsDispatchableViaExecuteCommandFallback(): void

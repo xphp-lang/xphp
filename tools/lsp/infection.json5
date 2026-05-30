@@ -109,6 +109,14 @@
                 // vs -1 changes only the printed digit, not behaviour;
                 // stderr is muted in tests anyway.
                 "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                // Cycle L XphpWillRenameFilesHandler::editsForFileRename
+                // `new TextDocumentItem($uri, 'xphp', 0, $source)` --
+                // the version 0 sentinel is just a placeholder for the
+                // workspace-inject; nothing reads it (the inject is
+                // removed in `finally` before the workspace sees a real
+                // didOpen).  Negative or positive integers behave
+                // identically.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::editsForFileRename",
                 // Cycle L XphpWillRenameFilesHandler::basenameStem --
                 // `if ($dot === false || $dot === 0)` -> `$dot === -1`.
                 // The check guards hidden-file basenames (`.gitignore`).
@@ -199,6 +207,10 @@
                 // muted in tests.
                 "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
                 "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler::didChangeWatchedFiles",
+                // Cycle L XphpWillRenameFilesHandler::editsForFileRename
+                // -- same TextDocumentItem version-sentinel rationale
+                // as the DecrementInteger ignore above.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::editsForFileRename",
                 // XphpTypeHierarchyHandler -- see top-of-mutators rationale.
                 "XPHP\\Lsp\\Handler\\XphpTypeHierarchyHandler::buildItem",
                 // XphpHoverHandler angle-clause helpers -- see top-of-mutators rationale.
@@ -1291,6 +1303,15 @@
             "ignore": [
                 "XPHP\\Lsp\\Reflection\\FqnIndexWarmer::warm",
                 "XPHP\\Lsp\\Analyzer\\ParsedDocumentCacheWarmer::warmNow",
+                // Cycle L XphpWillRenameFilesHandler::findClassLikeNameOffset
+                // -- `$this->cache->seedIfAbsent($uri, $source)` is a
+                // perf optimisation: dropping it leaves the cache
+                // empty for this URI; the `$parsed?->ast` lookup
+                // returns null; and the `if ($ast === null)` branch
+                // falls through to a direct tolerant-parse that
+                // produces the same AST.  Same final offset returned,
+                // just one extra parse on the cold path.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::findClassLikeNameOffset",
                 "XPHP\\Lsp\\Reflection\\FilesystemSourceLocator::locate",
                 "XPHP\\Lsp\\Reflection\\FqnIndex::buildFilesystemIndex",
                 "XPHP\\Lsp\\Handler\\XphpFileWatcherHandler",
@@ -1524,7 +1545,15 @@
                 // segment ending at the last `/`, so the same stem
                 // emerges).  No realistic input produces different
                 // stems with and without the strip.
-                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::basenameStem"
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::basenameStem",
+                // Cycle L XphpWillRenameFilesHandler::sourceFor --
+                // `substr($uri, strlen('file://'))` strip before
+                // file_get_contents.  PHP's file_get_contents accepts
+                // BOTH `file:///foo` and `/foo` (the URL wrapper is
+                // registered by default on a typical PHP install), so
+                // dropping the strip produces the same bytes.  No
+                // realistic env distinguishes the paths here.
+                "XPHP\\Lsp\\Handler\\XphpWillRenameFilesHandler::sourceFor"
             ]
         },
         "Increment": {

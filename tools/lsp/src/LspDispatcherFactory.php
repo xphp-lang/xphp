@@ -371,20 +371,23 @@ final class LspDispatcherFactory implements DispatcherFactory
      * (no `rename`/`delete`), so any `RenameFile` we send is silently
      * dropped on the client side and the user sees a partial apply.
      *
-     * **Cycle L override**: the xphp PhpStorm plugin applies
-     * `RenameFile` ops manually (its own write-action against the
-     * VFS), and opts in via `initializationOptions.xphpAcceptsRenameFile
-     * = true`.  When set, we emit the ops regardless of the standard
-     * `resourceOperations` advertisement.  This keeps spec-compliant
-     * clients (VS Code) on the standard path and unlocks PhpStorm
-     * without lying about its capabilities.
+     * **Cycle L attempt 1** added a plugin-side opt-in
+     * (`initializationOptions.xphpAcceptsRenameFile`) so the server
+     * could emit RenameFile ops regardless of the standard
+     * advertisement.  Prod-test (xphp-20260530-161814 log id=50)
+     * proved the opt-in self-defeating: PhpStorm advertises
+     * `failureHandling: "abort"`, so when LSP4IJ's WorkspaceEdit
+     * applier sees the unsupported RenameFile op, it aborts the
+     * ENTIRE WorkspaceEdit including the text edits the user
+     * actually wanted.  Reverted -- the flag is now read but no
+     * longer fires the override; we honour the spec-standard
+     * advertisement only.  The xphp-side flag stays on the wire so
+     * the plugin can be told the server CAN emit the op (for a
+     * future architecture where the plugin intercepts the rename
+     * before LSP4IJ's abort-on-failure applier sees it).
      */
     private static function clientSupportsRenameFileOp(InitializeParams $initializeParams): bool
     {
-        $opts = $initializeParams->initializationOptions ?? null;
-        if (is_array($opts) && ($opts['xphpAcceptsRenameFile'] ?? false) === true) {
-            return true;
-        }
         $ops = $initializeParams->capabilities?->workspace?->workspaceEdit?->resourceOperations ?? null;
         if (!is_array($ops)) {
             return false;

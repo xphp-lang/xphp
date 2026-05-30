@@ -18,6 +18,7 @@ use Phpactor\LanguageServerProtocol\FileOperationPattern;
 use Phpactor\LanguageServerProtocol\FileOperationRegistrationOptions;
 use Phpactor\LanguageServerProtocol\RenameFilesParams;
 use Phpactor\LanguageServerProtocol\ServerCapabilities;
+use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use Phpactor\LanguageServerProtocol\WorkspaceEdit;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Resolver\RenameProvider;
@@ -125,6 +126,26 @@ final class XphpWillRenameFilesHandler implements Handler, CanRegisterCapabiliti
      * null when the file isn't a safe PSR-4 candidate (multi-class
      * file, basename mismatch, basename isn't an identifier, or new
      * basename equals old).
+     *
+     * IntelliJ caveat (prod-test 2026-05-30 16:18 log id=59): the LSP
+     * spec says `workspace/willRenameFiles` is sent BEFORE the file
+     * is renamed, but PhpStorm sends it 4ms AFTER -- the order on
+     * the wire is `didClose(old) + didChangeWatchedFiles(deleted+
+     * created) + willRenameFiles(old->new) + didOpen(new)`.  By the
+     * time we run, the OLD file is gone (off disk AND out of
+     * workspace) and the NEW file isn't open yet.  We probe both
+     * URIs for source so the handler works under both spec-compliant
+     * clients (VS Code) and IntelliJ's post-hoc dispatch.
+     *
+     * The rename pipeline still uses the OLD URI: that's where the
+     * class WAS declared (and where ReferenceFinder's findReferences
+     * needs to anchor its cursor walk).  When the OLD file is gone
+     * but the NEW file has matching content, we feed the NEW file's
+     * source into the OLD URI's analysis -- the resulting edits
+     * target the OLD URI, which the client interprets correctly
+     * (the file will be at the new path by the time it applies the
+     * edits, and most clients re-target outdated URIs via the
+     * applier's lookup).
      */
     private function editsForFileRename(
         string $oldUri,
@@ -147,17 +168,48 @@ final class XphpWillRenameFilesHandler implements Handler, CanRegisterCapabiliti
         ) {
             return null;
         }
+
+        // Pick the URI we'll drive the rename against: prefer the old
+        // URI if the file is still reachable there (spec-compliant
+        // client), fall back to the new URI when IntelliJ already
+        // moved the file before sending willRenameFiles.  Either way
+        // the source on disk still carries the OLD class name --
+        // findClassLikeNameOffset matches it against $oldStem.
+        $operatingUri = $oldUri;
         $source = $this->sourceFor($oldUri);
         if ($source === null) {
-            return null;
+            $source = $this->sourceFor($newUri);
+            if ($source === null) {
+                return null;
+            }
+            $operatingUri = $newUri;
         }
-        $offset = $this->findClassLikeNameOffset($oldUri, $source, $oldStem);
+        $offset = $this->findClassLikeNameOffset($operatingUri, $source, $oldStem);
         if ($offset === null) {
             return null;
         }
-        // Drive the existing rename pipeline with the new short name,
-        // suppressing the RenameFile op (the client is doing the move).
-        return $this->renameProvider->renameSymbolOnly($oldUri, $offset, $newStem, $cancel);
+
+        // RenameProvider's chain (resolveTargetAt -> findReferences)
+        // guards on `workspace->has($uri)` and returns null when the
+        // URI isn't open in the workspace.  Under IntelliJ's post-hoc
+        // dispatch, neither the old NOR the new URI is open at this
+        // moment (didClose fired for old, didOpen for new comes
+        // AFTER willRenameFiles).  Inject the operating URI into the
+        // workspace just for this call so the chain has source to
+        // anchor against, then forget it -- the upcoming didOpen
+        // will re-establish the version-keyed entry properly.
+        $injected = false;
+        if (!$this->workspace->has($operatingUri)) {
+            $this->workspace->open(new TextDocumentItem($operatingUri, 'xphp', 0, $source));
+            $injected = true;
+        }
+        try {
+            return $this->renameProvider->renameSymbolOnly($operatingUri, $offset, $newStem, $cancel);
+        } finally {
+            if ($injected) {
+                $this->workspace->remove(new \Phpactor\LanguageServerProtocol\TextDocumentIdentifier($operatingUri));
+            }
+        }
     }
 
     /**

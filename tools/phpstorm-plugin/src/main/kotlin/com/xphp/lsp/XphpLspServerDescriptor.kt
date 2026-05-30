@@ -100,29 +100,6 @@ class XphpLspServerDescriptor(project: Project) :
         override val commandsCustomizer = XphpShowReferencesCommandsSupport()
     }
 
-    /**
-     * Cycle L Half A: PhpStorm's LSP4IJ advertises
-     * `workspace.workspaceEdit.resourceOperations: ["create"]` only
-     * (no `"rename"`), so per spec our server elides `RenameFile`
-     * ops from `textDocument/rename` responses -- the file stays
-     * `Foo.xphp` even though the class is now `Bar`.  This opt-in
-     * tells the server to emit `RenameFile` ops anyway, and the
-     * plugin commits to applying them.
-     *
-     * Whether LSP4IJ's internal `LspWorkspaceEditApplier` actually
-     * processes `RenameFile` ops (vs silently dropping them like
-     * the resourceOperations advertisement suggests) is empirically
-     * unknown until prod-test; even if it does drop them, Half B
-     * (file -> class) ships independently and gets the user 50% of
-     * the way.  See plan for the Half-A follow-up path if needed.
-     *
-     * Spec: returned object becomes `initializationOptions` in the
-     * `initialize` request body.  The server reads
-     * `$initializeParams->initializationOptions['xphpAcceptsRenameFile']`
-     * in {@link LspDispatcherFactory.clientSupportsRenameFileOp}.
-     */
-    override fun createInitializationOptions(): Any =
-        mapOf("xphpAcceptsRenameFile" to true)
 
     // IntelliJ's LSP framework dedupes "is this server already running?"
     // by descriptor equality.  Our `XphpLspServerSupportProvider.fileOpened`

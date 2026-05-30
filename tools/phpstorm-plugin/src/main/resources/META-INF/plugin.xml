@@ -169,15 +169,16 @@
             implementation="com.xphp.lsp.textmate.XphpBundleRegistrar"/>
 
         <!--
-          Cycle L Half B: VFS rename listener for `.xphp` / `.php`
-          files.  Sends `workspace/willRenameFiles` to the xphp LSP
-          server on each rename; the response carries text edits
-          renaming the in-source class to match the new basename,
-          applied via WriteCommandAction.  See [XphpFileRenameListener]
-          for the safety guard around non-PSR-4 files.
+          Cycle L Half B: PhpStorm dispatches `workspace/willRenameFiles`
+          natively when the server advertises
+          `workspace.fileOperations.willRename` (our
+          XphpWillRenameFilesHandler does this on `initialize`), so
+          no plugin-side AsyncFileListener is required.  The earlier
+          XphpFileRenameListener implementation was removed once
+          prod-test (xphp-20260530-161814 log id=59) confirmed
+          PhpStorm sends the request itself on every .xphp/.php
+          rename in the project tree.
         -->
-        <vfs.asyncListener
-            implementation="com.xphp.lsp.XphpFileRenameListener"/>
 
         <!--
           NOTE: we deliberately do NOT register a

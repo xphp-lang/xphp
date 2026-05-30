@@ -350,6 +350,71 @@ final class XphpWillRenameFilesHandlerTest extends TestCase
         self::assertNull($edit);
     }
 
+    public function testDoesNotRemoveAlreadyOpenDocumentFromWorkspace(): void
+    {
+        // The handler injects a TextDocumentItem into the workspace
+        // ONLY when the operating URI isn't already open (IntelliJ
+        // post-hoc dispatch case).  When the file IS open in the
+        // workspace, the handler must NOT remove it -- a `$injected =
+        // true` FalseValue mutant would call workspace->remove() on
+        // the user's open document, closing it from under them.
+        $source = "<?php\nnamespace App;\nclass StillOpen {}\n";
+        file_put_contents($this->root . '/StillOpen.xphp', $source);
+        $uri = 'file://' . $this->root . '/StillOpen.xphp';
+
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem($uri, 'xphp', 1, $source));
+        self::assertTrue($workspace->has($uri), 'precondition: file open');
+
+        $this->dispatch($workspace, [
+            new FileRename($uri, 'file://' . $this->root . '/StillOpenRenamed.xphp'),
+        ]);
+
+        self::assertTrue(
+            $workspace->has($uri),
+            'workspace must retain documents the handler did NOT inject',
+        );
+    }
+
+    public function testHandlesIntelliJPostHocDispatchWithFileAlreadyMovedAndWorkspaceClosed(): void
+    {
+        // IntelliJ's prod behavior (xphp-20260530-161814 log id=59):
+        // PhpStorm sends willRenameFiles AFTER renaming the file on
+        // disk AND AFTER firing didClose for the old URI.  Sequence:
+        //   1. didClose(old) -> workspace.has(old) is false
+        //   2. didChangeWatchedFiles -> file watcher invalidates AST
+        //      cache (warmer-seeded entries dropped)
+        //   3. willRenameFiles(old -> new) -> this handler runs
+        //   4. didOpen(new) -> workspace.has(new) becomes true (AFTER)
+        // At step 3, neither URI is open in the workspace and the
+        // OLD file no longer exists on disk.  The handler must
+        // resolve source via the NEW path (which now has the file
+        // contents) and run the rename pipeline correctly anyway.
+        $source = "<?php\nnamespace App;\nclass Original {}\n";
+        // Simulate IntelliJ's post-rename state: write the file at
+        // the NEW path only, don't open either URI in the workspace.
+        file_put_contents($this->root . '/Renamed.xphp', $source);
+        $oldUri = 'file://' . $this->root . '/Original.xphp';
+        $newUri = 'file://' . $this->root . '/Renamed.xphp';
+
+        $workspace = new PhpactorWorkspace();
+        // Workspace is empty -- mirrors the moment after didClose
+        // and before didOpen.
+
+        $edit = $this->dispatch($workspace, [new FileRename($oldUri, $newUri)]);
+
+        self::assertNotNull($edit, 'must produce edits even when file has already moved');
+        $changes = $edit->documentChanges ?? [];
+        $textEdits = array_values(array_filter($changes, fn ($c) => $c instanceof TextDocumentEdit));
+        self::assertNotEmpty($textEdits, 'at least one TextDocumentEdit for the class rename');
+        // The handler injects the file into the workspace under the
+        // operating URI it picked (the new URI in this scenario) and
+        // removes it before returning, so the workspace is clean
+        // afterwards.
+        self::assertFalse($workspace->has($oldUri), 'workspace untouched after rename');
+        self::assertFalse($workspace->has($newUri), 'workspace untouched after rename');
+    }
+
     public function testHandlesInterfaceDeclarations(): void
     {
         // Interfaces follow PSR-4 exactly like classes.  This pins
