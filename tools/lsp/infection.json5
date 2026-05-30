@@ -829,6 +829,19 @@
                 "XPHP\\Lsp\\Handler\\XphpImplementationHandler::buildLocation",
             ]
         },
+        "LessThanNegotiation": {
+            "ignore": [
+                // XphpCallHierarchyHandler::buildTopLevelItem -- the
+                // defensive `if ($startByte < 0 || $endByte < 0 ||
+                // $endByte < $startByte)` guard against malformed
+                // nikic positions.  nikic always populates valid
+                // positions for parsed statements, so the negative-
+                // position and end-before-start branches are
+                // unreachable from production input; the guard
+                // exists for synthetic-AST safety.
+                "XPHP\\Lsp\\Handler\\XphpCallHierarchyHandler::buildTopLevelItem"
+            ]
+        },
 
         // ReferenceFinder line 419: InstanceOf_ on
         // `$best instanceof Node\VarLikeIdentifier || $best instanceof Identifier`.

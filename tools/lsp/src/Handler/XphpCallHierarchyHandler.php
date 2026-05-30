@@ -180,13 +180,50 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
         if ($result->ast === null || $result->ast === []) {
             return new Success([]);
         }
-        $body = self::findMethodOrFunctionBody($result->ast, $classFqn, $methodName);
-        if ($body === null) {
+        // Top-level scope sentinel (`__topLevel`) -- walk the file's
+        // script-mode statements instead of looking up a method body.
+        // See `buildTopLevelItem` for where this sentinel is set.
+        if ($methodName === '__topLevel') {
+            $body = self::collectTopLevelStmts($result->ast);
+        } else {
+            $body = self::findMethodOrFunctionBody($result->ast, $classFqn, $methodName);
+        }
+        if ($body === null || $body === []) {
             return new Success([]);
         }
         $positionMap = new PositionMap($document->text);
         $calls = self::collectOutgoingFromBody($body, $uri, $positionMap);
         return new Success($calls);
+    }
+
+    /**
+     * Collect every statement that's NOT inside a Function_ or
+     * ClassLike across the whole AST (including stmts inside any
+     * Namespace_ block).  Used by outgoingCalls when the caller
+     * item is the synthetic top-level scope.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return list<Node\Stmt>
+     */
+    private static function collectTopLevelStmts(array $ast): array
+    {
+        $out = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                foreach ($stmt->stmts as $inner) {
+                    if ($inner instanceof ClassLike || $inner instanceof Function_) {
+                        continue;
+                    }
+                    $out[] = $inner;
+                }
+                continue;
+            }
+            if ($stmt instanceof ClassLike || $stmt instanceof Function_) {
+                continue;
+            }
+            $out[] = $stmt;
+        }
+        return $out;
     }
 
     /**
@@ -237,6 +274,14 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
         PositionMap $positionMap,
         array &$hits,
     ): void {
+        // Statements at the current scope level that don't belong to
+        // a Function_, ClassMethod, or nested Namespace_ are *top-
+        // level script code* (PHP allows arbitrary statements at file
+        // root and inside `namespace … { … }` blocks).  Call sites
+        // there have no enclosing callable -- collect them so a
+        // synthetic "top-level scope" item can carry them in the
+        // CallHierarchy result.
+        $topLevelStmts = [];
         foreach ($stmts as $stmt) {
             if ($stmt instanceof Namespace_) {
                 $nextNs = $stmt->name === null ? '' : $stmt->name->toString();
@@ -261,8 +306,85 @@ final class XphpCallHierarchyHandler implements Handler, CanRegisterCapabilities
             }
             if ($stmt instanceof Function_) {
                 self::scanCallableBody($stmt, $namespace, null, $targetName, $uri, $positionMap, $hits);
+                continue;
             }
+            $topLevelStmts[] = $stmt;
         }
+        if ($topLevelStmts !== []) {
+            self::scanTopLevelBody($topLevelStmts, $targetName, $uri, $positionMap, $hits);
+        }
+    }
+
+    /**
+     * @param list<Node\Stmt>      $stmts top-level (non-callable, non-class) statements
+     * @param array<int, mixed>    $hits
+     */
+    private static function scanTopLevelBody(
+        array $stmts,
+        string $targetName,
+        string $uri,
+        PositionMap $positionMap,
+        array &$hits,
+    ): void {
+        $callRanges = [];
+        self::walkForMatchingCalls($stmts, $targetName, $positionMap, $callRanges);
+        if ($callRanges === []) {
+            return;
+        }
+        $enclosingItem = self::buildTopLevelItem($uri, $stmts, $positionMap);
+        foreach ($callRanges as $range) {
+            $hits[] = [
+                'uri' => $uri,
+                'range' => $range,
+                'enclosingFqn' => null,
+                'enclosingName' => $enclosingItem->name,
+                'enclosingItem' => $enclosingItem,
+            ];
+        }
+    }
+
+    /**
+     * Synthesize a CallHierarchyItem representing the top-level
+     * scope (script-mode region) of a file.  Used as the
+     * `from` of incoming-call hits whose call site sits outside
+     * any function/method, and as the receiver of
+     * outgoingCalls when the user navigates into it from a
+     * Callers view entry.  The `data.name` sentinel is
+     * `__topLevel` (a name no userland symbol can collide
+     * with -- PHP reserves `__`-prefixed names).
+     *
+     * @param list<Node\Stmt> $stmts the contiguous top-level statements
+     */
+    private static function buildTopLevelItem(
+        string $uri,
+        array $stmts,
+        PositionMap $positionMap,
+    ): CallHierarchyItem {
+        $path = parse_url($uri, PHP_URL_PATH);
+        $name = $path !== null && $path !== false ? basename($path) : basename($uri);
+        if ($name === '') {
+            $name = '<script>';
+        }
+        $startByte = $stmts[0]->getStartFilePos();
+        $endByte = end($stmts)->getEndFilePos();
+        if ($startByte < 0 || $endByte < 0 || $endByte < $startByte) {
+            $rangeStart = new Position(0, 0);
+            $rangeEnd = new Position(0, 0);
+        } else {
+            [$rsl, $rsc] = $positionMap->offsetToPosition($startByte);
+            [$rel, $rec] = $positionMap->offsetToPosition($endByte + 1);
+            $rangeStart = new Position($rsl, $rsc);
+            $rangeEnd = new Position($rel, $rec);
+        }
+        return new CallHierarchyItem(
+            name: $name,
+            kind: SymbolKind::MODULE,
+            uri: $uri,
+            range: new Range($rangeStart, $rangeEnd),
+            selectionRange: new Range(new Position(0, 0), new Position(0, strlen($name))),
+            detail: null,
+            data: ['classFqn' => '', 'name' => '__topLevel'],
+        );
     }
 
     /**

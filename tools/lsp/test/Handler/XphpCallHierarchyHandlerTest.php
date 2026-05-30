@@ -139,6 +139,80 @@ final class XphpCallHierarchyHandlerTest extends TestCase
         self::assertContains('qux', $calleeNames);
     }
 
+    public function testIncomingCallsSurfacesTopLevelCallSitesViaModuleScope(): void
+    {
+        // PHP allows top-level script code (no enclosing function /
+        // method).  Calls there must surface in the Callers view --
+        // before this fix the walker only descended into Function_ /
+        // ClassMethod, so script-mode call sites were invisible.
+        //
+        // Fixture mirrors the playground demo shape: a class with the
+        // target method + a separate file that calls it from
+        // top-level scripting under a namespace.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Animal.xphp', 'xphp', 1, <<<'PHP'
+        <?php
+        namespace App;
+        class Animal {
+            public function speak(): string { return 'noise'; }
+        }
+        PHP));
+        $workspace->open(new TextDocumentItem('/demo.xphp', 'xphp', 1, <<<'PHP'
+        <?php
+        namespace App\Demos;
+        use App\Animal;
+        $a = new Animal();
+        $a->speak();
+        PHP));
+        $handler = $this->newHandler($workspace);
+
+        $item = [
+            'uri' => '/Animal.xphp',
+            'data' => ['classFqn' => 'App\\Animal', 'name' => 'speak'],
+        ];
+        $incoming = wait($handler->incomingCalls($item));
+
+        self::assertNotEmpty($incoming, 'top-level call site must surface');
+        self::assertCount(1, $incoming);
+        // Synthetic top-level scope item: SymbolKind::MODULE,
+        // name = file basename, data.name sentinel = `__topLevel`.
+        $from = $incoming[0]->from;
+        self::assertSame('demo.xphp', $from->name);
+        self::assertSame(SymbolKind::MODULE, $from->kind);
+        self::assertSame('__topLevel', $from->data['name']);
+        self::assertSame('/demo.xphp', $from->uri);
+        // fromRanges must point at the call site.
+        self::assertCount(1, $incoming[0]->fromRanges);
+    }
+
+    public function testOutgoingCallsResolvesTopLevelScopeBody(): void
+    {
+        // Symmetric: when the user navigates into the top-level
+        // scope entry from a Callers view and asks for its
+        // outgoing calls, walk the file's script-mode statements
+        // (not a method body).  Locks the `__topLevel` sentinel
+        // special-case in outgoingCalls.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/demo.xphp', 'xphp', 1, <<<'PHP'
+        <?php
+        namespace App\Demos;
+        $a = new \App\Animal();
+        $a->speak();
+        $a->describe();
+        PHP));
+        $handler = $this->newHandler($workspace);
+
+        $item = [
+            'uri' => '/demo.xphp',
+            'data' => ['classFqn' => '', 'name' => '__topLevel'],
+        ];
+        $outgoing = wait($handler->outgoingCalls($item));
+
+        $names = array_map(static fn (CallHierarchyOutgoingCall $c): string => $c->to->name, $outgoing);
+        sort($names);
+        self::assertSame(['describe', 'speak'], $names);
+    }
+
     public function testIncomingCallsReturnsEmptyForMissingItem(): void
     {
         // incomingCalls(array $item) is type-hinted; non-array would
