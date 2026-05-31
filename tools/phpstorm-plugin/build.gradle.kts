@@ -102,9 +102,26 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            // Verify against the same baseline we target.  Future minors get
-            // added when they ship; the until-build window catches the rest.
-            recommended()
+            // PhpStorm-only.  `plugin.xml` declares
+            // `<depends>com.intellij.modules.php</depends>`, so the plugin
+            // can't load in IDEA / WebStorm / RustRover / RubyMine / etc. --
+            // verifying against `recommended()` (the JetBrains-curated set
+            // of every IntelliJ Platform IDE) downloads ~6-8 IDE bundles
+            // (~10-15 GB) the plugin would never run on, and on GitHub
+            // ubuntu-latest runners that's enough to exhaust the ~14 GB
+            // free disk and crash the runner worker with
+            // "No space left on device".
+            //
+            // Pinning to the same PhpStorm version the sandbox + the
+            // platform dependency use checks the API surface the plugin
+            // actually targets.  Reads from `platformVersion` in
+            // gradle.properties (same value the `dependencies.intellijPlatform.create(...)`
+            // call above resolves) so a single bump there moves both
+            // the runtime dependency and the verifier target -- no drift.
+            create(
+                IntelliJPlatformType.PhpStorm,
+                providers.gradleProperty("platformVersion").get(),
+            )
         }
     }
 }
