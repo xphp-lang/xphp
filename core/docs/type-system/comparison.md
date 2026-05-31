@@ -9,8 +9,6 @@ The compilation model is **monomorphization** -- same as Rust, different from
 Kotlin and Typescript. That last point matters a lot for what's easy vs hard to
 implement.
 
----
-
 ## Overview
 
 | Feature                   | xphp                      | TS              | Kotlin      | Rust                |
@@ -34,16 +32,14 @@ implement.
 
 p.s. `n/a` meaning it doesn't fit the language's design.
 
----
-
 ## Tier 1 gaps
 
 These are obvious gaps with clear value.
 
 ### 1. Variance annotations
 
-TypeScript (`in` / `out`), Kotlin (`in` / `out`), Rust (implicit via
-lifetimes and `PhantomData`).
+TypeScript (`in` / `out`), Kotlin (`in` / `out`), Rust (implicit via lifetimes
+and `PhantomData`).
 
 ```php
 // covariant
@@ -57,14 +53,14 @@ class Consumer<in T>  {
 }  
 ```
 
-Currently, every `Box<Plastic>` and `Box<Animal>` is unrelated even when
-`Plastic extends Animal`.
+Currently, every `Box<Banana>` and `Box<Fruit>` is unrelated even when
+`Banana extends Fruit`.
 
 With marker interfaces the only commonality is the erased `Box`.
 
 Adding `out T` would let the compiler emit
-`Box_<Plastic> implements Box_<Animal>` when `Plastic <: Animal` -- a real
-subtype relationship at the specialized FQN level.
+`Box_<Banana> implements Box_<Fruit>` when `Banana <: Fruit` -- a real subtype
+relationship at the specialized FQN level.
 
 Monomorphization already produces per-specialization classes; wiring up the
 right `implements` chains is mostly a hierarchy lookup at specialization time.
@@ -146,8 +142,6 @@ type Pair<A, B> = array{first: A, second: B};
 Currently. `xphp` doesn't have type aliases at all. Adding generic ones is
 essentially a substitution at parse time -- much simpler than introducing
 nominal types. Pairs well with PHP 8.0+ union types.
-
----
 
 
 ## Tier 2 gaps
@@ -251,8 +245,6 @@ class Builder<T> {
 The `static` part should "just work" in specializations -- worth a fixture
 to lock it.
 
----
-
 ## Tier 3 Gaps
 
 These are features supported by other languages, but may not be necessary
@@ -284,8 +276,6 @@ Needs a real type-level evaluator. Typescript's domain.
 
 Typescript conditional-type pattern extraction. Pairs with mapped & conditional
 types above.
-
----
 
 ## Next opportunities
 
