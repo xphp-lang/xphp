@@ -807,4 +807,77 @@ final class GenericResolverTest extends TestCase
             "<?php\nnamespace App\\Models;\nclass User {}\n",
         ));
     }
+
+    public function testSubstitutesPromotedPropertyFetchFromVarBinding(): void
+    {
+        // Prod scenario: `class StringableBox<T> { public function
+        // __construct(public T $item) {} }`.  Hovering `$item` after
+        // `$item = $v->item` should show `Tag`, not `T`.
+        $workspace = $this->workspace();
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class StringableBox<T> {
+            public function __construct(public T $item) {}
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Tag.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Tag {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Containers\StringableBox;
+        use App\Models\Tag;
+        $v = new StringableBox<Tag>(new Tag());
+        $item = $v->item;
+        XPHP));
+
+        $resolved = $this->resolver($workspace)->resolveVariable('/Use.xphp', 'item', PHP_INT_MAX);
+        self::assertSame('App\\Models\\Tag', $resolved);
+    }
+
+    public function testSubstitutesRegularPropertyFetchFromVarBinding(): void
+    {
+        // Regular (non-promoted) property declaration variant of the
+        // above -- covers the `Property` branch of `findPropertyType`.
+        $workspace = $this->workspace();
+        $workspace->open(new TextDocumentItem('/Box.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Containers;
+        class Box<T> {
+            public T $item;
+        }
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Tag.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Tag {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        use App\Containers\Box;
+        use App\Models\Tag;
+        $b = new Box<Tag>();
+        $item = $b->item;
+        XPHP));
+
+        $resolved = $this->resolver($workspace)->resolveVariable('/Use.xphp', 'item', PHP_INT_MAX);
+        self::assertSame('App\\Models\\Tag', $resolved);
+    }
+
+    public function testReturnsNullForPropertyFetchOnNonGenericReceiver(): void
+    {
+        // Defensive: receiver isn't a tracked generic instantiation
+        // -- the property-fetch path must bail null so the caller
+        // falls back to worse-reflection.
+        $workspace = $this->workspace();
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        $item = $opaque->item;
+        XPHP));
+
+        self::assertNull($this->resolver($workspace)->resolveVariable('/Use.xphp', 'item', PHP_INT_MAX));
+    }
 }

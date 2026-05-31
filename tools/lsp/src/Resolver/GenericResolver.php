@@ -1042,6 +1042,20 @@ final class GenericResolver
                     if ($resolved !== null) {
                         $this->writeBinding($name, $resolved);
                     }
+                    return;
+                }
+                if ($rhs instanceof PropertyFetch || $rhs instanceof NullsafePropertyFetch) {
+                    $resolved = GenericResolver::resolvePropertyFetch(
+                        $rhs,
+                        $this->currentBindings(),
+                        $this->classes,
+                        $this->fqnIndex,
+                        $this->useMap,
+                        $this->currentNamespace,
+                    );
+                    if ($resolved !== null) {
+                        $this->writeBinding($name, $resolved);
+                    }
                 }
             }
 
@@ -1271,6 +1285,107 @@ final class GenericResolver
         }
         $substituted = Specializer::substituteTypeRef($ref, $paramMap);
         return new ResolvedType($substituted, $nullable);
+    }
+
+    /**
+     * Resolve `$receiver->propName` to a substituted concrete type by:
+     *   1. inferring the receiver's type (typically a `VarBinding`);
+     *   2. locating the property declaration on the receiver's class --
+     *      both regular `Property` declarations AND
+     *      constructor-promoted `public T $item` params;
+     *   3. substituting the property's type via the receiver's
+     *      paramMap (e.g. `T` → `Tag` for `StringableBox<Tag>`).
+     *
+     * Returns null when the receiver isn't tracked, the property isn't
+     * declared on the class, or the property's type isn't a shape we
+     * can model (union / intersection -- those fall back to prettify).
+     *
+     * @param array<string, VarBinding|ResolvedType> $bindings
+     * @param array<string, string>                  $useMap
+     */
+    public static function resolvePropertyFetch(
+        PropertyFetch|NullsafePropertyFetch $fetch,
+        array $bindings,
+        ClassLikeLookup $classes,
+        FqnIndex $fqnIndex,
+        array $useMap = [],
+        string $currentNamespace = '',
+    ): ?ResolvedType {
+        if (!$fetch->name instanceof Identifier) {
+            return null;
+        }
+        $receiverType = self::inferType(
+            $fetch->var,
+            $bindings,
+            $classes,
+            $fqnIndex,
+            $useMap,
+            $currentNamespace,
+        );
+        if ($receiverType === null) {
+            return null;
+        }
+        $classLike = $classes->find($receiverType->ref->name);
+        if ($classLike === null) {
+            return null;
+        }
+        $propertyType = self::findPropertyType($classLike, $fetch->name->toString());
+        if ($propertyType === null) {
+            return null;
+        }
+        $paramMap = self::paramMapFromReceiver($classLike, $receiverType);
+        $paramNames = array_keys($paramMap);
+        // returnTypeToRef is the right shape: it handles nullable, plain
+        // names, ATTR_TEMPLATE_FQN-tagged generic refs, and bare TypeParam
+        // identifiers (`T`).  Property types share the same node shapes
+        // as return types so we reuse the helper.
+        [$nullable, $ref] = self::returnTypeToRef($propertyType, $paramNames) ?? [null, null];
+        if ($ref === null) {
+            return null;
+        }
+        $substituted = Specializer::substituteTypeRef($ref, $paramMap);
+        return new ResolvedType($substituted, $nullable);
+    }
+
+    /**
+     * Locate `$propName` on `$classLike` and return its declared type
+     * node.  Checks BOTH:
+     *   - regular `Property` declarations inside the class body, AND
+     *   - constructor-promoted `public T $item` params (which expand
+     *     into properties at PHP 8.0+ syntax level).
+     *
+     * Returns null when the property is undeclared or has no type hint.
+     */
+    private static function findPropertyType(ClassLike $classLike, string $propName): ?Node
+    {
+        foreach ($classLike->stmts as $member) {
+            if ($member instanceof Node\Stmt\Property) {
+                foreach ($member->props as $prop) {
+                    if (strcasecmp($prop->name->toString(), $propName) === 0) {
+                        return $member->type;
+                    }
+                }
+                continue;
+            }
+            if ($member instanceof ClassMethod && strcasecmp($member->name->toString(), '__construct') === 0) {
+                foreach ($member->params as $param) {
+                    // PHP 8 constructor-promoted properties: any
+                    // visibility / `readonly` modifier on a ctor param
+                    // also declares a class property with the same
+                    // name + type.
+                    if ($param->flags === 0) {
+                        continue;
+                    }
+                    if (!$param->var instanceof Node\Expr\Variable || !is_string($param->var->name)) {
+                        continue;
+                    }
+                    if (strcasecmp($param->var->name, $propName) === 0) {
+                        return $param->type;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /**

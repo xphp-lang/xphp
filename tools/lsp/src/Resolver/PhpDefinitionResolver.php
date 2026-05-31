@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Resolver;
 
+use Amp\CancellationToken;
 use PhpParser\Node;
 use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\Assign;
@@ -69,7 +70,21 @@ final class PhpDefinitionResolver
     ) {
     }
 
-    public function resolve(string $uri, int $line, int $character): ?Location
+    public function resolve(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Location
+    {
+        // Backwards-compat wrapper: returns the FIRST location from
+        // {@see resolveAll}, or null when there are none.  Existing
+        // tests + the single-Location path of XphpDefinitionHandler
+        // keep working unchanged; the handler uses `resolveAll` for
+        // the array case Cycle K introduced.
+        $all = $this->resolveAll($uri, $line, $character, $cancel);
+        return $all === [] ? null : $all[0];
+    }
+
+    /**
+     * @return list<Location>
+     */
+    public function resolveAll(string $uri, int $line, int $character, ?CancellationToken $cancel = null): array
     {
         // Belt-and-braces: the resolver calls into third-party
         // worse-reflection which has its own surprises on edge cases
@@ -79,17 +94,57 @@ final class PhpDefinitionResolver
         // as "no result" instead of a fatal that poisons the LSP
         // transport via stdout.
         try {
-            return $this->resolveInner($uri, $line, $character);
+            return $this->resolveInner($uri, $line, $character, $cancel);
         } catch (Throwable) {
-            return null;
+            return [];
         }
     }
 
-    private function resolveInner(string $uri, int $line, int $character): ?Location
+    /**
+     * Resolve the cursor to the definition of the symbol's INFERRED
+     * TYPE rather than the symbol's own declaration site.  Backs
+     * `textDocument/typeDefinition` -- e.g. on `$user = new User();`
+     * with the cursor on the second `$user`, regular `definition`
+     * jumps to the first `$user` (the variable's declaration), while
+     * `typeDefinition` jumps to `class User`.
+     *
+     * For a class reference (cursor on `User`), `(string) $context->type()`
+     * already yields the class FQN -- so this collapses to the same
+     * behaviour as `definition`'s CLASS_ branch.
+     *
+     * For symbol kinds with no meaningful "type" (FUNCTION /
+     * CONSTANT / CASE), returns null -- LSP clients render that as
+     * "no Go To Type Declaration target".
+     */
+    public function resolveType(string $uri, int $line, int $character, ?CancellationToken $cancel = null): ?Location
     {
+        $all = $this->resolveTypeAll($uri, $line, $character, $cancel);
+        return $all === [] ? null : $all[0];
+    }
+
+    /**
+     * @return list<Location>
+     */
+    public function resolveTypeAll(string $uri, int $line, int $character, ?CancellationToken $cancel = null): array
+    {
+        try {
+            return $this->resolveTypeInner($uri, $line, $character, $cancel);
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * @return list<Location>
+     */
+    private function resolveTypeInner(string $uri, int $line, int $character, ?CancellationToken $cancel): array
+    {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return [];
+        }
         $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
         if ($document === null) {
-            return null;
+            return [];
         }
 
         $offset = (new PositionMap($document->text))->positionToOffset($line, $character);
@@ -102,7 +157,86 @@ final class PhpDefinitionResolver
         try {
             $reflectionOffset = $this->reflector->reflectOffset($sourceCode, ByteOffset::fromInt($offset));
         } catch (Throwable) {
-            return null;
+            return [];
+        }
+
+        if ($cancel !== null && $cancel->isRequested()) {
+            return [];
+        }
+
+        $context = $reflectionOffset->nodeContext();
+        $symbol = $context->symbol();
+
+        // For VARIABLE / PROPERTY / METHOD cursors the meaningful
+        // "type" is the inferred type at the cursor position.  For
+        // CLASS_ the symbol IS the class, so $context->type() returns
+        // the same FQN.  Everything else (FUNCTION, CONSTANT, CASE)
+        // has no useful type to jump to.
+        $kind = $symbol->symbolType();
+        $typeBearing = $kind === Symbol::VARIABLE
+            || $kind === Symbol::PROPERTY
+            || $kind === Symbol::METHOD
+            || $kind === Symbol::CLASS_;
+        if (!$typeBearing) {
+            return [];
+        }
+
+        // Cycle K: typeDefinition on `$x: A|B` returns the union of
+        // type-declaration locations so PhpStorm can render a picker.
+        return $this->fanOutLocate(
+            (string) $context->type(),
+            fn (string $fqn): ?Location => $this->locateClass($fqn),
+        );
+    }
+
+    /**
+     * Reject non-class type strings BEFORE they reach the locator.
+     *
+     * Backwards-compatible alias for the shared
+     * {@see ClassFqnPredicate::is}.  Originally introduced inline
+     * here in commit 4f22c4a (Phase 6 Fix 1); promoted to the shared
+     * resolver in Cycle C of the open backlog so every
+     * `reflectClassLike` caller can short-circuit on union /
+     * intersection / scalar-literal / `<missing>` strings.  Kept as a
+     * static method on this class so the test surface (and any
+     * external callers) don't have to be re-routed.
+     */
+    public static function isClassFqn(string $typeName): bool
+    {
+        return ClassFqnPredicate::is($typeName);
+    }
+
+    /**
+     * @return list<Location>
+     */
+    private function resolveInner(string $uri, int $line, int $character, ?CancellationToken $cancel): array
+    {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return [];
+        }
+        $document = $this->workspace->has($uri) ? $this->workspace->get($uri) : null;
+        if ($document === null) {
+            return [];
+        }
+
+        $offset = (new PositionMap($document->text))->positionToOffset($line, $character);
+        $stripped = $this->parser->strip($document->text);
+        $sourceCode = TextDocumentBuilder::create($stripped)
+            ->uri($uri)
+            ->language('php')
+            ->build();
+
+        try {
+            $reflectionOffset = $this->reflector->reflectOffset($sourceCode, ByteOffset::fromInt($offset));
+        } catch (Throwable) {
+            return [];
+        }
+
+        if ($cancel !== null && $cancel->isRequested()) {
+            // worse-reflection's reflectOffset is one of the heavier
+            // ops in the chain; bail before locate-* if the user
+            // moved on.
+            return [];
         }
 
         $context = $reflectionOffset->nodeContext();
@@ -117,7 +251,7 @@ final class PhpDefinitionResolver
         // statement.  Same logic applies to PhpHoverResolver.
         $useFunctionFqn = $this->useFunctionFqnAtOffset($uri, $offset, $symbol->name());
         if ($useFunctionFqn !== null) {
-            return $this->locateFunction($useFunctionFqn);
+            return self::asList($this->locateFunction($useFunctionFqn));
         }
 
         // For class references, worse-reflection puts the SHORT name (or
@@ -133,28 +267,98 @@ final class PhpDefinitionResolver
         // dynamic property access on unknown variables, etc.).  We funnel
         // through `containerOrNull()` so MissingType means "give up
         // gracefully" instead of "crash on undefined method name()".
+        //
+        // Cycle K: union / intersection receiver types fan out via
+        // {@see fanOutLocate}, returning one Location per constituent
+        // class.  PhpStorm renders the resulting array as a picker.
         return match ($symbol->symbolType()) {
-            Symbol::CLASS_     => $this->locateClass(self::preferType($context, $symbol->name())),
-            Symbol::FUNCTION   => $this->locateFunction($symbol->name()),
+            Symbol::CLASS_     => $this->fanOutLocate(
+                                    self::preferType($context, $symbol->name()),
+                                    fn (string $fqn): ?Location => $this->locateClass($fqn),
+                                ),
+            Symbol::FUNCTION   => self::asList($this->locateFunction($symbol->name())),
             Symbol::METHOD     => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->locateMethod($c, $symbol->name())
-                                    : null,
-            Symbol::PROPERTY   => $this->locateProperty(
+                                    ? $this->fanOutLocate(
+                                        $c,
+                                        fn (string $fqn): ?Location => $this->locateMethod($fqn, $symbol->name()),
+                                    )
+                                    : [],
+            Symbol::PROPERTY   => $this->fanOutLocate(
                                     // Resolver-first: substituted receiver wins
                                     // when GenericResolver has a binding for
                                     // `$x->method()?->prop` (Phase 0.7).  Falls
                                     // back to worse-reflection's containerType.
                                     $this->genericResolver->resolvePropertyReceiverClassAt($uri, $offset)
-                                        ?? self::containerOrNull($context),
-                                    $symbol->name(),
+                                        ?? self::containerOrNull($context)
+                                        ?? '',
+                                    fn (string $fqn): ?Location => $this->locateProperty($fqn, $symbol->name()),
                                 ),
-            Symbol::CONSTANT   => $this->locateConstant($context, $symbol->name()),
+            Symbol::CONSTANT,
+            Symbol::DECLARED_CONSTANT
+                               => self::asList($this->locateConstant($context, $symbol->name())),
             Symbol::CASE       => ($c = self::containerOrNull($context)) !== null
-                                    ? $this->locateEnumCase($c, $symbol->name())
-                                    : null,
-            Symbol::VARIABLE   => $this->locateVariable($uri, $symbol->name()),
-            default            => null,
+                                    ? $this->fanOutLocate(
+                                        $c,
+                                        fn (string $fqn): ?Location => $this->locateEnumCase($fqn, $symbol->name()),
+                                    )
+                                    : [],
+            Symbol::VARIABLE   => self::asList($this->locateVariable($uri, $symbol->name())),
+            default            => [],
         };
+    }
+
+    /**
+     * Run `$singleLocator` against every constituent class FQN of the
+     * type string.  For single-class types (the common case) this
+     * just calls the locator once with the input.  For union /
+     * intersection / `(A&B)|C` shapes (the Cycle K UX) the splitter
+     * yields each FQN in order and the per-FQN results are
+     * concatenated, then deduped by (uri, range).
+     *
+     * @param callable(string): ?Location $singleLocator
+     * @return list<Location>
+     */
+    private function fanOutLocate(string $typeName, callable $singleLocator): array
+    {
+        $typeName = ltrim($typeName, '\\');
+        // Fast path: ClassFqnPredicate-shaped FQN -- skip the splitter
+        // entirely.  The splitter's single-class case is correct but
+        // adds a string scan + regex per locate.
+        if (ClassFqnPredicate::is($typeName)) {
+            $location = $singleLocator(ltrim($typeName, '?'));
+            return $location === null ? [] : [$location];
+        }
+        $locations = [];
+        $seen = [];
+        foreach (TypeUnionSplitter::split($typeName) as $intersectionArm) {
+            foreach ($intersectionArm as $componentFqn) {
+                $location = $singleLocator($componentFqn);
+                if ($location === null) {
+                    continue;
+                }
+                $key = $location->uri . '@' . $location->range->start->line
+                    . ':' . $location->range->start->character
+                    . '-' . $location->range->end->line
+                    . ':' . $location->range->end->character;
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $locations[] = $location;
+            }
+        }
+        return $locations;
+    }
+
+    /**
+     * Promote a `?Location` into `list<Location>` for the dispatch
+     * arms that don't fan out (FUNCTION / CONSTANT / VARIABLE).
+     *
+     * @return list<Location>
+     */
+    private static function asList(?Location $location): array
+    {
+        return $location === null ? [] : [$location];
     }
 
     /**
@@ -371,12 +575,44 @@ final class PhpDefinitionResolver
 
     private function locateClass(string $fqn): ?Location
     {
-        try {
-            $class = $this->reflector->reflectClassLike($fqn);
-        } catch (NotFound | SourceNotFound) {
+        // Cycle C: gate at the locator entry point.  `resolveInner`'s
+        // Symbol::CLASS_ dispatch funnels both inferred-type FQNs
+        // (which `resolveTypeInner` may have skipped via isClassFqn)
+        // and surface symbol names through here; ensure neither path
+        // hits the locator with a union / intersection / scalar-
+        // literal shape.
+        if (!ClassFqnPredicate::is($fqn)) {
             return null;
         }
-        return $this->classNameRange($class, $fqn);
+        try {
+            $class = $this->reflector->reflectClassLike($fqn);
+            return $this->classNameRange($class, $fqn);
+        } catch (NotFound | SourceNotFound) {
+            // Fall through to the constant fallback below.
+        }
+
+        // Worse-reflection classifies bare uppercase identifiers as
+        // `Symbol::CLASS_` even when they're actually constant references
+        // (`echo PHP_EOL;`, `if (DEBUG) ...`).  The dispatch routes
+        // through us; we just failed to find a class.  Before reporting
+        // null, retry as a constant -- with both the original FQN and
+        // its short-name fallback (matching PHP's global-namespace
+        // resolution for constants inside namespaced files).
+        //
+        // Prod evidence: GTD on `PHP_EOL` inside `namespace App\Demos`
+        // produced `App\Demos\PHP_EOL` as the lookup name; both the
+        // namespaced lookup and the bare lookup must be tried before
+        // we admit defeat.
+        $constant = self::tryReflectConstant($this->reflector, $fqn);
+        if ($constant === null) {
+            return null;
+        }
+        $position = $constant->position();
+        return $this->locationFromSource(
+            $constant->sourceCode(),
+            $position->start()->toInt(),
+            $position->end()->toInt(),
+        );
     }
 
     private function locateFunction(string $fqn): ?Location
@@ -391,6 +627,10 @@ final class PhpDefinitionResolver
 
     private function locateMethod(string $classFqn, string $methodName): ?Location
     {
+        // Cycle C: receiver inferred type can be a union/intersection.
+        if (!ClassFqnPredicate::is($classFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($classFqn);
             $method = $class->methods()->get($methodName);
@@ -403,6 +643,10 @@ final class PhpDefinitionResolver
     private function locateProperty(?string $classFqn, string $propertyName): ?Location
     {
         if ($classFqn === null) {
+            return null;
+        }
+        // Cycle C: same receiver-inference gate as locateMethod.
+        if (!ClassFqnPredicate::is($classFqn)) {
             return null;
         }
         try {
@@ -424,6 +668,10 @@ final class PhpDefinitionResolver
         // through to top-level reflectConstant).
         $containerName = self::containerOrNull($context);
         if ($containerName !== null) {
+            // Cycle C: gate against union/intersection container types.
+            if (!ClassFqnPredicate::is($containerName)) {
+                return null;
+            }
             try {
                 $class = $this->reflector->reflectClassLike($containerName);
                 $constant = $class->constants()->get($name);
@@ -433,9 +681,8 @@ final class PhpDefinitionResolver
             return $this->memberNameRange($constant->declaringClass()->sourceCode(), $constant->nameRange());
         }
 
-        try {
-            $constant = $this->reflector->reflectConstant($name);
-        } catch (NotFound | SourceNotFound) {
+        $constant = self::tryReflectConstant($this->reflector, $name);
+        if ($constant === null) {
             return null;
         }
         // ReflectionDeclaredConstant exposes position via AbstractReflectedNode.
@@ -443,8 +690,56 @@ final class PhpDefinitionResolver
         return $this->locationFromSource($constant->sourceCode(), $position->start()->toInt(), $position->end()->toInt());
     }
 
+    /**
+     * Resolve a constant via worse-reflection, with the same global-
+     * namespace fallback PHP's runtime applies at call time.
+     *
+     * Worse-reflection's NameResolver attaches the enclosing namespace
+     * to every bare constant reference -- a `PHP_EOL` mentioned inside
+     * `namespace App\Demos` becomes `App\Demos\PHP_EOL` as the symbol
+     * name worse-reflection asks the locator for.  But PHP's runtime
+     * falls back to the GLOBAL `PHP_EOL` when the namespaced form isn't
+     * defined, and the stub locator only knows the global form.  Without
+     * this retry, `\PHP_EOL` (and every other namespaced reference to a
+     * built-in constant) GTDs to null and PhpStorm reports "Cannot find
+     * declaration to go to."
+     *
+     * The retry uses the LAST segment after the trailing `\` (the
+     * short name).  We only retry when the original was namespaced --
+     * a bare `Foo` that doesn't resolve is genuinely unknown, not a
+     * global-namespace fallback candidate.
+     */
+    private static function tryReflectConstant(
+        \Phpactor\WorseReflection\Reflector $reflector,
+        string $name,
+    ): ?\Phpactor\WorseReflection\Core\Reflection\ReflectionDeclaredConstant {
+        try {
+            return $reflector->reflectConstant($name);
+        } catch (NotFound | SourceNotFound) {
+            // fall through to global retry
+        }
+        $needle = ltrim($name, '\\');
+        $lastBackslash = strrpos($needle, '\\');
+        if ($lastBackslash === false) {
+            return null;
+        }
+        $shortName = substr($needle, $lastBackslash + 1);
+        if ($shortName === '') {
+            return null;
+        }
+        try {
+            return $reflector->reflectConstant($shortName);
+        } catch (NotFound | SourceNotFound) {
+            return null;
+        }
+    }
+
     private function locateEnumCase(string $enumFqn, string $caseName): ?Location
     {
+        // Cycle C: gate enum's container FQN identically.
+        if (!ClassFqnPredicate::is($enumFqn)) {
+            return null;
+        }
         try {
             $class = $this->reflector->reflectClassLike($enumFqn);
             if (!$class->isEnum()) {

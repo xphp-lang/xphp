@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
@@ -46,8 +47,11 @@ final class XphpReferencesHandler implements Handler, CanRegisterCapabilities
     /**
      * @return Promise<list<\Phpactor\LanguageServerProtocol\Location>>
      */
-    public function references(ReferenceParams $params): Promise
+    public function references(ReferenceParams $params, ?CancellationToken $cancel = null): Promise
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success([]);
+        }
         $uri = $params->textDocument->uri;
         if (!$this->workspace->has($uri)) {
             return new Success([]);
@@ -58,6 +62,6 @@ final class XphpReferencesHandler implements Handler, CanRegisterCapabilities
             $params->position->character,
         );
         $includeDeclaration = $params->context->includeDeclaration ?? true;
-        return new Success($this->finder->findReferences($uri, $offset, $includeDeclaration));
+        return new Success($this->finder->findReferences($uri, $offset, $includeDeclaration, $cancel));
     }
 }

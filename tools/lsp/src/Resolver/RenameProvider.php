@@ -67,8 +67,42 @@ final class RenameProvider
      *     PHP identifier.  The handler converts this to an LSP error
      *     response with a friendly message.
      */
-    public function rename(string $uri, int $byteOffset, string $newName): ?WorkspaceEdit
-    {
+    public function rename(
+        string $uri,
+        int $byteOffset,
+        string $newName,
+        ?\Amp\CancellationToken $cancel = null,
+    ): ?WorkspaceEdit {
+        return $this->renameInternal($uri, $byteOffset, $newName, true, $cancel);
+    }
+
+    /**
+     * Cycle L: text-edits-only variant for `workspace/willRenameFiles`.
+     *
+     * Same machinery as {@see rename} but never emits a `RenameFile`
+     * resource operation -- the client is already in the middle of
+     * renaming the file itself, so we just need to update the source
+     * declaration + every cross-file reference.  Without this variant
+     * the handler would respond with a `RenameFile` op that races
+     * against the client's own pending rename and lands as a no-op
+     * (the source file no longer exists at the old URI by then).
+     */
+    public function renameSymbolOnly(
+        string $uri,
+        int $byteOffset,
+        string $newName,
+        ?\Amp\CancellationToken $cancel = null,
+    ): ?WorkspaceEdit {
+        return $this->renameInternal($uri, $byteOffset, $newName, false, $cancel);
+    }
+
+    private function renameInternal(
+        string $uri,
+        int $byteOffset,
+        string $newName,
+        bool $allowFileRenameOp,
+        ?\Amp\CancellationToken $cancel,
+    ): ?WorkspaceEdit {
         if (!self::isValidIdentifier($newName)) {
             throw new InvalidRenameNameException(sprintf(
                 '"%s" is not a valid PHP identifier; rename aborted.',
@@ -81,7 +115,7 @@ final class RenameProvider
             return null;
         }
 
-        $locations = $this->finder->findReferences($uri, $byteOffset, true);
+        $locations = $this->finder->findReferences($uri, $byteOffset, true, $cancel);
         if ($locations === []) {
             return null;
         }
@@ -123,9 +157,11 @@ final class RenameProvider
         // class itself.  Skip when the file name doesn't follow PSR-4
         // (e.g. multiple classes per file, autoloader-less code, etc.) --
         // we'd rather under-rename than rename the wrong file.
-        $renameFile = $this->buildFileRenameOp($uri, $byteOffset, $oldShortName, $newName);
-        if ($renameFile !== null) {
-            $documentChanges[] = $renameFile;
+        if ($allowFileRenameOp) {
+            $renameFile = $this->buildFileRenameOp($uri, $byteOffset, $oldShortName, $newName);
+            if ($renameFile !== null) {
+                $documentChanges[] = $renameFile;
+            }
         }
 
         if ($documentChanges === []) {

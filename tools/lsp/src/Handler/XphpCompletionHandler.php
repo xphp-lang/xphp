@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
@@ -20,6 +21,7 @@ use Phpactor\WorseReflection\Reflector;
 use Throwable;
 use XPHP\Lsp\PositionMap;
 use XPHP\Lsp\Reflection\FqnIndex;
+use XPHP\Lsp\Resolver\ClassNameImportContext;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -43,9 +45,11 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  *     non-Stringable classes; the diagnostic surface will flag the violation
  *     after the user picks. Bound-aware completion is a follow-up that
  *     requires resolving the enclosing Name's template definition first.
- *   - No use-alias short-form yet. We always insert the full FQN, which is
- *     always correct; a future refinement could substitute the short form
- *     when a matching `use` statement is in scope.
+ *   - Class-name insertText is scope-aware: the file's namespace +
+ *     use map decide whether to emit the bare short name, the aliased
+ *     short name, or a leading-backslash FQ. Never emits the
+ *     qualified-but-not-FQ form, which would namespace-prepend and
+ *     resolve to a wrong (or non-existent) class.
  */
 final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
 {
@@ -83,15 +87,25 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
         // context detected).  Including `-` would just produce noise.
         $capabilities->completionProvider = new CompletionOptions(
             triggerCharacters: ['<', ',', '>', ':'],
+            // `resolveProvider: true` opts the server into the lazy
+            // `completionItem/resolve` round-trip: items emitted here
+            // can carry a `data` payload that XphpCompletionResolveHandler
+            // uses to look up the documentation on-demand.  Cheap
+            // per-item up-front (no docblock fetch), one extra request
+            // when the user actually navigates to an item.
+            resolveProvider: true,
         );
     }
 
     /**
      * @return Promise<CompletionList>
      */
-    public function complete(CompletionParams $params): Promise
+    public function complete(CompletionParams $params, ?CancellationToken $cancel = null): Promise
     {
         $emptyList = new CompletionList(isIncomplete: false, items: []);
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success($emptyList);
+        }
         if (!$this->workspace->has($params->textDocument->uri)) {
             return new Success($emptyList);
         }
@@ -104,7 +118,8 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
         $hit = TypeArgPositionDetector::detect($item->text, $offset);
         if ($hit !== null) {
             $bound = $this->boundFor($hit['containerName'], $hit['slot']);
-            $candidates = $this->buildCandidates($hit['prefix'], $bound);
+            $importContext = ClassNameImportContext::extractFromSource($item->text);
+            $candidates = $this->buildCandidates($hit['prefix'], $bound, $importContext);
             return new Success(new CompletionList(isIncomplete: false, items: $candidates));
         }
 
@@ -127,7 +142,7 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
     /**
      * @return list<CompletionItem>
      */
-    private function buildCandidates(string $prefix, ?string $bound): array
+    private function buildCandidates(string $prefix, ?string $bound, ClassNameImportContext $importContext): array
     {
         $items = [];
 
@@ -148,7 +163,19 @@ final class XphpCompletionHandler implements Handler, CanRegisterCapabilities
                 label: $shortName,
                 kind: CompletionItemKind::CLASS_,
                 detail: $fqn,
-                insertText: $fqn,
+                // Scope-aware insertText: bare short name when the FQN
+                // is already imported or same-namespace, leading-backslash
+                // FQ otherwise.  Prevents the qualified-but-not-FQ form
+                // (e.g. inserting `App\Models\Tag` inside `namespace App\Demos`)
+                // from namespace-prepending to a non-existent class.
+                insertText: $importContext->chooseInsertText($fqn),
+                // `completionItem/resolve` payload: when the user
+                // navigates to this item, the client sends the
+                // item back and XphpCompletionResolveHandler reads
+                // `data.fqn` to fetch the docblock from
+                // worse-reflection.  Cheap up-front, lazy on
+                // demand.
+                data: ['kind' => 'class', 'fqn' => $fqn],
             );
         }
 

@@ -8,6 +8,8 @@ use Phpactor\LanguageServerProtocol\ClientCapabilities;
 use Phpactor\LanguageServerProtocol\InitializeParams;
 use Phpactor\LanguageServerProtocol\InitializeResult;
 use Phpactor\LanguageServerProtocol\TextDocumentSyncKind;
+use Phpactor\LanguageServerProtocol\WorkspaceClientCapabilities;
+use Phpactor\LanguageServerProtocol\WorkspaceEditClientCapabilities;
 use Phpactor\LanguageServer\Test\LanguageServerTester;
 use PHPUnit\Framework\TestCase;
 use XPHP\Lsp\LspDispatcherFactory;
@@ -115,6 +117,99 @@ final class LspDispatcherFactoryTest extends TestCase
             $result->capabilities->documentSymbolProvider,
             'documentSymbolProvider must be announced as bool true (NOT a DocumentSymbolOptions object -- IntelliJ rejects the empty-object encoding)',
         );
+    }
+
+    /**
+     * @dataProvider clientSupportsRenameFileOpCases
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('clientSupportsRenameFileOpCases')]
+    public function testClientSupportsRenameFileOpDetection(
+        ?ClientCapabilities $capabilities,
+        bool $expected,
+    ): void {
+        // Pins the `$initializeParams->capabilities?->workspace?->workspaceEdit?->resourceOperations ?? null`
+        // chain plus the `is_array` / `in_array('rename', ...)` filter
+        // against NullSafePropertyCall / FalseValue mutants.  See the
+        // helper's docblock for the Cycle L init-option override that
+        // was reverted after prod-test proved it self-defeating
+        // (PhpStorm aborts the whole WorkspaceEdit when it sees an
+        // unsupported resource op due to `failureHandling: "abort"`).
+        $reflection = new \ReflectionClass(LspDispatcherFactory::class);
+        $method = $reflection->getMethod('clientSupportsRenameFileOp');
+        $method->setAccessible(true);
+
+        $params = new InitializeParams($capabilities ?? new ClientCapabilities());
+        // Force the capabilities to null when the case requests it
+        // (InitializeParams' constructor doesn't accept null).
+        if ($capabilities === null) {
+            $params->capabilities = null;
+        }
+
+        self::assertSame($expected, $method->invoke(null, $params));
+    }
+
+    /**
+     * @return iterable<string, array{ClientCapabilities|null, bool}>
+     */
+    public static function clientSupportsRenameFileOpCases(): iterable
+    {
+        $bareCaps = new ClientCapabilities();
+
+        $emptyWorkspace = new ClientCapabilities();
+        $emptyWorkspace->workspace = new WorkspaceClientCapabilities();
+
+        $emptyWorkspaceEdit = new ClientCapabilities();
+        $emptyWorkspaceEdit->workspace = new WorkspaceClientCapabilities();
+        $emptyWorkspaceEdit->workspace->workspaceEdit = new WorkspaceEditClientCapabilities();
+
+        $renameSupported = new ClientCapabilities();
+        $renameSupported->workspace = new WorkspaceClientCapabilities();
+        $renameSupported->workspace->workspaceEdit = new WorkspaceEditClientCapabilities();
+        $renameSupported->workspace->workspaceEdit->resourceOperations = ['rename'];
+
+        $createOnly = new ClientCapabilities();
+        $createOnly->workspace = new WorkspaceClientCapabilities();
+        $createOnly->workspace->workspaceEdit = new WorkspaceEditClientCapabilities();
+        $createOnly->workspace->workspaceEdit->resourceOperations = ['create'];
+
+        $renameAndCreate = new ClientCapabilities();
+        $renameAndCreate->workspace = new WorkspaceClientCapabilities();
+        $renameAndCreate->workspace->workspaceEdit = new WorkspaceEditClientCapabilities();
+        $renameAndCreate->workspace->workspaceEdit->resourceOperations = ['create', 'rename', 'delete'];
+
+        yield 'capabilities is null' => [null, false];
+        yield 'workspace is null' => [$bareCaps, false];
+        yield 'workspaceEdit is null' => [$emptyWorkspace, false];
+        yield 'resourceOperations is null' => [$emptyWorkspaceEdit, false];
+        yield 'resourceOperations is ["rename"]' => [$renameSupported, true];
+        yield 'resourceOperations is ["create"] only' => [$createOnly, false];
+        yield 'resourceOperations includes "rename"' => [$renameAndCreate, true];
+    }
+
+    public function testCodeLensCommandIsDispatchableViaExecuteCommandFallback(): void
+    {
+        // CodeLens emits `editor.action.showReferences` with
+        // locations baked in; well-behaved clients (VS Code, LSP4IJ,
+        // Helix) dispatch the command client-side and open Find
+        // Usages directly -- no executeCommand request reaches the
+        // server.  Any client that doesn't recognize the
+        // convention falls back to `workspace/executeCommand` --
+        // phpactor's CommandDispatcher would throw `Command "..."
+        // not found` on an unregistered name and surface that as a
+        // JSON-RPC error toast.  The dispatcher registers a
+        // server-side no-op for the command name as a safety net so
+        // the fallback path is silent.
+        $tester = $this->buildTester();
+        $tester->initialize();
+
+        $response = \Amp\Promise\wait(
+            $tester->workspace()->executeCommand(
+                \XPHP\Lsp\Handler\XphpCodeLensHandler::COMMAND_NAME,
+                ['file:///x.xphp', ['line' => 0, 'character' => 0], []],
+            ),
+        );
+
+        self::assertNull($response->error, 'no JSON-RPC error from executeCommand');
     }
 
     private function buildTester(): LanguageServerTester

@@ -45,14 +45,122 @@ final class XphpCompletionHandlerTest extends TestCase
         self::assertContains('Plastic', $labels);
         self::assertContains('Metal', $labels);
         self::assertContains('int', $labels, 'scalar types must also be suggested');
-        // Class items insertText carries the FQN — easier for the user to land
-        // a correct instantiation when no `use` is in scope.
+        // Class items use scope-aware insertText. The fixture file's
+        // namespace is `App` (not `App\Models`) and has no `use App\Models\Plastic`
+        // import, so the only safe form is leading-backslash FQ.
+        // Inserting the bare FQN (`App\Models\Plastic`) would namespace-prepend
+        // to `App\App\Models\Plastic` inside `namespace App;` and
+        // autoload-fail at runtime.
         foreach ($list->items as $item) {
             if ($item->label === 'Plastic') {
-                self::assertSame('App\\Models\\Plastic', $item->insertText);
+                self::assertSame('\\App\\Models\\Plastic', $item->insertText);
                 self::assertSame(CompletionItemKind::CLASS_, $item->kind);
             }
         }
+    }
+
+    public function testInsertsShortNameWhenFqnIsAlreadyImported(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Plastic {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\nuse App\\Models\\Plastic;\n\$x = new Box<";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        foreach ($list->items as $item) {
+            if ($item->label === 'Plastic') {
+                self::assertSame('Plastic', $item->insertText);
+                return;
+            }
+        }
+        self::fail('expected a Plastic completion item');
+    }
+
+    public function testInsertsShortNameWhenCandidateIsInSameNamespace(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Plastic {}
+        XPHP));
+        $useSource = "<?php\nnamespace App\\Models;\n\$x = new Box<";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        foreach ($list->items as $item) {
+            if ($item->label === 'Plastic') {
+                self::assertSame('Plastic', $item->insertText);
+                return;
+            }
+        }
+        self::fail('expected a Plastic completion item');
+    }
+
+    public function testInsertsAliasedShortNameForAliasedUse(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Plastic {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\nuse App\\Models\\Plastic as MyPlastic;\n\$x = new Box<";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        foreach ($list->items as $item) {
+            if ($item->label === 'Plastic') {
+                self::assertSame('MyPlastic', $item->insertText);
+                return;
+            }
+        }
+        self::fail('expected a Plastic completion item');
+    }
+
+    public function testFallsBackToFqWhenShortNameIsBoundToDifferentFqn(): void
+    {
+        // Two classes share the short name `Plastic`; the file imports
+        // the wrong one. The completion item for App\Models\Plastic must
+        // emit the FQ form, otherwise the inserted `Plastic` would
+        // resolve to App\Other\Plastic.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/Models.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Models;
+        class Plastic {}
+        XPHP));
+        $workspace->open(new TextDocumentItem('/Other.xphp', 'xphp', 1, <<<'XPHP'
+        <?php
+        namespace App\Other;
+        class Plastic {}
+        XPHP));
+        $useSource = "<?php\nnamespace App;\nuse App\\Other\\Plastic;\n\$x = new Box<";
+        $workspace->open(new TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $list = $this->complete($workspace, '/Use.xphp', $useSource, strlen($useSource));
+
+        $modelsItem = null;
+        $otherItem = null;
+        foreach ($list->items as $item) {
+            if ($item->detail === 'App\\Models\\Plastic') {
+                $modelsItem = $item;
+            }
+            if ($item->detail === 'App\\Other\\Plastic') {
+                $otherItem = $item;
+            }
+        }
+        self::assertNotNull($modelsItem);
+        self::assertNotNull($otherItem);
+        self::assertSame('\\App\\Models\\Plastic', $modelsItem->insertText, 'unimported same-short collides → FQ');
+        self::assertSame('Plastic', $otherItem->insertText, 'imported one → bare short');
     }
 
     public function testFiltersByPrefix(): void

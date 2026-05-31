@@ -21,6 +21,7 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
+use XPHP\Lsp\Stderr;
 use XPHP\Transpiler\Monomorphize\TypeParam;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
@@ -124,6 +125,25 @@ final class FqnIndex
      *     against the slot's declared upper bound.
      */
     private ?array $filesystemGenericBounds = null;
+
+    /**
+     * Monotonic version counter bumped each {@see invalidateFilesystem}.
+     * Downstream caches (notably the per-FQN TextDocument hit-cache in
+     * {@see FilesystemSourceLocator}) consult it to know when to flush.
+     */
+    private int $filesystemVersion = 0;
+
+    /**
+     * Lazy-built set of `<ns>\<paramName>` strings -- every type-param
+     * name namespace-prefixed by the FQN of its enclosing ClassLike's
+     * namespace.  Lookup-only: callers ask "is this resolved-FQN
+     * actually a type-param reference?" and skip the
+     * not-a-class-but-locator-tries-anyway path.  See
+     * {@see isTypeParamFqn} for the consumer.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $typeParamFqns = null;
 
     public function __construct(
         private readonly PhpactorWorkspace $workspace,
@@ -332,6 +352,137 @@ final class FqnIndex
         $this->filesystemGenericBounds = null;
         $this->filesystemSymbols = null;
         $this->filesystemWalkedPaths = null;
+        $this->typeParamFqns = null;
+        $this->filesystemVersion++;
+    }
+
+    /**
+     * Monotonically-increasing counter bumped on every
+     * {@see invalidateFilesystem} call.  Downstream caches (notably
+     * {@see FilesystemSourceLocator}'s per-FQN TextDocument cache) read
+     * this to know when to drop their own memoized state.
+     */
+    public function filesystemVersion(): int
+    {
+        return $this->filesystemVersion;
+    }
+
+    /**
+     * Is `$fqn` a namespace-resolved type-parameter reference rather
+     * than a real class FQN?
+     *
+     * When source code inside `namespace App\Containers` references a
+     * type-param `T`, nikic's name resolver attaches
+     * `App\Containers\T` as the namespacedName.  Worse-reflection then
+     * asks our `SourceCodeLocator` chain "where is `App\Containers\T`?",
+     * which misses (because `T` is a type-param, not a class) and
+     * wastes a workspace walk per lookup.
+     *
+     * This check answers cheaply: "is the LAST segment of $fqn a
+     * type-param of any generic class declared in the SAME namespace?"
+     * If yes, the locator can short-circuit immediately -- no log,
+     * no walk, still throws SourceNotFound to keep worse-reflection's
+     * chain falling through.
+     *
+     * Lookup is O(1) once the lazy set is built;
+     * {@see typeParamFqns} populates it from
+     * {@see iterGenericClasses} on first call.
+     */
+    public function isTypeParamFqn(string $fqn): bool
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return false;
+        }
+        return isset($this->typeParamFqns()[$needle]);
+    }
+
+    /**
+     * Is `$fqn` a namespace-resolved reference to a global PHP function
+     * rather than a class FQN?
+     *
+     * Fix 3 (extends Fix L's silent-bail pattern): when source code
+     * inside `namespace App\Demos` calls `gettype($x)`, nikic's name
+     * resolver speculatively emits `App\Demos\gettype` as the
+     * namespacedName -- PHP's actual function-lookup falls back to
+     * the global namespace at runtime, but the static AST view shows
+     * the prefixed form first.  Worse-reflection then asks our
+     * locator chain "where is `App\Demos\gettype`?", which misses and
+     * writes a `[xphp-lsp locator] miss …` line to stderr.
+     *
+     * This predicate recognises that shape: an FQN with a non-empty
+     * namespace whose last segment is the name of a PHP-internal
+     * function (case-insensitive, per PHP function semantics).  The
+     * locator uses it to suppress the miss log while still throwing
+     * SourceNotFound -- worse-reflection's chain still falls through
+     * normally; only the stderr noise goes away.
+     *
+     * Cross-checked against `ReflectionFunction::isInternal()` so a
+     * user-defined function happening to be loaded into the LSP
+     * server's process doesn't accidentally suppress a legitimate
+     * class-name lookup.
+     */
+    public function isBareBuiltinFunctionFqn(string $fqn): bool
+    {
+        $needle = ltrim($fqn, '\\');
+        if ($needle === '') {
+            return false;
+        }
+        $lastBackslash = strrpos($needle, '\\');
+        if ($lastBackslash === false) {
+            // Global-namespace lookup -- can't tell apart from a
+            // legitimate global-class reference to a class named after
+            // a function.  Conservative: don't claim it.
+            return false;
+        }
+        $shortName = substr($needle, $lastBackslash + 1);
+        if ($shortName === '' || !function_exists($shortName)) {
+            return false;
+        }
+        try {
+            return (new \ReflectionFunction($shortName))->isInternal();
+        } catch (\ReflectionException) {
+            return false;
+        }
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function typeParamFqns(): array
+    {
+        if ($this->typeParamFqns !== null) {
+            return $this->typeParamFqns;
+        }
+        $set = [];
+        foreach ($this->iterGenericClasses() as $classFqn => $paramNames) {
+            $namespace = self::namespaceOf($classFqn);
+            foreach ($paramNames as $paramName) {
+                $key = $namespace === '' ? $paramName : $namespace . '\\' . $paramName;
+                $set[$key] = true;
+            }
+        }
+        // Function- and method-scope generics share the problem: a `T`
+        // inside `function App\Demos\identity<T>(...)` becomes
+        // `App\Demos\T` after name resolution, and inside
+        // `class App\Containers\Util { function id<T>(...) }` the
+        // synthetic key splits at the last `\` so namespace =
+        // `App\Containers`, which matches what name resolution emits
+        // for a bare `T` inside that method body.
+        foreach ($this->iterGenericFunctionsAndMethods() as $scopeFqn => $paramNames) {
+            $namespace = self::namespaceOf($scopeFqn);
+            foreach ($paramNames as $paramName) {
+                $key = $namespace === '' ? $paramName : $namespace . '\\' . $paramName;
+                $set[$key] = true;
+            }
+        }
+        return $this->typeParamFqns = $set;
+    }
+
+    private static function namespaceOf(string $fqn): string
+    {
+        $pos = strrpos($fqn, '\\');
+        return $pos === false ? '' : substr($fqn, 0, $pos);
     }
 
     /**
@@ -506,6 +657,43 @@ final class FqnIndex
      *
      * @return array{uri: string, line: int, char: int, short: string}|null
      */
+    /**
+     * Return every class-like (or function) FQN whose trailing segment
+     * matches `$shortName`.  Used by the import-class code action
+     * (Cycle B) which surfaces one quick-fix per candidate so the user
+     * can disambiguate when the same short name exists in multiple
+     * namespaces.
+     *
+     * Result is sorted ascending by FQN length, then alphabetically --
+     * shorter / closer-to-root namespaces appear first in the
+     * lightbulb menu.
+     *
+     * @return list<string>
+     */
+    public function fqnsByShortName(string $shortName): array
+    {
+        if ($shortName === '') {
+            return [];
+        }
+        $tailSuffix = '\\' . $shortName;
+        $tailLen = strlen($tailSuffix);
+        $matches = [];
+        foreach ($this->allDeclarations() as $hit) {
+            $fqn = $hit['fqn'];
+            if ($fqn === $shortName
+                || (strlen($fqn) > $tailLen && substr($fqn, -$tailLen) === $tailSuffix)
+            ) {
+                $matches[$fqn] = true;
+            }
+        }
+        $sorted = array_keys($matches);
+        usort($sorted, static function (string $a, string $b): int {
+            $byLength = strlen($a) <=> strlen($b);
+            return $byLength !== 0 ? $byLength : strcmp($a, $b);
+        });
+        return $sorted;
+    }
+
     public function locationByShortName(string $shortName): ?array
     {
         if ($shortName === '') {
@@ -807,7 +995,7 @@ final class FqnIndex
         $symbols = [];
         $walkedPaths = [];
         if (!is_dir($this->rootPath)) {
-            @fwrite(STDERR, sprintf(
+            Stderr::write(sprintf(
                 "[xphp-lsp fqn-index] rootPath %s not a directory; filesystem index empty\n",
                 $this->rootPath,
             ));
@@ -871,7 +1059,7 @@ final class FqnIndex
             }
         }
 
-        @fwrite(STDERR, sprintf(
+        Stderr::write(sprintf(
             "[xphp-lsp fqn-index] indexed %d FQNs from %d files under %s (skipped: %s)\n",
             count($map),
             $filesScanned,

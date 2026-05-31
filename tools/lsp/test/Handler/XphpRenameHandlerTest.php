@@ -319,6 +319,32 @@ final class XphpRenameHandlerTest extends TestCase
         self::assertSame('rename', $renameOp->kind);
     }
 
+    public function testClassRenameWithFileUriPrefixPreservesPrefix(): void
+    {
+        // Editors typically open documents with `file://` URIs.  The
+        // RenameProvider strips the prefix before manipulating the path
+        // and re-adds it on the new URI.  Pins the `$hasFilePrefix
+        // ? 'file://' . $newPath : $newPath` ternary on line 190 of
+        // RenameProvider against Concat / ConcatOperandRemoval mutants
+        // (which would either drop the prefix on the new URI or
+        // concatenate it in the wrong order).
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('file:///workspace/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+        $workspace->open(new TextDocumentItem('file:///workspace/Use.xphp', 'xphp', 1, "<?php\nuse App\\User;\n\$u = new User();\n"));
+
+        $edit = $this->renameAt($workspace, 'file:///workspace/User.xphp', 'class User', strlen('class '), 'Customer');
+        self::assertNotNull($edit);
+
+        $renameOps = array_filter(
+            $edit->documentChanges ?? [],
+            fn ($c): bool => $c instanceof RenameFile,
+        );
+        self::assertCount(1, $renameOps);
+        $renameOp = array_values($renameOps)[0];
+        self::assertSame('file:///workspace/User.xphp', $renameOp->oldUri);
+        self::assertSame('file:///workspace/Customer.xphp', $renameOp->newUri);
+    }
+
     public function testClassRenameSkipsRenameFileWhenBasenameMismatch(): void
     {
         // Multiple classes per file (or any other non-PSR-4 layout) --
@@ -451,6 +477,36 @@ final class XphpRenameHandlerTest extends TestCase
         $result = wait($this->handler($workspace)->rename($params));
         self::assertTrue($result === null || $result instanceof WorkspaceEdit);
         return $result;
+    }
+
+    public function testReturnsResultWhenCancelTokenNotRequested(): void
+    {
+        // Pins the cancel-poll guard at XphpRenameHandler line 61.
+        // A LogicalAndSingleSubExprNegation mutant flipping
+        // `isRequested` to `!isRequested` would short-circuit every
+        // rename call that arrived with a non-requested cancel token.
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+
+        $params = self::paramsFor($workspace, '/User.xphp', 'class User', strlen('class '), 'Customer');
+        $cancel = new \Amp\CancellationTokenSource();
+        // Deliberately NOT cancelled.
+
+        $result = wait($this->handler($workspace)->rename($params, $cancel->getToken()));
+        self::assertInstanceOf(WorkspaceEdit::class, $result);
+    }
+
+    public function testReturnsNullWhenCancelTokenAlreadyRequested(): void
+    {
+        $workspace = new PhpactorWorkspace();
+        $workspace->open(new TextDocumentItem('/User.xphp', 'xphp', 1, "<?php\nnamespace App;\nclass User {}\n"));
+
+        $params = self::paramsFor($workspace, '/User.xphp', 'class User', strlen('class '), 'Customer');
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $result = wait($this->handler($workspace)->rename($params, $cancel->getToken()));
+        self::assertNull($result);
     }
 
     private static function paramsFor(

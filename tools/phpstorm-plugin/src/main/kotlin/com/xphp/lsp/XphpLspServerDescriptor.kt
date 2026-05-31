@@ -40,8 +40,25 @@ import java.io.File
 class XphpLspServerDescriptor(project: Project) :
     ProjectWideLspServerDescriptor(project, "xphp") {
 
-    override fun isSupportedFile(file: VirtualFile): Boolean =
-        file.extension == "xphp"
+    override fun isSupportedFile(file: VirtualFile): Boolean {
+        if (file.extension == "xphp") return true
+        // PHP stubs extracted by the LSP server are .php files outside
+        // the workspace -- e.g. `/tmp/xphp-lsp-extracted-stubs/<sha>/
+        // Reflection/ReflectionNamedType.php`.  When the LSP returns a
+        // Location pointing at one of them (native-class GTD,
+        // typeDefinition, etc.), PhpStorm asks every registered LSP
+        // descriptor "is this file yours?"  Without this branch our
+        // descriptor says no, the platform finds no claimant, and
+        // reports "Cannot find declaration to go to" -- even though
+        // the LSP returned the correct stub path.
+        //
+        // We claim only the well-known extraction cache root, not
+        // every .php file -- those still belong to PhpStorm's native
+        // PHP support.  The cache root is hard-coded to match
+        // PHP's sys_get_temp_dir() default + the prefix used by
+        // ReflectorFactory::extractStubsCache().
+        return file.path.contains("/xphp-lsp-extracted-stubs/")
+    }
 
     // Opt in to LSP-routed editor actions.  Server-side capability advertisement
     // (`definitionProvider: true`, `hoverProvider: true` in our `initialize`
@@ -69,7 +86,20 @@ class XphpLspServerDescriptor(project: Project) :
     // empty anonymous subclass satisfies the contract: we're EXTENDING
     // the class (the documented use case), not constructing it from
     // outside, and we inherit every default the no-arg path provides.
-    override val lspCustomization: LspCustomization = object : LspCustomization() {}
+    override val lspCustomization: LspCustomization = object : LspCustomization() {
+        // Client-side handler for the `editor.action.showReferences`
+        // command that XphpCodeLensHandler emits with pre-baked
+        // Location[].  Without this override PhpStorm's default
+        // LspCommandsSupport round-trips every command to the server
+        // via `workspace/executeCommand`; our server-side no-op
+        // returns null, the click silently fails.  The override
+        // intercepts the specific command client-side and navigates
+        // directly to the first location.  See
+        // XphpShowReferencesCommandsSupport for the rationale and
+        // multi-location follow-up note.
+        override val commandsCustomizer = XphpShowReferencesCommandsSupport()
+    }
+
 
     // IntelliJ's LSP framework dedupes "is this server already running?"
     // by descriptor equality.  Our `XphpLspServerSupportProvider.fileOpened`

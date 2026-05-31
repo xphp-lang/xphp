@@ -13,6 +13,7 @@ use Phpactor\LanguageServerProtocol\Diagnostic as LspDiagnostic;
 use Phpactor\LanguageServerProtocol\TextDocumentItem;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\Analyzer\WorkspaceAnalyzer;
+use XPHP\Lsp\Reflection\FqnIndex;
 
 /**
  * Bridges the xphp analyzer (per-file + cross-file) to phpactor's diagnostics engine.
@@ -39,13 +40,13 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
         private readonly ParsedDocumentCache $cache,
         private readonly WorkspaceAnalyzer $workspaceAnalyzer,
         private readonly PhpactorWorkspace $workspace,
+        private readonly FqnIndex $fqnIndex,
     ) {
     }
 
     public function provideDiagnostics(TextDocumentItem $textDocument, CancellationToken $cancel): Promise
     {
-        $diagnostics = $this->analyze($textDocument);
-        return new Success($diagnostics);
+        return new Success($this->analyzeSync($textDocument));
     }
 
     public function name(): string
@@ -54,9 +55,13 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
     }
 
     /**
+     * Sync entry-point shared by the push-mode `provideDiagnostics`
+     * (above) and the pull-mode `textDocument/diagnostic` handler.
+     * Both flows want the same analysis without the Promise wrap.
+     *
      * @return list<LspDiagnostic>
      */
-    private function analyze(TextDocumentItem $textDocument): array
+    public function analyzeSync(TextDocumentItem $textDocument): array
     {
         $currentUri = $textDocument->uri;
 
@@ -96,7 +101,26 @@ final class XphpDiagnosticsProvider implements DiagnosticsProvider
             $parsedFiles[$uri] = ['ast' => $otherResult->ast, 'source' => $item->text];
         }
 
-        $workspaceByUri = $this->workspaceAnalyzer->analyze($parsedFiles);
+        // Enrich the bound-check hierarchy with every filesystem-indexed file the
+        // ParsedDocumentCacheWarmer has already parsed. Without this, the workspace
+        // pass only sees open buffers — so `new Box<Tag>(…)` in an open file dependent
+        // on a Tag class that's on disk but not open fires a spurious
+        // "concrete type is not in the source set" diagnostic. Open-buffer entries
+        // already in $parsedFiles take precedence and are skipped here.
+        $hierarchyAsts = [];
+        foreach ($this->fqnIndex->indexedFilesystemPaths() as $path) {
+            $uri = 'file://' . $path;
+            if (isset($parsedFiles[$uri])) {
+                continue;
+            }
+            $peek = $this->cache->peek($uri);
+            if ($peek === null || $peek->ast === null) {
+                continue;
+            }
+            $hierarchyAsts[$uri] = $peek->ast;
+        }
+
+        $workspaceByUri = $this->workspaceAnalyzer->analyze($parsedFiles, $hierarchyAsts);
         $currentWorkspaceDiagnostics = $workspaceByUri[$currentUri] ?? [];
 
         $lspWorkspaceDiagnostics = array_map(

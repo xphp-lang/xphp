@@ -279,6 +279,54 @@ final class PhpCompletionResolverTest extends TestCase
         }
     }
 
+    public function testBareStaticContextSurfacesStaticProperties(): void
+    {
+        // Prod scenario: `class InMemoryRepository<T> { public static
+        // string $test = '...'; }` plus `$repo::|` -- typing `::` on
+        // an instance variable should still bring up the static
+        // property `$test`.  Pre-fix the `Cls::|` branch in
+        // `itemsForClass` only iterated constants and methods; static
+        // properties were silently skipped (`$repo::$test` could only
+        // surface from the narrower `Cls::$|` branch which the user
+        // hits AFTER typing `$`).
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Repo.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class Repo {
+            public static string $test = '';
+            public static int $count = 0;
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Repo;\n\$r = new Repo();\necho \$r::;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // Cursor sits right after `$r::` on line 3 (0-indexed).
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$r::', strlen('$r::'));
+
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+        self::assertContains('$test', $labels, 'static property `$test` must appear on `$r::|`');
+        self::assertContains('$count', $labels, 'all static properties surface');
+
+        // Shape check: the `$test` item must self-insert the `$` so
+        // accept produces `$r::$test`, not `$r::test`.  filterText is
+        // bare so PhpStorm filters the typed prefix (which doesn't
+        // yet include `$`) against the candidate; textEdit pins the
+        // replacement range so the inserted `$` lands consistently.
+        $testItem = null;
+        foreach ($items as $candidate) {
+            if ($candidate->label === '$test') {
+                $testItem = $candidate;
+                break;
+            }
+        }
+        self::assertNotNull($testItem);
+        self::assertSame('$test', $testItem->insertText);
+        self::assertSame('test', $testItem->filterText);
+        self::assertNotNull($testItem->textEdit);
+        self::assertSame('$test', $testItem->textEdit->newText);
+    }
+
     public function testStaticPropertyCompletionFiltersByPrefix(): void
     {
         // `Cls::$la|` -- prefix filter narrows to props matching `la*`.
@@ -434,6 +482,35 @@ final class PhpCompletionResolverTest extends TestCase
         self::assertContains('MIN', $labels);
     }
 
+    public function testCompletesInterfaceConstantsAfterDoubleColon(): void
+    {
+        // Regression for the `Cls::|` completion fataling on interface
+        // receivers: pre-fix, `worse-reflection`'s `ReflectionInterface`
+        // omits a `properties()` method, and our completion path called
+        // `$class->properties()` unconditionally -- `Call to undefined
+        // method` propagated to the top-level catch which silently
+        // returned `[]`.  Symptom: `\DateTimeInterface::|` showed no
+        // completions while `\DateTime::|` worked fine.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Status.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        interface Status {
+            public const ACTIVE = 'active';
+            public const ARCHIVED = 'archived';
+            public function transition(): void;
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\Status;\nStatus::";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'Status::', strlen('Status::'));
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        self::assertContains('ACTIVE', $labels, 'interface constants must be offered');
+        self::assertContains('ARCHIVED', $labels, 'interface constants must be offered');
+    }
+
     public function testReturnsEmptyForNonMemberContext(): void
     {
         $workspace = $this->workspace();
@@ -458,6 +535,42 @@ final class PhpCompletionResolverTest extends TestCase
     {
         $resolver = $this->resolver($this->workspace());
         self::assertSame([], $resolver->complete('/never-opened.xphp', 0, 0));
+    }
+
+    public function testVariableCompletionEmitsTextEditPreservingDollar(): void
+    {
+        // Prod log id=178 of xphp-20260529-104259-087.log captured
+        // `{"label":"$item","kind":6,"insertText":"item"}` -- no textEdit,
+        // so PhpStorm extended the implicit replacement range backward
+        // through the `$` and accept dropped it.  The textEdit must
+        // anchor the replacement range to start at the typed prefix's
+        // first character (right after the `$`), so the `$` already
+        // in source survives.
+        $workspace = $this->workspace();
+        $source = "<?php\n\$item = 1;\nif (\$ite) {}\n";
+        $this->open($workspace, '/doc.xphp', $source);
+
+        $items = $this->completeAt($workspace, '/doc.xphp', $source, 'if ($ite', strlen('if ($ite'));
+        $itemItem = null;
+        foreach ($items as $candidate) {
+            if ($candidate->label === '$item') {
+                $itemItem = $candidate;
+                break;
+            }
+        }
+        self::assertNotNull($itemItem, '$item must surface from a `$ite` prefix');
+        self::assertSame('item', $itemItem->insertText, 'insertText is the bare name');
+        self::assertSame('$item', $itemItem->filterText, 'filterText keeps the popup matching `$ite`');
+        self::assertNotNull($itemItem->textEdit, 'textEdit pins the replacement range');
+        // Range start = character of the typed `i` (after `$`).  Source
+        // `if ($ite` has the `i` of `ite` at column 5 (0-based) on
+        // line 2 (0-based).  Cursor sits at column 8 after `e`.  Prefix
+        // length is 3.
+        self::assertSame(2, $itemItem->textEdit->range->start->line);
+        self::assertSame(5, $itemItem->textEdit->range->start->character);
+        self::assertSame(2, $itemItem->textEdit->range->end->line);
+        self::assertSame(8, $itemItem->textEdit->range->end->character);
+        self::assertSame('item', $itemItem->textEdit->newText);
     }
 
     public function testCompletesVariablesInScopeAfterDollar(): void
@@ -588,6 +701,86 @@ final class PhpCompletionResolverTest extends TestCase
         // After `new`, only classes -- no functions.
         $kinds = array_map(static fn (CompletionItem $i): int => $i->kind ?? -1, $items);
         self::assertNotContains(\Phpactor\LanguageServerProtocol\CompletionItemKind::FUNCTION, $kinds);
+    }
+
+    public function testClassCompletionInsertTextIsFqWithLeadingBackslashWhenNotImported(): void
+    {
+        // Different namespace, no `use App\Models\User;` → must be FQ
+        // with leading backslash, otherwise the inserted bare
+        // `App\Models\User` would namespace-prepend to `App\Demos\App\Models\User`.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('\\App\\Models\\User', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextIsShortNameWhenAlreadyImported(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Models\\User;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('User', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextIsShortNameWhenSameNamespace(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        // Same namespace as User → bare short name (no use statement needed).
+        $useSource = "<?php\nnamespace App\\Models;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('User', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextRespectsAliasedUse(): void
+    {
+        $workspace = $this->workspace();
+        $this->open($workspace, '/User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Models\\User as Account;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        // The label remains the FQN's last segment (`User`) — completion
+        // doesn't currently index aliases by label, so prefix-matching
+        // goes via the short name. The relevant assertion is on
+        // insertText, which must use the file's bound alias `Account`.
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $userItem = self::findFirstWithLabel($items, 'User');
+        self::assertNotNull($userItem);
+        self::assertSame('Account', $userItem->insertText);
+    }
+
+    public function testClassCompletionInsertTextFallsBackToFqOnConflictingShortName(): void
+    {
+        // Two `User`s in the workspace; the file imports App\Other\User.
+        // Completing App\Models\User cannot emit bare `User` (would
+        // resolve to the imported other one) — must emit the FQ form.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/Models_User.xphp', "<?php\nnamespace App\\Models;\nclass User {}\n");
+        $this->open($workspace, '/Other_User.xphp', "<?php\nnamespace App\\Other;\nclass User {}\n");
+        $useSource = "<?php\nnamespace App\\Demos;\nuse App\\Other\\User;\n\$x = new Use";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, 'new Use', strlen('new Use'));
+        $modelsItem = self::findFirstWithDetail($items, 'App\\Models\\User');
+        $otherItem = self::findFirstWithDetail($items, 'App\\Other\\User');
+        self::assertNotNull($modelsItem);
+        self::assertNotNull($otherItem);
+        self::assertSame('\\App\\Models\\User', $modelsItem->insertText);
+        self::assertSame('User', $otherItem->insertText);
     }
 
     public function testNewWithEmptyPrefixReturnsEmpty(): void
@@ -724,6 +917,85 @@ final class PhpCompletionResolverTest extends TestCase
 
         self::assertContains('shout', $labels);
         self::assertContains('name', $labels);
+    }
+
+    public function testCompletesUnionOfMembersForUnionReceiver(): void
+    {
+        // Cycle K.1: cursor on `$x->|` where `$x: A|B` shows every
+        // method from either A or B (user-spec union semantics).
+        // A-only and B-only methods both surface; the popup is the
+        // most permissive shape.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class A {
+            public function alpha(): string { return 'a'; }
+            public function common(): string { return 'c'; }
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class B {
+            public function beta(): string { return 'b'; }
+            public function common(): string { return 'c'; }
+        }
+        XPHP);
+        // Docblock @var triggers worse-reflection's union inference
+        // for local variables.  Native PHP 8 union return types from
+        // function calls aren't traced through assignments by the
+        // current worse-reflection -- the docblock annotation is the
+        // most reliable way to seed a union in a test fixture.
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @var A|B \$x */\n\$x = new A();\n\$x->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$x->', 4);
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // alpha + beta + common (common deduped to one) -- union of
+        // members across A and B.
+        self::assertContains('alpha', $labels, 'A-only method surfaces in union completion');
+        self::assertContains('beta', $labels, 'B-only method surfaces in union completion');
+        self::assertContains('common', $labels);
+        self::assertSame(1, count(array_filter($labels, fn ($l) => $l === 'common')), 'shared method deduped to one entry');
+    }
+
+    public function testCompletesIntersectionOfMembersForIntersectionReceiver(): void
+    {
+        // Cycle K.1: cursor on `$x->|` where `$x: A&B` shows ONLY
+        // members common to BOTH A and B (user-spec intersection
+        // semantics).  A-only and B-only methods are hidden.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        interface A {
+            public function alpha(): string;
+            public function common(): string;
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        interface B {
+            public function beta(): string;
+            public function common(): string;
+        }
+        XPHP);
+        // Docblock @var with intersection syntax.  See the union
+        // test above for why docblocks beat native param types in
+        // these fixtures.
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @var A&B \$x */\n\$x = null;\n\$x->\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $items = $this->completeAt($workspace, '/Use.xphp', $useSource, '$x->', 4);
+        $labels = array_map(static fn (CompletionItem $i): string => $i->label, $items);
+
+        // Only `common` -- the only method on BOTH A AND B.
+        self::assertContains('common', $labels, 'shared method surfaces');
+        self::assertNotContains('alpha', $labels, 'A-only method hidden in intersection completion');
+        self::assertNotContains('beta', $labels, 'B-only method hidden in intersection completion');
     }
 
     public function testCompletesVariablesWhenSourceMidEditDoesNotParseStrictly(): void
@@ -922,5 +1194,31 @@ final class PhpCompletionResolverTest extends TestCase
     private function open(PhpactorWorkspace $workspace, string $uri, string $source): void
     {
         $workspace->open(new TextDocumentItem($uri, 'xphp', 1, $source));
+    }
+
+    /**
+     * @param list<CompletionItem> $items
+     */
+    private static function findFirstWithLabel(array $items, string $label): ?CompletionItem
+    {
+        foreach ($items as $item) {
+            if ($item->label === $label) {
+                return $item;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param list<CompletionItem> $items
+     */
+    private static function findFirstWithDetail(array $items, string $detail): ?CompletionItem
+    {
+        foreach ($items as $item) {
+            if ($item->detail === $detail) {
+                return $item;
+            }
+        }
+        return null;
     }
 }

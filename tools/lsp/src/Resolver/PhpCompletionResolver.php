@@ -36,6 +36,7 @@ use Phpactor\WorseReflection\Reflector;
 use Throwable;
 use XPHP\Lsp\Analyzer\ParsedDocumentCache;
 use XPHP\Lsp\PositionMap;
+use XPHP\Lsp\Stderr;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -126,12 +127,18 @@ final class PhpCompletionResolver
             $cursorOffset,
         ));
 
+        // Class-name completion needs the file's namespace + use map to
+        // pick the right insertText shape (bare short name when imported
+        // or same-namespace, leading-backslash FQ otherwise). Computed
+        // once per request and shared across both class-completion arms.
+        $importContext = ClassNameImportContext::extractFromSource($document->text);
+
         $items = match ($hit['kind']) {
             'member', 'static', 'static-prop' => $this->completeMembers($uri, $document->text, $hit, $line, $character),
-            'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset),
-            'new'              => $this->completeClassesByPrefix($hit['prefix']),
+            'variable'         => $this->completeVariables($uri, $hit['prefix'], $cursorOffset, $line, $character),
+            'new'              => $this->completeClassesByPrefix($hit['prefix'], $importContext),
             'expression'       => array_merge(
-                $this->completeClassesByPrefix($hit['prefix']),
+                $this->completeClassesByPrefix($hit['prefix'], $importContext),
                 $this->completeFunctionsByPrefix($hit['prefix']),
             ),
         };
@@ -207,6 +214,35 @@ final class PhpCompletionResolver
             $lookupName = $swapped;
         }
 
+        // Cycle K.1: fan out per union arm.  Single-class types
+        // short-circuit through the existing path; union /
+        // intersection receivers split via TypeUnionSplitter and the
+        // per-arm member sets get merged per the user-specified UX:
+        //   - union arms (`A|B`)    -> UNION of members across arms
+        //   - intersection within (`A&B`) -> INTERSECTION across
+        //                                    components of that arm
+        // Members are deduped by (kind, label).
+        if (!ClassFqnPredicate::is($lookupName)) {
+            return $this->fanOutMembers($lookupName, $hit, $uri, $receiverProbe, $line, $character);
+        }
+        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+        return $this->itemsForClass($lookupName, $hit, $callerClassFqn, $line, $character);
+    }
+
+    /**
+     * Build the member-completion list for a single class FQN.
+     *
+     * Extracted from `completeMembers` to support Cycle K.1's union/
+     * intersection fan-out.  Visibility (private / protected) is
+     * evaluated against the caller's enclosing class -- threaded in
+     * rather than recomputed so the union-fan-out's repeated calls
+     * agree on the caller scope.
+     *
+     * @param array{kind: string, receiverEnd: int, prefix: string} $hit
+     * @return list<CompletionItem>
+     */
+    private function itemsForClass(string $lookupName, array $hit, ?string $callerClassFqn, int $line, int $character): array
+    {
         try {
             $class = $this->reflector->reflectClassLike($lookupName);
         } catch (Throwable $t) {
@@ -219,8 +255,20 @@ final class PhpCompletionResolver
             return [];
         }
 
+        // Interfaces don't have properties -- in PHP, only classes,
+        // traits, and enums do.  Worse-reflection's `ReflectionInterface`
+        // omits the `properties()` method entirely; calling it throws
+        // `Error: Call to undefined method ReflectionInterface::properties()`
+        // which top-level-catches to an empty completion list.  Symptom:
+        // `\DateTimeInterface::|` returns no items, while `\DateTime::|`
+        // works fine.  Gate every `properties()` access on a method
+        // existence check rather than `instanceof ReflectionInterface`
+        // -- there are multiple TolerantParser / Core variants of the
+        // class, and `method_exists` covers them all without us having
+        // to enumerate them.
+        $hasProperties = method_exists($class, 'properties');
         $methodsAll = count($class->methods());
-        $propsAll = count($class->properties());
+        $propsAll = $hasProperties ? count($class->properties()) : 0;
         $constsAll = count($class->constants());
         self::trace(sprintf(
             'reflectClassLike(%s) ok methods=%d props=%d consts=%d',
@@ -252,7 +300,11 @@ final class PhpCompletionResolver
         // descendant of the receiver class) consults worse-reflection's
         // parents() walk -- protected becomes visible there too;
         // private stays gated to same-class only.
-        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+        //
+        // Cycle K.1: $callerClassFqn is now threaded in by the caller
+        // (`completeMembers` for the single-class path, `fanOutMembers`
+        // for each union/intersection constituent) so the same caller-
+        // scope decision is shared across every per-component call.
         $isSameClass = $callerClassFqn !== null && $callerClassFqn === $lookupName;
         $isSubclass = !$isSameClass
             && $callerClassFqn !== null
@@ -303,38 +355,89 @@ final class PhpCompletionResolver
             if ($staticPropPrefixLen > 0) {
                 $staticPropAnchorStart = new Position($line, max(0, $character - $staticPropPrefixLen));
             }
-            foreach ($class->properties() as $property) {
-                if (!$property->isStatic()) {
-                    continue;
+            if ($hasProperties) {
+                foreach ($class->properties() as $property) {
+                    if (!$property->isStatic()) {
+                        continue;
+                    }
+                    if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                        continue;
+                    }
+                    if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                        continue;
+                    }
+                    $items[] = $this->propertyItem(
+                        $property,
+                        forStaticProp: true,
+                        textEditRange: new Range($staticPropAnchorStart, $staticPropAnchorEnd),
+                    );
                 }
-                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
-                    continue;
-                }
-                if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
-                    continue;
-                }
-                $items[] = $this->propertyItem(
-                    $property,
-                    forStaticProp: true,
-                    textEditRange: new Range($staticPropAnchorStart, $staticPropAnchorEnd),
-                );
             }
         } elseif (!$isStatic) {
-            // `$obj->|` -- only instance properties.
-            foreach ($class->properties() as $property) {
-                if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
-                    continue;
+            // `$obj->|` -- only instance properties.  Interfaces have
+            // no properties so we skip the iteration when `$class` is
+            // a ReflectionInterface.  Methods on interfaces are still
+            // surfaced by the earlier `methods()` loop.
+            if ($hasProperties) {
+                foreach ($class->properties() as $property) {
+                    if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                        continue;
+                    }
+                    if ($property->isStatic()) {
+                        continue;
+                    }
+                    if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                        continue;
+                    }
+                    $items[] = self::propertyItem($property);
                 }
-                if ($property->isStatic()) {
-                    continue;
-                }
-                if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
-                    continue;
-                }
-                $items[] = self::propertyItem($property);
             }
         } else {
-            // `Cls::|` -- static methods (above) + class constants.
+            // `Cls::|` -- static methods (above) + static properties +
+            // class constants.  Static properties used to be silently
+            // skipped here (the parallel `Cls::$|` branch handled them
+            // but the bare-static branch had only constants), so
+            // `$repo::$test` never surfaced for a `public static
+            // string $test` declared on the receiver class.
+            //
+            // Item shape mirrors `Cls::$|` (the static-prop branch
+            // above): label carries `$` for popup display; filterText
+            // is the bare name so PhpStorm filters the typed prefix
+            // (which doesn't yet include `$`) against the candidate;
+            // the textEdit replaces the typed prefix with `$<name>`
+            // so the `$` lands in source on accept regardless of
+            // how PhpStorm would otherwise pick the implicit range.
+            $bareStaticPropAnchorStart = new Position($line, max(0, $character - strlen($hit['prefix'])));
+            $bareStaticPropAnchorEnd = new Position($line, $character);
+            if ($hasProperties) {
+                foreach ($class->properties() as $property) {
+                    if (!$property->isStatic()) {
+                        continue;
+                    }
+                    if (!self::isVisibleFromCaller($property->visibility(), $isSameClass, $isSubclass)) {
+                        $droppedVis++;
+                        continue;
+                    }
+                    if (!self::matchesPrefix($property->name(), $hit['prefix'])) {
+                        $droppedPrefix++;
+                        continue;
+                    }
+                    $propType = $this->genericParams->prettify((string) $property->inferredType());
+                    $propName = $property->name();
+                    $completion = new CompletionItem(
+                        label: '$' . $propName,
+                        kind: CompletionItemKind::PROPERTY,
+                        detail: $propType !== '' && $propType !== '<missing>' ? $propType : null,
+                        insertText: '$' . $propName,
+                        filterText: $propName,
+                    );
+                    $completion->textEdit = new TextEdit(
+                        new Range($bareStaticPropAnchorStart, $bareStaticPropAnchorEnd),
+                        '$' . $propName,
+                    );
+                    $items[] = $completion;
+                }
+            }
             foreach ($class->constants() as $constant) {
                 if (!self::matchesPrefix((string) $constant->name(), $hit['prefix'])) {
                     continue;
@@ -361,6 +464,102 @@ final class PhpCompletionResolver
     }
 
     /**
+     * Cycle K.1 union/intersection fan-out for member completion.
+     *
+     * For each union arm (one per `|`), build the per-component
+     * completion lists.  Intersect the components within the arm by
+     * (kind, label), then union across arms (also deduped by
+     * (kind, label)).  This matches the user-specified UX:
+     *
+     *   - `$x: A|B`   -> arms = [{A}, {B}], each arm yields its
+     *                    component's full member set; union shows
+     *                    everything from A OR B.
+     *   - `$x: A&B`   -> arms = [{A,B}], intersection yields only
+     *                    members common to A AND B.
+     *   - `$x: (A&B)|C` -> arms = [{A,B}, {C}], result =
+     *                      (A's members ∩ B's members) ∪ C's members.
+     *
+     * @param array{kind: string, receiverEnd: int, prefix: string} $hit
+     * @return list<CompletionItem>
+     */
+    private function fanOutMembers(string $typeName, array $hit, string $uri, int $receiverProbe, int $line, int $character): array
+    {
+        $arms = TypeUnionSplitter::split($typeName);
+        if ($arms === []) {
+            self::trace(sprintf('union split yielded no class FQNs for %s', $typeName));
+            return [];
+        }
+        // Per-call caller-class lookup: same scope for every component
+        // in the fan-out.
+        $callerClassFqn = $this->enclosingClassFqnAt($uri, $receiverProbe);
+
+        $merged = [];
+        $mergedKeys = [];
+        foreach ($arms as $components) {
+            $perComponent = [];
+            foreach ($components as $componentFqn) {
+                $perComponent[] = $this->itemsForClass($componentFqn, $hit, $callerClassFqn, $line, $character);
+            }
+            $armItems = count($perComponent) === 1
+                ? $perComponent[0]
+                : self::intersectByKindLabel($perComponent);
+            foreach ($armItems as $item) {
+                $key = (string) ($item->kind ?? '') . '::' . $item->label;
+                if (isset($mergedKeys[$key])) {
+                    continue;
+                }
+                $mergedKeys[$key] = true;
+                $merged[] = $item;
+            }
+        }
+        self::trace(sprintf('fan-out completion: %s -> %d items across %d arm(s)', $typeName, count($merged), count($arms)));
+        return $merged;
+    }
+
+    /**
+     * Return items whose (kind, label) appears in EVERY list of
+     * `$perComponentItems`.  The returned items come from the first
+     * list (so the `detail` / `insertText` reflect that component's
+     * shape; the user-facing label/kind is what intersection
+     * promised).
+     *
+     * @param list<list<CompletionItem>> $perComponentItems
+     * @return list<CompletionItem>
+     */
+    private static function intersectByKindLabel(array $perComponentItems): array
+    {
+        if ($perComponentItems === []) {
+            return [];
+        }
+        // Build key sets for every component except the first.
+        $otherKeySets = [];
+        for ($i = 1, $n = count($perComponentItems); $i < $n; $i++) {
+            $set = [];
+            foreach ($perComponentItems[$i] as $item) {
+                $set[(string) ($item->kind ?? '') . '::' . $item->label] = true;
+            }
+            $otherKeySets[] = $set;
+        }
+        // Keep first-component items whose key appears in every
+        // other component's set.
+        $intersection = [];
+        foreach ($perComponentItems[0] as $item) {
+            $key = (string) ($item->kind ?? '') . '::' . $item->label;
+            $inAll = true;
+            foreach ($otherKeySets as $set) {
+                if (!isset($set[$key])) {
+                    $inAll = false;
+                    break;
+                }
+            }
+            if ($inAll) {
+                $intersection[] = $item;
+            }
+        }
+        return $intersection;
+    }
+
+    /**
      * Variable completion, scope-aware.
      *
      * Visible names at the cursor:
@@ -383,7 +582,7 @@ final class PhpCompletionResolver
      *
      * @return list<CompletionItem>
      */
-    private function completeVariables(string $uri, string $prefix, int $cursorOffset): array
+    private function completeVariables(string $uri, string $prefix, int $cursorOffset, int $line, int $character): array
     {
         if (!$this->workspace->has($uri)) {
             return [];
@@ -446,15 +645,36 @@ final class PhpCompletionResolver
         }
 
         $items = [];
+        // Pin the replacement range to START at the typed prefix's first
+        // character (right AFTER the `$` already in source).  Without
+        // this textEdit, PhpStorm extends the implicit range backward
+        // through the `$` -- treating it as part of the same word
+        // token -- and the accept swallows it, leaving `item` instead
+        // of `$item`.  Prod log id=178 of xphp-20260529-104259-087.log
+        // captures the regression; the static-prop branch of
+        // `propertyItem()` carries the same fix.
+        $prefixLen = strlen($prefix);
+        $anchorStart = new Position($line, max(0, $character - $prefixLen));
+        $anchorEnd = new Position($line, $character);
         foreach (array_keys($visible) as $name) {
             if (!self::variableMatchesPrefix($name, $prefix)) {
                 continue;
             }
-            $items[] = new CompletionItem(
+            $completion = new CompletionItem(
                 label: '$' . $name,
                 kind: CompletionItemKind::VARIABLE,
                 insertText: $name,
+                // filterText keeps the item visible while the user
+                // types more characters AFTER `$` (PhpStorm matches
+                // the typed `$it` prefix against `filterText`, not
+                // `insertText`).
+                filterText: '$' . $name,
             );
+            $completion->textEdit = new TextEdit(
+                new Range($anchorStart, $anchorEnd),
+                $name,
+            );
+            $items[] = $completion;
         }
         return $items;
     }
@@ -589,7 +809,7 @@ final class PhpCompletionResolver
     /**
      * @return list<CompletionItem>
      */
-    private function completeClassesByPrefix(string $prefix): array
+    private function completeClassesByPrefix(string $prefix, ClassNameImportContext $importContext): array
     {
         // Empty prefix in `new ` or bare-expression position would dump the
         // entire workspace + ~1000 stub classes into the popup.  Require
@@ -609,7 +829,12 @@ final class PhpCompletionResolver
                 label: $short,
                 kind: CompletionItemKind::CLASS_,
                 detail: $fqn,
-                insertText: $fqn,
+                // Scope-aware insertText: bare short name when the FQN is
+                // already imported (or same-namespace), leading-backslash
+                // FQ otherwise. Prevents the qualified-but-not-FQ form
+                // (e.g. inserting `App\Models\Tag` inside `namespace App\Demos`)
+                // from namespace-prepending to a non-existent class.
+                insertText: $importContext->chooseInsertText($fqn),
             );
         }
         return $items;
@@ -882,7 +1107,7 @@ final class PhpCompletionResolver
      */
     private static function trace(string $message): void
     {
-        @fwrite(STDERR, '[xphp-lsp completion] ' . $message . "\n");
+        Stderr::write('[xphp-lsp completion] ' . $message . "\n");
     }
 
     private static function oneLine(string $message): string

@@ -25,6 +25,15 @@
   -->
   <php>
     <ini name="memory_limit" value="512M"/>
+    <!--
+      Mute `[xphp-lsp …]` stderr diagnostics during tests.  Infection's
+      InitialTestsRunner calls $process->stop() the moment the test
+      subprocess writes anything to stderr; a single stray fwrite kills
+      the entire mutation run with SIGTERM before any mutant is scored.
+      See XPHP\Lsp\Stderr, the helper that gates every `[xphp-lsp …]`
+      line on this env var.
+    -->
+    <env name="XPHP_LSP_QUIET" value="1"/>
   </php>
 
   <testsuites>

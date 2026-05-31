@@ -1,21 +1,79 @@
 # xphp
 
-`xphp` is a superset of `php` that compiles directly into zero-overhead native, opcache-friendly `php` and gives
-developers **runtime safety without runtime penalty**.
+## What it is
 
-`xphp` contributes to the community in a pragmatic way. With that in mind, it works around the current Zend Engine
-limitations by moving the heavy lifting to an Ahead-of-Time (`AOT`) compilation step.
-
----
+`xphp` is a superset of `php` that gives developers real generics, powered by
+[monomorphization](https://en.wikipedia.org/wiki/Monomorphization) at compile
+time.
 
 ## How it works
 
-### 1. The `xphp` source
+Generics specialize into concrete classes with native typehints the engine
+enforces, so the safety is real and the abstraction compiles away to nothing.
 
-You define a generic class and instantiate it exactly as you would expect:
+The compiler turns `xphp` into regular `php`. In the end it's good ~~old~~
+modern `php`, but developers and AI agents have richer abstractions to design
+better solutions.
+
+## Ecosystem and community first
+
+Ideally a project should first show how it works, but ecosystem and community
+are too much important to be mentioned only at the bottom of the main document.
+This project **CAN NOT** be successful without their support.
+
+The single biggest asset of any programming language is the community and
+ecosystem around it, much more than its syntax and features. We believe that
+meeting a community where it is, respecting their culture, history and work
+compounds far better than asking them to leave all of that behind.
+
+As `xphp` is simply a superset of `php`, existing `php` code can be easily
+converted into `xphp` and `xphp` code can seamlessly consume `php` -- little to
+zero effort either way.
+
+The design choice to compile to vanilla `php` is a deliberate commitment to
+contribute to the `php` community and its ecosystem, **not** to compete against
+them.
+
+## Getting started
+
+### 1. Install the xphp package
+
+```bash
+composer require --dev xphp-lang/xphp
+```
+
+### 2. Enhance your PSR-4 autoload config
+
+Add a PSR-4 entry to `composer.json` so the standard autoloader finds the
+specialized classes without manual `require`.
+
+```json5
+{
+  "autoload": {
+    "psr-4": {
+      // generics will be converted into specialized classes,
+      // they need to have their own namespace.
+      "XPHP\\Generated\\": "<cache>/Generated/",
+      "App\\": [
+        // path to your normal/regular php code
+        "<source>",
+        // some `xphp` files just need to be rewritten into native php to use specialized classes,
+        // but their namespace will remain the same.
+        "<target>"
+      ],
+    }
+  }
+}
+```
+
+After that, update your autoload file via `composer dump-autoload`.
+
+### 3. Write `xphp` code
+
+You can define a generic class and instantiate it exactly as you would expect:
 
 ```php
-// src/Collection.xphp
+// <source>/Collection.xphp
 namespace App;
 
 class Collection<T> {
@@ -31,17 +89,19 @@ class Collection<T> {
     }
 }
 
-// src/main.xphp
+// <source>/main.xphp
+namespace App;
+
 $users = new Collection<User>(
     new User('Alice'),
     new User('Bob')
 );
 ```
 
-### 2. The compile command
+### 4. Compile
 
 ```bash
-`xphp` compile <source> <target> <cache>
+vendor/bin/xphp compile <source> <target> <cache>
 ```
 
 | Argument   | Purpose                                                                              |
@@ -52,10 +112,7 @@ $users = new Collection<User>(
 
 p.s. you can `gitignore` files in `<target>` and `<cache>` as they can be generated in your CI/CD pipeline.
 
-### 3. The compiled native php
-
-The compiler monomorphizes the generic `Collection<T>` class into a concrete `Collection_User` class. No impact on
-the runtime, it's native `php` code.
+#### Sample output 
 
 ```php
 // <cache>/Generated/Collection_User.php
@@ -91,134 +148,67 @@ $users = new Collection_User(
 );
 ```
 
-### 4. Autoload the generated classes
+### 5. Deploy
 
-Add a PSR-4 entry to `composer.json` so the standard autoloader finds the specialized classes without manual `require`,
-then update your autoload file via `composer dump-autoload`.
+The compiler monomorphizes the generic classes and converts downstream code
+into native `php` code.
 
-```json5
-{
-  "autoload": {
-    "psr-4": {
-      // generics will be converted into specialized classes,
-      // they need to have their own namespace.
-      "XPHP\\Generated\\": "<cache>/Generated/",
-      "App\\": [
-        // path to your normal/regular php code
-        "<source>",
-        // some `xphp` files just need to be rewritten into native php to use specialized classes,
-        // but their namespace will remain the same.
-        "<target>"
-      ],
-    }
-  }
-}
-```
+Meaning every place where generics are declared or used is converted into normal
+`php` code. No impact on the runtime. You still deploy `php` code.
 
 ### Project structure
 
 ```
-your-project/
+<root>/
 ├── <source>         # php/xphp source files (PSR-4: namespace mirrors directory structure)
 ├── <target>         # rewritten .php (gitignored, generated)
 ├── <cache>          # specialized classes (gitignored, generated)
 └── composer.json    # PSR-4: XPHP\Generated\ => <cache>/Generated/
 ```
 
----
+## Principles
 
-## Ecosystem and community matter much more than syntax and features
-
-The single biggest asset of any programming language is the community and ecosystem around it, much more than its
-syntax and features. We believe that meeting a community where it is, respecting their culture, history and work
-compounds far better than asking them to leave all of that behind.
-
-As `xphp` is simply a superset of `php`, existing `php` code can be easily converted into `xphp` and `xphp` code can
-seamlessly consume `php` -- little to zero effort either way.
-
-The design choice to compile to vanilla `php` is a deliberate commitment to contribute to the `php` community and its
-ecosystem, **not** to compete against them.
-
----
-
-## Turning static illusions into runtime reality
-
-For years, we've relied on a shared agreement to keep our `php` codebases safe: we use docblocks to tell our IDEs and
-static analyzers what our data should look like. It's a wonderful system that has pushed the language to new heights.
-
-However, there is a fundamental limit to this approach. The `php` engine doesn't read our static analysis rules. At
-runtime, those type guarantees disappear, leaving our applications vulnerable exactly when it matters most.
-
-`xphp` doesn't ask you to change how you think about types, but it does change how they are enforced. It relies on the
-actual `php` engine.
-
-Through a process called monomorphization, `xphp` reads your generic code and safely compiles it into specialized,
-native `php` classes. If you write `Collection<User>` in `xphp`, the compiler automatically generates a physical
-`Collection_User` class. Crucially, the native type hints are baked right in, meaning your code is protected by the
-engine itself, not just a comment.
-
----
-
-## Designing for the runtime, building for developers
-
-Whenever we make an architectural decision, it must be supported by the following non-negotiable principles:
+Whenever we make an architectural decision, it must be supported by the
+following non-negotiable principles:
 
 ### 1. Zero Runtime Penalty
 
-Abstractions should not cost performance. By relying on monomorphization rather than runtime reflection hacks, the
-output is plain `php` classes (`Box_Int`, `Map_String_User`). `opcache` loves this, and execution speed remains
-identical to hand-written, hyper-optimized `php`.
+Abstractions should not cost performance. By relying on monomorphization rather
+than runtime reflection hacks, the output is plain `php` classes. `opcache`
+likes that, and execution speed remains identical to handwritten, optimized
+`php` code.
 
 ### 2. Maximum Runtime Safety
 
-`xphp` bakes the types directly into the generated `php` code. If a boundary is crossed or a third-party plain `php`
-library misuses your code, it triggers a native `php` error. The runtime never lies.
+`xphp` bakes the types directly into the generated `php` code. If a boundary is
+crossed or a third-party plain `php` library misuses your code, it triggers a
+native `php` error. The runtime never lies.
 
 ### 3. Progressive Enhancement
 
-It must play nicely with legacy codebases. A team should be able to write one `xphp` class in a legacy `php`
-application, compile it, and use it seamlessly. No custom runtimes, no `HHVM` style ecosystem splits.
+It must play nicely with normal `php` codebases. A team should be able to write
+a single `xphp` file in a `php` application, compile it, and use it seamlessly.
 
-### 4. Developer Experience First
+No custom runtimes, no `HHVM` style ecosystem splits.
 
-The tooling must feel as fast and native as every modern web tool. IDEs should be able to read `xphp` files, while the
-`php` runtime happily consumes the compiled `php` files.
+### 4. Developer Experience
 
----
+The tooling must be fast and native as every modern ecosystem. IDEs should
+be able to read `xphp` files, while the `php` runtime happily consumes the
+compiled `php` files.
 
 ## Generics: the start, not the finish line
 
-Adding native generics to `php` -- a [long-awaited php feature](https://wiki.php.net/rfc/generics) -- is genuinely [hard
-work](https://thephp.foundation/blog/2024/08/19/state-of-generics-and-collections/) (reification / variance / OpCache
-cost / backwards compatibility). The object model that's served the
-ecosystem for two decades doesn't bend easily.
+Adding native generics to `php` -- a [long-awaited php feature](https://wiki.php.net/rfc/generics) --
+is genuinely [hard work](https://thephp.foundation/blog/2024/08/19/state-of-generics-and-collections/).
 
-Supporting generics proves that the compile-to-vanilla model handles non-trivial type-system additions. The remaining
-features are on the [roadmap](docs/roadmap.md): type aliases, literal types, mapped and conditional types to name a few.
+The object model that's served the ecosystem for two decades doesn't bend easily.
 
-`xphp` doesn't wait for `php` internals to ship these features. It delivers them today, on top of the runtime the
-community and ecosystem already trust.
+Supporting generics proves that the compile-to-vanilla model handles non-trivial
+type-system additions. The remaining features are on the [roadmap](docs/roadmap.md):
+type aliases, literal types, mapped and conditional types to name a few.
 
-- Full generics reference: [docs/generics.md](docs/generics.md)
-- Side-by-side comparison against TypeScript, Kotlin, and Rust (what's there, what's missing, what's uniquely possible
-  with monomorphization): [docs/generics-comparison.md](docs/generics-comparison.md)
+## See also
 
----
-
-## Editor tooling
-
-The compiler itself lives at [core/](core/) (Composer package
-`xphp-lang/xphp`); a Language Server Protocol implementation under [tools/lsp/](tools/lsp/) delivers the full editor surface for `.xphp`
-files: live diagnostics, hover (xphp generics + PHP semantic, with parameter and return-type substitution),
-go-to-definition, find references, rename, document and workspace symbols, and rich completion (member access,
-static access, static property, type-arg positions with bound-aware filtering, scope-aware variables, visibility
-filtering across same-class and subclass contexts). The same server powers two editor integrations:
-
-- **PhpStorm**: plugin at [tools/phpstorm-plugin/](tools/phpstorm-plugin/) targeting PhpStorm 2026.1+ (uses the
-  IntelliJ Platform LSP API, free for all editions since 2025.2). This is the primary editor target.
-- **VS Code**: extension client at [tools/vscode-extension/](tools/vscode-extension/) for local dev
-  iteration. Marketplace publication is deferred indefinitely.
-
-Both bind to the same TextMate grammar and the same LSP semantics, so editing experience is consistent across editors.
-
----
+- [Type-system comparison](core/docs/type-system/comparison.md)
+- [Full generics reference](core/docs/type-system/generics/index.md)

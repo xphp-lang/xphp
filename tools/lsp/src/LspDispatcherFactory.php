@@ -6,6 +6,7 @@ namespace XPHP\Lsp;
 
 use PhpParser\ParserFactory;
 use Phpactor\LanguageServer\Adapter\Psr\AggregateEventDispatcher;
+use Phpactor\LanguageServer\Core\Command\ClosureCommand;
 use Phpactor\LanguageServer\Core\Command\CommandDispatcher;
 use Phpactor\LanguageServer\Core\Dispatcher\ArgumentResolver\ChainArgumentResolver;
 use Phpactor\LanguageServer\Core\Dispatcher\ArgumentResolver\LanguageSeverProtocolParamsResolver;
@@ -48,10 +49,25 @@ use XPHP\Lsp\Handler\WorkspaceSymbols;
 use XPHP\Lsp\Handler\XphpCompletionHandler;
 use XPHP\Lsp\Handler\XphpDefinitionHandler;
 use XPHP\Lsp\Handler\XphpDocumentSymbolHandler;
+use XPHP\Lsp\Handler\XphpCodeActionHandler;
+use XPHP\Lsp\Handler\XphpCodeActionResolveHandler;
+use XPHP\Lsp\Handler\XphpCompletionResolveHandler;
+use XPHP\Lsp\Handler\XphpDocumentHighlightHandler;
+use XPHP\Lsp\Handler\XphpCallHierarchyHandler;
+use XPHP\Lsp\Handler\XphpCodeLensHandler;
+use XPHP\Lsp\Handler\XphpFoldingRangeHandler;
+use XPHP\Lsp\Handler\XphpInlayHintHandler;
+use XPHP\Lsp\Handler\XphpSignatureHelpHandler;
+use XPHP\Lsp\Handler\XphpTypeDefinitionHandler;
 use XPHP\Lsp\Handler\XphpFileWatcherHandler;
 use XPHP\Lsp\Handler\XphpHoverHandler;
 use XPHP\Lsp\Handler\XphpReferencesHandler;
 use XPHP\Lsp\Handler\XphpRenameHandler;
+use XPHP\Lsp\Handler\XphpWillRenameFilesHandler;
+use XPHP\Lsp\Handler\XphpImplementationHandler;
+use XPHP\Lsp\Handler\XphpPullDiagnosticsHandler;
+use XPHP\Lsp\Handler\XphpSemanticTokensHandler;
+use XPHP\Lsp\Handler\XphpTypeHierarchyHandler;
 use XPHP\Lsp\Handler\XphpWorkspaceSymbolHandler;
 use XPHP\Lsp\Reflection\ReflectorFactory;
 use XPHP\Lsp\Reflection\FqnIndex;
@@ -60,6 +76,9 @@ use XPHP\Lsp\Resolver\CompositeClassLikeLookup;
 use XPHP\Lsp\Resolver\FilesystemClassLikeLookup;
 use XPHP\Lsp\Resolver\GenericParamRegistry;
 use XPHP\Lsp\Resolver\GenericResolver;
+use XPHP\Lsp\Resolver\DiagnosticCodeActionProvider;
+use XPHP\Lsp\Resolver\ImportCodeActionProvider;
+use XPHP\Lsp\Resolver\OptimizeImportsCodeActionProvider;
 use XPHP\Lsp\Resolver\PhpCompletionResolver;
 use XPHP\Lsp\Resolver\ReferenceFinder;
 use XPHP\Lsp\Resolver\RenameProvider;
@@ -162,6 +181,7 @@ final class LspDispatcherFactory implements DispatcherFactory
             $cache,
             new WorkspaceAnalyzer(),
             $workspace,
+            $fqnIndex,
         );
 
         $diagnosticsEngine = new DiagnosticsEngine(
@@ -195,6 +215,18 @@ final class LspDispatcherFactory implements DispatcherFactory
                 ['**/*.xphp', '**/*.php'],
                 $initializeParams->capabilities,
             ),
+            // Fix I: warm the FQN index off the `Initialized` event so
+            // the first user-facing hover/definition/completion doesn't
+            // pay the ~500ms filesystem-walk cost in-band.  Async via
+            // Amp\asyncCall -- doesn't block the initialize handshake.
+            new \XPHP\Lsp\Reflection\FqnIndexWarmer($fqnIndex),
+            // Perf #1: warm ParsedDocumentCache with every filesystem-
+            // indexed file so the cold first `textDocument/references`
+            // (codeLens click, Alt+F7) skips the per-file parse step --
+            // dominant cost in the prod 7.5s/click measurement.
+            // Runs on the same Initialized event, independently of the
+            // FQN warmer above; both are asyncCall-dispatched.
+            new \XPHP\Lsp\Analyzer\ParsedDocumentCacheWarmer($fqnIndex, $cache, $workspace),
             $diagnosticsService,
         );
 
@@ -221,7 +253,23 @@ final class LspDispatcherFactory implements DispatcherFactory
         $handlers = new Handlers(
             new XphpTextDocumentHandler($eventDispatcher),
             new ServiceHandler($serviceManager, $clientApi),
-            new CommandHandler(new CommandDispatcher([])),
+            new CommandHandler(new CommandDispatcher([
+                // CodeLens emits `editor.action.showReferences` with
+                // locations baked in -- VS Code, PhpStorm LSP4IJ, and
+                // Helix all dispatch this name client-side and open
+                // the Find Usages panel without round-tripping.
+                // Register a server-side no-op as a safety net: any
+                // client that doesn't recognize the convention will
+                // fall back to `workspace/executeCommand`, and the
+                // CommandDispatcher would throw on an unknown
+                // command name -- phpactor's framework would surface
+                // that as a JSON-RPC error toast.  Returning null
+                // here makes the unhandled-by-client path silently
+                // do nothing instead.
+                XphpCodeLensHandler::COMMAND_NAME => new ClosureCommand(
+                    static fn (...$args): \Amp\Promise => new \Amp\Success(null),
+                ),
+            ])),
             new ExitHandler(),
             new XphpHoverHandler($workspace, $cache, $phpHoverResolver),
             new XphpDefinitionHandler(
@@ -232,28 +280,79 @@ final class LspDispatcherFactory implements DispatcherFactory
                 new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
                 $phpDefinitionResolver,
             ),
+            new XphpTypeDefinitionHandler($phpDefinitionResolver),
             new XphpCompletionHandler($workspace, $workspaceSymbols, $phpCompletionResolver, $fqnIndex, $reflector),
+            new XphpCompletionResolveHandler($reflector),
+            new XphpSignatureHelpHandler($workspace, $cache, $xphpParser, $reflector),
+            new XphpInlayHintHandler($workspace, $cache, $genericResolver),
+            new XphpCodeActionHandler(
+                $workspace,
+                new ImportCodeActionProvider($fqnIndex, $cache),
+                new DiagnosticCodeActionProvider(),
+                new OptimizeImportsCodeActionProvider($cache),
+            ),
+            new XphpCodeActionResolveHandler(),
             new XphpDocumentSymbolHandler($workspace, $cache),
+            new XphpCallHierarchyHandler($workspace, $cache, $fqnIndex, $xphpParser),
+            new XphpCodeLensHandler(
+                $workspace,
+                $cache,
+                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
+            ),
+            new XphpFoldingRangeHandler($workspace, $cache),
             new XphpWorkspaceSymbolHandler($fqnIndex),
-            new XphpFileWatcherHandler($fqnIndex),
+            new XphpFileWatcherHandler($fqnIndex, $workspace, $cache),
             new XphpReferencesHandler(
+                $workspace,
+                new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
+            ),
+            new XphpDocumentHighlightHandler(
                 $workspace,
                 new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
             ),
             new XphpRenameHandler(
                 $workspace,
-                new RenameProvider(
+                $renameProvider = new RenameProvider(
                     $workspace,
                     new ReferenceFinder($workspace, $cache, $fqnIndex, $xphpParser, $reflector, $genericResolver),
                     $fqnIndex,
                     self::clientSupportsRenameFileOp($initializeParams),
                 ),
             ),
+            // Cycle L Half B: workspace/willRenameFiles -- file-rename
+            // -> class-rename text edits.  Pairs with the plugin's
+            // AsyncFileListener which sends the request on .xphp/.php
+            // file moves.  Shares the rename machinery with
+            // textDocument/rename via the just-bound $renameProvider.
+            new XphpWillRenameFilesHandler(
+                $workspace,
+                $cache,
+                $xphpParser,
+                $renameProvider,
+                new \XPHP\Lsp\Resolver\NamespaceMoveProvider(
+                    $workspace,
+                    $cache,
+                    $fqnIndex,
+                    $xphpParser,
+                ),
+            ),
+            new XphpSemanticTokensHandler($workspace, $cache),
+            new XphpPullDiagnosticsHandler($workspace, $diagnosticsProvider),
+            new XphpTypeHierarchyHandler($workspace, $cache, $xphpParser, $fqnIndex),
+            new XphpImplementationHandler($workspace, $cache, $xphpParser, $fqnIndex),
         );
 
         $runner = new HandlerMethodRunner(
             $handlers,
             new ChainArgumentResolver(
+                // LspObjectArgumentResolver runs BEFORE the framework's
+                // `*Params$`-only resolver so handlers whose first
+                // parameter is a non-Params LSP object (CompletionItem,
+                // CodeAction) get a properly deserialised instance
+                // instead of `array_values($params)` splatted scalars.
+                // Backs textDocument/completionItem/resolve and
+                // codeAction/resolve.
+                new \XPHP\Lsp\Dispatcher\LspObjectArgumentResolver(),
                 new LanguageSeverProtocolParamsResolver(),
                 new PassThroughArgumentResolver(),
             ),
@@ -275,12 +374,24 @@ final class LspDispatcherFactory implements DispatcherFactory
     /**
      * Per LSP spec: when the client advertises
      * `workspace.workspaceEdit.resourceOperations`, the server must
-     * only emit ops in that list.  PhpStorm currently lists `["create"]`
-     * only (no `rename`/`delete`), so any `RenameFile` we send is
-     * silently dropped on the client side and the user sees a partial
-     * apply.  We detect support up-front and elide RenameFile when the
-     * client doesn't claim it.  VS Code advertises all three and gets
-     * the full behavior.
+     * only emit ops in that list.  PhpStorm lists `["create"]` only
+     * (no `rename`/`delete`), so any `RenameFile` we send is silently
+     * dropped on the client side and the user sees a partial apply.
+     *
+     * **Cycle L attempt 1** added a plugin-side opt-in
+     * (`initializationOptions.xphpAcceptsRenameFile`) so the server
+     * could emit RenameFile ops regardless of the standard
+     * advertisement.  Prod-test (xphp-20260530-161814 log id=50)
+     * proved the opt-in self-defeating: PhpStorm advertises
+     * `failureHandling: "abort"`, so when LSP4IJ's WorkspaceEdit
+     * applier sees the unsupported RenameFile op, it aborts the
+     * ENTIRE WorkspaceEdit including the text edits the user
+     * actually wanted.  Reverted -- the flag is now read but no
+     * longer fires the override; we honour the spec-standard
+     * advertisement only.  The xphp-side flag stays on the wire so
+     * the plugin can be told the server CAN emit the op (for a
+     * future architecture where the plugin intercepts the rename
+     * before LSP4IJ's abort-on-failure applier sees it).
      */
     private static function clientSupportsRenameFileOp(InitializeParams $initializeParams): bool
     {

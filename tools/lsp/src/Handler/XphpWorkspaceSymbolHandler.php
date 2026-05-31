@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Lsp\Handler;
 
+use Amp\CancellationToken;
 use Amp\Promise;
 use Amp\Success;
 use Phpactor\LanguageServer\Core\Handler\CanRegisterCapabilities;
@@ -62,11 +63,24 @@ final class XphpWorkspaceSymbolHandler implements Handler, CanRegisterCapabiliti
     /**
      * @return Promise<list<SymbolInformation>>
      */
-    public function symbol(WorkspaceSymbolParams $params): Promise
+    public function symbol(WorkspaceSymbolParams $params, ?CancellationToken $cancel = null): Promise
     {
+        if ($cancel !== null && $cancel->isRequested()) {
+            return new Success([]);
+        }
         $query = strtolower(self::stripMemberSuffix($params->query));
         $results = [];
+        $iterations = 0;
         foreach ($this->fqnIndex->allDeclarations() as $hit) {
+            // Workspace symbol scans the whole FQN index -- in big
+            // workspaces this can be slow, so we poll the cancellation
+            // token every 256 iterations to bail mid-scan when the
+            // user has moved on.  256 is small enough to keep the
+            // perceived response time low and large enough that the
+            // per-iteration overhead of `isRequested()` is amortized.
+            if (($iterations++ & 255) === 0 && $cancel !== null && $cancel->isRequested()) {
+                return new Success([]);
+            }
             if ($query !== '' && !self::matches($hit['fqn'], $query)) {
                 continue;
             }

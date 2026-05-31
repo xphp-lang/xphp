@@ -203,6 +203,28 @@ final class PhpDefinitionResolverTest extends TestCase
         $this->assertResolves($location, '/Cfg.xphp', 'MAX');
     }
 
+    public function testJumpsFromNamespacedGlobalConstantToStub(): void
+    {
+        // Regression for the prod PHP_EOL bug.  A bare `PHP_EOL`
+        // referenced inside `namespace App\Demos` name-resolves to
+        // `App\Demos\PHP_EOL` -- never declared anywhere -- but PHP's
+        // runtime falls back to the global `PHP_EOL` (stub-indexed).
+        // Pre-fix, `locateConstant` only tried the namespaced form
+        // and returned null; PhpStorm then showed "Cannot find
+        // declaration to go to."
+        if (!is_dir(ReflectorFactory::defaultStubPath())) {
+            self::markTestSkipped('jetbrains/phpstorm-stubs not installed at expected path');
+        }
+        $workspace = $this->workspace();
+        $useSource = "<?php\nnamespace App\\Demos;\necho PHP_EOL;\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $location = $this->resolveAt($workspace, '/Use.xphp', $useSource, 'echo PHP_EOL', strlen('echo '));
+
+        self::assertNotNull($location, 'global-namespace fallback must resolve namespaced builtin constants');
+        self::assertStringContainsString('phpstorm-stubs', $location->uri);
+    }
+
     public function testUnknownClassReturnsNull(): void
     {
         $workspace = $this->workspace();
@@ -382,6 +404,61 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertStringEndsWith('/User.xphp', $location->uri);
     }
 
+    public function testUnionReceiverFanOutReturnsAllConstituentClassLocations(): void
+    {
+        // Cycle K: cursor on `$x->foo()` where `$x: A|B` should
+        // return Locations for BOTH A::foo and B::foo so PhpStorm
+        // renders a picker.  worse-reflection's containerType()
+        // surfaces the union; the dispatch's fanOutLocate splits
+        // it and merges per-constituent locations.
+        $workspace = $this->workspace();
+        $this->open($workspace, '/A.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class A {
+            public function foo(): string { return 'a'; }
+        }
+        XPHP);
+        $this->open($workspace, '/B.xphp', <<<'XPHP'
+        <?php
+        namespace App;
+        class B {
+            public function foo(): string { return 'b'; }
+        }
+        XPHP);
+        $useSource = "<?php\nuse App\\A;\nuse App\\B;\n/** @return A|B */\nfunction pick() { return new A(); }\n\$x = pick();\n\$x->foo();\n";
+        $this->open($workspace, '/Use.xphp', $useSource);
+
+        $locations = $this->resolveAllAt($workspace, '/Use.xphp', $useSource, '->foo', strlen('->'));
+
+        // Both A::foo and B::foo must appear in the result.  The
+        // legacy `resolve()` returns the first; `resolveAll()` is
+        // the fan-out used by the Cycle K handler.
+        self::assertCount(2, $locations);
+        $uris = array_map(fn (Location $l): string => $l->uri, $locations);
+        $endsWithA = array_filter($uris, fn (string $u): bool => str_ends_with($u, '/A.xphp'));
+        $endsWithB = array_filter($uris, fn (string $u): bool => str_ends_with($u, '/B.xphp'));
+        self::assertNotEmpty($endsWithA, 'A::foo declaration is in the picker');
+        self::assertNotEmpty($endsWithB, 'B::foo declaration is in the picker');
+    }
+
+    /**
+     * @return list<Location>
+     */
+    private function resolveAllAt(
+        PhpactorWorkspace $workspace,
+        string $uri,
+        string $source,
+        string $needle,
+        int $offsetInNeedle,
+    ): array {
+        $byte = strpos($source, $needle);
+        self::assertNotFalse($byte, "fixture needle '$needle' must exist");
+        $byte += $offsetInNeedle;
+        [$line, $character] = (new PositionMap($source))->offsetToPosition($byte);
+        return $this->resolver($workspace)->resolveAll($uri, $line, $character);
+    }
+
     private function resolveAt(
         PhpactorWorkspace $workspace,
         string $uri,
@@ -406,6 +483,82 @@ final class PhpDefinitionResolverTest extends TestCase
         self::assertGreaterThanOrEqual(0, $location->range->start->line);
         self::assertGreaterThanOrEqual(0, $location->range->start->character);
         self::assertLessThanOrEqual(80, $location->range->end->character - $location->range->start->character);
+    }
+
+    /**
+     * @dataProvider acceptedClassFqnProvider
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('acceptedClassFqnProvider')]
+    public function testIsClassFqnAcceptsPlausibleClassNames(string $typeName): void
+    {
+        self::assertTrue(PhpDefinitionResolver::isClassFqn($typeName), $typeName);
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function acceptedClassFqnProvider(): iterable
+    {
+        yield 'simple name' => ['User'];
+        yield 'namespaced' => ['App\\Models\\User'];
+        yield 'leading backslash' => ['\\App\\Models\\User'];
+        yield 'nullable' => ['?App\\Models\\User'];
+        yield 'nullable leading backslash' => ['?\\App\\Models\\User'];
+        yield 'underscore-prefix' => ['_internal'];
+    }
+
+    /**
+     * @dataProvider rejectedClassFqnProvider
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('rejectedClassFqnProvider')]
+    public function testIsClassFqnRejectsNonClassTypeStrings(string $typeName): void
+    {
+        // worse-reflection emits these shapes for inferred non-class
+        // types -- feeding them to `reflectClassLike` causes a
+        // SourceNotFound after a wasted locator walk + a stderr miss
+        // log line.  isClassFqn must catch every shape seen in prod.
+        self::assertFalse(PhpDefinitionResolver::isClassFqn($typeName), $typeName);
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function rejectedClassFqnProvider(): iterable
+    {
+        yield 'empty' => [''];
+        yield 'missing sentinel' => ['<missing>'];
+        yield 'union' => ['App\\Foo|App\\Bar'];
+        yield 'intersection' => ['App\\Foo&App\\Bar'];
+        yield 'grouped union of intersections' => [
+            '(PhpParser\\Node\\Stmt\\ClassLike&PhpParser\\Node\\Stmt\\Class_)|(PhpParser\\Node\\Stmt\\ClassLike&PhpParser\\Node\\Stmt\\Interface_)',
+        ];
+        yield 'grouped method-call union' => [
+            '(PhpParser\\Node&PhpParser\\Node\\Expr\\MethodCall)|(PhpParser\\Node&PhpParser\\Node\\Expr\\NullsafeMethodCall)',
+        ];
+        yield 'integer literal zero' => ['0'];
+        yield 'integer literal one' => ['1'];
+        yield 'string literal' => ["'foo'"];
+    }
+
+    public function testReturnsNullWhenAlreadyCancelledAtEntry(): void
+    {
+        // Fix D: pre-cancelled token bails at the top of resolveInner,
+        // before worse-reflection's reflectOffset runs.
+        $workspace = new PhpactorWorkspace();
+        $userSource = "<?php\nnamespace App;\nclass User {}\n";
+        $workspace->open(new \Phpactor\LanguageServerProtocol\TextDocumentItem('/User.xphp', 'xphp', 1, $userSource));
+        $useSource = "<?php\nuse App\\User;\n\$u = new User();\n";
+        $workspace->open(new \Phpactor\LanguageServerProtocol\TextDocumentItem('/Use.xphp', 'xphp', 1, $useSource));
+
+        $cancel = new \Amp\CancellationTokenSource();
+        $cancel->cancel();
+
+        $byte = strpos($useSource, 'new User');
+        self::assertNotFalse($byte);
+        [$line, $character] = (new \XPHP\Lsp\PositionMap($useSource))->offsetToPosition($byte + 4);
+
+        $location = $this->resolver($workspace)->resolve('/Use.xphp', $line, $character, $cancel->getToken());
+        self::assertNull($location, 'cancelled token must produce no location even when symbol resolves');
     }
 
     private function resolver(PhpactorWorkspace $workspace): PhpDefinitionResolver

@@ -9,6 +9,7 @@ use Phpactor\TextDocument\TextDocumentBuilder;
 use Phpactor\WorseReflection\Core\Exception\SourceNotFound;
 use Phpactor\WorseReflection\Core\Name;
 use Phpactor\WorseReflection\Core\SourceCodeLocator;
+use XPHP\Lsp\Stderr;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
 /**
@@ -34,6 +35,34 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  */
 final class FilesystemSourceLocator implements SourceCodeLocator
 {
+    /**
+     * FQN -> built TextDocument.  Avoids re-reading and re-stripping the
+     * same file across the dozens of `locate()` calls worse-reflection
+     * issues for one FQN within a single user request (~12 lookups of
+     * `ReflectionMethod` for a single hover, per prod log analysis).
+     *
+     * @var array<string, TextDocument>
+     */
+    private array $hitCache = [];
+
+    /**
+     * Set of FQNs we've already logged a miss for.  Suppresses the
+     * `[xphp-lsp locator] miss ...` stderr spam (the same FQN missing
+     * 30+ times per request).  Still throws `SourceNotFound` on every
+     * call (worse-reflection's chain needs the exception to fall
+     * through to the next locator); we just don't repeat the log.
+     *
+     * @var array<string, true>
+     */
+    private array $loggedMisses = [];
+
+    /**
+     * Snapshot of {@see FqnIndex::filesystemVersion} when the caches
+     * above were populated.  An increment (from
+     * {@see FqnIndex::invalidateFilesystem}) flushes both.
+     */
+    private int $observedVersion = -1;
+
     public function __construct(
         private readonly FqnIndex $index,
         private readonly XphpSourceParser $parser,
@@ -43,15 +72,59 @@ final class FilesystemSourceLocator implements SourceCodeLocator
 
     public function locate(Name $name): TextDocument
     {
+        $this->flushIfStale();
+
         $needle = ltrim((string) $name, '\\');
+
+        // Hit-cache: same FQN looked up multiple times in the same
+        // request returns the cached TextDocument without re-reading
+        // the file or running the strip pass.
+        if (isset($this->hitCache[$needle])) {
+            return $this->hitCache[$needle];
+        }
+
+        // Fix L: short-circuit when the FQN is a namespace-resolved
+        // type-param.  nikic's name resolver attaches the enclosing
+        // namespace to every bare identifier, so a hover on `T` inside
+        // `namespace App\Containers` becomes `App\Containers\T`.  That
+        // never resolves to a class, but pre-fix-L we'd still consult
+        // pathFor, log a miss, throw -- repeated dozens of times per
+        // request when worse-reflection's chain re-asks.  Now we
+        // recognise the type-param shape and bail silently.
+        if ($this->index->isTypeParamFqn($needle)) {
+            throw new SourceNotFound(sprintf(
+                '"%s" is a type-param reference, not a class FQN',
+                $needle,
+            ));
+        }
+
         $path = $this->index->pathFor($needle);
 
         if ($path === null) {
-            @fwrite(STDERR, sprintf(
-                "[xphp-lsp locator] miss %s (no declaration indexed under %s)\n",
-                $needle,
-                $this->rootPath,
-            ));
+            // Fix 3: when `$needle` is a namespace-resolved reference
+            // to a built-in PHP function (e.g. `App\Demos\gettype`,
+            // `XPHP\Lsp\Resolver\max`), suppress the stderr miss line
+            // AND differentiate the exception message so tests can
+            // observe the path.  nikic's name resolver emits the
+            // namespaced form speculatively; PHP's runtime falls back
+            // to global-scope function lookup, but the locator never
+            // gets that fallback because functions are never
+            // registered with `pathFor`.  Still throw SourceNotFound
+            // so worse-reflection's chain falls through normally.
+            if ($this->index->isBareBuiltinFunctionFqn($needle)) {
+                throw new SourceNotFound(sprintf(
+                    '"%s" is a namespace-resolved global function reference, not a class FQN',
+                    $needle,
+                ));
+            }
+            if (!isset($this->loggedMisses[$needle])) {
+                $this->loggedMisses[$needle] = true;
+                Stderr::write(sprintf(
+                    "[xphp-lsp locator] miss %s (no declaration indexed under %s)\n",
+                    $needle,
+                    $this->rootPath,
+                ));
+            }
             throw new SourceNotFound(sprintf(
                 'No file under "%s" declares "%s"',
                 $this->rootPath,
@@ -80,10 +153,31 @@ final class FilesystemSourceLocator implements SourceCodeLocator
 
         $stripped = self::shouldStrip($path) ? $this->parser->strip($source) : $source;
 
-        return TextDocumentBuilder::create($stripped)
+        $document = TextDocumentBuilder::create($stripped)
             ->uri($path)
             ->language('php')
             ->build();
+
+        $this->hitCache[$needle] = $document;
+        return $document;
+    }
+
+    /**
+     * Flush the hit-cache + logged-miss set when the underlying
+     * {@see FqnIndex} bumps its filesystem version.  Called at the
+     * start of every {@see locate} to keep the caches consistent
+     * with the index's freshness without requiring the index to call
+     * back into the locator on invalidation.
+     */
+    private function flushIfStale(): void
+    {
+        $current = $this->index->filesystemVersion();
+        if ($current === $this->observedVersion) {
+            return;
+        }
+        $this->hitCache = [];
+        $this->loggedMisses = [];
+        $this->observedVersion = $current;
     }
 
     private static function shouldStrip(string $path): bool

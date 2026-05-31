@@ -169,6 +169,26 @@
             implementation="com.xphp.lsp.textmate.XphpBundleRegistrar"/>
 
         <!--
+          Cycle L Half B: VFS rename listener for `.xphp` / `.php`
+          files.  Sends `workspace/willRenameFiles` to the xphp LSP
+          server on each rename; the response carries text edits
+          renaming the in-source class to match the new basename,
+          applied via WriteCommandAction.
+
+          NOTE on why this is needed: an earlier prod-test (log id=59)
+          showed a willRenameFiles request being sent to the server,
+          which I initially attributed to PhpStorm's native dispatch
+          based on the server's `workspace.fileOperations.willRename`
+          capability advertisement.  A subsequent prod-test
+          (xphp-20260530-164821) with the listener removed confirmed
+          that was wrong: PhpStorm 2026.1's LSP4IJ does NOT
+          dispatch willRenameFiles natively; the earlier traffic was
+          this listener doing the work.  Restored.
+        -->
+        <vfs.asyncListener
+            implementation="com.xphp.lsp.XphpFileRenameListener"/>
+
+        <!--
           NOTE: we deliberately do NOT register a
           `<lang.syntaxHighlighterFactory language="xphp" ...>`.  Without
           an `XphpLanguage` for the LSP-only model (see the longer
@@ -181,4 +201,22 @@
           `TextMateLanguage` by the platform) handles them automatically.
         -->
     </extensions>
+
+    <!--
+      Cycle L Half A (file-rename half): when the user renames an
+      xphp class via Shift+F6, LSP4IJ applies the text edits but
+      silently drops `RenameFile` resource ops, so the FILE stays
+      at its old name even though the class is renamed.  This
+      BulkFileListener watches `VFileContentChangeEvent`s for
+      .xphp/.php files and, when a single-declaration PSR-4 file's
+      class short name no longer matches the basename stem,
+      renames the file to match.  See [XphpClassFileSync] for the
+      regex-based heuristic and cycle-interaction notes (it plays
+      symmetrically with Half B's file → class flow).
+    -->
+    <applicationListeners>
+        <listener
+            class="com.xphp.lsp.XphpClassFileSync"
+            topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+    </applicationListeners>
 </idea-plugin>
