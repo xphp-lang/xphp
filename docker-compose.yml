@@ -11,53 +11,7 @@ services:
   xphp:
     extends:
       service: php
-    entrypoint: [ "/opt/app/core/bin/xphp" ]
-
-  # JDK 21 + Gradle + X11 forwarding for the PhpStorm plugin under
-  # tools/phpstorm-plugin/.  This is THE Java toolchain for that package
-  # -- no host JDK is expected.  Developers always go through the
-  # package Makefile:
-  #
-  #   make -C tools/phpstorm-plugin build      # headless
-  #   make -C tools/phpstorm-plugin verify     # headless
-  #   make -C tools/phpstorm-plugin run-ide    # GUI, sandbox PhpStorm
-  #
-  # Each target shells out to `docker compose run --rm jdk ...`; the
-  # `run-ide` target additionally runs `xhost +local:docker` first so
-  # the sandbox UI can reach the host X server.  No manual docker
-  # invocation required.
-  #
-  # Rootless docker maps the container's root to your host user, so
-  # build outputs (build/, .gradle/) land owned by you -- no chown
-  # cleanup after a run.
-  jdk:
-    build:
-      dockerfile: .docker/jdk.Dockerfile
-    working_dir: /opt/app
-    volumes:
-      - ./:/opt/app
-      - gradle_cache:/root/.gradle
-      # Host's X11 socket -- combined with DISPLAY and `xhost +local:docker`,
-      # the whole GUI hookup for `./gradlew runIde`.
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    environment:
-      # Inherit DISPLAY from the shell that ran `docker compose run`.
-      DISPLAY: "${DISPLAY:-:0}"
-      # JBR's Swing occasionally trips a non-reparenting-WM check inside
-      # rootless containers; setting this preemptively suppresses the
-      # cosmetic window-decoration glitches that come with it.
-      _JAVA_AWT_WM_NONREPARENTING: "1"
-    # Default to an interactive shell so `docker compose run --rm jdk` (no
-    # command) drops you at /opt/app.  Pass a command to override:
-    # `docker compose run --rm jdk ./gradlew ...`.
-    entrypoint: [ "/bin/bash" ]
+    entrypoint: [ "/opt/app/bin/xphp" ]
 
 volumes:
   composer_cache: ~
-
-  # Persisted Gradle home. Holds the downloaded Gradle distribution, the
-  # IntelliJ Platform Gradle Plugin's cached PhpStorm 2026.1.2 distribution
-  # (~1 GB) and the Plugin Verifier's IDE matrix.
-  # Named volume rather than a host bind-mount so root-owned files inside
-  # don't collide with any host-side gradle invocation you do later.
-  gradle_cache:

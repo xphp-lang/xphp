@@ -2,9 +2,11 @@
 
 ## What it is
 
-`xphp` is a superset of `php` that gives developers real generics, powered by
-[monomorphization](https://en.wikipedia.org/wiki/Monomorphization) at compile
-time.
+`xphp` is a superset of `php` that gives developers real generics,
+powered by [monomorphization](https://en.wikipedia.org/wiki/Monomorphization) at compile time.
+
+In a more inspirational mood, it is a fast lane for the `php` language, a bridge
+between what developers need today and what `php` will support in the future.
 
 ## How it works
 
@@ -17,22 +19,57 @@ better solutions.
 
 ## Ecosystem and community first
 
-Ideally a project should first show how it works, but ecosystem and community
-are too much important to be mentioned only at the bottom of the main document.
-This project **CAN NOT** be successful without their support.
-
 The single biggest asset of any programming language is the community and
-ecosystem around it, much more than its syntax and features. We believe that
-meeting a community where it is, respecting their culture, history and work
-compounds far better than asking them to leave all of that behind.
+ecosystem around it, much more than its syntax and features.
 
-As `xphp` is simply a superset of `php`, existing `php` code can be easily
-converted into `xphp` and `xphp` code can seamlessly consume `php` -- little to
-zero effort either way.
+We believe that meeting a community where it is, respecting their culture,
+history and work compounds far better than asking them to leave all of that
+behind.
 
 The design choice to compile to vanilla `php` is a deliberate commitment to
-contribute to the `php` community and its ecosystem, **not** to compete against
-them.
+**contribute** to the `php` community and its ecosystem.
+
+## Principles
+
+Whenever we make an architectural decision, it must be supported by the
+following non-negotiable principles:
+
+### 1. Zero Runtime Penalty
+
+Abstractions should not cost performance. By relying on monomorphization rather
+than runtime reflection hacks, the output is plain `php` classes. `opcache`
+likes that, and execution speed remains identical to handwritten, optimized
+`php` code.
+
+### 2. Maximum Runtime Safety
+
+`xphp` bakes the types directly into the generated `php` code. If a boundary is
+crossed or a third-party plain `php` library misuses your code, it triggers a
+native `php` error. The runtime never lies.
+
+### 3. Progressive Enhancement
+
+It must play nicely with normal `php` codebases. A team should be able to write
+a single `xphp` file in a `php` application, compile it, and use it seamlessly.
+
+No custom runtimes, no `HHVM` style ecosystem splits.
+
+### 4. Developer Experience
+
+The tooling must be fast and native as in every modern ecosystem. IDEs should
+be able to read `xphp` files, while the `php` runtime happily consumes the
+compiled `php` files.
+
+## Generics: the start, not the finish line
+
+Adding native generics to `php` -- a [long-awaited php feature](https://wiki.php.net/rfc/generics) --
+is genuinely [hard work](https://thephp.foundation/blog/2024/08/19/state-of-generics-and-collections/).
+
+The object model that's served the ecosystem for two decades doesn't bend easily.
+
+Supporting generics proves that the compile-to-vanilla model handles non-trivial
+type-system additions. The remaining features are on the [roadmap](docs/roadmap.md):
+type aliases, literal types, mapped and conditional types to name a few.
 
 ## Getting started
 
@@ -165,48 +202,6 @@ Meaning every place where generics are declared or used is converted into normal
 ├── <cache>          # specialized classes (gitignored, generated)
 └── composer.json    # PSR-4: XPHP\Generated\ => <cache>/Generated/
 ```
-
-## Principles
-
-Whenever we make an architectural decision, it must be supported by the
-following non-negotiable principles:
-
-### 1. Zero Runtime Penalty
-
-Abstractions should not cost performance. By relying on monomorphization rather
-than runtime reflection hacks, the output is plain `php` classes. `opcache`
-likes that, and execution speed remains identical to handwritten, optimized
-`php` code.
-
-### 2. Maximum Runtime Safety
-
-`xphp` bakes the types directly into the generated `php` code. If a boundary is
-crossed or a third-party plain `php` library misuses your code, it triggers a
-native `php` error. The runtime never lies.
-
-### 3. Progressive Enhancement
-
-It must play nicely with normal `php` codebases. A team should be able to write
-a single `xphp` file in a `php` application, compile it, and use it seamlessly.
-
-No custom runtimes, no `HHVM` style ecosystem splits.
-
-### 4. Developer Experience
-
-The tooling must be fast and native as every modern ecosystem. IDEs should
-be able to read `xphp` files, while the `php` runtime happily consumes the
-compiled `php` files.
-
-## Generics: the start, not the finish line
-
-Adding native generics to `php` -- a [long-awaited php feature](https://wiki.php.net/rfc/generics) --
-is genuinely [hard work](https://thephp.foundation/blog/2024/08/19/state-of-generics-and-collections/).
-
-The object model that's served the ecosystem for two decades doesn't bend easily.
-
-Supporting generics proves that the compile-to-vanilla model handles non-trivial
-type-system additions. The remaining features are on the [roadmap](docs/roadmap.md):
-type aliases, literal types, mapped and conditional types to name a few.
 
 ## See also
 
