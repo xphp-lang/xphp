@@ -17,3 +17,34 @@ test/unit:
 # repo is stable enough that no new test gaps are expected.
 test/mutation:
 	php vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
+
+# Humbug Box is the standard tool for compiling a Composer-managed
+# PHP project into a single self-contained PHAR.  Pinned to a known-
+# good release (Box 4.6.6 supports PHP 8.4) so a new Box version
+# can't silently break the build.  Bump after validating locally.
+BOX_VERSION := 4.6.6
+BOX_PHAR := var/box.phar
+
+$(BOX_PHAR):
+	@mkdir -p $(dir $(BOX_PHAR))
+	@echo "==> Downloading box.phar $(BOX_VERSION)"
+	@curl -fsSL -o $@ \
+	  https://github.com/box-project/box/releases/download/$(BOX_VERSION)/box.phar
+	@chmod +x $@
+
+.PHONY: build/phar
+# Builds dist/xphp.phar -- the release artifact attached to every
+# `v*` tag by .github/workflows/release.yml.  Box reads box.json at
+# the repo root and auto-discovers what to include from
+# composer.json.
+#
+# `composer install` runs twice on purpose: once with --no-dev to
+# strip phpunit/infection/etc. from the PHAR (smaller artifact, no
+# test machinery shipped to users), then once more in dev mode so
+# the next `make test/unit` keeps working without a separate
+# install step.
+build/phar: $(BOX_PHAR)
+	composer install --no-dev --classmap-authoritative --quiet --no-interaction
+	php -d phar.readonly=0 $(BOX_PHAR) compile --no-interaction
+	composer install --quiet --no-interaction
+	@echo "==> Built $$(ls -lh dist/xphp.phar | awk '{print $$5, $$9}')"

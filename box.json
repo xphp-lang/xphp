@@ -1,0 +1,7 @@
+{
+    "$schema": "vendor/humbug/box/res/schema.json",
+    "main": "bin/xphp",
+    "output": "dist/xphp.phar",
+    "compression": "GZ",
+    "banner": "xphp -- generic-aware PHP transpiler.\nhttps://github.com/xphp-lang/xphp"
+}

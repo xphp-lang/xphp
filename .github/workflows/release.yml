@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Required to create the GitHub Release and upload assets via
+# softprops/action-gh-release.
+permissions:
+  contents: write
+
+jobs:
+  phar:
+    name: Build + publish PHAR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer, phar
+          coverage: none
+          tools: composer:v2
+
+      - name: Build PHAR
+        # `make build/phar` strips dev dependencies, downloads
+        # box.phar lazily into var/, compiles dist/xphp.phar, then
+        # restores the dev install.  See Makefile for the rationale.
+        run: make build/phar
+
+      - name: Smoke-test the PHAR
+        # If the PHAR is broken (missing autoload, bad shebang,
+        # excluded a runtime dep), `list` exits non-zero and the
+        # release fails BEFORE the asset is uploaded.
+        run: php dist/xphp.phar list
+
+      - name: Compute SHA256 sum
+        # `sha256sum` outputs `<hex>  <filename>`; running it from
+        # the dist/ directory keeps the filename relative so users
+        # can `sha256sum -c xphp.phar.sha256sum` after downloading
+        # both files into the same directory.
+        working-directory: dist
+        run: sha256sum xphp.phar > xphp.phar.sha256sum
+
+      - name: Attach assets to GitHub Release
+        # softprops/action-gh-release creates the release matched by
+        # tag name if it doesn't already exist, then appends the
+        # listed files as assets.  Release body stays
+        # auto-generated unless `body:` / `body_path:` is set later.
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/xphp.phar
+            dist/xphp.phar.sha256sum
+          fail_on_unmatched_files: true
