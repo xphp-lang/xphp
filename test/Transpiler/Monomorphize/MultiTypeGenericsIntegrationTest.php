@@ -41,15 +41,15 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $this->compile();
 
         $pairUserPlasticFqn = Registry::generatedFqn(
-            'App\\Containers\\Pair',
-            [new TypeRef('App\\Models\\User'), new TypeRef('App\\Models\\Plastic')],
+            'App\\MultiType\\Containers\\Pair',
+            [new TypeRef('App\\MultiType\\Models\\User'), new TypeRef('App\\MultiType\\Models\\Plastic')],
         );
         $file = $this->fqnToPath($pairUserPlasticFqn);
         self::assertFileExists($file);
 
         $content = file_get_contents($file);
-        self::assertStringContainsString('public \\App\\Models\\User $first', $content);
-        self::assertStringContainsString('public \\App\\Models\\Plastic $second', $content);
+        self::assertStringContainsString('public \\App\\MultiType\\Models\\User $first', $content);
+        self::assertStringContainsString('public \\App\\MultiType\\Models\\Plastic $second', $content);
     }
 
     public function testSameClassUsedForBothParamsStillGeneratesOneSpecialization(): void
@@ -57,15 +57,15 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $this->compile();
 
         $pairPlasticPlasticFqn = Registry::generatedFqn(
-            'App\\Containers\\Pair',
-            [new TypeRef('App\\Models\\Plastic'), new TypeRef('App\\Models\\Plastic')],
+            'App\\MultiType\\Containers\\Pair',
+            [new TypeRef('App\\MultiType\\Models\\Plastic'), new TypeRef('App\\MultiType\\Models\\Plastic')],
         );
         $file = $this->fqnToPath($pairPlasticPlasticFqn);
         self::assertFileExists($file);
 
         $content = file_get_contents($file);
-        self::assertStringContainsString('public \\App\\Models\\Plastic $first', $content);
-        self::assertStringContainsString('public \\App\\Models\\Plastic $second', $content);
+        self::assertStringContainsString('public \\App\\MultiType\\Models\\Plastic $first', $content);
+        self::assertStringContainsString('public \\App\\MultiType\\Models\\Plastic $second', $content);
     }
 
     public function testMixedScalarAndScalarParams(): void
@@ -73,7 +73,7 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $this->compile();
 
         $mapFqn = Registry::generatedFqn(
-            'App\\Containers\\Map',
+            'App\\MultiType\\Containers\\Map',
             [
                 new TypeRef('string', isScalar: true),
                 new TypeRef('int', isScalar: true),
@@ -91,8 +91,8 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
     public function testParamOrderMattersForHash(): void
     {
         // Pair<User, Plastic> and Pair<Plastic, User> must be different specializations.
-        $a = Registry::generatedFqn('App\\Containers\\Pair', [new TypeRef('App\\Models\\User'), new TypeRef('App\\Models\\Plastic')]);
-        $b = Registry::generatedFqn('App\\Containers\\Pair', [new TypeRef('App\\Models\\Plastic'), new TypeRef('App\\Models\\User')]);
+        $a = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [new TypeRef('App\\MultiType\\Models\\User'), new TypeRef('App\\MultiType\\Models\\Plastic')]);
+        $b = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [new TypeRef('App\\MultiType\\Models\\Plastic'), new TypeRef('App\\MultiType\\Models\\User')]);
         self::assertNotSame($a, $b);
 
         $this->compile();
@@ -109,8 +109,8 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $registry = json_decode(file_get_contents($this->cacheDir . '/registry.json'), true);
         $fqns = array_column($registry['instantiations'], 'generatedFqn');
 
-        $userPlastic = Registry::generatedFqn('App\\Containers\\Pair', [new TypeRef('App\\Models\\User'), new TypeRef('App\\Models\\Plastic')]);
-        $plasticUser = Registry::generatedFqn('App\\Containers\\Pair', [new TypeRef('App\\Models\\Plastic'), new TypeRef('App\\Models\\User')]);
+        $userPlastic = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [new TypeRef('App\\MultiType\\Models\\User'), new TypeRef('App\\MultiType\\Models\\Plastic')]);
+        $plasticUser = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [new TypeRef('App\\MultiType\\Models\\Plastic'), new TypeRef('App\\MultiType\\Models\\User')]);
 
         self::assertContains($userPlastic, $fqns, 'expected the explicit Pair<User, Plastic>');
         self::assertContains($plasticUser, $fqns, 'expected transitive Pair<Plastic, User> from swap() return type');
@@ -121,27 +121,27 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         // Pair<Map<string,int>, Pair<Plastic,User>> — both args are themselves multi-type generics.
         $this->compile();
 
-        $mapStringInt = new TypeRef('App\\Containers\\Map', [
+        $mapStringInt = new TypeRef('App\\MultiType\\Containers\\Map', [
             new TypeRef('string', isScalar: true),
             new TypeRef('int', isScalar: true),
         ]);
-        $pairPlasticUser = new TypeRef('App\\Containers\\Pair', [
-            new TypeRef('App\\Models\\Plastic'),
-            new TypeRef('App\\Models\\User'),
+        $pairPlasticUser = new TypeRef('App\\MultiType\\Containers\\Pair', [
+            new TypeRef('App\\MultiType\\Models\\Plastic'),
+            new TypeRef('App\\MultiType\\Models\\User'),
         ]);
-        $outerFqn = Registry::generatedFqn('App\\Containers\\Pair', [$mapStringInt, $pairPlasticUser]);
+        $outerFqn = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [$mapStringInt, $pairPlasticUser]);
 
         $file = $this->fqnToPath($outerFqn);
         self::assertFileExists($file, "expected deeply-nested specialization at {$file}");
 
         $content = file_get_contents($file);
-        $innerMapFqn = Registry::generatedFqn('App\\Containers\\Map', [
+        $innerMapFqn = Registry::generatedFqn('App\\MultiType\\Containers\\Map', [
             new TypeRef('string', isScalar: true),
             new TypeRef('int', isScalar: true),
         ]);
-        $innerPairFqn = Registry::generatedFqn('App\\Containers\\Pair', [
-            new TypeRef('App\\Models\\Plastic'),
-            new TypeRef('App\\Models\\User'),
+        $innerPairFqn = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [
+            new TypeRef('App\\MultiType\\Models\\Plastic'),
+            new TypeRef('App\\MultiType\\Models\\User'),
         ]);
         self::assertStringContainsString('public \\' . $innerMapFqn . ' $first', $content);
         self::assertStringContainsString('public \\' . $innerPairFqn . ' $second', $content);
@@ -170,8 +170,8 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $this->compile();
 
         $pairUserPlasticFqn = Registry::generatedFqn(
-            'App\\Containers\\Pair',
-            [new TypeRef('App\\Models\\User'), new TypeRef('App\\Models\\Plastic')],
+            'App\\MultiType\\Containers\\Pair',
+            [new TypeRef('App\\MultiType\\Models\\User'), new TypeRef('App\\MultiType\\Models\\Plastic')],
         );
         $pairFile = $this->fqnToPath($pairUserPlasticFqn);
 
@@ -187,7 +187,7 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
 
         // Correct order
         try {
-            \$ok = new \$pair(new \\App\\Models\\User('alice'), new \\App\\Models\\Plastic('red'));
+            \$ok = new \$pair(new \\App\\MultiType\\Models\\User('alice'), new \\App\\MultiType\\Models\\Plastic('red'));
             echo "OK\\n";
         } catch (\\Throwable \$e) {
             echo "UNEXPECTED:" . \$e->getMessage() . "\\n";
@@ -195,7 +195,7 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
 
         // Swap arg order — should fail on first slot (User vs Plastic) AND second slot (Plastic vs User)
         try {
-            \$bad = new \$pair(new \\App\\Models\\Plastic('red'), new \\App\\Models\\User('alice'));
+            \$bad = new \$pair(new \\App\\MultiType\\Models\\Plastic('red'), new \\App\\MultiType\\Models\\User('alice'));
             echo "MISSED_TYPE_ERROR\\n";
         } catch (\\TypeError \$e) {
             echo "TYPE_ERROR_OK\\n";

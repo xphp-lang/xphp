@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\GenericMethod;
 
 $asInt = Util::identity<int>(42);
 $asString = Util::identity<string>('hello');

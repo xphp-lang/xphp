@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\NestedInstantiation;
 
-use App\Containers\Box;
-use App\Containers\Lst;
-use App\Models\Plastic;
+use App\NestedInstantiation\Containers\Box;
+use App\NestedInstantiation\Containers\Lst;
+use App\NestedInstantiation\Models\Plastic;
 
 $boxOfList = new Box<Lst<Plastic>>();
 

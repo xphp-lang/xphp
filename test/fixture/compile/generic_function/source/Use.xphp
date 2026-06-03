@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\GenericFunction;
 
 $asInt = identity<int>(42);
 $asString = identity<string>('world');

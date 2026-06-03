@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\BoxGeneric;
 
-use App\Containers\Box;
-use App\Models\Metal;
-use App\Models\Plastic;
+use App\BoxGeneric\Containers\Box;
+use App\BoxGeneric\Models\Metal;
+use App\BoxGeneric\Models\Plastic;
 
 $plasticBox = new Box<Plastic>();
 $plasticBox->set(new Plastic('red'));

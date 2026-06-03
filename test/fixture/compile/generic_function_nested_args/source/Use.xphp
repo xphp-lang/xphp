@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\GenericFunctionNestedArgs;
 
 $boxed = wrap<int>(42);

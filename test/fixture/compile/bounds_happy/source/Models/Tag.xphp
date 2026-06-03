@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Models;
+namespace App\BoundsHappy\Models;
 
 final class Tag implements \Stringable
 {

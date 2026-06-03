@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\GenericFunctionNestedArgs;
 
-use App\Containers\Box;
+use App\GenericFunctionNestedArgs\Containers\Box;
 
 function wrap<T>(T $x): Box<T>
 {

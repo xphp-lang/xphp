@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\NestedTypehint;
 
-use App\Containers\Wrapper;
-use App\Models\Plastic;
+use App\NestedTypehint\Containers\Wrapper;
+use App\NestedTypehint\Models\Plastic;
 
 $wrapper = new Wrapper<Plastic>();
 $wrapper->setBoxed(new Plastic('blue'));

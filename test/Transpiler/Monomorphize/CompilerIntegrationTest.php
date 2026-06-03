@@ -48,8 +48,8 @@ final class CompilerIntegrationTest extends TestCase
         self::assertSame(5, $result->sourceCount, 'expected 5 source .xphp files (4 top-level + 1 in sub/)');
         self::assertSame(2, $result->generatedCount, 'expected 2 specializations (Box<Plastic>, Box<Metal>)');
 
-        $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $boxMetalFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
+        $boxPlasticFqn = Registry::generatedFqn('App\\BoxGeneric\\Containers\\Box', [new TypeRef('App\\BoxGeneric\\Models\\Plastic')]);
+        $boxMetalFqn = Registry::generatedFqn('App\\BoxGeneric\\Containers\\Box', [new TypeRef('App\\BoxGeneric\\Models\\Metal')]);
 
         $boxPlasticFile = $this->fqnToPath($boxPlasticFqn);
         $boxMetalFile = $this->fqnToPath($boxMetalFqn);
@@ -58,11 +58,11 @@ final class CompilerIntegrationTest extends TestCase
 
         $boxPlasticContent = file_get_contents($boxPlasticFile);
         self::assertStringContainsString('declare (strict_types=1)', $boxPlasticContent, 'specialized class must opt in to strict types');
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\Containers\\Box', $boxPlasticContent);
+        self::assertStringContainsString('namespace XPHP\\Generated\\App\\BoxGeneric\\Containers\\Box', $boxPlasticContent);
         self::assertStringContainsString('class ' . self::shortName($boxPlasticFqn), $boxPlasticContent);
-        self::assertStringContainsString('public \\App\\Models\\Plastic $item', $boxPlasticContent);
-        self::assertStringContainsString('public function set(\\App\\Models\\Plastic $val)', $boxPlasticContent);
-        self::assertStringContainsString('public function get(): \\App\\Models\\Plastic', $boxPlasticContent);
+        self::assertStringContainsString('public \\App\\BoxGeneric\\Models\\Plastic $item', $boxPlasticContent);
+        self::assertStringContainsString('public function set(\\App\\BoxGeneric\\Models\\Plastic $val)', $boxPlasticContent);
+        self::assertStringContainsString('public function get(): \\App\\BoxGeneric\\Models\\Plastic', $boxPlasticContent);
 
         $useFile = $this->targetDir . '/Use.php';
         self::assertFileExists($useFile);
@@ -121,20 +121,20 @@ final class CompilerIntegrationTest extends TestCase
         //      without explicit require statements
         //   -> reflection on the specialized class reports the real concrete type
         $loader = new \Composer\Autoload\ClassLoader();
-        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4('App\\BoxGeneric\\', $this->targetDir);
         $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
         $loader->register();
 
         try {
-            self::assertTrue(class_exists('App\\Models\\Plastic'), 'user class App\\Models\\Plastic must autoload from the PSR-4 target dir');
+            self::assertTrue(class_exists('App\\BoxGeneric\\Models\\Plastic'), 'user class App\\BoxGeneric\\Models\\Plastic must autoload from the PSR-4 target dir');
 
-            $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+            $boxPlasticFqn = Registry::generatedFqn('App\\BoxGeneric\\Containers\\Box', [new TypeRef('App\\BoxGeneric\\Models\\Plastic')]);
             self::assertTrue(class_exists($boxPlasticFqn), "specialized class {$boxPlasticFqn} must autoload from the PSR-4 cache dir");
 
             // Confirm the autoloaded specialized class carries the real concrete type on its property.
             $type = (new \ReflectionProperty($boxPlasticFqn, 'item'))->getType();
             self::assertInstanceOf(\ReflectionNamedType::class, $type);
-            self::assertSame('App\\Models\\Plastic', $type->getName());
+            self::assertSame('App\\BoxGeneric\\Models\\Plastic', $type->getName());
         } finally {
             $loader->unregister();
         }
@@ -149,13 +149,13 @@ final class CompilerIntegrationTest extends TestCase
         $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
 
         $loader = new \Composer\Autoload\ClassLoader();
-        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4('App\\BoxGeneric\\', $this->targetDir);
         $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
         $loader->register();
 
         try {
-            $boxPlasticFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-            $boxMetalFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
+            $boxPlasticFqn = Registry::generatedFqn('App\\BoxGeneric\\Containers\\Box', [new TypeRef('App\\BoxGeneric\\Models\\Plastic')]);
+            $boxMetalFqn = Registry::generatedFqn('App\\BoxGeneric\\Containers\\Box', [new TypeRef('App\\BoxGeneric\\Models\\Metal')]);
 
             // Use reflection rather than `new $fqn()` to avoid coupling this test to whether
             // the box_generic Box<T> template happens to declare a constructor at any given
@@ -166,11 +166,11 @@ final class CompilerIntegrationTest extends TestCase
 
             // Both specializations satisfy `instanceof OriginalTemplate` via the
             // marker interface emitted at the original FQN.
-            self::assertTrue($plasticRefl->implementsInterface('App\\Containers\\Box'));
-            self::assertTrue($metalRefl->implementsInterface('App\\Containers\\Box'));
+            self::assertTrue($plasticRefl->implementsInterface('App\\BoxGeneric\\Containers\\Box'));
+            self::assertTrue($metalRefl->implementsInterface('App\\BoxGeneric\\Containers\\Box'));
 
             // And reflection sees the marker as an interface, not the old class.
-            $r = new \ReflectionClass('App\\Containers\\Box');
+            $r = new \ReflectionClass('App\\BoxGeneric\\Containers\\Box');
             self::assertTrue($r->isInterface(), 'original generic class FQN must now be the marker interface');
         } finally {
             $loader->unregister();

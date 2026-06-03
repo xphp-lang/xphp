@@ -42,11 +42,11 @@ final class NestedGenericsIntegrationTest extends TestCase
 
         self::assertSame(2, $result->generatedCount, 'expected Lst<Plastic> + Box<Lst<Plastic>>');
 
-        $plastic = new TypeRef('App\\Models\\Plastic');
-        $lstOfPlastic = new TypeRef('App\\Containers\\Lst', [$plastic]);
+        $plastic = new TypeRef('App\\NestedInstantiation\\Models\\Plastic');
+        $lstOfPlastic = new TypeRef('App\\NestedInstantiation\\Containers\\Lst', [$plastic]);
 
-        $lstFqn = Registry::generatedFqn('App\\Containers\\Lst', [$plastic]);
-        $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [$lstOfPlastic]);
+        $lstFqn = Registry::generatedFqn('App\\NestedInstantiation\\Containers\\Lst', [$plastic]);
+        $boxFqn = Registry::generatedFqn('App\\NestedInstantiation\\Containers\\Box', [$lstOfPlastic]);
 
         $lstFile = $this->fqnToPath($lstFqn);
         $boxFile = $this->fqnToPath($boxFqn);
@@ -54,12 +54,12 @@ final class NestedGenericsIntegrationTest extends TestCase
         self::assertFileExists($boxFile, "expected {$boxFile}");
 
         $lstContent = file_get_contents($lstFile);
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\Containers\\Lst', $lstContent);
-        self::assertStringContainsString('public function push(\\App\\Models\\Plastic $val)', $lstContent);
-        self::assertStringContainsString('public function first(): \\App\\Models\\Plastic', $lstContent);
+        self::assertStringContainsString('namespace XPHP\\Generated\\App\\NestedInstantiation\\Containers\\Lst', $lstContent);
+        self::assertStringContainsString('public function push(\\App\\NestedInstantiation\\Models\\Plastic $val)', $lstContent);
+        self::assertStringContainsString('public function first(): \\App\\NestedInstantiation\\Models\\Plastic', $lstContent);
 
         $boxContent = file_get_contents($boxFile);
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\Containers\\Box', $boxContent);
+        self::assertStringContainsString('namespace XPHP\\Generated\\App\\NestedInstantiation\\Containers\\Box', $boxContent);
         self::assertStringContainsString('public \\' . $lstFqn . ' $item', $boxContent);
         self::assertStringContainsString('public function set(\\' . $lstFqn . ' $val)', $boxContent);
 
@@ -81,9 +81,9 @@ final class NestedGenericsIntegrationTest extends TestCase
 
         self::assertSame(2, $result->generatedCount, 'expected Wrapper<Plastic> + transitively Box<Plastic>');
 
-        $plastic = new TypeRef('App\\Models\\Plastic');
-        $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [$plastic]);
-        $wrapperFqn = Registry::generatedFqn('App\\Containers\\Wrapper', [$plastic]);
+        $plastic = new TypeRef('App\\NestedTypehint\\Models\\Plastic');
+        $boxFqn = Registry::generatedFqn('App\\NestedTypehint\\Containers\\Box', [$plastic]);
+        $wrapperFqn = Registry::generatedFqn('App\\NestedTypehint\\Containers\\Wrapper', [$plastic]);
 
         $boxFile = $this->fqnToPath($boxFqn);
         $wrapperFile = $this->fqnToPath($wrapperFqn);
@@ -91,14 +91,14 @@ final class NestedGenericsIntegrationTest extends TestCase
         self::assertFileExists($boxFile);
 
         $wrapperContent = file_get_contents($wrapperFile);
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\Containers\\Wrapper', $wrapperContent);
+        self::assertStringContainsString('namespace XPHP\\Generated\\App\\NestedTypehint\\Containers\\Wrapper', $wrapperContent);
         self::assertStringContainsString('public \\' . $boxFqn . ' $box', $wrapperContent);
         self::assertStringContainsString('$this->box = new \\' . $boxFqn . '()', $wrapperContent);
-        self::assertStringContainsString('public function setBoxed(\\App\\Models\\Plastic $val)', $wrapperContent);
-        self::assertStringContainsString('public function getBoxed(): \\App\\Models\\Plastic', $wrapperContent);
+        self::assertStringContainsString('public function setBoxed(\\App\\NestedTypehint\\Models\\Plastic $val)', $wrapperContent);
+        self::assertStringContainsString('public function getBoxed(): \\App\\NestedTypehint\\Models\\Plastic', $wrapperContent);
 
         $boxContent = file_get_contents($boxFile);
-        self::assertStringContainsString('public \\App\\Models\\Plastic $item', $boxContent);
+        self::assertStringContainsString('public \\App\\NestedTypehint\\Models\\Plastic $item', $boxContent);
 
         $useFile = $this->targetDir . '/Use.php';
         $useContent = file_get_contents($useFile);
@@ -117,13 +117,13 @@ final class NestedGenericsIntegrationTest extends TestCase
         $registry = json_decode(file_get_contents($this->cacheDir . '/registry.json'), true);
         $fqns = array_column($registry['instantiations'], 'generatedFqn');
 
-        $plastic = new TypeRef('App\\Models\\Plastic');
+        $plastic = new TypeRef('App\\NestedTypehint\\Models\\Plastic');
         self::assertContains(
-            Registry::generatedFqn('App\\Containers\\Wrapper', [$plastic]),
+            Registry::generatedFqn('App\\NestedTypehint\\Containers\\Wrapper', [$plastic]),
             $fqns,
         );
         self::assertContains(
-            Registry::generatedFqn('App\\Containers\\Box', [$plastic]),
+            Registry::generatedFqn('App\\NestedTypehint\\Containers\\Box', [$plastic]),
             $fqns,
         );
         self::assertCount(2, $fqns);
@@ -136,9 +136,9 @@ final class NestedGenericsIntegrationTest extends TestCase
 
         $this->compile($sourceDir);
 
-        $plastic = new TypeRef('App\\Models\\Plastic');
-        $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [$plastic]);
-        $wrapperFqn = Registry::generatedFqn('App\\Containers\\Wrapper', [$plastic]);
+        $plastic = new TypeRef('App\\NestedTypehint\\Models\\Plastic');
+        $boxFqn = Registry::generatedFqn('App\\NestedTypehint\\Containers\\Box', [$plastic]);
+        $wrapperFqn = Registry::generatedFqn('App\\NestedTypehint\\Containers\\Wrapper', [$plastic]);
         $boxFile = $this->fqnToPath($boxFqn);
         $wrapperFile = $this->fqnToPath($wrapperFqn);
 

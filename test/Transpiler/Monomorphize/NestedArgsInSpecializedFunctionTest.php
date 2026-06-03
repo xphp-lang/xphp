@@ -47,13 +47,13 @@ final class NestedArgsInSpecializedFunctionTest extends TestCase
         $this->compile();
 
         // The specialized `wrap_T_<hash>` must have return type pointing at
-        // `\XPHP\Generated\App\Containers\Box\T_<hash>`, not the unsubstituted `Box<T>`.
+        // `\XPHP\Generated\App\GenericFunctionNestedArgs\Containers\Box\T_<hash>`, not the unsubstituted `Box<T>`.
         $funcsPath = $this->targetDir . '/funcs.php';
         self::assertFileExists($funcsPath);
         $content = file_get_contents($funcsPath);
 
         self::assertMatchesRegularExpression(
-            '#function wrap_T_[0-9a-f]+\(int \$x\): \\\\XPHP\\\\Generated\\\\App\\\\Containers\\\\Box\\\\T_[0-9a-f]+#',
+            '#function wrap_T_[0-9a-f]+\(int \$x\): \\\\XPHP\\\\Generated\\\\App\\\\GenericFunctionNestedArgs\\\\Containers\\\\Box\\\\T_[0-9a-f]+#',
             $content,
             'specialized wrap must have its Box<T> return type substituted to the matching Box<int> specialization FQN',
         );
@@ -67,7 +67,7 @@ final class NestedArgsInSpecializedFunctionTest extends TestCase
         $this->compile();
 
         $loader = new \Composer\Autoload\ClassLoader();
-        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4('App\\GenericFunctionNestedArgs\\', $this->targetDir);
         $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
         $loader->register();
 
@@ -80,9 +80,9 @@ final class NestedArgsInSpecializedFunctionTest extends TestCase
             $content = file_get_contents($this->targetDir . '/funcs.php');
             \preg_match('/function (wrap_T_[0-9a-f]+)\(/', $content, $m);
             self::assertNotEmpty($m, 'expected to find mangled wrap_T_<hash>');
-            $mangled = '\\App\\' . $m[1];
+            $mangled = '\\App\\GenericFunctionNestedArgs\\' . $m[1];
 
-            $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('int', isScalar: true)]);
+            $boxFqn = Registry::generatedFqn('App\\GenericFunctionNestedArgs\\Containers\\Box', [new TypeRef('int', isScalar: true)]);
             $result = $mangled(42);
             self::assertInstanceOf($boxFqn, $result, 'wrap<int> must return the specialized Box<int>');
             self::assertSame(42, $result->item);

@@ -41,12 +41,12 @@ final class GenericInterfaceIntegrationTest extends TestCase
         $this->compile();
 
         $ifaceFqn = Registry::generatedFqn(
-            'App\\Containers\\Container',
-            [new TypeRef('App\\Models\\Plastic')],
+            'App\\GenericInterface\\Containers\\Container',
+            [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
         );
         $boxFqn = Registry::generatedFqn(
-            'App\\Containers\\Box',
-            [new TypeRef('App\\Models\\Plastic')],
+            'App\\GenericInterface\\Containers\\Box',
+            [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
         );
 
         $ifaceFile = $this->fqnToPath($ifaceFqn);
@@ -56,7 +56,7 @@ final class GenericInterfaceIntegrationTest extends TestCase
 
         $ifaceContent = file_get_contents($ifaceFile);
         self::assertStringContainsString('interface ' . self::shortName($ifaceFqn), $ifaceContent, 'specialized declaration must remain an interface');
-        self::assertStringContainsString('public function get(): \\App\\Models\\Plastic', $ifaceContent, 'T return type must be substituted in the interface signature');
+        self::assertStringContainsString('public function get(): \\App\\GenericInterface\\Models\\Plastic', $ifaceContent, 'T return type must be substituted in the interface signature');
 
         $boxContent = file_get_contents($boxFile);
         self::assertStringContainsString('class ' . self::shortName($boxFqn), $boxContent);
@@ -80,29 +80,24 @@ final class GenericInterfaceIntegrationTest extends TestCase
 
     public function testSpecializedClassIsInstanceOfOriginalInterfaceMarker(): void
     {
-        // F3 from the review: `$x instanceof App\Containers\Container` must hold for the
-        // specialized Box, traveling the chain
-        //   Box_<Polymer> implements Container_<Polymer> extends App\Containers\Container.
+        // F3 from the review: `$x instanceof App\GenericInterface\Containers\Container`
+        // must hold for the specialized Box, traveling the chain
+        //   Box_<Polymer> implements Container_<Polymer> extends App\GenericInterface\Containers\Container.
         // This is the marker-interface contract (item 5) applied to the interface case.
-        //
-        // Polymer is fixture-unique (see Models/Polymer.xphp) to avoid PHP's process-wide
-        // class-table cache returning a Box<Plastic> body loaded by an earlier integration
-        // test (multiple fixtures specialize Box<Plastic> at the same hash but only this
-        // one's body implements Container<T>).
         $this->compile();
 
         $loader = new \Composer\Autoload\ClassLoader();
-        $loader->addPsr4('App\\', $this->targetDir);
+        $loader->addPsr4('App\\GenericInterface\\', $this->targetDir);
         $loader->addPsr4(Registry::GENERATED_NAMESPACE_PREFIX . '\\', $this->cacheDir . '/Generated');
         $loader->register();
 
         try {
-            $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Polymer')]);
-            $box = new $boxFqn(new \App\Models\Polymer('PET'));
+            $boxFqn = Registry::generatedFqn('App\\GenericInterface\\Containers\\Box', [new TypeRef('App\\GenericInterface\\Models\\Polymer')]);
+            $box = new $boxFqn(new \App\GenericInterface\Models\Polymer('PET'));
 
-            self::assertInstanceOf('App\\Containers\\Container', $box, 'specialized Box must transitively satisfy the original Container interface marker');
+            self::assertInstanceOf('App\\GenericInterface\\Containers\\Container', $box, 'specialized Box must transitively satisfy the original Container interface marker');
 
-            $r = new \ReflectionClass('App\\Containers\\Container');
+            $r = new \ReflectionClass('App\\GenericInterface\\Containers\\Container');
             self::assertTrue($r->isInterface(), 'original generic interface FQN must now be the marker interface');
         } finally {
             $loader->unregister();
@@ -114,12 +109,12 @@ final class GenericInterfaceIntegrationTest extends TestCase
         $this->compile();
 
         $ifaceFqn = Registry::generatedFqn(
-            'App\\Containers\\Container',
-            [new TypeRef('App\\Models\\Plastic')],
+            'App\\GenericInterface\\Containers\\Container',
+            [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
         );
         $boxFqn = Registry::generatedFqn(
-            'App\\Containers\\Box',
-            [new TypeRef('App\\Models\\Plastic')],
+            'App\\GenericInterface\\Containers\\Box',
+            [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
         );
 
         $ifaceFile = $this->fqnToPath($ifaceFqn);
@@ -135,7 +130,7 @@ final class GenericInterfaceIntegrationTest extends TestCase
         require '{$ifaceFile}';
         require '{$boxFile}';
 
-        \$box = new \\{$boxFqn}(new \\App\\Models\\Plastic('red'));
+        \$box = new \\{$boxFqn}(new \\App\\GenericInterface\\Models\\Plastic('red'));
         echo \$box instanceof \\{$ifaceFqn} ? "INSTANCEOF_OK" : "INSTANCEOF_BAD";
         echo "\\n";
         echo \$box->get()->color === 'red' ? "GET_OK" : "GET_BAD";
@@ -153,7 +148,7 @@ final class GenericInterfaceIntegrationTest extends TestCase
         self::assertSame(0, $exit, "runtime check failed:\n" . implode("\n", $output));
         self::assertSame('INSTANCEOF_OK', $output[0]);
         self::assertSame('GET_OK', $output[1]);
-        self::assertSame('App\\Models\\Plastic', $output[2]);
+        self::assertSame('App\\GenericInterface\\Models\\Plastic', $output[2]);
     }
 
     public function testAllOutputFilesAreSyntacticallyValid(): void
