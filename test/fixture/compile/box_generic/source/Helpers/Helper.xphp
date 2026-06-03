@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Helpers;
+namespace App\BoxGeneric\Helpers;
 
 final class Helper
 {

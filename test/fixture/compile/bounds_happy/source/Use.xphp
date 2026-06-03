@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\BoundsHappy;
 
-use App\Containers\Box;
-use App\Models\Tag;
+use App\BoundsHappy\Containers\Box;
+use App\BoundsHappy\Models\Tag;
 
 $tagBox = new Box<Tag>(new Tag('hello'));

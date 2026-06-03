@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\MultiType;
 
-use App\Containers\Map;
-use App\Containers\Pair;
-use App\Models\Plastic;
-use App\Models\User;
+use App\MultiType\Containers\Map;
+use App\MultiType\Containers\Pair;
+use App\MultiType\Models\Plastic;
+use App\MultiType\Models\User;
 
 // Two distinct classes as type params
 $userPlastic = new Pair<User, Plastic>(new User('alice'), new Plastic('red'));

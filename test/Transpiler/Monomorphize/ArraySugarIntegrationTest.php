@@ -41,8 +41,8 @@ final class ArraySugarIntegrationTest extends TestCase
         $this->compile();
 
         $fqn = Registry::generatedFqn(
-            'App\\Containers\\Collection',
-            [new TypeRef('App\\Models\\User')],
+            'App\\ArraySugar\\Containers\\Collection',
+            [new TypeRef('App\\ArraySugar\\Models\\User')],
         );
         $file = $this->fqnToPath($fqn);
         self::assertFileExists($file);
@@ -51,12 +51,12 @@ final class ArraySugarIntegrationTest extends TestCase
         self::assertStringContainsString('private array $items', $content, 'T[] property must lower to `array`');
         self::assertStringContainsString('public function all(): array', $content, 'T[] return type must lower to `array`');
         self::assertStringContainsString(
-            'public function first(): ?\\App\\Models\\User',
+            'public function first(): ?\\App\\ArraySugar\\Models\\User',
             $content,
             '?T return type must specialize to ?<concrete>',
         );
         self::assertStringContainsString(
-            'public function __construct(\\App\\Models\\User ...$items)',
+            'public function __construct(\\App\\ArraySugar\\Models\\User ...$items)',
             $content,
             'variadic T must specialize to <concrete>',
         );
@@ -85,8 +85,8 @@ final class ArraySugarIntegrationTest extends TestCase
         $this->compile();
 
         $fqn = Registry::generatedFqn(
-            'App\\Containers\\Collection',
-            [new TypeRef('App\\Models\\User')],
+            'App\\ArraySugar\\Containers\\Collection',
+            [new TypeRef('App\\ArraySugar\\Models\\User')],
         );
         $collectionFile = $this->fqnToPath($fqn);
 
@@ -98,10 +98,10 @@ final class ArraySugarIntegrationTest extends TestCase
         require '{$this->targetDir}/Containers/Collection.php';
         require '{$collectionFile}';
 
-        \$c = new \\{$fqn}(new \\App\\Models\\User('alice'), new \\App\\Models\\User('bob'));
+        \$c = new \\{$fqn}(new \\App\\ArraySugar\\Models\\User('alice'), new \\App\\ArraySugar\\Models\\User('bob'));
 
         \$first = \$c->first();
-        echo \$first instanceof \\App\\Models\\User ? "FIRST_OK" : "FIRST_BAD";
+        echo \$first instanceof \\App\\ArraySugar\\Models\\User ? "FIRST_OK" : "FIRST_BAD";
         echo "\\n";
 
         \$all = \$c->all();
@@ -127,7 +127,7 @@ final class ArraySugarIntegrationTest extends TestCase
         self::assertSame('FIRST_OK', $output[0]);
         self::assertSame('ALL_OK', $output[1]);
         self::assertSame('EMPTY_NULL_OK', $output[2]);
-        self::assertSame('App\\Models\\User', $output[3]);
+        self::assertSame('App\\ArraySugar\\Models\\User', $output[3]);
         self::assertSame('NULLABLE_OK', $output[4]);
     }
 

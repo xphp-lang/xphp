@@ -44,12 +44,12 @@ final class BoundedGenericIntegrationTest extends TestCase
 
         $result = $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
 
-        $boxFqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Tag')]);
+        $boxFqn = Registry::generatedFqn('App\\BoundsHappy\\Containers\\Box', [new TypeRef('App\\BoundsHappy\\Models\\Tag')]);
         $boxFile = $this->fqnToPath($boxFqn);
         self::assertFileExists($boxFile, 'Box<Tag> must specialize when Tag implements \\Stringable (bound satisfied via hierarchy)');
 
         $content = file_get_contents($boxFile);
-        self::assertStringContainsString('public \\App\\Models\\Tag $item', $content);
+        self::assertStringContainsString('public \\App\\BoundsHappy\\Models\\Tag $item', $content);
 
         self::assertGreaterThan(0, $result->generatedCount);
     }

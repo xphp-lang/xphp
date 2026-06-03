@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\ArraySugar;
 
-use App\Containers\Collection;
-use App\Models\User;
+use App\ArraySugar\Containers\Collection;
+use App\ArraySugar\Models\User;
 
 $users = new Collection<User>(new User('Alice'), new User('Bob'));
 $first = $users->first();

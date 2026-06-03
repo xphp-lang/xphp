@@ -2,13 +2,8 @@
 
 declare(strict_types=1);
 
-namespace App\Models;
+namespace App\GenericInterface\Models;
 
-// Fixture-unique concrete type. Earlier fixtures' Box<Plastic> specializations
-// share a hash key (Plastic is a popular sample concrete) and PHP's process-wide
-// class table caches the first loader's body — which doesn't implement the
-// Container marker we want to assert here. Using a name no other fixture uses
-// gives this test a deterministic, non-shared specialization to inspect.
 final class Polymer
 {
     public function __construct(public readonly string $label)

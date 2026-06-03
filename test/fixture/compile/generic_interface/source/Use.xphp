@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\GenericInterface;
 
-use App\Containers\Box;
-use App\Models\Plastic;
-use App\Models\Polymer;
+use App\GenericInterface\Containers\Box;
+use App\GenericInterface\Models\Plastic;
+use App\GenericInterface\Models\Polymer;
 
 $plasticBox = new Box<Plastic>(new Plastic('red'));
 $polymerBox = new Box<Polymer>(new Polymer('PET'));

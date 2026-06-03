@@ -12,63 +12,63 @@ final class RegistryTest extends TestCase
 {
     public function testGeneratedFqnIsStableForSameInput(): void
     {
-        $a = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $b = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $a = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $b = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
         self::assertSame($a, $b);
     }
 
     public function testGeneratedFqnMirrorsTemplateNamespace(): void
     {
-        $fqn = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        self::assertStringStartsWith('XPHP\\Generated\\App\\Containers\\Box\\T_', $fqn);
+        $fqn = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $fqn);
         self::assertMatchesRegularExpression('/T_[0-9a-f]{64}$/', $fqn);
     }
 
     public function testDifferentTemplateNamespacesProduceDifferentFqns(): void
     {
-        $a = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $b = Registry::generatedFqn('App\\Other\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $a = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $b = Registry::generatedFqn('App\\RegistryTest\\Other\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         self::assertNotSame($a, $b);
-        self::assertStringContainsString('App\\Containers\\Box', $a);
-        self::assertStringContainsString('App\\Other\\Box', $b);
+        self::assertStringContainsString('App\\RegistryTest\\Containers\\Box', $a);
+        self::assertStringContainsString('App\\RegistryTest\\Other\\Box', $b);
     }
 
     public function testDifferentArgsProduceDifferentHashes(): void
     {
-        $a = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $b = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
+        $a = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $b = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Metal')]);
 
         self::assertNotSame($a, $b);
-        self::assertStringStartsWith('XPHP\\Generated\\App\\Containers\\Box\\T_', $a);
-        self::assertStringStartsWith('XPHP\\Generated\\App\\Containers\\Box\\T_', $b);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $a);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $b);
     }
 
     public function testSameArgShortNameDifferentNamespacesDoNotCollide(): void
     {
-        $a = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $b = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Other\\Plastic')]);
+        $a = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $b = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Other\\Plastic')]);
 
         self::assertNotSame($a, $b, 'short-name collision must be prevented by hashing the full canonical arg FQCN');
     }
 
     public function testNestedGenericArgsAffectHashDeterministically(): void
     {
-        $nested = new TypeRef('App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
+        $nested = new TypeRef('App\\RegistryTest\\Containers\\Lst', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
-        $a = Registry::generatedFqn('App\\Containers\\Box', [$nested]);
-        $b = Registry::generatedFqn('App\\Containers\\Box', [$nested]);
+        $a = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [$nested]);
+        $b = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [$nested]);
 
         self::assertSame($a, $b);
-        self::assertStringStartsWith('XPHP\\Generated\\App\\Containers\\Box\\T_', $a);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $a);
     }
 
     public function testRecordInstantiationIsIdempotent(): void
     {
         $registry = new Registry();
 
-        $first = $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $second = $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $first = $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $second = $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         self::assertSame($first, $second);
         self::assertCount(1, $registry->instantiations());
@@ -78,12 +78,12 @@ final class RegistryTest extends TestCase
     {
         $registry = new Registry();
 
-        $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Metal')]);
 
         self::assertCount(2, $registry->instantiations());
         foreach ($registry->instantiations() as $fqn => $_) {
-            self::assertStringStartsWith('XPHP\\Generated\\App\\Containers\\Box\\T_', $fqn);
+            self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $fqn);
         }
     }
 
@@ -91,18 +91,18 @@ final class RegistryTest extends TestCase
     {
         $registry = new Registry();
 
-        $nested = new TypeRef('App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
-        $registry->recordInstantiation('App\\Containers\\Box', [$nested]);
+        $nested = new TypeRef('App\\RegistryTest\\Containers\\Lst', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [$nested]);
 
         self::assertCount(2, $registry->instantiations());
 
         $hasBox = false;
         $hasLst = false;
         foreach ($registry->instantiations() as $fqn => $_) {
-            if (str_starts_with($fqn, 'XPHP\\Generated\\App\\Containers\\Box\\T_')) {
+            if (str_starts_with($fqn, 'XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_')) {
                 $hasBox = true;
             }
-            if (str_starts_with($fqn, 'XPHP\\Generated\\App\\Containers\\Lst\\T_')) {
+            if (str_starts_with($fqn, 'XPHP\\Generated\\App\\RegistryTest\\Containers\\Lst\\T_')) {
                 $hasLst = true;
             }
         }
@@ -114,22 +114,22 @@ final class RegistryTest extends TestCase
     {
         $registry = new Registry(hashLength: 16);
 
-        $instantiation = $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $instantiation = $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
         self::assertMatchesRegularExpression('/T_[0-9a-f]{16}$/', $instantiation->generatedFqn);
     }
 
     public function testCustomHashLengthStillCollisionDistinct(): void
     {
         $reg = new Registry(hashLength: 16);
-        $reg->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $reg->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Metal')]);
+        $reg->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $reg->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Metal')]);
 
         self::assertCount(2, $reg->instantiations());
     }
 
     public function testStaticGeneratedFqnAcceptsHashLength(): void
     {
-        $fqn = Registry::generatedFqn('App\\Box', [new TypeRef('App\\Plastic')], 32);
+        $fqn = Registry::generatedFqn('App\\RegistryTest\\Box', [new TypeRef('App\\RegistryTest\\Plastic')], 32);
         self::assertMatchesRegularExpression('/T_[0-9a-f]{32}$/', $fqn);
     }
 
@@ -202,22 +202,22 @@ final class RegistryTest extends TestCase
         // the FQCN slot the next recordInstantiation() call will produce.
         $registry = new Registry(hashLength: 16);
 
-        $newArgs = [new TypeRef('App\\Models\\Metal')];
-        $collidingFqn = Registry::generatedFqn('App\\Containers\\Box', $newArgs, 16);
+        $newArgs = [new TypeRef('App\\RegistryTest\\Models\\Metal')];
+        $collidingFqn = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', $newArgs, 16);
 
         // Seed: pretend Box<Plastic> was already recorded at the Box<Metal> hash slot.
         $reflection = new \ReflectionClass($registry);
         $prop = $reflection->getProperty('instantiations');
         $prop->setValue($registry, [
             $collidingFqn => new GenericInstantiation(
-                'App\\Containers\\Box',
-                [new TypeRef('App\\Models\\Plastic')],
+                'App\\RegistryTest\\Containers\\Box',
+                [new TypeRef('App\\RegistryTest\\Models\\Plastic')],
                 $collidingFqn,
             ),
         ]);
 
         try {
-            $registry->recordInstantiation('App\\Containers\\Box', $newArgs);
+            $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', $newArgs);
             self::fail('expected RuntimeException for hash collision');
         } catch (\RuntimeException $e) {
             // Exact message match locks the order and presence of every concat operand.
@@ -225,8 +225,8 @@ final class RegistryTest extends TestCase
             // that previously slipped through substring-only assertions.
             $expected = "Hash collision detected while monomorphizing generics.\n\n"
                 . "Two distinct instantiations produced the same specialized FQCN:\n"
-                . "  existing : App\\Containers\\Box<App\\Models\\Plastic>\n"
-                . "  new      : App\\Containers\\Box<App\\Models\\Metal>\n"
+                . "  existing : App\\RegistryTest\\Containers\\Box<App\\RegistryTest\\Models\\Plastic>\n"
+                . "  new      : App\\RegistryTest\\Containers\\Box<App\\RegistryTest\\Models\\Metal>\n"
                 . "  collision: {$collidingFqn}\n\n"
                 . "The current XPHP_HASH_LENGTH = 16 is too short for this codebase.\n"
                 . "Increase it (max 64, the full sha256 digest) and re-run, e.g.:\n\n"
@@ -239,21 +239,21 @@ final class RegistryTest extends TestCase
     {
         $registry = new Registry(hashLength: 48);
 
-        $newArgs = [new TypeRef('App\\Models\\Metal')];
-        $collidingFqn = Registry::generatedFqn('App\\Containers\\Box', $newArgs, 48);
+        $newArgs = [new TypeRef('App\\RegistryTest\\Models\\Metal')];
+        $collidingFqn = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', $newArgs, 48);
 
         $reflection = new \ReflectionClass($registry);
         $prop = $reflection->getProperty('instantiations');
         $prop->setValue($registry, [
             $collidingFqn => new GenericInstantiation(
-                'App\\Containers\\Box',
-                [new TypeRef('App\\Models\\Plastic')],
+                'App\\RegistryTest\\Containers\\Box',
+                [new TypeRef('App\\RegistryTest\\Models\\Plastic')],
                 $collidingFqn,
             ),
         ]);
 
         try {
-            $registry->recordInstantiation('App\\Containers\\Box', $newArgs);
+            $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', $newArgs);
             self::fail('expected collision exception');
         } catch (\RuntimeException $e) {
             // 48 * 2 = 96, clamped to MAX (64)
@@ -264,8 +264,8 @@ final class RegistryTest extends TestCase
     public function testIdempotentRecordingDoesNotTriggerCollisionCheck(): void
     {
         $registry = new Registry();
-        $a = $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
-        $b = $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $a = $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $b = $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
         self::assertSame($a, $b);
     }
 
@@ -276,23 +276,23 @@ final class RegistryTest extends TestCase
 
     public function testLeadingBackslashOnTemplateFqnIsNormalized(): void
     {
-        $withSlash = Registry::generatedFqn('\\App\\Containers\\Box', [new TypeRef('App\\Plastic')]);
-        $without   = Registry::generatedFqn('App\\Containers\\Box', [new TypeRef('App\\Plastic')]);
+        $withSlash = Registry::generatedFqn('\\App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Plastic')]);
+        $without   = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Plastic')]);
         self::assertSame($without, $withSlash);
     }
 
     public function testLeadingBackslashOnArgFqnIsNormalized(): void
     {
-        $withSlash = Registry::generatedFqn('App\\Box', [new TypeRef('\\App\\Plastic')]);
-        $without   = Registry::generatedFqn('App\\Box', [new TypeRef('App\\Plastic')]);
+        $withSlash = Registry::generatedFqn('App\\RegistryTest\\Box', [new TypeRef('\\App\\RegistryTest\\Plastic')]);
+        $without   = Registry::generatedFqn('App\\RegistryTest\\Box', [new TypeRef('App\\RegistryTest\\Plastic')]);
         self::assertSame($without, $withSlash);
     }
 
     public function testRecordInstantiationTreatsBackslashFormsAsIdentical(): void
     {
         $registry = new Registry();
-        $a = $registry->recordInstantiation('\\App\\Box', [new TypeRef('\\App\\Plastic')]);
-        $b = $registry->recordInstantiation('App\\Box',   [new TypeRef('App\\Plastic')]);
+        $a = $registry->recordInstantiation('\\App\\RegistryTest\\Box', [new TypeRef('\\App\\RegistryTest\\Plastic')]);
+        $b = $registry->recordInstantiation('App\\RegistryTest\\Box',   [new TypeRef('App\\RegistryTest\\Plastic')]);
 
         self::assertSame($a->generatedFqn, $b->generatedFqn);
         self::assertCount(1, $registry->instantiations(), 'leading backslash must not produce a duplicate entry');
@@ -301,15 +301,15 @@ final class RegistryTest extends TestCase
     public function testIsSameInstantiationIgnoresLeadingBackslashOnTemplateFqn(): void
     {
         $registry = new Registry();
-        $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         // Recording the same instantiation via the leading-backslash form must hit the
         // "same instantiation" branch in isSameInstantiation (which uses ltrim on $existing->templateFqn);
         // without ltrim, the comparison would fail and a hash collision would be falsely reported.
-        $second = $registry->recordInstantiation('\\App\\Containers\\Box', [new TypeRef('\\App\\Models\\Plastic')]);
+        $second = $registry->recordInstantiation('\\App\\RegistryTest\\Containers\\Box', [new TypeRef('\\App\\RegistryTest\\Models\\Plastic')]);
 
         self::assertCount(1, $registry->instantiations());
-        self::assertSame('App\\Containers\\Box', $second->templateFqn);
+        self::assertSame('App\\RegistryTest\\Containers\\Box', $second->templateFqn);
     }
 
     // -----------------------------------------------------------------------
@@ -320,13 +320,13 @@ final class RegistryTest extends TestCase
     public function testStaticGeneratedFqnRejectsBelowMinimum(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        Registry::generatedFqn('App\\Box', [new TypeRef('App\\Plastic')], 0);
+        Registry::generatedFqn('App\\RegistryTest\\Box', [new TypeRef('App\\RegistryTest\\Plastic')], 0);
     }
 
     public function testStaticGeneratedFqnRejectsOverMax(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        Registry::generatedFqn('App\\Box', [new TypeRef('App\\Plastic')], 100);
+        Registry::generatedFqn('App\\RegistryTest\\Box', [new TypeRef('App\\RegistryTest\\Plastic')], 100);
     }
 
     // -----------------------------------------------------------------------
@@ -341,13 +341,13 @@ final class RegistryTest extends TestCase
 
         $templateAst = new Class_(new Identifier('Box'));
         $registry->recordDefinition(
-            'App\\Containers\\Box',
+            'App\\RegistryTest\\Containers\\Box',
             'Box',
             [new TypeParam('T')],
             $templateAst,
             '/some/source/Box.xphp',
         );
-        $registry->recordInstantiation('App\\Containers\\Box', [new TypeRef('App\\Models\\Plastic')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         $out = $registry->toArray();
 
@@ -355,7 +355,7 @@ final class RegistryTest extends TestCase
         self::assertCount(1, $out['definitions']);
         $def = $out['definitions'][0];
         self::assertSame(['name', 'typeParams', 'sourceFile'], array_keys($def), 'definition keys must be exactly these three');
-        self::assertSame('App\\Containers\\Box', $def['name']);
+        self::assertSame('App\\RegistryTest\\Containers\\Box', $def['name']);
         self::assertSame(['T'], $def['typeParams']);
         self::assertSame('/some/source/Box.xphp', $def['sourceFile']);
 
@@ -363,32 +363,32 @@ final class RegistryTest extends TestCase
         self::assertCount(1, $out['instantiations']);
         $inst = $out['instantiations'][0];
         self::assertSame(['template', 'concreteTypes', 'generatedFqn'], array_keys($inst), 'instantiation keys must be exactly these three');
-        self::assertSame('App\\Containers\\Box', $inst['template']);
+        self::assertSame('App\\RegistryTest\\Containers\\Box', $inst['template']);
         // concreteTypes must be a list of display strings (UnwrapArrayMap would leave raw TypeRefs).
         self::assertIsArray($inst['concreteTypes']);
-        self::assertSame(['App\\Models\\Plastic'], $inst['concreteTypes']);
-        self::assertStringStartsWith('XPHP\\Generated\\App\\Containers\\Box\\T_', $inst['generatedFqn']);
+        self::assertSame(['App\\RegistryTest\\Models\\Plastic'], $inst['concreteTypes']);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $inst['generatedFqn']);
     }
 
     public function testToArraySerializesNestedGenericArgAsDisplayString(): void
     {
         $registry = new Registry();
-        $lstOfPlastic = new TypeRef('App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
-        $registry->recordInstantiation('App\\Containers\\Box', [$lstOfPlastic]);
+        $lstOfPlastic = new TypeRef('App\\RegistryTest\\Containers\\Lst', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [$lstOfPlastic]);
 
         $out = $registry->toArray();
 
         // Find the outer Box<Lst<Plastic>> entry; concreteTypes should be the angle-bracket form.
         $boxEntry = null;
         foreach ($out['instantiations'] as $entry) {
-            if ($entry['template'] === 'App\\Containers\\Box') {
+            if ($entry['template'] === 'App\\RegistryTest\\Containers\\Box') {
                 $boxEntry = $entry;
                 break;
             }
         }
         self::assertNotNull($boxEntry);
         self::assertSame(
-            ['App\\Containers\\Lst<App\\Models\\Plastic>'],
+            ['App\\RegistryTest\\Containers\\Lst<App\\RegistryTest\\Models\\Plastic>'],
             $boxEntry['concreteTypes'],
         );
     }

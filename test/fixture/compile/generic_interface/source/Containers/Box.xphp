@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Containers;
+namespace App\GenericInterface\Containers;
 
 class Box<T> implements Container<T>
 {

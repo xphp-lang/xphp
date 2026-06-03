@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\DepthCap;
 
-use App\Containers\Recursive;
+use App\DepthCap\Containers\Recursive;
 
 $x = new Recursive<int>();

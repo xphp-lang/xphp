@@ -62,7 +62,7 @@ final class GenericFunctionIntegrationTest extends TestCase
         self::assertFileExists($usePath);
         $content = file_get_contents($usePath);
 
-        self::assertSame(2, preg_match_all('/\\\\App\\\\identity_T_[0-9a-f]+\(/', $content));
+        self::assertSame(2, preg_match_all('/\\\\App\\\\GenericFunction\\\\identity_T_[0-9a-f]+\(/', $content));
         self::assertStringNotContainsString('identity<', $content);
     }
 
@@ -85,7 +85,7 @@ final class GenericFunctionIntegrationTest extends TestCase
         foreach (\$m[1] as \$i => \$mangled) {
             \$type = \$m[2][\$i];
             \$sample = \$type === 'int' ? 42 : 'hi';
-            \$fqn = '\\\\App\\\\' . \$mangled;
+            \$fqn = '\\\\App\\\\GenericFunction\\\\' . \$mangled;
             \$out = \$fqn(\$sample);
             \$expected = \$type === 'int' ? 'integer' : 'string';
             echo gettype(\$out) === \$expected ? "OK_{\$type}" : "BAD_{\$type}", "\\n";

@@ -65,7 +65,7 @@ final class GenericMethodIntegrationTest extends TestCase
         $content = file_get_contents($usePath);
 
         // Three call sites (2 int + 1 string), all rewritten to fully-qualified mangled refs.
-        self::assertSame(3, preg_match_all('/\\\\App\\\\Util::identity_T_[0-9a-f]+\\(/', $content));
+        self::assertSame(3, preg_match_all('/\\\\App\\\\GenericMethod\\\\Util::identity_T_[0-9a-f]+\\(/', $content));
         // The two int call sites must share the same mangled name (single specialization
         // per unique arg list, not per call site — locks the alreadyGenerated dedupe).
         \preg_match_all('/identity_T_([0-9a-f]+)/', $content, $matches);
@@ -91,7 +91,7 @@ final class GenericMethodIntegrationTest extends TestCase
         declare(strict_types=1);
         require '{$utilPath}';
 
-        \$asInt = \\App\\Util::identity_T_FILLED_AT_RUNTIME(42);
+        \$asInt = \\App\\GenericMethod\\Util::identity_T_FILLED_AT_RUNTIME(42);
         PHP);
 
         // Pull the mangled FQNs out of Util.php and call them directly. We assert each
@@ -104,7 +104,7 @@ final class GenericMethodIntegrationTest extends TestCase
             $type = $matches[2][$i];
             $sample = $type === 'int' ? '42' : "'hello'";
             $expected = $gettypeName[$type];
-            $script .= "\$out{$i} = \\App\\Util::{$mangled}({$sample});\n";
+            $script .= "\$out{$i} = \\App\\GenericMethod\\Util::{$mangled}({$sample});\n";
             $script .= "echo gettype(\$out{$i}) === '{$expected}' ? 'OK_{$type}' : 'BAD_{$type}', \"\\n\";\n";
         }
         file_put_contents($runScript, $script);
