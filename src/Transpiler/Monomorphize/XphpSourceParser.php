@@ -262,6 +262,10 @@ final class XphpSourceParser
                         $parsed = self::parseTypeArgList($tokens, $afterDc);
                         if ($parsed !== null) {
                             [$args, $endIdx] = $parsed;
+                            // @todo MethodCall resolver branch is pending; for
+                            //       `$obj->m::<…>(...)` the marker is recorded but
+                            //       not claimed today -- the strip on its own is
+                            //       enough to keep the cleaned source valid PHP.
                             $nameMarkers[] = [
                                 'line' => $nameLine,
                                 'anchorLine' => $anchorLine,
@@ -284,15 +288,18 @@ final class XphpSourceParser
                 // Bare `Name<…>` is only valid in type-hint position (param/return/
                 // property types, `extends` / `implements` clauses). In expression
                 // context bare `<` is comparison; call sites must use the `::<…>`
-                // turbofish per RFC. Heuristic: if the `>` is followed by `(`, it's
-                // a call site -- reject so the downstream PHP parser surfaces the
-                // error rather than xphp silently specializing a now-invalid form.
+                // turbofish per RFC. Heuristic: the position is an expression-context
+                // call site if the `>` is followed by `(` (function-call open) OR if
+                // the Name is preceded by `new` (catches the parenless `new Foo<T>;`
+                // and `new Foo<T>` shapes that PHP accepts but the RFC turbofish
+                // requirement refuses). Type-hint sites match neither check.
                 if ($j < $n && $tokens[$j]->text === '<') {
                     $parsed = self::parseTypeArgList($tokens, $j);
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;
                         $afterClose = self::skipWs($tokens, $endIdx + 1);
-                        $isCallSite = $afterClose < $n && $tokens[$afterClose]->text === '(';
+                        $isCallSite = ($afterClose < $n && $tokens[$afterClose]->text === '(')
+                            || self::isPrecededByNew($tokens, $i);
                         if (!$isCallSite) {
                             $nameMarkers[] = [
                                 'line' => $nameLine,
@@ -546,6 +553,36 @@ final class XphpSourceParser
         return $tokens[$i]->id === T_OBJECT_OPERATOR
             || $tokens[$i]->id === T_NULLSAFE_OBJECT_OPERATOR
             || $tokens[$i]->id === T_DOUBLE_COLON;
+    }
+
+    /**
+     * Returns true when the Name token at `$nameIdx` is preceded by `new` (with
+     * optional whitespace / comments in between).
+     *
+     * Used to reject bare `<…>` at `new`-expression sites that don't have a
+     * trailing `(` -- specifically `new Foo<T>;` and `new Foo<T>` shapes that
+     * PHP itself allows. Without this check, the bare-`<…>` heuristic only
+     * catches the parens-bearing form (`new Foo<T>()`), so the parenless
+     * variants slip through and xphp silently specializes a form the RFC
+     * turbofish requirement would refuse.
+     *
+     * @infection-ignore-all — flat token walk, same shape as
+     * `memberAccessReceiverLine` / `isMemberAccessContext`. Boundary mutations
+     * (`-1` → `-2`, `>=` → `>`) only differ at the very first token, which is
+     * always T_OPEN_TAG and not skippable -- nikic would have rejected any
+     * source where the walk could underflow before this code runs. The
+     * triple-`||` split (skippable-token check) only matters between comment
+     * tokens, which the bare-`<>` rejection still catches via the parens arm.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function isPrecededByNew(array $tokens, int $nameIdx): bool
+    {
+        $i = $nameIdx - 1;
+        while ($i >= 0 && ($tokens[$i]->id === T_WHITESPACE || $tokens[$i]->id === T_COMMENT || $tokens[$i]->id === T_DOC_COMMENT)) {
+            $i--;
+        }
+        return $i >= 0 && $tokens[$i]->id === T_NEW;
     }
 
     /**

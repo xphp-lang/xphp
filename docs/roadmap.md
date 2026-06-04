@@ -35,8 +35,8 @@ timeline
     section Next
         Type system depth
                 : default type parameters
-                : multiple bounds (T must satisfy A and B)
-                : variance annotations (covariant / contravariant) — leverages monomorphization for real subtype edges
+                : multiple bounds (T satisfies `A & B` per RFC intersection types)
+                : variance annotations (`+T` / `-T` per RFC) — leverages monomorphization for real subtype edges
                 : reified T as documented contract (T-class / instanceof T / is_a)
                 : F-bounded recursion (T bounded by a generic of itself)
         Generic surface
@@ -47,6 +47,7 @@ timeline
         Developer experience
                 : Composer plugin for autoload registration
                 : Live transpilation via stream wrapper (no build step)
+                : Compile-time migration hint for bare-`Name<…>(` call sites (point users at the `::<…>` turbofish)
                 : Phpdoc substitution in generated bodies
     section Long-term
         Type system breadth

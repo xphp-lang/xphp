@@ -36,6 +36,11 @@ p.s. `n/a` meaning it doesn't fit the language's design.
 
 These are obvious gaps with clear value.
 
+> **Status**: every snippet in this section shows the *intended* RFC-aligned
+> syntax that `xphp` does not yet parse. Until the corresponding implementation
+> lands, the parser rejects these forms with a PHP-side `Syntax error,
+> unexpected '<'`. Tracked in [`../roadmap.md`](../roadmap.md).
+
 ### 1. Variance annotations
 
 PHP RFC [bound-erased generic types](https://wiki.php.net/rfc/bound_erased_generic_types)

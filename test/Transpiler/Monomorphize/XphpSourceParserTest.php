@@ -1179,6 +1179,25 @@ PHP;
         self::assertStringContainsString('<Plastic>', $stripped, 'bare `new Name<…>()` must be left un-stripped');
     }
 
+    public function testBareNewWithoutParensIsRejectedAndLeftUnstripped(): void
+    {
+        // PHP allows `new Foo;` (no parens). Without the `isPrecededByNew`
+        // lookback, the bare-`<…>` rejection only caught the parens-bearing
+        // form (`>` followed by `(`), so this slipped through and xphp
+        // silently specialized a call shape the RFC turbofish requirement
+        // would refuse.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+$x = new Box<Plastic>;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringContainsString('<Plastic>', $stripped, 'parenless `new Name<…>` must be left un-stripped');
+    }
+
     public function testBareFreeFunctionCallIsRejectedAndLeftUnstripped(): void
     {
         $source = <<<'PHP'
