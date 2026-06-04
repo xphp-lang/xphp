@@ -60,7 +60,7 @@ final class GenericMethodCompiler
      * @param array<string, list<Node\Stmt>> $astSet keyed by an arbitrary string id (filepath
      *     or "<specialized:fqcn>"). The values are the top-level statements of each AST.
      */
-    public function process(array $astSet): void
+    public function process(array &$astSet): void
     {
         /** @var array<string, ClassMethod> $methodTemplates keyed by "classFqn::methodName" */
         $methodTemplates = [];
@@ -68,8 +68,10 @@ final class GenericMethodCompiler
         $classByFqn = [];
         /** @var array<string, Function_> $functionTemplates keyed by namespace\\functionName */
         $functionTemplates = [];
-        /** @var array<string, Namespace_> $functionNamespaceByFqn  enclosing Namespace_ per fqn */
+        /** @var array<string, ?Namespace_> $functionNamespaceByFqn  enclosing Namespace_ per fqn, or null for bare top-level functions */
         $functionNamespaceByFqn = [];
+        /** @var array<string, string> $functionAstKeyByFqn  ast-key (filepath) per fqn for top-level (null-namespace) templates, so the strip+append step knows which AST to mutate */
+        $functionAstKeyByFqn = [];
         /** @var array<string, string> $functionSourceByFqn  ast-key (filepath or "<specialized:…>") per fqn — used to point duplicate-declaration errors at both source locations */
         $functionSourceByFqn = [];
 
@@ -104,6 +106,7 @@ final class GenericMethodCompiler
             foreach ($perFileFns as $k => $v) {
                 $functionTemplates[$k] = $v;
                 $functionSourceByFqn[$k] = (string) $astKey;
+                $functionAstKeyByFqn[$k] = (string) $astKey;
             }
             foreach ($perFileFnNs as $k => $v) {
                 $functionNamespaceByFqn[$k] = $v;
@@ -116,7 +119,13 @@ final class GenericMethodCompiler
 
         /** @var array<string, true> $alreadyGenerated */
         $alreadyGenerated = [];
-        foreach ($astSet as $ast) {
+        foreach ($astSet as $astKey => &$ast) {
+            // For top-level (null-namespace) functions: the visitor's pendingAppends
+            // mechanism mutates a container's ->stmts; the top-level AST is a plain
+            // array with no container. We catch top-level appends in a separate bag
+            // and flush them by direct array mutation after the traversal completes.
+            /** @var list<Function_> $topLevelAppends */
+            $topLevelAppends = [];
             $this->rewriteCallSites(
                 $ast,
                 $methodTemplates,
@@ -124,8 +133,13 @@ final class GenericMethodCompiler
                 $functionTemplates,
                 $functionNamespaceByFqn,
                 $alreadyGenerated,
+                $topLevelAppends,
             );
+            foreach ($topLevelAppends as $specialized) {
+                $ast[] = $specialized;
+            }
         }
+        unset($ast);
 
         // Strip the original method templates from their owning classes.
         foreach ($methodTemplates as $key => $template) {
@@ -138,11 +152,21 @@ final class GenericMethodCompiler
             }
         }
 
-        // Strip the original function templates from their owning namespaces.
+        // Strip the original function templates: namespaced ones get stripped from
+        // their owning Namespace_; top-level (null-namespace) ones get stripped from
+        // the top-level AST array directly via the saved astKey.
         foreach ($functionTemplates as $fqn => $template) {
             $namespace = $functionNamespaceByFqn[$fqn] ?? null;
             if ($namespace !== null) {
                 $this->stripFunction($namespace, $template->name->toString());
+                continue;
+            }
+            $astKey = $functionAstKeyByFqn[$fqn] ?? null;
+            if ($astKey !== null && isset($astSet[$astKey])) {
+                $astSet[$astKey] = self::stripTopLevelFunction(
+                    $astSet[$astKey],
+                    $template->name->toString(),
+                );
             }
         }
     }
@@ -152,7 +176,7 @@ final class GenericMethodCompiler
      * @param array<string, ClassMethod> $methodTemplates  out-param
      * @param array<string, ClassLike> $classByFqn         out-param
      * @param array<string, Function_> $functionTemplates  out-param
-     * @param array<string, Namespace_> $functionNamespaceByFqn  out-param
+     * @param array<string, ?Namespace_> $functionNamespaceByFqn  out-param (null = bare top-level)
      */
     private function indexTemplates(
         array $ast,
@@ -175,7 +199,7 @@ final class GenericMethodCompiler
             public array $classByFqn = [];
             /** @var array<string, Function_> */
             public array $functionTemplates = [];
-            /** @var array<string, Namespace_> */
+            /** @var array<string, ?Namespace_> */
             public array $functionNamespaceByFqn = [];
             private ?string $currentClassFqn = null;
 
@@ -200,11 +224,13 @@ final class GenericMethodCompiler
                 }
                 if ($node instanceof Function_) {
                     $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                    if (is_array($params) && $params !== [] && $this->currentNamespaceNode !== null) {
+                    if (is_array($params) && $params !== []) {
                         $fqn = $this->currentNamespace !== ''
                             ? $this->currentNamespace . '\\' . $node->name->toString()
                             : $node->name->toString();
                         $this->functionTemplates[$fqn] = $node;
+                        // null = bare top-level (no enclosing `namespace { }` block);
+                        // the outer process() handles strip + append for that case.
                         $this->functionNamespaceByFqn[$fqn] = $this->currentNamespaceNode;
                     }
                 }
@@ -243,8 +269,10 @@ final class GenericMethodCompiler
      * @param array<string, ClassMethod> $methodTemplates
      * @param array<string, ClassLike> $classByFqn
      * @param array<string, Function_> $functionTemplates
-     * @param array<string, Namespace_> $functionNamespaceByFqn
+     * @param array<string, ?Namespace_> $functionNamespaceByFqn  null = bare top-level
      * @param array<string, true> $alreadyGenerated
+     * @param list<Function_> $topLevelAppends  out-param: specializations for null-namespace
+     *   templates; the caller flushes these to the top-level AST after the traversal completes
      */
     private function rewriteCallSites(
         array $ast,
@@ -253,13 +281,14 @@ final class GenericMethodCompiler
         array $functionTemplates,
         array $functionNamespaceByFqn,
         array &$alreadyGenerated,
+        array &$topLevelAppends,
     ): void {
         $hashLength = $this->hashLength;
         $hierarchy = $this->hierarchy;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
@@ -271,8 +300,9 @@ final class GenericMethodCompiler
              * @param array<string, ClassMethod> $methodTemplates
              * @param array<string, ClassLike> $classByFqn
              * @param array<string, Function_> $functionTemplates
-             * @param array<string, Namespace_> $functionNamespaceByFqn
+             * @param array<string, ?Namespace_> $functionNamespaceByFqn
              * @param array<string, true> $alreadyGenerated
+             * @param list<Function_> $topLevelAppends
              */
             public function __construct(
                 private array $methodTemplates,
@@ -282,6 +312,7 @@ final class GenericMethodCompiler
                 private array &$alreadyGenerated,
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
+                private array &$topLevelAppends,
             ) {
             }
 
@@ -426,8 +457,14 @@ final class GenericMethodCompiler
                         // doesn't reliably propagate through nikic's NodeTraverser. The
                         // outer process() loop flushes pendingAppends after the walk.
                         $this->pendingAppends[] = [$namespaceNode, $specialized];
-                        $this->alreadyGenerated[$generatedKey] = true;
+                    } else {
+                        // Bare top-level template (no enclosing `namespace { }` block):
+                        // there's no container to append to, so route the specialized
+                        // function through the topLevelAppends out-param; process() flushes
+                        // it directly into the top-level AST array after this visitor returns.
+                        $this->topLevelAppends[] = $specialized;
                     }
+                    $this->alreadyGenerated[$generatedKey] = true;
                 }
 
                 $node->name = new FullyQualified($mangledFqn, $node->name->getAttributes());
@@ -541,5 +578,28 @@ final class GenericMethodCompiler
             $newStmts[] = $stmt;
         }
         $namespace->stmts = $newStmts;
+    }
+
+    /**
+     * Same shape as `stripFunction` but for the top-level AST when there's no
+     * enclosing `namespace { }` block. Returns the filtered statement list so the
+     * caller can replace the slot in `$astSet` directly.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return list<Node\Stmt>
+     */
+    private static function stripTopLevelFunction(array $ast, string $functionName): array
+    {
+        $newStmts = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Function_
+                && $stmt->name->toString() === $functionName
+                && $stmt->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS) !== null
+            ) {
+                continue;
+            }
+            $newStmts[] = $stmt;
+        }
+        return $newStmts;
     }
 }
