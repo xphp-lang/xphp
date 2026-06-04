@@ -178,6 +178,74 @@ PHP;
         self::assertNull($params[1]->boundFqn, 'V has no bound — boundFqn must stay null');
     }
 
+    public function testTopLevelSelfReferenceBoundIsRejectedAtDeclarationTime(): void
+    {
+        // RFC bound-erased generic types forbids `class A<T : T>` -- T cannot use
+        // itself as a bound at top level. The error fires at declaration time
+        // rather than later at instantiation, where the user would see a
+        // confusing "compiler cannot prove satisfaction" message instead.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class A<T : T> {
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot use itself as a bound');
+        $parser->parse($source);
+    }
+
+    public function testFullyQualifiedBoundWithSameNameAsTypeParamIsAllowed(): void
+    {
+        // `class A<T : \T>` is NOT a self-reference -- the leading backslash
+        // makes `\T` a global-class reference, not the type parameter. The
+        // self-reference guard must skip this case.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class A<T : \T> {
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);    // must not throw
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertCount(1, $params);
+        self::assertSame('T', $params[0]->name);
+        self::assertSame('T', $params[0]->boundFqn, 'leading-\\ marks bound as FQ -- resolves to global `T`, not the type-param');
+    }
+
+    public function testForwardReferenceToEarlierTypeParamAsBoundIsAllowed(): void
+    {
+        // `class C<T, U : T>` is NOT a self-reference -- U's bound references
+        // a DIFFERENT type parameter (T), not itself. The RFC explicitly allows
+        // this (the "forward references and mutual recursion" clause).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Pair<T, U : T> {
+    public T $first;
+    public U $second;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);    // must not throw
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertCount(2, $params);
+    }
+
     public function testAttachesGenericArgsToNewExpressionResolvedAgainstNamespace(): void
     {
         $source = <<<'PHP'

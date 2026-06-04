@@ -398,6 +398,7 @@ final class XphpSourceParser
                 return null;
             }
             if ($tokens[$i]->text === '>') {
+                self::assertNoTopLevelSelfReference($entries);
                 return [$entries, $i];
             }
             if ($tokens[$i]->text === ',') {
@@ -408,6 +409,38 @@ final class XphpSourceParser
         }
 
         return null;
+    }
+
+    /**
+     * RFC bound-erased generic types forbids `class A<T : T>` -- a type parameter
+     * cannot use *itself* as a bound at the top level. F-bounded recursion
+     * (`class A<T : Box<T>>`) is fine because the inner T is a generic argument
+     * to a different type; only the bare-self case is rejected.
+     *
+     * `boundIsFq` filters out `\T` (a global class named T), which is a real
+     * class reference rather than a type-parameter self-reference.
+     *
+     * @param list<array{name: string, boundName: ?string, boundIsFq: bool}> $entries
+     */
+    private static function assertNoTopLevelSelfReference(array $entries): void
+    {
+        foreach ($entries as $entry) {
+            if ($entry['boundName'] !== null
+                && !$entry['boundIsFq']
+                && $entry['boundName'] === $entry['name']
+            ) {
+                throw new RuntimeException(sprintf(
+                    'Generic parameter `%s` cannot use itself as a bound (top-level '
+                    . 'self-reference in `<%s : %s>`). Use a nested form like '
+                    . '`%s : Box<%s>` for F-bounded recursion, or remove the bound.',
+                    $entry['name'],
+                    $entry['name'],
+                    $entry['name'],
+                    $entry['name'],
+                    $entry['name'],
+                ));
+            }
+        }
     }
 
     /**

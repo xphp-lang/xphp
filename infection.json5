@@ -96,7 +96,14 @@
                 "XPHP\\Transpiler\\Monomorphize\\Registry::checkBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // XphpSourceParser::assertNoTopLevelSelfReference: human-facing
+                // "Generic parameter `T` cannot use itself as a bound..." message.
+                // The three concat segments get reordered by the mutation; the
+                // self-reference test asserts on the substring "cannot use itself
+                // as a bound" which survives every reordering. Same justification
+                // as the Registry::validateBounds entries above.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference"
             ]
         },
         "ConcatOperandRemoval": {
@@ -114,7 +121,11 @@
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 // SpecializedClassGenerator::emit: the `Registry::GENERATED_NAMESPACE_PREFIX . '\\\\'`
                 // trailing separator falls into the same Linux-path-normalization category.
-                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
+                // assertNoTopLevelSelfReference: same as the Concat entry above --
+                // dropping any concat operand still leaves the "cannot use itself
+                // as a bound" substring intact, which is what the test asserts on.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference"
             ]
         },
 
