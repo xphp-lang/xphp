@@ -235,7 +235,12 @@ final class XphpSourceParser
                 continue;
             }
 
-            if (self::isNameToken($tok)) {
+            // `static` is a PHP keyword (T_STATIC), not a name token, but the
+            // RFC treats `static<T>` (and the sibling `self<T>` / `parent<T>`
+            // pseudo-types) as valid type-hint positions. `self` / `parent` are
+            // T_STRING and fall through the next branch naturally; `static`
+            // needs an explicit gate here.
+            if (self::isNameToken($tok) || $tok->id === T_STATIC) {
                 $nameText = $tok->text;
                 $nameLine = $tok->line;
                 // For member-access call sites (`Foo::method::<…>`, `$x->method::<…>`,

@@ -223,6 +223,80 @@ PHP;
         self::assertSame('T', $params[0]->boundFqn, 'leading-\\ marks bound as FQ -- resolves to global `T`, not the type-param');
     }
 
+    public function testSelfWithTypeArgsInReturnPositionIsAccepted(): void
+    {
+        // RFC class pseudo-types: `self<T>`, `static<T>`, `parent<T>` are
+        // accepted in type-hint positions. Verifies the scanner accepts
+        // the bare `<T>` after `self` (which is in SCALAR_TYPES), strips it,
+        // and the resolver attaches the marker.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Container<T> {
+    public T $item;
+
+    public function with(T $newItem): self<T> {
+        $this->item = $newItem;
+        return $this;
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        // The `<T>` clause on the `self` return type must be stripped from the
+        // cleaned source so PHP parses the method signature as `: self`.
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('self<T>', $stripped);
+        self::assertStringContainsString(': self', $stripped);
+    }
+
+    public function testStaticWithTypeArgsInReturnPositionIsAccepted(): void
+    {
+        // Same as the self<T> case but for late-static-bound `static<T>`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Builder<T> {
+    public function reset(): static<T> {
+        return $this;
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringNotContainsString('static<T>', $stripped);
+        self::assertStringContainsString(': static', $stripped);
+
+        $parser->parse($source);    // must not throw
+    }
+
+    public function testParentWithTypeArgsInReturnPositionIsAccepted(): void
+    {
+        // `parent<T>` in a return position resolves to the parent class
+        // specialized with T. Same recognizer / strip mechanism.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Sub<T> extends Container {
+    public function reset(): parent<T> {
+        return parent::reset();
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringNotContainsString('parent<T>', $stripped);
+        self::assertStringContainsString(': parent', $stripped);
+
+        $parser->parse($source);    // must not throw
+    }
+
     public function testForwardReferenceToEarlierTypeParamAsBoundIsAllowed(): void
     {
         // `class C<T, U : T>` is NOT a self-reference -- U's bound references
