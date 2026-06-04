@@ -5,16 +5,40 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\ArrowFunction;
+use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\Match_;
+use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\New_;
+use PhpParser\Node\Expr\NullsafeMethodCall;
+use PhpParser\Node\Expr\PropertyFetch;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
+use PhpParser\Node\MatchArm;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
+use PhpParser\Node\NullableType;
+use PhpParser\Node\Stmt\Case_;
+use PhpParser\Node\Stmt\Catch_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Do_;
+use PhpParser\Node\Stmt\Else_;
+use PhpParser\Node\Stmt\ElseIf_;
+use PhpParser\Node\Stmt\Finally_;
+use PhpParser\Node\Stmt\For_;
+use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\If_;
 use PhpParser\Node\Stmt\Namespace_;
+use PhpParser\Node\Stmt\Property;
+use PhpParser\Node\Stmt\Switch_;
+use PhpParser\Node\Stmt\TryCatch;
 use PhpParser\Node\Stmt\Use_;
+use PhpParser\Node\Stmt\While_;
 use PhpParser\Node\UseItem;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
@@ -296,6 +320,68 @@ final class GenericMethodCompiler
             /** @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_}> */
             public array $pendingAppends = [];
 
+            /** Receiver-type analysis state. Pushed on entering ClassLike, popped on leave. */
+            private ?string $currentClassFqn = null;
+            /**
+             * Local scope: parameter-name => resolved-class-FQN. Populated on entering a
+             * Function_ / ClassMethod by walking its `params` list and resolving each typed
+             * parameter. Used for receiver-type analysis on `$paramName->method::<T>(...)`.
+             *
+             * @var array<string, string>
+             */
+            private array $currentScopeParamTypes = [];
+            /**
+             * Stage B local flow typing: variable-name => resolved-class-FQN. Populated by
+             * `enterNode` when it sees an `Assign($var, New_($className))` -- the lexical
+             * last-write determines the receiver type at later call sites in the same scope.
+             *
+             * Each Function_ / ClassMethod / Closure / ArrowFunction pushes a fresh scope
+             * onto `$scopeSnapshots`; the parent scope is restored on leave. Without the
+             * closure/arrow push, an inner `$x = new Bar()` overwrites the outer scope's
+             * `$x` slot, and the receiver type at a later outer call site picks the wrong
+             * class (the original review of b88539c caught this exact bug).
+             *
+             * @var array<string, string>
+             */
+            private array $currentScopeLocalTypes = [];
+            /**
+             * Snapshot stack for scope isolation across nested
+             * Function_/ClassMethod/Closure/ArrowFunction boundaries. On enter we push the
+             * outgoing `(params, locals, branches)` triple; on leave we pop and restore.
+             * Branch snapshots are nested per-scope so that branches inside a closure
+             * don't leak to branches in the enclosing function.
+             *
+             * @var list<array{params: array<string,string>, locals: array<string,string>, branches: list<array{snapshot: array<string,string>, assigned: array<string,bool>}>}>
+             */
+            private array $scopeSnapshots = [];
+            /**
+             * Branch frame stack for conservative reasoning across mutually-exclusive
+             * control-flow constructs (if/elseif/else, switch/case, match arms,
+             * while/for/foreach/do-while loops, try/catch/finally). Each frame holds:
+             *   - `snapshot`: the value of `$currentScopeLocalTypes` at the moment the
+             *     branching construct was entered;
+             *   - `assigned`: the set of variable names that received an Assign anywhere
+             *     inside the branch body.
+             *
+             * On enter of a branching parent we push a frame. On entering a sibling
+             * branch (else / elseif / case / catch / finally / match arm), we reset
+             * `currentScopeLocalTypes` from the top frame's snapshot -- each sibling
+             * starts from the pre-branch state, NOT from the previous sibling's
+             * mutations. On leave of the branching parent, we pop the frame, restore
+             * the snapshot, and INVALIDATE every variable in `assigned` (we can't
+             * tell at runtime whether the branch ran or not -- conservative says
+             * "we don't know the type"). The popped frame's `assigned` set
+             * propagates into the parent frame so nested branches stay reflected
+             * through the outer invalidation pass.
+             *
+             * Without this, `if ($cond) { $x = new Bar(); } $x->m::<T>()` silently
+             * picks Bar (the last lexical write) regardless of whether the branch
+             * fired -- the original bug review of the post-b88539c work flagged.
+             *
+             * @var list<array{snapshot: array<string,string>, assigned: array<string,bool>}>
+             */
+            private array $branchSnapshots = [];
+
             /**
              * @param array<string, ClassMethod> $methodTemplates
              * @param array<string, ClassLike> $classByFqn
@@ -332,6 +418,118 @@ final class GenericMethodCompiler
                         $this->useMap[$alias] = $fqn;
                     }
                 }
+                if ($node instanceof ClassLike && $node->name !== null) {
+                    $this->currentClassFqn = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $node->name->toString()
+                        : $node->name->toString();
+                }
+                if ($node instanceof Function_
+                    || $node instanceof ClassMethod
+                    || $node instanceof Closure
+                    || $node instanceof ArrowFunction
+                ) {
+                    // Push outgoing scope (params + locals + branch stack) before
+                    // computing the new one. The branch stack is per-scope: branches
+                    // inside the closure are independent of branches in the parent.
+                    $parentParams = $this->currentScopeParamTypes;
+                    $parentLocals = $this->currentScopeLocalTypes;
+                    $this->scopeSnapshots[] = [
+                        'params' => $parentParams,
+                        'locals' => $parentLocals,
+                        'branches' => $this->branchSnapshots,
+                    ];
+                    $this->currentScopeParamTypes = [];
+                    $this->currentScopeLocalTypes = [];
+                    $this->branchSnapshots = [];
+
+                    // For closures: `use ($x)` explicitly imports outer variables.
+                    // Copy each imported name's type from the parent scope so the
+                    // closure body can specialize `$x->m::<T>(...)` correctly.
+                    if ($node instanceof Closure) {
+                        foreach ($node->uses as $use) {
+                            if (!$use->var instanceof Variable || !is_string($use->var->name)) {
+                                continue;
+                            }
+                            $importedName = $use->var->name;
+                            $importedType = $parentParams[$importedName]
+                                ?? $parentLocals[$importedName]
+                                ?? null;
+                            if ($importedType !== null) {
+                                $this->currentScopeParamTypes[$importedName] = $importedType;
+                            }
+                        }
+                    }
+
+                    // Arrow functions implicitly capture every outer variable by
+                    // value. Copy all of parent's tracked types so the single-
+                    // expression body can specialize the same way the parent could.
+                    if ($node instanceof ArrowFunction) {
+                        foreach ($parentParams as $importedName => $importedType) {
+                            $this->currentScopeParamTypes[$importedName] = $importedType;
+                        }
+                        foreach ($parentLocals as $importedName => $importedType) {
+                            $this->currentScopeParamTypes[$importedName] = $importedType;
+                        }
+                    }
+
+                    // Declared parameter types overwrite any imported same-named
+                    // outer variable -- the param shadows the outer in PHP semantics.
+                    foreach ($node->params as $param) {
+                        if (!$param->var instanceof Variable || !is_string($param->var->name)) {
+                            continue;
+                        }
+                        $type = $param->type;
+                        // Strip nullable wrapper: `?Container` is still "the receiver is Container"
+                        // for method-resolution purposes (the runtime null-check is the caller's
+                        // problem, not the type-resolution step).
+                        if ($type instanceof NullableType) {
+                            $type = $type->type;
+                        }
+                        if ($type instanceof Name) {
+                            $this->currentScopeParamTypes[$param->var->name] = $this->resolveClassName($type);
+                        }
+                    }
+                }
+                // Branching parents: push a frame so any Assign inside the branch
+                // body (or its sub-branches) gets recorded for post-leave
+                // invalidation. The visitor enters each parent ONCE; siblings
+                // (Else_/ElseIf_/Case_/Catch_/Finally_/MatchArm) reset
+                // currentScopeLocalTypes from the top frame's snapshot.
+                if (self::isBranchingParent($node)) {
+                    $this->branchSnapshots[] = [
+                        'snapshot' => $this->currentScopeLocalTypes,
+                        'assigned' => [],
+                    ];
+                }
+                if (self::isSiblingBranch($node) && $this->branchSnapshots !== []) {
+                    $top = count($this->branchSnapshots) - 1;
+                    $this->currentScopeLocalTypes = $this->branchSnapshots[$top]['snapshot'];
+                }
+                // Stage B flow typing: `$x = new ClassName(...)` records `$x`'s receiver
+                // type for later MethodCall sites in the same scope. Lexical last-write
+                // wins within a straight-line code path; branching constructs invalidate
+                // their assigned vars on leave (see branchSnapshots above).
+                if ($node instanceof Assign
+                    && $node->var instanceof Variable
+                    && is_string($node->var->name)
+                ) {
+                    $assignedName = $node->var->name;
+                    // Record the assignment in the innermost active branch frame
+                    // regardless of RHS shape -- even a non-`new` assign poisons
+                    // our tracked type for the post-leave invalidation.
+                    if ($this->branchSnapshots !== []) {
+                        $top = count($this->branchSnapshots) - 1;
+                        $this->branchSnapshots[$top]['assigned'][$assignedName] = true;
+                    }
+                    // Update the live tracked type only when the RHS is `new ClassName(...)`
+                    // -- that's the one shape we can prove statically. Other RHS
+                    // shapes are conservatively ignored (they could be anything).
+                    if ($node->expr instanceof New_
+                        && $node->expr->class instanceof Name
+                    ) {
+                        $this->currentScopeLocalTypes[$assignedName] = $this->resolveClassName($node->expr->class);
+                    }
+                }
                 return null;
             }
 
@@ -343,7 +541,86 @@ final class GenericMethodCompiler
                 if ($node instanceof FuncCall) {
                     return $this->rewriteFuncCall($node);
                 }
+                if ($node instanceof MethodCall || $node instanceof NullsafeMethodCall) {
+                    return $this->rewriteInstanceMethodCall($node);
+                }
+                if ($node instanceof ClassLike) {
+                    $this->currentClassFqn = null;
+                }
+                if ($node instanceof Function_
+                    || $node instanceof ClassMethod
+                    || $node instanceof Closure
+                    || $node instanceof ArrowFunction
+                ) {
+                    $snapshot = array_pop($this->scopeSnapshots);
+                    if ($snapshot !== null) {
+                        $this->currentScopeParamTypes = $snapshot['params'];
+                        $this->currentScopeLocalTypes = $snapshot['locals'];
+                        $this->branchSnapshots = $snapshot['branches'];
+                    } else {
+                        // Defensive: matched enter/leave count is invariant of the
+                        // NodeTraverser; the else-branch is only reachable if the AST
+                        // is malformed. Fall back to empty scope to avoid an undefined
+                        // pop on the next leave.
+                        $this->currentScopeParamTypes = [];
+                        $this->currentScopeLocalTypes = [];
+                        $this->branchSnapshots = [];
+                    }
+                }
+                // Branching parents: pop the frame, restore the pre-branch local
+                // types, then invalidate every variable that received an Assign
+                // anywhere inside the branch body. Propagate the popped frame's
+                // assigned set into the parent frame so nested branches contribute
+                // to the outer invalidation pass.
+                if (self::isBranchingParent($node)) {
+                    $popped = array_pop($this->branchSnapshots);
+                    if ($popped !== null) {
+                        $this->currentScopeLocalTypes = $popped['snapshot'];
+                        foreach ($popped['assigned'] as $assignedName => $_true) {
+                            unset($this->currentScopeLocalTypes[$assignedName]);
+                            if ($this->branchSnapshots !== []) {
+                                $parentTop = count($this->branchSnapshots) - 1;
+                                $this->branchSnapshots[$parentTop]['assigned'][$assignedName] = true;
+                            }
+                        }
+                    }
+                }
                 return null;
+            }
+
+            /**
+             * Branching parents push a fresh frame on enter and pop on leave. These
+             * are the control-flow constructs whose body MAY OR MAY NOT execute (or
+             * may execute MULTIPLE TIMES, in the case of loops). Either way, the
+             * receiver-type tracker can't rely on the body's assignments to hold
+             * post-leave.
+             */
+            private static function isBranchingParent(Node $node): bool
+            {
+                return $node instanceof If_
+                    || $node instanceof Switch_
+                    || $node instanceof Match_
+                    || $node instanceof While_
+                    || $node instanceof Do_
+                    || $node instanceof For_
+                    || $node instanceof Foreach_
+                    || $node instanceof TryCatch;
+            }
+
+            /**
+             * Sibling-branch nodes (Else_, ElseIf_, the cases of Switch_, the arms
+             * of Match_, Catch_/Finally_ on TryCatch). Each sibling starts from the
+             * pre-branch state -- without the reset, the else body would see the
+             * if body's mutations and pick the wrong receiver class.
+             */
+            private static function isSiblingBranch(Node $node): bool
+            {
+                return $node instanceof Else_
+                    || $node instanceof ElseIf_
+                    || $node instanceof Case_
+                    || $node instanceof MatchArm
+                    || $node instanceof Catch_
+                    || $node instanceof Finally_;
             }
 
             private function rewriteStaticCall(StaticCall $node): ?Node
@@ -404,6 +681,131 @@ final class GenericMethodCompiler
                 }
 
                 return $node;
+            }
+
+            /**
+             * Instance-method turbofish rewrite. Same mangling / append shape as the
+             * StaticCall path; the only new piece is `resolveReceiverFqn` -- the
+             * receiver-type analysis that says "this $obj is statically of type X" so
+             * we can pick the right method template from $methodTemplates.
+             *
+             * Stage A coverage (this commit):
+             *   - `$this->method::<T>(...)` -- receiver is the enclosing class.
+             *   - `$param->method::<T>(...)` -- receiver is the function/method
+             *     parameter's declared type (snapshot in $currentScopeParamTypes).
+             *
+             * Receivers we currently can't resolve (returns null -> no
+             * specialization, marker drops silently; user's call site becomes a
+             * normal MethodCall to a method that doesn't exist post-strip, surfacing
+             * a runtime "undefined method" error). Stage B will widen the receiver
+             * sources to local-variable assignments.
+             */
+            private function rewriteInstanceMethodCall(MethodCall|NullsafeMethodCall $node): ?Node
+            {
+                $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
+                    return null;
+                }
+                if (!$node->name instanceof Identifier) {
+                    return null;
+                }
+
+                $classFqn = $this->resolveReceiverFqn($node->var);
+                if ($classFqn === null) {
+                    return null;
+                }
+                $methodName = $node->name->toString();
+                $key = $classFqn . '::' . $methodName;
+                $template = $this->methodTemplates[$key] ?? null;
+                if ($template === null) {
+                    return null;
+                }
+                $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (!is_array($params) || count($params) !== count($args)) {
+                    return null;
+                }
+
+                if ($this->hierarchy !== null) {
+                    Registry::checkBounds(
+                        $params,
+                        $args,
+                        $this->hierarchy,
+                        $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
+                    );
+                }
+
+                $mangled = self::mangleName($methodName, $args, $this->hashLength);
+                $generatedKey = $classFqn . '::' . $mangled;
+                if (!isset($this->alreadyGenerated[$generatedKey])) {
+                    $substitution = [];
+                    foreach ($params as $i => $param) {
+                        $substitution[$param->name] = $args[$i];
+                    }
+                    $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
+                    $owner = $this->classByFqn[$classFqn] ?? null;
+                    if ($owner !== null) {
+                        $this->pendingAppends[] = [$owner, $specialized];
+                        $this->alreadyGenerated[$generatedKey] = true;
+                    }
+                }
+
+                $node->name = new Identifier($mangled, $node->name->getAttributes());
+                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+
+                return $node;
+            }
+
+            /**
+             * Resolve the static type (FQN) of a method-call receiver expression.
+             * Returns null when the receiver type can't be determined -- the caller
+             * uses null to mean "no specialization, leave the call site alone".
+             *
+             * Stage A handles two shapes:
+             *   - `$this`     -> enclosing class FQN (tracked on ClassLike enter).
+             *   - `$paramName` where paramName has a typed declaration in the
+             *                  current function/method's signature.
+             */
+            private function resolveReceiverFqn(Node $receiver): ?string
+            {
+                if ($receiver instanceof Variable && is_string($receiver->name)) {
+                    if ($receiver->name === 'this') {
+                        return $this->currentClassFqn;
+                    }
+                    return $this->currentScopeParamTypes[$receiver->name]
+                        ?? $this->currentScopeLocalTypes[$receiver->name]
+                        ?? null;
+                }
+                if ($receiver instanceof PropertyFetch
+                    && $receiver->var instanceof Variable
+                    && $receiver->var->name === 'this'
+                    && $receiver->name instanceof Identifier
+                    && $this->currentClassFqn !== null
+                ) {
+                    // `$this->prop->method::<T>(...)` -- look up `prop`'s declared
+                    // type on the current class.
+                    $owner = $this->classByFqn[$this->currentClassFqn] ?? null;
+                    if ($owner !== null) {
+                        $propName = $receiver->name->toString();
+                        foreach ($owner->stmts as $stmt) {
+                            if (!$stmt instanceof Property) {
+                                continue;
+                            }
+                            foreach ($stmt->props as $prop) {
+                                if ($prop->name->toString() !== $propName) {
+                                    continue;
+                                }
+                                $type = $stmt->type;
+                                if ($type instanceof NullableType) {
+                                    $type = $type->type;
+                                }
+                                if ($type instanceof Name) {
+                                    return $this->resolveClassName($type);
+                                }
+                            }
+                        }
+                    }
+                }
+                return null;
             }
 
             private function rewriteFuncCall(FuncCall $node): ?Node
@@ -476,10 +878,24 @@ final class GenericMethodCompiler
 
             private function resolveClassName(Name $name): string
             {
+                $raw = $name->toString();
+                // Pseudo-types short-circuit to the enclosing class FQN. Without this,
+                // a parameter typed `self` would resolve to `App\…\self` (a phantom
+                // class), and any `$param->m::<T>()` call on it would miss the
+                // template lookup. Same gap as the scanner's pseudo-type filter --
+                // they need to stay in sync. `currentClassFqn` is null only at top
+                // level (no enclosing ClassLike), where pseudo-types aren't legal
+                // anyway; fall through to the namespace path so the user sees PHP's
+                // own "cannot use self outside class context" error.
+                $lower = strtolower($raw);
+                if ($this->currentClassFqn !== null
+                    && ($lower === 'self' || $lower === 'static' || $lower === 'parent')
+                ) {
+                    return $this->currentClassFqn;
+                }
                 if ($name instanceof FullyQualified) {
                     return $name->toString();
                 }
-                $raw = $name->toString();
                 if (str_starts_with($raw, '\\')) {
                     return ltrim($raw, '\\');
                 }

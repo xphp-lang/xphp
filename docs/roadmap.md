@@ -19,8 +19,9 @@ timeline
                 : generic interfaces
                 : generic traits (template only — dropped after specialization)
         Function-level generics
-                : method-scoped generics — static calls only
-                : free generic functions at namespace scope
+                : method-scoped generics — static AND instance call sites
+                : free generic functions at namespace scope (and bare top-level)
+                : receiver-type analysis for `$this` / typed-param / typed-property / local `new` assignments
         Type-parameter bounds
                 : single upper bound (e.g. T must extend Stringable) validated at compile time
                 : enforced at class instantiation AND method / free-function call sites
@@ -43,7 +44,6 @@ timeline
                 : reified T as documented contract (T-class / instanceof T / is_a)
                 : F-bounded recursion (T bounded by a generic of itself)
         Generic surface
-                : instance-method generic calls on a typed receiver
                 : generic type aliases
         Compiler
                 : Real cycle detection (replaces depth-cap heuristic)

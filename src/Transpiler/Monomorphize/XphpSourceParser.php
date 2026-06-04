@@ -267,10 +267,10 @@ final class XphpSourceParser
                         $parsed = self::parseTypeArgList($tokens, $afterDc);
                         if ($parsed !== null) {
                             [$args, $endIdx] = $parsed;
-                            // @todo MethodCall resolver branch is pending; for
-                            //       `$obj->m::<…>(...)` the marker is recorded but
-                            //       not claimed today -- the strip on its own is
-                            //       enough to keep the cleaned source valid PHP.
+                            // Instance-method turbofish (`$obj->m::<…>(...)`) markers are
+                            // claimed by the MethodCall / NullsafeMethodCall resolver branch
+                            // alongside StaticCall (item #11). GenericMethodCompiler does
+                            // receiver-type analysis to pick the right method template.
                             $nameMarkers[] = [
                                 'line' => $nameLine,
                                 'anchorLine' => $anchorLine,
@@ -847,14 +847,21 @@ final class XphpSourceParser
                     $this->typeParamStack[] = $matchedParamNames;
                 }
 
-                if ($node instanceof Node\Expr\StaticCall && $node->name instanceof Node\Identifier) {
+                if (($node instanceof Node\Expr\StaticCall
+                        || $node instanceof Node\Expr\MethodCall
+                        || $node instanceof Node\Expr\NullsafeMethodCall)
+                    && $node->name instanceof Node\Identifier
+                ) {
                     $callMethodName = $node->name->toString();
                     $startLine = $node->getStartLine();
                     foreach ($this->nameMarkers as $i => $marker) {
-                        // Match by name + line-range overlap. StaticCall::getStartLine() is the
-                        // receiver's line; the marker's anchorLine is the same, and its
-                        // (later) line is the identifier's line. Both can differ on multi-line
-                        // `Foo::\n    method<int>` constructs.
+                        // Match by name + line-range overlap. The Call node's
+                        // getStartLine() is the receiver's line; the marker's anchorLine
+                        // is the same, and its (later) line is the identifier's line.
+                        // Both can differ on multi-line `Foo::\n    method::<int>` or
+                        // `$obj->\n    method::<int>` constructs. The same logic now
+                        // covers static, instance, and nullsafe method calls -- the
+                        // GenericMethodCompiler distinguishes them later by AST type.
                         if ($marker['name'] === $callMethodName
                             && $startLine >= $marker['anchorLine']
                             && $startLine <= $marker['line']

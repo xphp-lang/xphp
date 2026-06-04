@@ -1306,12 +1306,12 @@ PHP;
         self::assertSame('int', $args[0]->name);
     }
 
-    public function testTurbofishOnInstanceMethodCallStripsButHasNoResolverYet(): void
+    public function testTurbofishOnInstanceMethodCallIsRecognized(): void
     {
-        // Instance-method generic specialization is on the roadmap but not yet
-        // wired (no MethodCall branch in the resolver). The scanner still has to
-        // strip the `::<…>` so the cleaned source is plain PHP -- otherwise the
-        // file would refuse to parse at all.
+        // Instance-method turbofish (`$obj->method::<T>(...)`) -- the resolver
+        // now claims the marker and attaches it to the MethodCall node, alongside
+        // the scanner's strip. GenericMethodCompiler does receiver-type analysis
+        // to pick the right method template at specialization time.
         $source = <<<'PHP'
 <?php
 $result = $obj->map::<string>($fn);
@@ -1323,13 +1323,17 @@ PHP;
         self::assertStringNotContainsString('<string>', $stripped);
         self::assertStringContainsString('$obj->map', $stripped);
 
-        // Sanity: the cleaned source actually parses as PHP.
         $ast = $parser->parse($source);
         $call = self::findFirstNodeOfType($ast, Node\Expr\MethodCall::class);
         self::assertNotNull($call);
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertCount(1, $args);
+        self::assertSame('string', $args[0]->name);
+        self::assertTrue($args[0]->isScalar);
     }
 
-    public function testTurbofishOnNullsafeInstanceMethodCallIsStripped(): void
+    public function testTurbofishOnNullsafeInstanceMethodCallIsRecognized(): void
     {
         $source = <<<'PHP'
 <?php
@@ -1341,6 +1345,14 @@ PHP;
         self::assertStringNotContainsString('::<', $stripped);
         self::assertStringNotContainsString('<string>', $stripped);
         self::assertStringContainsString('$obj?->map', $stripped);
+
+        $ast = $parser->parse($source);
+        $call = self::findFirstNodeOfType($ast, Node\Expr\NullsafeMethodCall::class);
+        self::assertNotNull($call);
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertCount(1, $args);
+        self::assertSame('string', $args[0]->name);
     }
 
     public function testBareNewCallSiteIsRejectedAndLeftUnstripped(): void

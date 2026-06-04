@@ -14,7 +14,7 @@ implement.
 | Feature                   | xphp                      | TS              | Kotlin      | Rust                |
 |---------------------------|---------------------------|-----------------|-------------|---------------------|
 | Generic classes/ifaces    | ✅                        | ✅              | ✅          | ✅                  |
-| Generic functions/methods | ✅ (static-call only)     | ✅              | ✅          | ✅                  |
+| Generic functions/methods | ✅                        | ✅              | ✅          | ✅                  |
 | Upper bounds              | ✅ (single)               | ✅              | ✅          | ✅                  |
 | Multiple bounds           | ❌                        | ✅              | ✅          | ✅                  |
 | Default type params       | ❌                        | ✅              | ✅          | ✅                  |
@@ -108,18 +108,7 @@ Bound validation (`Registry::checkBounds`) already loops per param at both the
 class-instantiation and method-call sites; trivially extends to loop per
 (param, bound) pair. The parser is the only real change.
 
-### 4. Instance-method generic calls
-
-Currently: only `Util::method::<T>(...)` (static call on a non-generic enclosing
-class) is supported. `$obj->method::<T>(...)` requires knowing the static type of
-`$obj` to pick the receiver class. With strict typing on parameters and
-properties, the static type is usually known at the call site; the unsolved part
-is the dispatch table when `$obj` is a union / intersection / interface.
-
-Tracked in the [roadmap](../roadmap.md) under "Next". The compiler-level
-lowering for runtime dispatch is the gap.
-
-### 5. Reified type parameters
+### 4. Reified type parameters
 
 A headline Kotlin feature. Rust gets the same effect "for free" via
 monomorphization -- the type IS known at codegen time.
@@ -137,7 +126,7 @@ code can't write `if ($x instanceof T)` and reason about it as a documented
 contract. Worth promoting from "accidentally works" to "documented capability"
 with `T::class`, `instanceof T`, and `is_a($x, T::class)` all guaranteed.
 
-### 6. Generic type aliases
+### 5. Generic type aliases
 
 - TypeScript: `type Result<T, E> = ...`
 - Rust: `type Result<T> = ...`
@@ -311,6 +300,8 @@ unconstrained.
 `xphp` already pays for monomorphization, this is the user-facing payoff over
 Java /Kotlin.
 
-### Instance-method generic calls
+### Generic type aliases
 
-Largest single uplift for day-to-day call-site ergonomics.
+The remaining `Generic surface` item once instance-method generic calls
+shipped. Same line of work -- expressive surface that composes with the
+specialized-class output `xphp` already produces.

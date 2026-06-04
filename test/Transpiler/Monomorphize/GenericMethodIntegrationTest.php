@@ -318,6 +318,594 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    public function testInstanceMethodGenericThisReceiverSpecializes(): void
+    {
+        // Phase 2 Stage A1: `$this->method::<T>(...)` -- the most common shape.
+        // Receiver type is the enclosing class, no flow analysis needed.
+        $dir = sys_get_temp_dir() . '/xphp-inst-this-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Util.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstThis;
+
+        class Util {
+            public function identity<T>(T $x): T { return $x; }
+            public function callIntIdentity(): int
+            {
+                return $this->identity::<int>(42);
+            }
+            public function callStringIdentity(): string
+            {
+                return $this->identity::<string>('hi');
+            }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstThis;
+
+        $u = new Util();
+        $i = $u->callIntIdentity();
+        $s = $u->callStringIdentity();
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $util = file_get_contents($dir . '/dist/Util.php');
+            self::assertIsString($util);
+            // Both turbofish call sites rewritten to mangled identifiers.
+            self::assertMatchesRegularExpression(
+                '/\$this->identity_T_[0-9a-f]+\(42\)/',
+                $util,
+                '$this->identity::<int> rewritten to mangled name',
+            );
+            self::assertMatchesRegularExpression(
+                "/\\\$this->identity_T_[0-9a-f]+\\('hi'\\)/",
+                $util,
+            );
+            // Two specialized methods appended to Util.
+            self::assertSame(
+                2,
+                preg_match_all('/public function identity_T_[0-9a-f]+\(/', $util),
+            );
+            self::assertStringNotContainsString('function identity(', $util);
+
+            // Runtime sanity: the rewritten class actually executes.
+            $runScript = $dir . '/run.php';
+            file_put_contents($runScript, <<<PHP
+            <?php
+            declare(strict_types=1);
+            require '{$dir}/dist/Util.php';
+            require '{$dir}/dist/Use.php';
+            echo "i={\$i};s={\$s}";
+            PHP);
+            $output = [];
+            $exit = 0;
+            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
+            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
+            self::assertContains('i=42;s=hi', $output);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testInstanceMethodGenericParamReceiverSpecializes(): void
+    {
+        // Phase 2 Stage A2: receiver is a parameter with a typed declaration.
+        // `function go(Util $u) { $u->identity::<int>(7); }` resolves $u to Util
+        // via the parameter type, no flow analysis needed.
+        $dir = sys_get_temp_dir() . '/xphp-inst-param-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Util.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstParam;
+        class Util {
+            public function identity<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($dir . '/Caller.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstParam;
+        class Caller {
+            public function viaParam(Util $u): int
+            {
+                return $u->identity::<int>(7);
+            }
+            public function viaNullableParam(?Util $u): ?int
+            {
+                return $u?->identity::<int>(11);
+            }
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $caller = file_get_contents($dir . '/dist/Caller.php');
+            self::assertIsString($caller);
+            self::assertMatchesRegularExpression(
+                '/\$u->identity_T_[0-9a-f]+\(7\)/',
+                $caller,
+                'parameter receiver: $u resolved via param type',
+            );
+            self::assertMatchesRegularExpression(
+                '/\$u\?->identity_T_[0-9a-f]+\(11\)/',
+                $caller,
+                'nullable parameter receiver: nullable wrapper stripped before type lookup',
+            );
+
+            $util = file_get_contents($dir . '/dist/Util.php');
+            self::assertIsString($util);
+            self::assertMatchesRegularExpression('/public function identity_T_[0-9a-f]+\(int \$x\): int/', $util);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testInstanceMethodGenericLocalVariableReceiverSpecializes(): void
+    {
+        // Phase 2 Stage B: local flow typing. `$u = new Util(); $u->m::<T>(...)`
+        // -- the visitor records `$u`'s type from the assignment so the later
+        // method call can specialize. Lexical last-write wins; we don't model
+        // branches or method-return-typed reassignments.
+        $dir = sys_get_temp_dir() . '/xphp-inst-local-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Util.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstLocal;
+        class Util {
+            public function identity<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstLocal;
+
+        $u = new Util();
+        $i = $u->identity::<int>(99);
+        $s = $u->identity::<string>('world');
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$u->identity_T_[0-9a-f]+\(99\)/',
+                $use,
+                'local var: $u flow-typed from `new Util()`',
+            );
+            self::assertMatchesRegularExpression(
+                "/\\\$u->identity_T_[0-9a-f]+\\('world'\\)/",
+                $use,
+            );
+
+            // Runtime sanity check.
+            $runScript = $dir . '/run.php';
+            file_put_contents($runScript, <<<PHP
+            <?php
+            declare(strict_types=1);
+            require '{$dir}/dist/Util.php';
+            require '{$dir}/dist/Use.php';
+            echo "i={\$i};s={\$s}";
+            PHP);
+            $output = [];
+            $exit = 0;
+            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
+            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
+            self::assertContains('i=99;s=world', $output);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testInstanceMethodGenericPropertyReceiverSpecializes(): void
+    {
+        // Bonus: `$this->prop->method::<T>(...)` where prop is a typed property.
+        $dir = sys_get_temp_dir() . '/xphp-inst-prop-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Util.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstProp;
+        class Util {
+            public function identity<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($dir . '/Owner.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InstProp;
+        class Owner {
+            public Util $util;
+            public function __construct()
+            {
+                $this->util = new Util();
+            }
+            public function go(): int
+            {
+                return $this->util->identity::<int>(123);
+            }
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $owner = file_get_contents($dir . '/dist/Owner.php');
+            self::assertIsString($owner);
+            self::assertMatchesRegularExpression(
+                '/\$this->util->identity_T_[0-9a-f]+\(123\)/',
+                $owner,
+                'property receiver: $this->util resolved via property type declaration',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testReceiverTypeAnalysisDoesNotLeakAcrossClosureScopes(): void
+    {
+        // Regression for the review of b88539c (Issue B): receiver-type analysis
+        // shared `$currentScopeLocalTypes` across closure boundaries, so an inner
+        // `$x = new Bar()` overwrote the outer scope's `$x = new Foo()` slot.
+        // The outer call after the closure returned then picked Bar's mangled
+        // method (often a method that didn't exist on Foo) and Foo never got
+        // its specialization generated.
+        //
+        // Fix: snapshot/restore $currentScopeParamTypes + $currentScopeLocalTypes
+        // on Closure (and ArrowFunction) enter/leave the same way Function_ and
+        // ClassMethod already did. Closure body gets a fresh scope; outer scope
+        // is restored on leave.
+        $dir = sys_get_temp_dir() . '/xphp-leak-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ClosureLeak;
+        class Foo {
+            public function fooId<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($dir . '/Bar.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ClosureLeak;
+        class Bar {
+            public function barId<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ClosureLeak;
+
+        $x = new Foo();
+        $cb = function (): void {
+            $x = new Bar();
+            $inner = $x->barId::<int>(11);
+        };
+        $cb();
+        $outer = $x->fooId::<int>(22);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+
+            // Foo must receive its `fooId_T_<hash>` specialization, NOT silently
+            // get nothing (which was the original failure mode).
+            $foo = file_get_contents($dir . '/dist/Foo.php');
+            self::assertIsString($foo);
+            self::assertMatchesRegularExpression(
+                '/public function fooId_T_[0-9a-f]+\(int \$x\): int/',
+                $foo,
+                'Foo must receive its specialized method -- the outer-scope receiver',
+            );
+
+            // Bar still gets its inner-scope specialization.
+            $bar = file_get_contents($dir . '/dist/Bar.php');
+            self::assertIsString($bar);
+            self::assertMatchesRegularExpression(
+                '/public function barId_T_[0-9a-f]+\(int \$x\): int/',
+                $bar,
+            );
+
+            // Call sites: inner uses Bar's mangled name, outer uses Foo's.
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->barId_T_[0-9a-f]+\(11\)/',
+                $use,
+                'inner closure call uses Bar barId mangled name',
+            );
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(22\)/',
+                $use,
+                'outer call uses Foo fooId mangled name -- proves the scope was restored',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testReceiverTypeAnalysisDoesNotLeakAcrossArrowFunction(): void
+    {
+        // Arrow functions can't reassign outer variables in PHP semantics (a
+        // single-expression body has nowhere to assign), but the snapshot /
+        // restore on `ArrowFunction` enter/leave is symmetric with Closure
+        // for invariant safety. This test pins the arrow-function shape so a
+        // future refactor that loses the symmetry can't quietly regress.
+        $dir = sys_get_temp_dir() . '/xphp-arrow-leak-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ArrowLeak;
+        class Foo {
+            public function fooId<T>(T $x): T { return $x; }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ArrowLeak;
+
+        $x = new Foo();
+        // Arrow function with its own typed parameter `$x`. After the arrow
+        // body finishes evaluating, the outer `$x` must still be Foo.
+        $double = fn(int $x): int => $x * 2;
+        $r = $double(21);
+        $outer = $x->fooId::<int>(7);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(7\)/',
+                $use,
+                'outer Foo call survives the arrow function body',
+            );
+
+            $foo = file_get_contents($dir . '/dist/Foo.php');
+            self::assertIsString($foo);
+            self::assertMatchesRegularExpression(
+                '/public function fooId_T_[0-9a-f]+\(int \$x\): int/',
+                $foo,
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingReassignmentInvalidatesPostBranchSpecialization(): void
+    {
+        // Bug fix: `$x = new Foo(); if (…) { $x = new Bar(); } $x->m::<T>()`
+        // used to specialize against Bar (the last lexical write) regardless
+        // of whether the branch fired. The conservative fix invalidates `$x`
+        // on the branch's exit -- the post-branch call site no longer
+        // specializes, and PHP throws "undefined method" at runtime instead
+        // of silently calling the wrong specialization.
+        $dir = sys_get_temp_dir() . '/xphp-br-post-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrPost;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Bar.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrPost;
+        class Bar { public function barId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrPost;
+
+        $x = new Foo();
+        if (mt_rand(0, 1)) {
+            $x = new Bar();
+        }
+        $r = $x->fooId::<int>(7);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            // Post-branch call must NOT be specialized -- the receiver type is
+            // ambiguous after the conditional reassignment.
+            self::assertStringNotContainsString(
+                'fooId_T_',
+                $use,
+                'post-branch call must not specialize when receiver was conditionally reassigned',
+            );
+            // The bare unmangled name should survive into the cleaned output.
+            self::assertStringContainsString('$x->fooId(7)', $use);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingIntraBranchSpecializationStillWorks(): void
+    {
+        // Conservative branching analysis must NOT lose the intra-branch
+        // specialization -- within the if-body we know exactly what `$x` is,
+        // so calls there are still resolvable.
+        $dir = sys_get_temp_dir() . '/xphp-br-intra-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrIntra;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrIntra;
+
+        if (mt_rand(0, 1)) {
+            $x = new Foo();
+            $r = $x->fooId::<int>(1);
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(1\)/',
+                $use,
+                'intra-branch call site must specialize -- the branch knows the type',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingElseBranchSeesPreBranchState(): void
+    {
+        // Bug fix: with the sibling-branch reset, the else-body now sees the
+        // pre-if state of every variable, NOT the if-body's mutations. So
+        // `$y = Foo; if (…) { $y = Bar; } else { $y->fooId::<T>(); }` specializes
+        // the else call against Foo, not against Bar.
+        $dir = sys_get_temp_dir() . '/xphp-br-else-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrElse;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Bar.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrElse;
+        class Bar { }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrElse;
+
+        $y = new Foo();
+        if (mt_rand(0, 1)) {
+            $y = new Bar();
+        } else {
+            $r = $y->fooId::<int>(2);
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$y->fooId_T_[0-9a-f]+\(2\)/',
+                $use,
+                'else branch must see the pre-if state of $y (Foo, not Bar)',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testClosureUseImportPreservesReceiverType(): void
+    {
+        // Bug fix: closures with explicit `use ($x)` now import the type of
+        // `$x` from the parent scope so `$x->m::<T>(...)` inside the closure
+        // body can specialize. Without this, the body's specialized call
+        // site was silently dropped (the visitor's fresh-scope-per-closure
+        // had no knowledge of $x).
+        $dir = sys_get_temp_dir() . '/xphp-imp-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\UseImport;
+        class Foo { public function id<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\UseImport;
+
+        $x = new Foo();
+        $cb = function () use ($x): void {
+            $r = $x->id::<int>(11);
+        };
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->id_T_[0-9a-f]+\(11\)/',
+                $use,
+                'closure with `use ($x)` must specialize $x->id::<int> via the imported type',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testArrowFunctionImplicitCapturePreservesReceiverType(): void
+    {
+        // Bug fix: arrow functions automatically capture every outer
+        // variable. The receiver-type analysis must now copy parent-scope
+        // params + locals into the arrow function's scope so the body's
+        // call sites can specialize.
+        $dir = sys_get_temp_dir() . '/xphp-arrow-imp-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ArrowImp;
+        class Foo { public function id<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ArrowImp;
+
+        $x = new Foo();
+        $cb = fn() => $x->id::<int>(22);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->id_T_[0-9a-f]+\(22\)/',
+                $use,
+                'arrow function must inherit outer $x type via implicit capture',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    private function compileFrom(string $dir): void
+    {
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($dir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $dir, $dir . '/dist', $dir . '/.xphp-cache');
+    }
+
     private function compile(): void
     {
         $compiler = $this->buildCompiler();
