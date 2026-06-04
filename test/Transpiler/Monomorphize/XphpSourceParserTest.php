@@ -297,6 +297,28 @@ PHP;
         $parser->parse($source);    // must not throw
     }
 
+    public function testAnonymousClassWithAngleBracketsIsNotRecognizedAsTemplate(): void
+    {
+        // RFC bound-erased generic types forbids type parameters on anonymous
+        // classes (`new class<T> { ... }` is "unrecoverably ambiguous" per the
+        // RFC text). xphp's T_CLASS branch already requires a T_STRING name
+        // after the keyword, so `new class<T>` never reaches the template
+        // recognizer. This test locks the alignment-by-shape so a future
+        // refactor of the T_CLASS branch can't quietly start accepting
+        // anonymous-class type parameters.
+        $source = <<<'PHP'
+<?php
+$x = new class<T> { public int $item = 0; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        // Contract: the scanner does NOT strip the `<T>` clause -- it must
+        // survive into the cleaned source so any downstream tooling sees the
+        // form as invalid PHP rather than xphp silently specializing it.
+        $stripped = $parser->strip($source);
+        self::assertStringContainsString('class<T>', $stripped, 'anon-class `<T>` must be left un-stripped');
+    }
+
     public function testForwardReferenceToEarlierTypeParamAsBoundIsAllowed(): void
     {
         // `class C<T, U : T>` is NOT a self-reference -- U's bound references
