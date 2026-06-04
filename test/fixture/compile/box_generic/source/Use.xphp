@@ -8,10 +8,10 @@ use App\BoxGeneric\Containers\Box;
 use App\BoxGeneric\Models\Metal;
 use App\BoxGeneric\Models\Plastic;
 
-$plasticBox = new Box<Plastic>();
+$plasticBox = new Box::<Plastic>();
 $plasticBox->set(new Plastic('red'));
 
-$metalBox = new Box<Metal>();
+$metalBox = new Box::<Metal>();
 $metalBox->set(new Metal(7));
 
-$secondPlasticBox = new Box<Plastic>();
+$secondPlasticBox = new Box::<Plastic>();

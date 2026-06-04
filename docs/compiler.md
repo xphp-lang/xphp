@@ -174,7 +174,7 @@ below.
 
 ## Phase 3 -- Method- and function-scope specialization
 
-Method-scoped generics (`Cls::method<T>(...)`) and free generic
+Method-scoped generics (`Cls::method::<T>(...)`) and free generic
 functions (`function f<T>(...)`) are handled by a separate pass
 before the class-level fixed-point loop runs. The reason is that
 their specialization is **call-site driven**: each unique arg list
@@ -198,8 +198,8 @@ runs on the full `astPerFile` map and:
 4. Strips the original template `ClassMethod` / `Function_`.
 5. Rewrites each call site's identifier to the mangled name.
 
-**MVP scope:** static calls only (`Cls::method<int>(...)`) -- instance
-calls `$obj->method<int>(...)` are deferred (the compiler can't pick
+**MVP scope:** static calls only (`Cls::method::<int>(...)`) -- instance
+calls `$obj->method::<int>(...)` are deferred (the compiler can't pick
 the receiver class without proper type inference). Method-scoped
 generics are also restricted to methods on non-generic enclosing
 classes; combining method-level and class-level type-params would
@@ -261,7 +261,7 @@ Two transformations happen during rewrite, both implemented in
 1. **Generic Name nodes become FullyQualified references.** Every
    Name node carrying `ATTR_GENERIC_ARGS` (with all args fully
    concrete) is replaced with a `FullyQualified` Name pointing at
-   the Registry's generated FQN. This catches `new Box<Plastic>(...)`,
+   the Registry's generated FQN. This catches `new Box::<Plastic>(...)`,
    `Box<Plastic> $b`, `function f(): Box<Plastic>`, and similar --
    every position where a generic instantiation can appear.
 2. **Generic ClassLike definitions become empty marker interfaces.**
@@ -292,13 +292,13 @@ the final step.
 Bound checks happen inside the Registry when an instantiation is
 recorded. The validation is integrated into the recording flow so
 violations fire at the source-level instantiation (e.g.
-`new Box<int>()`), not later when the obfuscated `T_<hash>` name
+`new Box::<int>()`), not later when the obfuscated `T_<hash>` name
 shows up.
 
 ```mermaid
 sequenceDiagram
     participant SRC as Source line
-    Note right of SRC: new Box<int>(...)
+    Note right of SRC: new Box::<int>(...)
     participant XSP as XphpSourceParser
     participant RC as RegistryCollector
     participant R as Registry

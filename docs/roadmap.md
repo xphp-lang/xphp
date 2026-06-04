@@ -31,6 +31,7 @@ timeline
                 : XPHP_HASH_LENGTH configurable (16..64)
         Developer experience
                 : PSR-4 fixtures
+                : RFC-aligned call-site syntax (`Name::<...>` turbofish per php-rfc/bound_erased_generic_types)
     section Next
         Type system depth
                 : default type parameters

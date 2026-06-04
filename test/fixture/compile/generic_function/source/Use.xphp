@@ -4,5 +4,5 @@ declare(strict_types=1);
 
 namespace App\GenericFunction;
 
-$asInt = identity<int>(42);
-$asString = identity<string>('world');
+$asInt = identity::<int>(42);
+$asString = identity::<string>('world');

@@ -71,7 +71,7 @@ final class BoundedGenericIntegrationTest extends TestCase
         file_put_contents($useFile, <<<'PHP'
         <?php
         namespace App;
-        $x = new Box<int>();
+        $x = new Box::<int>();
         PHP);
 
         $compiler = $this->buildCompiler();
@@ -103,7 +103,7 @@ final class BoundedGenericIntegrationTest extends TestCase
         namespace App;
         // Unknown\Thing isn't in any source file and isn't a built-in PHP type,
         // so the hierarchy can't prove it satisfies \Stringable.
-        $x = new Box<Unknown\Thing>();
+        $x = new Box::<Unknown\Thing>();
         PHP);
 
         $compiler = $this->buildCompiler();

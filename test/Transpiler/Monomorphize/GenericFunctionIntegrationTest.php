@@ -116,7 +116,7 @@ final class GenericFunctionIntegrationTest extends TestCase
         file_put_contents($usePath, <<<'PHP'
         <?php
         namespace App;
-        $out = describe<int>(42);
+        $out = describe::<int>(42);
         PHP);
 
         $compiler = $this->buildCompiler();

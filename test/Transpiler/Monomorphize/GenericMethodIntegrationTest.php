@@ -137,7 +137,7 @@ final class GenericMethodIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         namespace App;
-        $out = Util::describe<int>(42);
+        $out = Util::describe::<int>(42);
         PHP);
 
         $compiler = $this->buildCompiler();
@@ -185,7 +185,7 @@ final class GenericMethodIntegrationTest extends TestCase
         declare(strict_types=1);
         namespace App;
         $asInt = Util::
-            identity<int>(42);
+            identity::<int>(42);
         PHP);
 
         $compiler = $this->buildCompiler();

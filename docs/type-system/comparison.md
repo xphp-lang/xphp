@@ -38,19 +38,21 @@ These are obvious gaps with clear value.
 
 ### 1. Variance annotations
 
-TypeScript (`in` / `out`), Kotlin (`in` / `out`), Rust (implicit via lifetimes
-and `PhantomData`).
+PHP RFC [bound-erased generic types](https://wiki.php.net/rfc/bound_erased_generic_types)
+proposes prefix markers `+T` (covariant) / `-T` (contravariant). TypeScript /
+Kotlin spell the same idea as `in` / `out`; Rust handles it implicitly via
+lifetimes and `PhantomData`.
 
 ```php
 // covariant
-class Producer<out T> {
+class Producer<+T> {
     public function get(): T { /*... */ }
-}   
+}
 
 // contravariant
-class Consumer<in T>  {
+class Consumer<-T>  {
     public function set(T $x) { /* ... */ }
-}  
+}
 ```
 
 Currently, every `Box<Banana>` and `Box<Fruit>` is unrelated even when
@@ -58,7 +60,7 @@ Currently, every `Box<Banana>` and `Box<Fruit>` is unrelated even when
 
 With marker interfaces the only commonality is the erased `Box`.
 
-Adding `out T` would let the compiler emit
+Adding `+T` would let the compiler emit
 `Box_<Banana> implements Box_<Fruit>` when `Banana <: Fruit` -- a real subtype
 relationship at the specialized FQN level.
 
@@ -76,7 +78,7 @@ class Cache<K = string, V = mixed> { /* ... */ }
 $default = new Cache();
 
 /* @var Cache<string, mixed> $userCache */
-$userCache = new Cache<int, User>();
+$userCache = new Cache::<int, User>();
 ```
 
 Trivial to add: the scanner already parses param entries; just allow `= TypeRef`
@@ -88,9 +90,11 @@ defaults.
 - TypeScript: `T extends A & B`
 - Kotlin: `where T : A, T : B`
 - Rust: `T: A + B`
+- PHP RFC: any valid type expression -- unions (`A | B`), intersections
+  (`A & B`), or DNF -- as the bound
 
 ```php
-class Sortable<T: \Stringable + \Countable> { /* ... */ }
+class Sortable<T: \Stringable & \Countable> { /* ... */ }
 ```
 
 Bound validation (`Registry::checkBounds`) already loops per param at both the
@@ -99,8 +103,8 @@ class-instantiation and method-call sites; trivially extends to loop per
 
 ### 4. Instance-method generic calls
 
-Currently: only `Util::method<T>(...)` (static call on a non-generic enclosing
-class) is supported. `$obj->method<T>(...)` requires knowing the static type of
+Currently: only `Util::method::<T>(...)` (static call on a non-generic enclosing
+class) is supported. `$obj->method::<T>(...)` requires knowing the static type of
 `$obj` to pick the receiver class. With strict typing on parameters and
 properties, the static type is usually known at the call site; the unsolved part
 is the dispatch table when `$obj` is a union / intersection / interface.

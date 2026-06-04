@@ -129,7 +129,7 @@ class Collection<T> {
 // <source>/main.xphp
 namespace App;
 
-$users = new Collection<User>(
+$users = new Collection::<User>(
     new User('Alice'),
     new User('Bob')
 );

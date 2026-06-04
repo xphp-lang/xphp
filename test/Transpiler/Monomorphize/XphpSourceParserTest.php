@@ -184,7 +184,7 @@ PHP;
 <?php
 namespace App;
 
-$x = new Box<Plastic>();
+$x = new Box::<Plastic>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -200,7 +200,7 @@ namespace App;
 
 use App\Models\Plastic;
 
-$x = new Box<Plastic>();
+$x = new Box::<Plastic>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -211,7 +211,7 @@ PHP;
     {
         $source = <<<'PHP'
 <?php
-$x = new Map<string, User>();
+$x = new Map::<string, User>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Map');
         self::assertCount(2, $args);
@@ -230,7 +230,7 @@ use App\Containers\Box;
 use App\Containers\Lst;
 use App\Models\Plastic;
 
-$x = new Box<Lst<Plastic>>();
+$x = new Box::<Lst<Plastic>>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -305,7 +305,7 @@ namespace App;
 use App\Models;
 use App\Containers\Box;
 
-$x = new Box<Models\Plastic>();
+$x = new Box::<Models\Plastic>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -325,7 +325,7 @@ namespace App;
 
 use Vendor\Lib;
 
-$x = new Box<Lib\Container>();
+$x = new Box::<Lib\Container>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -344,7 +344,7 @@ namespace App;
 use App\Containers;
 use App\Models\Plastic;
 
-$x = new Containers\Box<Plastic>();
+$x = new Containers\Box::<Plastic>();
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $ast = $parser->parse($source);
@@ -521,7 +521,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-$y = Foo::method() + (new Box<Plastic>())->x;
+$y = Foo::method() + (new Box::<Plastic>())->x;
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $ast = $parser->parse($source);
@@ -583,7 +583,7 @@ PHP;
 <?php
 namespace App\Containers;
 
-$x = new Box<\Vendor\Foreign>();
+$x = new Box::<\Vendor\Foreign>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -602,7 +602,7 @@ namespace App;
 
 use App\Models\Plastic;
 
-$x = new \App\Containers\Box<Plastic>();
+$x = new \App\Containers\Box::<Plastic>();
 PHP;
         $args = self::parseAndGetArgs($source, 'App\\Containers\\Box');
         self::assertCount(1, $args);
@@ -618,7 +618,7 @@ PHP;
 <?php
 namespace App;
 
-$x = new Box<\Vendor\Lst<\Vendor\Plastic>>();
+$x = new Box::<\Vendor\Lst<\Vendor\Plastic>>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -647,7 +647,7 @@ PHP;
 <?php
 namespace App;
 
-$x = new Box<namespace\Plastic>();
+$x = new Box::<namespace\Plastic>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertNotEmpty(
@@ -673,7 +673,7 @@ namespace App;
 
 use Vendor\Plastic as Material;
 
-$x = new Box<Material>();
+$x = new Box::<Material>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
@@ -1069,6 +1069,234 @@ PHP;
 
         self::assertIsArray($ast);
         self::assertInstanceOf(ByteOffsetMap::class, $byteOffsetMap);
+    }
+
+    // ===================================================================
+    // RFC bound_erased_generic_types: `::<…>` turbofish at call/`new` sites,
+    // bare `<…>` at type-hint sites only.
+    // ===================================================================
+
+    public function testTurbofishOnFreeFunctionCallIsRecognized(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+$x = identity::<int>(42);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        // Cleaned source must drop both `::` and `<int>` so PHP sees `identity(42)`.
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<', $stripped);
+        self::assertStringNotContainsString('<int>', $stripped);
+        self::assertStringContainsString('identity', $stripped);
+
+        // And the resolver attaches the type-args to the FuncCall node.
+        $ast = $parser->parse($source);
+        $funcCall = self::findFirstNodeOfType($ast, Node\Expr\FuncCall::class);
+        self::assertNotNull($funcCall);
+        $args = $funcCall->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertCount(1, $args);
+        self::assertSame('int', $args[0]->name);
+        self::assertTrue($args[0]->isScalar);
+    }
+
+    public function testTurbofishOnStaticMethodCallIsRecognized(): void
+    {
+        $source = <<<'PHP'
+<?php
+$x = Util::identity::<int>(42);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<', $stripped);
+        self::assertStringNotContainsString('<int>', $stripped);
+        self::assertStringContainsString('Util::identity', $stripped);
+
+        $ast = $parser->parse($source);
+        $call = self::findFirstNodeOfType($ast, Node\Expr\StaticCall::class);
+        self::assertNotNull($call);
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertCount(1, $args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testTurbofishOnInstanceMethodCallStripsButHasNoResolverYet(): void
+    {
+        // Instance-method generic specialization is on the roadmap but not yet
+        // wired (no MethodCall branch in the resolver). The scanner still has to
+        // strip the `::<…>` so the cleaned source is plain PHP -- otherwise the
+        // file would refuse to parse at all.
+        $source = <<<'PHP'
+<?php
+$result = $obj->map::<string>($fn);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<', $stripped);
+        self::assertStringNotContainsString('<string>', $stripped);
+        self::assertStringContainsString('$obj->map', $stripped);
+
+        // Sanity: the cleaned source actually parses as PHP.
+        $ast = $parser->parse($source);
+        $call = self::findFirstNodeOfType($ast, Node\Expr\MethodCall::class);
+        self::assertNotNull($call);
+    }
+
+    public function testTurbofishOnNullsafeInstanceMethodCallIsStripped(): void
+    {
+        $source = <<<'PHP'
+<?php
+$result = $obj?->map::<string>($fn);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<', $stripped);
+        self::assertStringNotContainsString('<string>', $stripped);
+        self::assertStringContainsString('$obj?->map', $stripped);
+    }
+
+    public function testBareNewCallSiteIsRejectedAndLeftUnstripped(): void
+    {
+        // Bare `new Box<Plastic>()` at expression context is not RFC-compliant;
+        // the scanner must NOT strip the `<…>` so downstream PHP surfaces the
+        // syntax error rather than xphp silently specializing the call.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+$x = new Box<Plastic>();
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringContainsString('<Plastic>', $stripped, 'bare `new Name<…>()` must be left un-stripped');
+    }
+
+    public function testBareFreeFunctionCallIsRejectedAndLeftUnstripped(): void
+    {
+        $source = <<<'PHP'
+<?php
+$x = identity<int>(42);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringContainsString('<int>', $stripped, 'bare `name<…>()` free-function call must be left un-stripped');
+    }
+
+    public function testBareStaticMethodCallIsRejectedAndLeftUnstripped(): void
+    {
+        $source = <<<'PHP'
+<?php
+$x = Util::identity<int>(42);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringContainsString('<int>', $stripped, 'bare `Recv::method<…>()` static call must be left un-stripped');
+    }
+
+    public function testWhitespaceBetweenDoubleColonAndAngleDefeatsTurbofish(): void
+    {
+        // The RFC turbofish is whitespace-sensitive: `Foo:: <T>` is `Foo::`
+        // (an incomplete static reference) followed by `<T>` (comparison) --
+        // not a turbofish. The scanner enforces this by requiring the `<`
+        // token's byte offset to sit at `::pos + 2` (no gap).
+        $source = <<<'PHP'
+<?php
+$x = identity:: <int>(42);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        self::assertStringContainsString('<int>', $stripped, 'whitespace between `::` and `<` must defeat turbofish recognition');
+    }
+
+    public function testTypeHintPositionAcceptsFullyQualifiedOuterName(): void
+    {
+        // Locks the ltrim('\\') on the bare-`<…>` (type-hint) branch: when the
+        // outer Name is fully qualified (`\App\Containers\Box`), the marker
+        // must be keyed by the trimmed form so the resolver -- which sees the
+        // AST Name's `toString()` (no leading backslash) -- can match.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use App\Models\Plastic;
+
+class Holder {
+    public \App\Containers\Box<Plastic> $b;
+}
+PHP;
+        $args = self::parseAndGetArgs($source, 'App\\Containers\\Box');
+        self::assertCount(1, $args);
+        self::assertSame('App\\Models\\Plastic', $args[0]->name);
+    }
+
+    public function testTypeHintPositionStillAcceptsBareGenericArgs(): void
+    {
+        // Regression: type-hint sites (property type, return type, params,
+        // `extends` / `implements`) keep bare `<…>`. The trailing-`(`
+        // heuristic that rejects call-site bare-`<…>` must not misfire here.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Holder {
+    public Box<Plastic> $b;
+    public function get(): Box<Plastic> { return $this->b; }
+    public function set(Box<Plastic> $b): void { $this->b = $b; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+
+        // All three `<Plastic>` clauses (property, return, param) are at
+        // type-hint sites and must be stripped.
+        self::assertStringNotContainsString('<Plastic>', $stripped);
+        // And neither original `Box` token should have leaked into a turbofish form.
+        self::assertStringNotContainsString('::<', $stripped);
+    }
+
+    /**
+     * @template TNode of Node
+     * @param array<int, mixed> $ast
+     * @param class-string<TNode> $kind
+     * @return TNode|null
+     */
+    private static function findFirstNodeOfType(array $ast, string $kind): ?Node
+    {
+        $found = null;
+        $walker = function ($nodes) use (&$walker, &$found, $kind): void {
+            foreach ($nodes as $node) {
+                if ($found !== null) {
+                    return;
+                }
+                if ($node instanceof $kind) {
+                    $found = $node;
+                    return;
+                }
+                if (is_object($node) && method_exists($node, 'getSubNodeNames')) {
+                    foreach ($node->getSubNodeNames() as $name) {
+                        $value = $node->$name;
+                        if (is_array($value)) {
+                            $walker($value);
+                        } elseif (is_object($value)) {
+                            $walker([$value]);
+                        }
+                    }
+                }
+            }
+        };
+        $walker($ast);
+        return $found;
     }
 
     // ===================================================================

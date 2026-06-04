@@ -7,5 +7,5 @@ namespace App\NestedTypehint;
 use App\NestedTypehint\Containers\Wrapper;
 use App\NestedTypehint\Models\Plastic;
 
-$wrapper = new Wrapper<Plastic>();
+$wrapper = new Wrapper::<Plastic>();
 $wrapper->setBoxed(new Plastic('blue'));

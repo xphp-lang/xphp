@@ -39,9 +39,15 @@ use RuntimeException;
  * introduces or removes a newline, so line numbers — which is how markers are matched to AST
  * nodes — stay stable.
  *
+ * Call-site syntax follows PHP RFC bound_erased_generic_types: `Name::<Args>(...)`
+ * turbofish at every expression-context call (`new`, free function, static method,
+ * instance method). Bare `Name<Args>(...)` at a call site is rejected so the source
+ * fails to compile rather than silently specializing into a form the future PHP
+ * runtime would refuse. Declaration sites (`class Box<T>`) and type-hint positions
+ * (`Box<T> $b`, `: Box<T>`, `extends Box<T>`) stay bare -- the RFC accepts both.
+ *
  * MVP limitations:
  *  - Generic syntax inside strings/comments is correctly ignored (tokenizer handles it).
- *  - Generic syntax with constraints (`T: SomeInterface`) is not supported.
  *  - `Name<Args>[]` (array of a generic) is not supported — generics-after-array-sugar would
  *    need extra wiring; users get a native PHP parse error today.
  */
@@ -232,31 +238,75 @@ final class XphpSourceParser
             if (self::isNameToken($tok)) {
                 $nameText = $tok->text;
                 $nameLine = $tok->line;
-                // For member-access call sites (`Foo::method<…>`, `$x->method<…>`,
-                // `$x?->method<…>`), walk back past the operator to the receiver and
+                // For member-access call sites (`Foo::method::<…>`, `$x->method::<…>`,
+                // `$x?->method::<…>`), walk back past the operator to the receiver and
                 // record its line as the marker's anchor. nikic sets a MethodCall /
                 // StaticCall's getStartLine() to the leftmost token in the chain — so
                 // matching against just the identifier's line breaks the moment the
-                // operator+name are split across lines, e.g. `Foo::\n    method<int>`.
+                // operator+name are split across lines, e.g. `Foo::\n    method::<int>`.
                 // The resolver matches if startLine ∈ [anchorLine, line].
                 $anchorLine = self::memberAccessReceiverLine($tokens, $i) ?? $nameLine;
                 $j = self::skipWs($tokens, $i + 1);
+
+                // Turbofish `Name::<…>` -- the RFC-mandated call-site form.
+                // Whitespace-sensitive between `::` and `<`: enforced by requiring the
+                // `<` token's byte position to sit immediately after `::`. Whitespace
+                // between the Name and `::` is fine (PHP allows it for member access).
+                if ($j < $n && $tokens[$j]->id === T_DOUBLE_COLON) {
+                    $dcTok = $tokens[$j];
+                    $afterDc = $j + 1;
+                    if ($afterDc < $n
+                        && $tokens[$afterDc]->text === '<'
+                        && $tokens[$afterDc]->pos === $dcTok->pos + 2
+                    ) {
+                        $parsed = self::parseTypeArgList($tokens, $afterDc);
+                        if ($parsed !== null) {
+                            [$args, $endIdx] = $parsed;
+                            $nameMarkers[] = [
+                                'line' => $nameLine,
+                                'anchorLine' => $anchorLine,
+                                'name' => ltrim($nameText, '\\'),
+                                'args' => $args,
+                            ];
+                            // Strip from `::` start through `>` end so the cleaned
+                            // source reads as a plain `Name(...)` / `Recv::Name(...)`
+                            // / `$obj->Name(...)` call.
+                            $startByte = $dcTok->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
+                    }
+                }
+
+                // Bare `Name<…>` is only valid in type-hint position (param/return/
+                // property types, `extends` / `implements` clauses). In expression
+                // context bare `<` is comparison; call sites must use the `::<…>`
+                // turbofish per RFC. Heuristic: if the `>` is followed by `(`, it's
+                // a call site -- reject so the downstream PHP parser surfaces the
+                // error rather than xphp silently specializing a now-invalid form.
                 if ($j < $n && $tokens[$j]->text === '<') {
                     $parsed = self::parseTypeArgList($tokens, $j);
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;
-                        $nameMarkers[] = [
-                            'line' => $nameLine,
-                            'anchorLine' => $anchorLine,
-                            'name' => ltrim($nameText, '\\'),
-                            'args' => $args,
-                        ];
-                        $startByte = $tokens[$j]->pos;
-                        $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
-                        $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
-                        $i = $endIdx + 1;
-                        continue;
+                        $afterClose = self::skipWs($tokens, $endIdx + 1);
+                        $isCallSite = $afterClose < $n && $tokens[$afterClose]->text === '(';
+                        if (!$isCallSite) {
+                            $nameMarkers[] = [
+                                'line' => $nameLine,
+                                'anchorLine' => $anchorLine,
+                                'name' => ltrim($nameText, '\\'),
+                                'args' => $args,
+                            ];
+                            $startByte = $tokens[$j]->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
                     }
                 }
 

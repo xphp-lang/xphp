@@ -161,18 +161,22 @@ or include the type in the source set.
 list mints one mangled specialization (`NAME_T_<hash>`) appended to the same
 class; call sites rewrite to the mangled name. Specializations are deduped --
 two
-`identity<int>` calls share one method body.
+`identity::<int>` calls share one method body.
+
+Call sites use the [RFC bound-erased generic types](https://wiki.php.net/rfc/bound_erased_generic_types)
+turbofish `::<...>`, which is forward-compatible with the proposed native PHP
+syntax.
 
 ```php
 class Util {
     public static function identity<T>(T $x): T { return $x; }
 }
 
-Util::identity<int>(42);    // -> Util::identity_T_<hash-of-int>(42)
-Util::identity<string>('hi'); // -> Util::identity_T_<hash-of-string>('hi')
+Util::identity::<int>(42);    // -> Util::identity_T_<hash-of-int>(42)
+Util::identity::<string>('hi'); // -> Util::identity_T_<hash-of-string>('hi')
 ```
 
-MVP limits: static-call sites only (`Util::method<…>`); method must be on a
+MVP limits: static-call sites only (`Util::method::<…>`); method must be on a
 non-generic enclosing class. Bound checks on method-level type-params are
 enforced at call time (same `Registry::checkBounds` machinery as class-level
 bounds).
@@ -195,8 +199,8 @@ and every specialization `implements` (or `extends`, for interfaces) it. So
 `true` for any `Box<…>` specialization, no concrete arg list required.
 
 ```php
-$x = new Box<Plastic>();
-$y = new Box<Metal>();
+$x = new Box::<Plastic>();
+$y = new Box::<Metal>();
 $x instanceof App\Containers\Box; // true
 $y instanceof App\Containers\Box; // true
 ```
