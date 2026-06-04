@@ -3,10 +3,25 @@
 ## What it is
 
 `xphp` is a superset of `php` that gives developers real generics,
-powered by [monomorphization](https://en.wikipedia.org/wiki/Monomorphization) at compile time.
+powered by [monomorphization](https://en.wikipedia.org/wiki/Monomorphization) at
+compile time.
 
 In a more inspirational mood, it is a fast lane for the `php` language, a bridge
 between what developers need today and what `php` will support in the future.
+
+> **Heads up**: `xphp` is heavily inspired by
+> [PHP RFC: bound-erased generic types](https://wiki.php.net/rfc/bound_erased_generic_types),
+> and the RFC drives the surface syntax -- turbofish `Name::<...>` at call
+> sites, bare `<...>` at declarations and type-hint positions, `:` for bounds.
+> The **intent** is that any `.xphp` source you write today stays valid against
+> a future PHP runtime.
+>
+> Runtime semantics may diverge. `xphp` monomorphizes each generic
+> instantiation into a distinct, fully-typed class -- the concrete type is
+> baked in and visible to reflection. The RFC erases bounds at runtime
+> instead. Both are honest design choices for different goals, and the gap
+> may widen as the RFC evolves. `xphp` will track the syntax wherever
+> practical and call out any divergence explicitly in the docs.
 
 ## How it works
 
@@ -62,13 +77,17 @@ compiled `php` files.
 
 ## Generics: the start, not the finish line
 
-Adding native generics to `php` -- a [long-awaited php feature](https://wiki.php.net/rfc/generics) --
-is genuinely [hard work](https://thephp.foundation/blog/2024/08/19/state-of-generics-and-collections/).
+Adding native generics to `php` --
+a [long-awaited php feature](https://wiki.php.net/rfc/generics) --
+is
+genuinely [hard work](https://thephp.foundation/blog/2024/08/19/state-of-generics-and-collections/).
 
-The object model that's served the ecosystem for two decades doesn't bend easily.
+The object model that's served the ecosystem for two decades doesn't bend
+easily.
 
 Supporting generics proves that the compile-to-vanilla model handles non-trivial
-type-system additions. The remaining features are on the [roadmap](docs/roadmap.md):
+type-system additions. The remaining features are on
+the [roadmap](docs/roadmap.md):
 type aliases, literal types, mapped and conditional types to name a few.
 
 ## Getting started
@@ -141,17 +160,22 @@ $users = new Collection::<User>(
 vendor/bin/xphp compile <source> <target> <cache>
 ```
 
-| Argument   | Required | Default        | Purpose                                                                              |
-|------------|----------|----------------|--------------------------------------------------------------------------------------|
-| `<source>` | yes      | --             | Directory of `.xphp` files (PSR-4 layout)                                            |
-| `<target>` | no       | `dist`         | Where rewritten `.php` files land -- your user code with generic call sites replaced |
-| `<cache>`  | no       | `.xphp-cache`  | Where specialized classes live                                                       |
+| Argument   | Required | Default       | Purpose                                                                              |
+|------------|----------|---------------|--------------------------------------------------------------------------------------|
+| `<source>` | yes      | --            | Directory of `.xphp` files (PSR-4 layout)                                            |
+| `<target>` | no       | `dist`        | Where rewritten `.php` files land -- your user code with generic call sites replaced |
+| `<cache>`  | no       | `.xphp-cache` | Where specialized classes live                                                       |
 
-p.s. you can `gitignore` files in `<target>` and `<cache>` as they can be generated in your CI/CD pipeline.
+p.s. you can `gitignore` files in `<target>` and `<cache>` as they can be
+generated in your CI/CD pipeline.
 
 #### Sample output
 
-The sample below uses a readable name (`Collection_User`) for clarity. The compiler actually emits hashed FQNs of the form `\XPHP\Generated\App\Collection\T_<hash>` -- see the [generics reference](docs/type-system/generics/index.md) for the real scheme.
+The sample below uses a readable name (`Collection_User`) for clarity. The
+compiler actually emits hashed FQNs of the form
+`\XPHP\Generated\App\Collection\T_<hash>` -- see
+the [generics reference](docs/type-system/generics/index.md) for the real
+scheme.
 
 ```php
 // <cache>/Generated/Collection_User.php
