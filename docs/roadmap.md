@@ -31,7 +31,6 @@ timeline
                 : XPHP_HASH_LENGTH configurable (16..64)
         Developer experience
                 : PSR-4 fixtures
-                : --lint headless CLI for CI (file,line,col error output)
     section Next
         Type system depth
                 : default type parameters

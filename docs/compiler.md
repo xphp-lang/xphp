@@ -1,23 +1,25 @@
 # How the xphp compiler works
 
-Narrative walkthrough of the `core/` pipeline -- what `bin/xphp compile`
+Narrative walkthrough of the compile pipeline -- what `bin/xphp compile`
 does between reading `.xphp` source and writing vanilla `.php` files
 that any stock PHP 8.4 runtime can execute. Each phase is paired with
 a Mermaid diagram so the same information is available both
 visually and in prose.
 
 For the feature inventory ("what does xphp support today?") see
-[generics reference](generics/index.md). For the strategic comparison
-against TypeScript / Kotlin / Rust see [comparison](type-system/comparison.md).
-For the forward-looking inventory see [roadmap](roadmap.md).
+[generics reference](type-system/generics/index.md). For the strategic
+comparison against TypeScript / Kotlin / Rust see
+[comparison](type-system/comparison.md). For the forward-looking inventory
+see [roadmap](roadmap.md).
 
 ---
 
 ## Pipeline overview
 
-`bin/xphp compile <source-dir> <target-dir> <cache-dir>` runs a single
+`bin/xphp compile <source-dir> [target-dir] [cache-dir]` runs a single
 function -- [`Compiler::compile()`](../src/Transpiler/Monomorphize/Compiler.php)
--- that orchestrates five phases. The data flows top-down: source bytes
+-- that orchestrates five phases. Only `<source-dir>` is required; `[target-dir]`
+defaults to `dist` and `[cache-dir]` defaults to `.xphp-cache`. The data flows top-down: source bytes
 turn into AST, the AST populates a Registry and a TypeHierarchy, a
 fixed-point loop expands every concrete instantiation into a specialized
 class file, and finally the rewritten user code lands in the target
@@ -119,8 +121,8 @@ Two parser entry points exist:
   source.
 - `parseTolerantWithMap()` -- recovers from trailing parse errors
   by feeding the stripped source through nikic's error-handler-
-  collecting mode. Used by the LSP path so mid-edit source still
-  yields useful results.
+  collecting mode. Used when callers need partial results from
+  incomplete source.
 
 ---
 
@@ -370,16 +372,14 @@ birthday collisions are impossible at any practical project size.
 
 `ByteOffsetMap` carries the bytes-stripped-and-where info so any
 diagnostic span computed after the strip can be translated back to
-the original `.xphp` source. The map gets serialised through to
-the LSP layer too, so editor squiggles land on the right column
-even though the parsed AST was built from stripped source.
+the original `.xphp` source.
 
 ---
 
 ## Class roster
 
 Every class under
-[`core/src/Transpiler/Monomorphize/`](../src/Transpiler/Monomorphize/),
+[`src/Transpiler/Monomorphize/`](../src/Transpiler/Monomorphize/),
 grouped by role.
 
 ```mermaid
