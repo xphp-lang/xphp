@@ -2,6 +2,9 @@
 
 ## Overview
 
+Syntax shape tracks [PHP RFC: bound-erased generic types](https://wiki.php.net/rfc/bound_erased_generic_types).
+All "per RFC" mentions in the timeline below resolve there.
+
 ```mermaid
 timeline
     section Shipped

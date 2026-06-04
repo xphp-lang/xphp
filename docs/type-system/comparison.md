@@ -36,10 +36,11 @@ p.s. `n/a` meaning it doesn't fit the language's design.
 
 These are obvious gaps with clear value.
 
-> **Status**: every snippet in this section shows the *intended* RFC-aligned
-> syntax that `xphp` does not yet parse. Until the corresponding implementation
-> lands, the parser rejects these forms with a PHP-side `Syntax error,
-> unexpected '<'`. Tracked in [`../roadmap.md`](../roadmap.md).
+> **Status**: every snippet in this section shows the *intended* syntax from
+> [PHP RFC: bound-erased generic types](https://wiki.php.net/rfc/bound_erased_generic_types)
+> that `xphp` does not yet parse. Until the corresponding implementation lands,
+> the parser rejects these forms with a PHP-side `Syntax error, unexpected '<'`.
+> Tracked in [`../roadmap.md`](../roadmap.md).
 
 ### 1. Variance annotations
 
@@ -95,8 +96,9 @@ defaults.
 - TypeScript: `T extends A & B`
 - Kotlin: `where T : A, T : B`
 - Rust: `T: A + B`
-- PHP RFC: any valid type expression -- unions (`A | B`), intersections
-  (`A & B`), or DNF -- as the bound
+- [PHP RFC](https://wiki.php.net/rfc/bound_erased_generic_types): any valid
+  type expression -- unions (`A | B`), intersections (`A & B`), or DNF -- as
+  the bound
 
 ```php
 class Sortable<T: \Stringable & \Countable> { /* ... */ }
