@@ -141,15 +141,17 @@ $users = new Collection<User>(
 vendor/bin/xphp compile <source> <target> <cache>
 ```
 
-| Argument   | Purpose                                                                              |
-|------------|--------------------------------------------------------------------------------------|
-| `<source>` | Directory of `.xphp` files (PSR-4 layout)                                            |
-| `<target>` | Where rewritten `.php` files land -- your user code with generic call sites replaced |
-| `<cache>`  | Where specialized classes live                                                       |
+| Argument   | Required | Default        | Purpose                                                                              |
+|------------|----------|----------------|--------------------------------------------------------------------------------------|
+| `<source>` | yes      | --             | Directory of `.xphp` files (PSR-4 layout)                                            |
+| `<target>` | no       | `dist`         | Where rewritten `.php` files land -- your user code with generic call sites replaced |
+| `<cache>`  | no       | `.xphp-cache`  | Where specialized classes live                                                       |
 
 p.s. you can `gitignore` files in `<target>` and `<cache>` as they can be generated in your CI/CD pipeline.
 
-#### Sample output 
+#### Sample output
+
+The sample below uses a readable name (`Collection_User`) for clarity. The compiler actually emits hashed FQNs of the form `\XPHP\Generated\App\Collection\T_<hash>` -- see the [generics reference](docs/type-system/generics/index.md) for the real scheme.
 
 ```php
 // <cache>/Generated/Collection_User.php
@@ -157,9 +159,6 @@ namespace XPHP\Generated;
 
 use App\User;
 
-// p.s. in reality it uses a hash in the class name,
-// but developers won't touch that,
-// only php runtime will see the hashed names.
 class Collection_User {
     private array $items;
 
@@ -205,5 +204,5 @@ Meaning every place where generics are declared or used is converted into normal
 
 ## See also
 
-- [Type-system comparison](core/docs/type-system/comparison.md)
-- [Full generics reference](core/docs/type-system/generics/index.md)
+- [Type-system comparison](docs/type-system/comparison.md)
+- [Full generics reference](docs/type-system/generics/index.md)

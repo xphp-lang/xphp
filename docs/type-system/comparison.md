@@ -105,10 +105,8 @@ class) is supported. `$obj->method<T>(...)` requires knowing the static type of
 properties, the static type is usually known at the call site; the unsolved part
 is the dispatch table when `$obj` is a union / intersection / interface.
 
-Tracked in `core/roadmap.md` under "Next". The LSP already substitutes
-type-args at instance call sites for hover / signature help / inlay hints --
-that's display-only inference; the compiler-level lowering for runtime dispatch
-is the gap.
+Tracked in the [roadmap](../roadmap.md) under "Next". The compiler-level
+lowering for runtime dispatch is the gap.
 
 ### 5. Reified type parameters
 

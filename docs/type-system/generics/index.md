@@ -4,7 +4,7 @@ This document covers how `xphp` implements generics: what the compiler emits,
 what's supported today, the naming scheme for generated classes, and the
 trade-offs the monomorphization model accepts.
 
-For the broader project context, see the [README](/README.md).
+For the broader project context, see the [README](../../../README.md).
 
 ---
 
@@ -23,7 +23,7 @@ For comparison, Rust does also apply monomorphization. Kotlin and TypeScript
 don't do that, and there they have no runtime safety.
 
 Variance annotations based on monomorphization become real subtype edges between
-specialized classes -- that's in the [roadmap](../roadmap.md).
+specialized classes -- that's in the [roadmap](../../roadmap.md).
 
 ---
 
@@ -263,5 +263,5 @@ intentional.
 
 ## Type-system comparison
 
-See a [side-by-side comparison](./comparison.md) against TypeScript, Kotlin,
+See a [side-by-side comparison](../comparison.md) against TypeScript, Kotlin,
 and Rust -- including the features `xphp` doesn't have yet.
