@@ -185,7 +185,7 @@ final class XphpSourceParser
                     $methodLine = $tokens[$j]->line;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
-                        $parsed = self::parseTypeParamList($tokens, $k);
+                        $parsed = self::parseTypeParamList($tokens, $k, allowDefaults: false);
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
                             $methodMarkers[] = [
@@ -213,7 +213,7 @@ final class XphpSourceParser
                     $classLine = $tokens[$j]->line;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
-                        $parsed = self::parseTypeParamList($tokens, $k);
+                        $parsed = self::parseTypeParamList($tokens, $k, allowDefaults: true);
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
                             $classMarkers[] = [
@@ -259,33 +259,44 @@ final class XphpSourceParser
                 if ($j < $n && $tokens[$j]->id === T_DOUBLE_COLON) {
                     $dcTok = $tokens[$j];
                     $afterDc = $j + 1;
-                    if ($afterDc < $n
+                    // PHP's tokenizer keeps `<>` as a single T_IS_NOT_EQUAL token
+                    // (the legacy != operator). Immediately after `::`, that's the
+                    // empty-turbofish all-defaults shape `Foo::<>` -- recognized here
+                    // by token-id rather than splitting upstream (splitting unconditionally
+                    // would break legitimate `$x <> $y` comparisons elsewhere).
+                    $isEmptyTurbofish = $afterDc < $n
+                        && $tokens[$afterDc]->id === T_IS_NOT_EQUAL
+                        && $tokens[$afterDc]->pos === $dcTok->pos + 2;
+                    $parsed = null;
+                    if ($isEmptyTurbofish) {
+                        $parsed = [[], $afterDc];
+                    } elseif ($afterDc < $n
                         && $tokens[$afterDc]->text === '<'
                         && $tokens[$afterDc]->pos === $dcTok->pos + 2
                     ) {
                         $parsed = self::parseTypeArgList($tokens, $afterDc);
-                        if ($parsed !== null) {
-                            [$args, $endIdx] = $parsed;
-                            // Instance-method turbofish (`$obj->m::<…>(...)`) markers are
-                            // claimed by the MethodCall / NullsafeMethodCall resolver branch
-                            // alongside StaticCall (item #11). GenericMethodCompiler does
-                            // receiver-type analysis to pick the right method template.
-                            $nameMarkers[] = [
-                                'line' => $nameLine,
-                                'anchorLine' => $anchorLine,
-                                'name' => ltrim($nameText, '\\'),
-                                'args' => $args,
-                            ];
-                            // Strip from `::` start through `>` end so the cleaned
-                            // source reads as a plain `Name(...)` / `Recv::Name(...)`
-                            // / `$obj->Name(...)` call.
-                            $startByte = $dcTok->pos;
-                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
-                            $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
-                            $i = $endIdx + 1;
-                            continue;
-                        }
+                    }
+                    if ($parsed !== null) {
+                        [$args, $endIdx] = $parsed;
+                        // Instance-method turbofish (`$obj->m::<…>(...)`) markers are
+                        // claimed by the MethodCall / NullsafeMethodCall resolver branch
+                        // alongside StaticCall (item #11). GenericMethodCompiler does
+                        // receiver-type analysis to pick the right method template.
+                        $nameMarkers[] = [
+                            'line' => $nameLine,
+                            'anchorLine' => $anchorLine,
+                            'name' => ltrim($nameText, '\\'),
+                            'args' => $args,
+                        ];
+                        // Strip from `::` start through `>` end so the cleaned
+                        // source reads as a plain `Name(...)` / `Recv::Name(...)`
+                        // / `$obj->Name(...)` call.
+                        $startByte = $dcTok->pos;
+                        $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                        $length = $endByte - $startByte;
+                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $i = $endIdx + 1;
+                        continue;
                     }
                 }
 
@@ -367,25 +378,33 @@ final class XphpSourceParser
     }
 
     /**
-     * Parse a class-header type-param list: `< Name(: Bound)? (, Name(: Bound)?)* >`.
+     * Parse a class-header type-param list: `< Name(: Bound)?(= Default)? (, ...)* >`.
      *
      * Unlike `parseTypeArgList` (which is for *instantiation* sites and only handles
      * concrete + nested-generic args), this variant only fires on the class/interface/trait
-     * header — so the `:` after a name is unambiguous and signals a bound.
+     * header (or, when `$allowDefaults` is false, on a method/function header) — so the
+     * `:` after a name unambiguously signals a bound and `=` unambiguously signals a default.
      *
-     * Returns `[entries, endIdx]` where each entry is a `{name: string, bound: ?array}`
-     * record. The bound (when present) is a structured tree:
-     *   - leaf:         `['kind' => 'leaf', 'name' => string, 'isFq' => bool, 'args' => list<TypeRef>]`
-     *   - intersection: `['kind' => 'and',  'operands' => list<bound>]`
-     *   - union:        `['kind' => 'or',   'operands' => list<bound>]`
+     * Returns `[entries, endIdx]` where each entry is a `{name, bound, default}` record:
+     *   - bound (when present) is a structured tree:
+     *       leaf:         `['kind' => 'leaf', 'name' => string, 'isFq' => bool, 'args' => list<TypeRef>]`
+     *       intersection: `['kind' => 'and',  'operands' => list<bound>]`
+     *       union:        `['kind' => 'or',   'operands' => list<bound>]`
+     *   - default (when present) is an unresolved `TypeRef`. The resolver pass
+     *     applies namespace + use-map resolution and marks `isTypeParam: true`
+     *     on references to earlier params in the same list.
      *
-     * Later resolved to a `BoundExpr` tree by the AST traversal step (which has
-     * access to the namespace + use map for class-name resolution).
+     * When `$allowDefaults` is false (method / function headers), `= Default` is
+     * rejected with a clear error pointing at the limitation.
+     *
+     * Defaulted parameters must be trailing (required follows defaulted is rejected
+     * at parse time). A default cannot reference the same param or a later one
+     * (forward references are rejected at parse time).
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: list<array{name: string, bound: ?array}>, 1: int}|null
+     * @return array{0: list<array{name: string, bound: ?array, default: ?TypeRef}>, 1: int}|null
      */
-    private static function parseTypeParamList(array $tokens, int $openIdx): ?array
+    private static function parseTypeParamList(array $tokens, int $openIdx, bool $allowDefaults): ?array
     {
         $n = count($tokens);
         if ($openIdx >= $n || $tokens[$openIdx]->text !== '<') {
@@ -393,6 +412,7 @@ final class XphpSourceParser
         }
 
         $entries = [];
+        $sawDefault = false;
         $i = self::skipWs($tokens, $openIdx + 1);
         while ($i < $n) {
             if (!self::isNameToken($tokens[$i])) {
@@ -412,9 +432,56 @@ final class XphpSourceParser
                 [$bound, $i] = $parsedBound;
             }
 
+            $default = null;
+            $afterBound = self::skipWs($tokens, $i);
+            if ($afterBound < $n && $tokens[$afterBound]->text === '=') {
+                if (!$allowDefaults) {
+                    throw new RuntimeException(sprintf(
+                        'Generic parameter `%s` has a default value, which is not yet '
+                        . 'supported on methods or functions. Move the generic to a '
+                        . 'class-level type parameter, or remove the default.',
+                        $paramName,
+                    ));
+                }
+                $afterEq = self::skipWs($tokens, $afterBound + 1);
+                $parsedDefault = self::parseTypeArg($tokens, $afterEq);
+                if ($parsedDefault === null) {
+                    throw new RuntimeException(sprintf(
+                        'Generic parameter `%s` has an invalid default; only a single '
+                        . 'concrete or generic type is allowed after `=` (no nullable '
+                        . 'or union shapes).',
+                        $paramName,
+                    ));
+                }
+                [$default, $i] = $parsedDefault;
+                // Reject `T = Box | Other` (union) and `T = Box & Other` (intersection)
+                // explicitly so users see the "no nullable or union shapes" message
+                // rather than the surrounding class header silently failing to be
+                // recognized as generic and PHP emitting a downstream syntax error.
+                $afterDefault = self::skipWs($tokens, $i);
+                if ($afterDefault < $n
+                    && ($tokens[$afterDefault]->text === '|' || $tokens[$afterDefault]->text === '&')
+                ) {
+                    throw new RuntimeException(sprintf(
+                        'Generic parameter `%s` has an invalid default; only a single '
+                        . 'concrete or generic type is allowed after `=` (no nullable '
+                        . 'or union shapes).',
+                        $paramName,
+                    ));
+                }
+                $sawDefault = true;
+            } elseif ($sawDefault) {
+                throw new RuntimeException(sprintf(
+                    'Generic parameter `%s` has no default but follows a parameter with '
+                    . 'a default. Required type parameters must precede defaulted ones.',
+                    $paramName,
+                ));
+            }
+
             $entries[] = [
                 'name' => $paramName,
                 'bound' => $bound,
+                'default' => $default,
             ];
 
             $i = self::skipWs($tokens, $i);
@@ -423,6 +490,7 @@ final class XphpSourceParser
             }
             if ($tokens[$i]->text === '>') {
                 self::assertNoTopLevelSelfReference($entries);
+                self::assertDefaultsReferenceOnlyEarlierParams($entries);
                 return [$entries, $i];
             }
             if ($tokens[$i]->text === ',') {
@@ -433,6 +501,78 @@ final class XphpSourceParser
         }
 
         return null;
+    }
+
+    /**
+     * Reject `class Bad<T = T>` (default references self) and `class Bad<T = U, U>`
+     * (default references a later param). A default may reference *strictly earlier*
+     * params in the same list; `class Pair<A, B = A>` is allowed.
+     *
+     * The check runs at parse time against the raw source-level names on the
+     * default's TypeRef tree. A leading-`\\` (e.g. `T = \T` where `\T` is a global
+     * class named T) is allowed because the FQ form unambiguously refers to a
+     * class and not the same-named type-param.
+     *
+     * @param list<array{name: string, bound: ?array, default: ?TypeRef}> $entries
+     */
+    private static function assertDefaultsReferenceOnlyEarlierParams(array $entries): void
+    {
+        $paramNames = array_map(
+            static fn (array $e): string => $e['name'],
+            $entries,
+        );
+        foreach ($entries as $idx => $entry) {
+            if ($entry['default'] === null) {
+                continue;
+            }
+            self::assertDefaultRefsEarlierOnly(
+                $entry['default'],
+                $entry['name'],
+                $paramNames,
+                $idx,
+            );
+        }
+    }
+
+    /**
+     * Recursively walk a default TypeRef tree. For any leaf whose name (after
+     * stripping leading `\\`) matches a param name at index `>= $currentIdx`,
+     * throw with a clear error. A leading-`\\` short-circuits the check (FQ
+     * names refer to classes, not type-params).
+     *
+     * @param list<string> $paramNames
+     */
+    private static function assertDefaultRefsEarlierOnly(
+        TypeRef $ref,
+        string $currentParam,
+        array $paramNames,
+        int $currentIdx,
+    ): void {
+        if (!str_starts_with($ref->name, '\\')) {
+            $refIdx = array_search($ref->name, $paramNames, true);
+            if ($refIdx !== false && $refIdx >= $currentIdx) {
+                $msg = $refIdx === $currentIdx
+                    ? sprintf(
+                        'Generic parameter `%s` cannot reference itself in its default. '
+                        . 'Use `\\%s` to reference a global class named %s, if that was '
+                        . 'intended.',
+                        $currentParam,
+                        $currentParam,
+                        $currentParam,
+                    )
+                    : sprintf(
+                        'Generic parameter `%s` default references `%s`, which is declared '
+                        . 'later in the same parameter list. Defaults may only reference '
+                        . 'strictly earlier parameters.',
+                        $currentParam,
+                        $ref->name,
+                    );
+                throw new RuntimeException($msg);
+            }
+        }
+        foreach ($ref->args as $inner) {
+            self::assertDefaultRefsEarlierOnly($inner, $currentParam, $paramNames, $currentIdx);
+        }
     }
 
     /**
@@ -672,6 +812,13 @@ final class XphpSourceParser
 
         $args = [];
         $i = self::skipWs($tokens, $openIdx + 1);
+        // Empty turbofish: `Foo::<>` -- the all-defaults call-site shape.
+        // Returning an empty args list here lets the registry's padding pick
+        // up every defaulted param. A non-defaulted template surfaces as the
+        // padding error at recordInstantiation time.
+        if ($i < $n && $tokens[$i]->text === '>') {
+            return [$args, $i];
+        }
         while ($i < $n) {
             $argResult = self::parseTypeArg($tokens, $i);
             if ($argResult === null) {
@@ -992,7 +1139,8 @@ final class XphpSourceParser
                         $typeParams = [];
                         foreach ($paramEntries as $entry) {
                             $bound = $this->buildBoundExpr($entry);
-                            $typeParams[] = new TypeParam($entry['name'], $bound);
+                            $default = $this->buildDefault($entry);
+                            $typeParams[] = new TypeParam($entry['name'], $bound, $default);
                         }
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $typeParams);
                         $currentNamespace = $this->ctx->currentNamespace();
@@ -1023,7 +1171,12 @@ final class XphpSourceParser
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $bound = $this->buildBoundExpr($entry);
-                                $typeParams[] = new TypeParam($entry['name'], $bound);
+                                // Method/function entries never carry defaults (parseTypeParamList
+                                // rejects `=` with $allowDefaults=false), so buildDefault is null
+                                // by construction; the explicit call documents the symmetry with
+                                // the ClassLike branch.
+                                $default = $this->buildDefault($entry);
+                                $typeParams[] = new TypeParam($entry['name'], $bound, $default);
                             }
                             // Pop here — the method's own scope is pushed again
                             // below to match the leaveNode pop pattern. This
@@ -1142,6 +1295,23 @@ final class XphpSourceParser
                     return null;
                 }
                 return $this->buildBoundExprNode($entry['bound']);
+            }
+
+            /**
+             * Resolve a parsed entry's default expression. The raw `TypeRef`
+             * carries the source-level name; `resolveTypeRef` rewrites it via
+             * namespace + use-map, marks scalars / type-params, and recurses
+             * into nested args (so `B = Box<A>` becomes
+             * `TypeRef('App\Box', [TypeRef('A', isTypeParam: true)])`).
+             *
+             * @param array{name: string, bound: ?array, default: ?TypeRef} $entry
+             */
+            private function buildDefault(array $entry): ?TypeRef
+            {
+                if ($entry['default'] === null) {
+                    return null;
+                }
+                return $this->resolveTypeRef($entry['default']);
             }
 
             /**

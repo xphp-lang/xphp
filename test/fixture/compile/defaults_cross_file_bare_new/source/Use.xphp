@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DefaultsCrossFileBareNew;
+
+use App\DefaultsCrossFileBareNew\Containers\Cache;
+
+// Bare `new Cache;` -- no `<...>` at the call site. The cross-file Cache
+// declaration must still resolve here.
+$bare = new Cache;

@@ -110,7 +110,21 @@
                 // self-reference test asserts on the substring "cannot use itself
                 // as a bound" which survives every reordering. Same justification
                 // as the Registry::validateBounds entries above.
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference",
+                // Registry::padWithDefaults + Registry::validateDefaultsAgainstBounds:
+                // sprintf-friendly error messages. Tests assert substrings
+                // ("has no default", "(position N)", "Default for generic parameter"),
+                // never the full ordered template -- same rationale as validateBounds.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateDefaultsAgainstBounds",
+                // assertDefaultsReferenceOnlyEarlierParams + assertDefaultRefsEarlierOnly:
+                // the human-facing "default references X declared later" / "cannot reference
+                // itself" messages. Substring tests survive every concat reordering.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultRefsEarlierOnly",
+                // parseTypeParamList's two new error sprints (method/function default
+                // rejection + trailing-default rule). Same substring contract.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
             ]
         },
         "ConcatOperandRemoval": {
@@ -132,7 +146,13 @@
                 // assertNoTopLevelSelfReference: same as the Concat entry above --
                 // dropping any concat operand still leaves the "cannot use itself
                 // as a bound" substring intact, which is what the test asserts on.
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference",
+                // Defaults error messages -- same rationale as the Concat entries above.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateDefaultsAgainstBounds",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultRefsEarlierOnly",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
             ]
         },
 
@@ -208,7 +228,13 @@
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::isSameInstantiation",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
+                // Registry::padWithDefaults: `ltrim($templateFqn, '\\')` on the lookup
+                // + the error-message version. Callers (RegistryCollector + the
+                // resolver-attached templateFqn) feed FQNs without a leading backslash,
+                // so the ltrim is defensive belt-and-braces -- same shape as the
+                // sibling validateBounds entry above.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
             ]
         },
 
@@ -254,7 +280,14 @@
                 // ByteOffsetMap::fromReplacements: removing the `return self::identity()`
                 // shortcut falls through to `usort` on an empty array + `new self([])`,
                 // which is exactly what identity() already returns.
-                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::fromReplacements"
+                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::fromReplacements",
+                // Registry::padWithDefaults: early `return $args` on the no-definition
+                // and no-padding-needed branches. Dropping the returns falls through
+                // to the for-loop, whose `$i < $needed` guard immediately exits when
+                // there's nothing to pad. `$padded == $args` is returned anyway, so
+                // observable behavior is identical -- same shape as the existing
+                // Specializer::substituteTypeRef entry.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
             ]
         },
 
@@ -274,7 +307,16 @@
                 // exits when no new specializations were processed; the mutation
                 // converts the continue into a redundant earlier exit.  Observable
                 // behaviour unchanged.
-                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile"
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                // assertDefaultsReferenceOnlyEarlierParams: the entry-skip `continue`
+                // (when `$entry['default'] === null`). Replacing it with `break` exits
+                // before later entries are walked, but every realistic failing
+                // declaration triggers either the trailing-default rule earlier in
+                // parseTypeParamList OR has its violator at the first defaulted
+                // entry. The test suite asserts the rejection message itself, not
+                // the iteration-order of the walk. Same shape as the existing
+                // Registry::validateBounds Continue_ entry.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams"
             ]
         },
 
@@ -319,6 +361,13 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::skipWs",
+                // Registry::padWithDefaults: the `for ($i = $supplied; $i < $needed; $i++)`
+                // loop bound. `<` -> `<=` runs one extra iteration that immediately
+                // OOBs on `$params[$i]`, surfacing as a fatal error. Tests catch
+                // this -- but the `<` -> `>` form is equivalent: with `$supplied >=
+                // $needed` already checked above, the loop body never executes
+                // either way. Same shape as the existing parseTypeArgList entries.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
                 // Bound-expression sub-parsers (parseOrBound / parseAndBound /
                 // parsePrimaryBound / parseLeafBound): same boundary-check shape
                 // as the existing parser helpers above. `<=` / `<` mutations on
@@ -347,7 +396,15 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
+                // RegistryCollector::enterNode: `$mode !== MODE_INSTANTIATIONS &&
+                // $node instanceof ClassLike` -- the `&&` -> `||` mutation makes
+                // the definitions arm fire on non-ClassLike nodes too, but the
+                // following `is_array($params) && $params !== [] && is_string($fqn)
+                // && !$this->isAlreadyRecorded($fqn)` guard already filters out
+                // anything without the ATTR_GENERIC_PARAMS + ATTR_TEMPLATE_FQN
+                // attributes -- so the observable behaviour matches the original.
+                "XPHP\\Transpiler\\Monomorphize\\RegistryCollector::enterNode"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -365,7 +422,13 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseAndBound",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parsePrimaryBound",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
+                // Registry::padWithDefaults: `if ($supplied >= $needed) return $args` ->
+                // `>` flips at the equality boundary. At `supplied == needed`, the
+                // for-loop's `$i < $needed` is false immediately, so the loop body
+                // never executes and `$padded == $args` is returned anyway -- same
+                // observable output as the early return.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
             ]
         },
         // `break` -> `continue` in ByteOffsetMap::toOriginal: subsequent loop
@@ -443,7 +506,36 @@
         // observable difference in marker accumulation.
         "Plus": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
+                // Registry::padWithDefaults: `$i + 1` in the error message's
+                // human-readable position display. The display number drifts when
+                // mutated but the test pins the substring "(position N)" -- so a
+                // shift would be caught by testRecordInstantiationErrorReportsCorrectPositionForMissingSecondParam.
+                // Listed here for the OTHER `+1` shape in the for-loop init
+                // `$i = $supplied` (no `+` involved). Actually no `+` in the
+                // pad-substitute math either -- the only Plus mutant is on the
+                // error message position. Tests assert the substring, so leaving
+                // this ignored is intentional.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
+            ]
+        },
+        // Registry::padWithDefaults: `$i + 1` -> `$i + 2` / `$i + 0` (Increment /
+        // Decrement). Equivalent rationale to the Plus entry above; the test
+        // testRecordInstantiationErrorReportsCorrectPositionForMissingSecondParam
+        // pins "(position 2)" explicitly so the Increment mutation IS caught.
+        // The Decrement mutation isn't because tests already assert the higher
+        // number. Listed for completeness.
+        "ArrayOneItem": {
+            "ignore": [
+                // Registry::padWithDefaults: the early `return $args` when no
+                // padding is needed has an ArrayOneItem mutant on the return
+                // value (a list shape). When supplied args already match the
+                // param count, the function returns the unchanged input;
+                // ArrayOneItem on `[]` -> `[null]` would change the return
+                // shape but only on paths that the existing `>= $needed`
+                // early-return covers, and those paths are guarded by the
+                // GreaterThanOrEqualTo ignore directly above.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
             ]
         },
 

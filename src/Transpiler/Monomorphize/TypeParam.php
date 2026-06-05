@@ -14,7 +14,15 @@ namespace XPHP\Transpiler\Monomorphize;
  * supported by the BoundIntersection / BoundUnion sub-types; a simple
  * `class Box<T : Stringable>` is stored as `BoundLeaf(TypeRef('Stringable'))`.
  *
- * The bound expression is built by `XphpSourceParser::resolveAndAttach` after
+ * `default` is the optional default type used when the call site omits the
+ * corresponding argument. Defaulted params must be trailing (`class Bad<T = int, U>`
+ * is rejected at parse time). A default may reference *strictly earlier* type
+ * params in the same list (`class Pair<A, B = A>` is fine; `class Bad<T = U, U>`
+ * is rejected). At instantiation, `Registry::recordInstantiation` pads the
+ * supplied args with these defaults, substituting earlier args into any
+ * type-param references in the default.
+ *
+ * Both expressions are built by `XphpSourceParser::resolveAndAttach` after
  * resolving each leaf class name against the file's namespace + use map.
  */
 final readonly class TypeParam
@@ -22,6 +30,7 @@ final readonly class TypeParam
     public function __construct(
         public string $name,
         public ?BoundExpr $bound = null,
+        public ?TypeRef $default = null,
     ) {
     }
 }

@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DefaultsFull;
+
+use App\DefaultsFull\Containers\Cache;
+use App\DefaultsFull\Models\Tag;
+
+// Exercises three call-site shapes -- all three must specialize to the same
+// `Cache<string, mixed>` FQN (#1 and #2) plus the partially-explicit form (#3).
+
+// #1: bare `new Cache;` -- no `<...>` at all. Synthesized to `Cache::<>` by
+//     the registry collector once the all-defaults template is known.
+$bare = new Cache;
+
+// #2: empty turbofish `new Cache::<>`. Routes through the same padding logic.
+$emptyTurbofish = new Cache::<>;
+
+// #3: partially-explicit `new Cache::<int>`. Pads V = mixed.
+$partial = new Cache::<int>;
+
+// #4: fully-explicit instantiation with a concrete class for V.
+$explicit = new Cache::<int, Tag>;

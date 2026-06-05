@@ -72,10 +72,21 @@ final readonly class Compiler
         $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
         $methodCompiler->process($astPerFile);
 
-        // Phase 1b: collect class definitions + instantiations (now including any concrete
-        // references introduced by Phase 1a).
+        // Phase 1b.i: collect class definitions across every source file. Splitting
+        // definitions ahead of instantiations gives bare-`new Foo;` synthesis (added
+        // in 1b.ii) a complete template registry so it can recognize Foo as an
+        // all-defaulted template regardless of the file-walk order.
         foreach ($astPerFile as $filepath => $ast) {
-            $collector->collect($ast, $filepath);
+            $collector->collectDefinitions($ast, $filepath);
+        }
+
+        // Phase 1b.ii: validate defaults-against-bounds at the source level (so a
+        // bad declaration like `class Box<T : Stringable = int>` fails BEFORE any
+        // padded instantiation is recorded), then collect instantiations -- including
+        // bare `new Foo;` shapes for templates whose every param has a default.
+        $registry->validateDefaultsAgainstBounds();
+        foreach ($astPerFile as $filepath => $ast) {
+            $collector->collectInstantiations($ast, $filepath);
         }
 
         // Phase 2: fixed-point specialization loop.

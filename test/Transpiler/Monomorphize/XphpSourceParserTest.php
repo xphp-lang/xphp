@@ -1704,6 +1704,270 @@ PHP;
         self::assertStringNotContainsString('::<', $stripped);
     }
 
+    public function testDefaultTypeParamIsAccepted(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T = string>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertCount(1, $params);
+        $default = $params[0]->default;
+        self::assertNotNull($default);
+        self::assertSame('string', $default->name);
+        self::assertTrue($default->isScalar);
+    }
+
+    public function testDefaultAfterBoundIsAccepted(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T : \Stringable = \App\MyStringable>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertNotNull($params[0]->bound);
+        self::assertSame('App\\MyStringable', $params[0]->default?->name);
+    }
+
+    public function testDefaultCanReferenceEarlierParam(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Pair<A, B = A>
+{
+    public A $first;
+    public B $second;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame('A', $params[1]->default?->name);
+        self::assertTrue($params[1]->default?->isTypeParam);
+    }
+
+    public function testDefaultCanReferenceEarlierParamInsideGenericArgs(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Wrapper<A, B = Box<A>>
+{
+    public B $inner;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        $default = $params[1]->default;
+        self::assertSame('App\\Box', $default?->name);
+        self::assertSame('A', $default?->args[0]->name);
+        self::assertTrue($default?->args[0]->isTypeParam);
+    }
+
+    public function testRequiredAfterDefaultIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<T = int, U>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Required type parameters must precede defaulted ones');
+        $parser->parse($source);
+    }
+
+    public function testDefaultCannotReferenceSelf(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<T = T>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot reference itself in its default');
+        $parser->parse($source);
+    }
+
+    public function testDefaultCannotReferenceLaterParam(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<T = U, U = int>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('declared later in the same parameter list');
+        $parser->parse($source);
+    }
+
+    public function testDefaultMayUseFullyQualifiedSameNameAsParam(): void
+    {
+        // `\T` is the global class named T, NOT the type-param T -- the FQ form
+        // unambiguously refers to a class, so the guard does not fire.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T = \T>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        // Must not throw.
+        $parser->parse($source);
+        self::assertTrue(true);
+    }
+
+    public function testMethodLevelDefaultIsRejectedWithClearError(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class C
+{
+    public function id<T = string>(T $x): T { return $x; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('not yet supported on methods or functions');
+        $parser->parse($source);
+    }
+
+    public function testFreeFunctionLevelDefaultIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+function id<T = string>(T $x): T { return $x; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('not yet supported on methods or functions');
+        $parser->parse($source);
+    }
+
+    public function testNullableDefaultIsRejectedWithClearError(): void
+    {
+        // PHP's `?Type` nullable shape is intentionally not allowed as a default;
+        // a nullable default is parsed by `parseTypeArg` failing on the `?` token,
+        // which surfaces as the "invalid default" error.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<T = ?int>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('invalid default');
+        $this->expectExceptionMessage('no nullable or union shapes');
+        $parser->parse($source);
+    }
+
+    public function testUnionDefaultIsRejectedWithClearError(): void
+    {
+        // PHP's union shape `A|B` is intentionally not allowed as a default --
+        // defaults must be a single concrete or generic type. The parser detects
+        // the trailing `|` after the first leaf and throws the consistent
+        // "invalid default" error.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<T = Box|Other>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('invalid default');
+        $this->expectExceptionMessage('no nullable or union shapes');
+        $parser->parse($source);
+    }
+
+    public function testIntersectionDefaultIsRejectedWithClearError(): void
+    {
+        // `A & B` (intersection) -- same rejection family as the union case.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<T = Box & Other>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('invalid default');
+        $this->expectExceptionMessage('no nullable or union shapes');
+        $parser->parse($source);
+    }
+
+    public function testDefaultForwardRefGuardWalksIntoNestedGenericArgs(): void
+    {
+        // `class Bad<A = Box<U>, U = string>` -- A's default references U via
+        // a nested generic arg. The trailing-default rule passes (both have
+        // defaults), so the forward-ref guard must descend into TypeRef::args
+        // to catch the violation.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<A = Box<U>, U = string>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('declared later in the same parameter list');
+        $parser->parse($source);
+    }
+
+    public function testCycleBetweenDefaultsIsRejectedAtForwardRef(): void
+    {
+        // `<A = B, B = A>` -- A's default references B (declared later, illegal).
+        // The forward-ref guard catches this on A first; B's own default (= A,
+        // earlier) is fine but is never reached because A fails first.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Bad<A = B, B = A>
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('declared later in the same parameter list');
+        $parser->parse($source);
+    }
+
     /**
      * @template TNode of Node
      * @param array<int, mixed> $ast

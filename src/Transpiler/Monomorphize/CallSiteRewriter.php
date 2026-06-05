@@ -49,7 +49,11 @@ final class CallSiteRewriter
                 if ($node instanceof Name && !$node instanceof FullyQualified) {
                     $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
                     $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-                    if (is_array($args) && $args !== [] && is_string($fqn) && self::allConcrete($args)) {
+                    // Empty `$args` is the call-site shape that asks the registry to pad
+                    // entirely from defaults (`new Cache::<>` or a synthesized bare
+                    // `new Cache;`). Both shapes route through the same recordInstantiation
+                    // path, which pads, validates, and hashes against the padded tuple.
+                    if (is_array($args) && is_string($fqn) && self::allConcrete($args)) {
                         $instantiation = $this->registry->recordInstantiation($fqn, $args);
                         return new FullyQualified($instantiation->generatedFqn, $node->getAttributes());
                     }

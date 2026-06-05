@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DefaultsForwardRef\Containers;
+
+// `Pair<A, B = A>` -- A is required, B defaults to A. At instantiation
+// `new Pair::<int>(...)`, B is padded to int -- the substitution flows
+// left-to-right through the registry's `padWithDefaults`.
+class Pair<A, B = A>
+{
+    public function __construct(public A $first, public B $second)
+    {
+    }
+}

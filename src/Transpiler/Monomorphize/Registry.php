@@ -70,6 +70,12 @@ final class Registry
     /**
      * Recursively record an instantiation along with every nested generic sub-instantiation in its args.
      *
+     * If the template has defaulted parameters and the supplied args are shorter
+     * than the param list, the missing tail is padded with each param's default
+     * (substituting earlier args into any type-param refs in the default). The
+     * padded tuple feeds both bound validation and the generated-FQN hash, so
+     * `Cache::<>` and `Cache::<string, mixed>` produce the same specialization.
+     *
      * Detects hash collisions: if a different `(template, args)` pair has already produced the same
      * generated FQCN, throws with a self-contained error message explaining how to raise XPHP_HASH_LENGTH.
      *
@@ -77,6 +83,8 @@ final class Registry
      */
     public function recordInstantiation(string $templateFqn, array $args): GenericInstantiation
     {
+        $args = $this->padWithDefaults($templateFqn, $args);
+
         foreach ($args as $arg) {
             if ($arg->isGeneric()) {
                 $this->recordInstantiation($arg->name, $arg->args);
@@ -103,6 +111,115 @@ final class Registry
         );
 
         return $this->instantiations[$generatedFqn];
+    }
+
+    /**
+     * Pad the supplied args with each param's default. Substitutes earlier
+     * already-positional args into any type-param references in the default so
+     * `class Pair<A, B = A>` instantiated as `<int>` pads to `<int, int>`.
+     *
+     * Returns the args tuple unchanged when:
+     *  - the definition isn't yet recorded (transient case during fixed-point);
+     *    arity mismatch surfaces later as the "instantiated but never defined"
+     *    error,
+     *  - the supplied count already matches or exceeds the param count.
+     *
+     * Throws when the supplied count is below the leading required params (only
+     * trailing defaults can fill).
+     *
+     * @param list<TypeRef> $args
+     * @return list<TypeRef>
+     */
+    private function padWithDefaults(string $templateFqn, array $args): array
+    {
+        $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
+        if ($definition === null) {
+            return $args;
+        }
+        $params = $definition->typeParams;
+        $supplied = count($args);
+        $needed = count($params);
+        if ($supplied >= $needed) {
+            return $args;
+        }
+
+        $padded = $args;
+        for ($i = $supplied; $i < $needed; $i++) {
+            if ($params[$i]->default === null) {
+                throw new RuntimeException(sprintf(
+                    'Generic template "%s" was instantiated with %d type argument(s) '
+                    . 'but parameter `%s` (position %d) has no default; supply it '
+                    . 'explicitly or add defaults to every preceding required parameter.',
+                    ltrim($templateFqn, '\\'),
+                    $supplied,
+                    $params[$i]->name,
+                    $i + 1,
+                ));
+            }
+            $subst = [];
+            foreach ($padded as $j => $concrete) {
+                $subst[$params[$j]->name] = $concrete;
+            }
+            $padded[] = Specializer::substituteTypeRef($params[$i]->default, $subst);
+        }
+        return $padded;
+    }
+
+    /**
+     * Declaration-time bound check on fully-concrete defaults. Defaults that
+     * reference earlier type-params can't be checked here because the bound
+     * verdict depends on the concrete arg supplied at the call site -- those
+     * are checked by the existing per-instantiation `validateBounds` path
+     * after `padWithDefaults` substitutes the concretes in.
+     *
+     * Runs after definitions are collected but before instantiations are
+     * recorded, so a bad declaration fails the compile at the source-level
+     * before any padded instantiation amplifies the error.
+     */
+    public function validateDefaultsAgainstBounds(): void
+    {
+        if ($this->hierarchy === null) {
+            return;
+        }
+        foreach ($this->definitions as $definition) {
+            foreach ($definition->typeParams as $param) {
+                if ($param->bound === null || $param->default === null) {
+                    continue;
+                }
+                if (!$param->default->isConcrete()) {
+                    continue;
+                }
+                $verdict = self::evaluateBound(
+                    $param->bound,
+                    $param->default,
+                    $this->hierarchy,
+                );
+                if ($verdict === true) {
+                    continue;
+                }
+                $boundDisplay = self::formatBound($param->bound);
+                $defaultDisplay = $param->default->toDisplayString();
+                $reason = $verdict === false
+                    ? sprintf('does not satisfy "%s".', $boundDisplay)
+                    : sprintf(
+                        'is not in the source set the hierarchy was built from (and is '
+                        . 'not a recognized PHP built-in), so the compiler cannot prove '
+                        . 'it satisfies "%s".',
+                        $boundDisplay,
+                    );
+                throw new RuntimeException(sprintf(
+                    "Default for generic parameter `%s` of \"%s\" violates the parameter's bound.\n"
+                    . "  bound:   %s\n"
+                    . "  default: %s\n"
+                    . "  reason:  %s",
+                    $param->name,
+                    $definition->templateFqn,
+                    $boundDisplay,
+                    $defaultDisplay,
+                    $reason,
+                ));
+            }
+        }
     }
 
     /**
@@ -206,7 +323,14 @@ final class Registry
     /**
      * Three-way verdict (true / false / null) for a bound expression against a
      * concrete TypeRef. Walks the BoundExpr tree:
-     *   - Leaf:        delegates to `$hierarchy->isSubtype`.
+     *   - Leaf:        delegates to `$hierarchy->isSubtype` using the leaf's
+     *                  name. Any generic args on the leaf (`Comparable<T>` in
+     *                  an F-bounded shape) are intentionally NOT substituted
+     *                  or consulted -- the hierarchy operates on erased
+     *                  nominal subtyping, so `MyType extends Comparable<MyType>?`
+     *                  reduces to `MyType extends Comparable?`. This is
+     *                  consistent across the decl-time `validateDefaultsAgainstBounds`
+     *                  call site and the inst-time `checkBounds` call site.
      *   - Intersection: any false -> false; all true -> true; otherwise null.
      *   - Union:        any true -> true; all false -> false; otherwise null.
      */

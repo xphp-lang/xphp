@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DefaultsFull\Containers;
+
+// `Cache<K = string, V = mixed>` -- both params defaulted. Call sites can omit
+// any trailing tail; `new Cache;` / `new Cache::<>` / `new Cache::<int>` /
+// `new Cache::<int, Tag>` all specialize cleanly.
+class Cache<K = string, V = mixed>
+{
+    /** @var array<K, V> */
+    public array $entries = [];
+
+    public function set(K $key, V $value): void
+    {
+        $this->entries[$key] = $value;
+    }
+}
