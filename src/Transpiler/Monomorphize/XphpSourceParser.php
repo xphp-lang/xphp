@@ -9,7 +9,6 @@ use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
-use PhpParser\Node\UseItem;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use PhpParser\Parser;
@@ -931,9 +930,7 @@ final class XphpSourceParser
     {
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
-            private string $currentNamespace = '';
-            /** @var array<string, string> alias → FQN */
-            private array $useMap = [];
+            private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
 
@@ -947,25 +944,26 @@ final class XphpSourceParser
                 private array $nameMarkers,
                 private array $methodMarkers,
             ) {
+                $this->ctx = new NamespaceContext();
             }
 
             public function enterNode(Node $node): null
             {
                 if ($node instanceof Namespace_) {
-                    // @infection-ignore-all — namespace { ... } (no name) isn't used in any fixture.
-                    $this->currentNamespace = $node->name?->toString() ?? '';
-                    $this->useMap = [];
+                    // @infection-ignore-all — bare `namespace { ... }` (no name) isn't used in any
+                    // fixture; the null-coalesce branch never observably differs from a missing name.
+                    $this->ctx->enterNamespace($node->name?->toString());
                     // @infection-ignore-all — redundant with the standalone Use_ branch below; dead loop.
                     foreach ($node->stmts ?? [] as $inner) {
                         if ($inner instanceof Use_) {
-                            $this->indexUses($inner);
+                            $this->ctx->indexUse($inner);
                         }
                     }
                 }
 
                 if ($node instanceof Use_) {
                     // @infection-ignore-all — dual-handled by the inner foreach above.
-                    $this->indexUses($node);
+                    $this->ctx->indexUse($node);
                 }
 
                 if ($node instanceof ClassLike && $node->name !== null) {
@@ -997,8 +995,9 @@ final class XphpSourceParser
                             $typeParams[] = new TypeParam($entry['name'], $bound);
                         }
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $typeParams);
-                        $fqn = $this->currentNamespace !== ''
-                            ? $this->currentNamespace . '\\' . $shortName
+                        $currentNamespace = $this->ctx->currentNamespace();
+                        $fqn = $currentNamespace !== ''
+                            ? $currentNamespace . '\\' . $shortName
                             : $shortName;
                         $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
                     } else {
@@ -1120,14 +1119,7 @@ final class XphpSourceParser
                 if ($this->isEnclosingTypeParam($name)) {
                     return $name;
                 }
-                $first = self::firstSegment($name);
-                if (isset($this->useMap[$first])) {
-                    $rest = substr($name, strlen($first));
-                    return $this->useMap[$first] . $rest;
-                }
-                return $this->currentNamespace !== ''
-                    ? $this->currentNamespace . '\\' . $name
-                    : $name;
+                return $this->ctx->resolveAgainstContext($name);
             }
 
             /**
@@ -1190,18 +1182,6 @@ final class XphpSourceParser
                 return null;
             }
 
-            private function indexUses(Use_ $use): void
-            {
-                foreach ($use->uses as $u) {
-                    if (!$u instanceof UseItem) {
-                        continue;
-                    }
-                    $fqn = $u->name->toString();
-                    $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
-                    $this->useMap[$alias] = $fqn;
-                }
-            }
-
             /**
              * @param list<TypeRef> $refs
              * @return list<TypeRef>
@@ -1216,10 +1196,6 @@ final class XphpSourceParser
                 $resolvedArgs = $this->resolveTypeRefList($ref->args);
                 $name = $ref->name;
 
-                if (str_starts_with($name, '\\')) {
-                    return new TypeRef(ltrim($name, '\\'), $resolvedArgs);
-                }
-
                 if ($this->isEnclosingTypeParam($name)) {
                     return new TypeRef($name, $resolvedArgs, isTypeParam: true);
                 }
@@ -1230,16 +1206,7 @@ final class XphpSourceParser
                     return new TypeRef($lower, $resolvedArgs, isScalar: true);
                 }
 
-                $first = self::firstSegment($name);
-                if (isset($this->useMap[$first])) {
-                    $rest = substr($name, strlen($first));
-                    return new TypeRef($this->useMap[$first] . $rest, $resolvedArgs);
-                }
-
-                $resolved = $this->currentNamespace !== ''
-                    ? $this->currentNamespace . '\\' . $name
-                    : $name;
-                return new TypeRef($resolved, $resolvedArgs);
+                return new TypeRef($this->ctx->resolveAgainstContext($name), $resolvedArgs);
             }
 
             private function isEnclosingTypeParam(string $name): bool
@@ -1250,18 +1217,6 @@ final class XphpSourceParser
                     }
                 }
                 return false;
-            }
-
-            private static function lastSegment(string $name): string
-            {
-                $pos = strrpos($name, '\\');
-                return $pos === false ? $name : substr($name, $pos + 1);
-            }
-
-            private static function firstSegment(string $name): string
-            {
-                $pos = strpos($name, '\\');
-                return $pos === false ? $name : substr($name, 0, $pos);
             }
         });
 
