@@ -166,20 +166,28 @@ final class Registry
             return;
         }
         foreach ($typeParams as $i => $param) {
-            if ($param->boundFqn === null) {
+            if ($param->bound === null) {
                 continue;
             }
             $concrete = $args[$i];
-            $verdict = $hierarchy->isSubtype($concrete->name, $param->boundFqn);
+            $verdict = self::evaluateBound($param->bound, $concrete, $hierarchy);
             if ($verdict === true) {
                 continue;
             }
+            $boundDisplay = self::formatBound($param->bound);
+            // Single-leaf bounds keep the original "extend/implement" wording
+            // (the relationship is a direct extends/implements query against the
+            // class hierarchy). Compound bounds (intersection / union / DNF)
+            // can't be described that way, so they get "satisfy" instead.
+            $isSimpleLeaf = $param->bound instanceof BoundLeaf;
             $detail = $verdict === false
-                ? sprintf('"%s" does not extend/implement "%s".', $concrete->toDisplayString(), $param->boundFqn)
+                ? ($isSimpleLeaf
+                    ? sprintf('"%s" does not extend/implement "%s".', $concrete->toDisplayString(), $boundDisplay)
+                    : sprintf('"%s" does not satisfy "%s".', $concrete->toDisplayString(), $boundDisplay))
                 : sprintf(
                     '"%s" is not in the source set the hierarchy was built from (and is not a recognized PHP built-in, or its bound satisfaction comes via a trait the compiler does not yet follow), so the compiler cannot prove it satisfies "%s".',
                     $concrete->toDisplayString(),
-                    $param->boundFqn,
+                    $boundDisplay,
                 );
             throw new RuntimeException(sprintf(
                 "Generic bound violated while instantiating %s.\n"
@@ -188,11 +196,91 @@ final class Registry
                 . "  %s",
                 $instantiationLabel,
                 $param->name,
-                $param->boundFqn,
+                $boundDisplay,
                 $concrete->toDisplayString(),
                 $detail,
             ));
         }
+    }
+
+    /**
+     * Three-way verdict (true / false / null) for a bound expression against a
+     * concrete TypeRef. Walks the BoundExpr tree:
+     *   - Leaf:        delegates to `$hierarchy->isSubtype`.
+     *   - Intersection: any false -> false; all true -> true; otherwise null.
+     *   - Union:        any true -> true; all false -> false; otherwise null.
+     */
+    private static function evaluateBound(BoundExpr $bound, TypeRef $concrete, TypeHierarchy $hierarchy): ?bool
+    {
+        if ($bound instanceof BoundLeaf) {
+            return $hierarchy->isSubtype($concrete->name, $bound->type->name);
+        }
+        if ($bound instanceof BoundIntersection) {
+            $sawNull = false;
+            foreach ($bound->operands as $operand) {
+                $v = self::evaluateBound($operand, $concrete, $hierarchy);
+                if ($v === false) {
+                    return false;
+                }
+                if ($v === null) {
+                    $sawNull = true;
+                }
+            }
+            return $sawNull ? null : true;
+        }
+        if ($bound instanceof BoundUnion) {
+            $sawNull = false;
+            foreach ($bound->operands as $operand) {
+                $v = self::evaluateBound($operand, $concrete, $hierarchy);
+                if ($v === true) {
+                    return true;
+                }
+                if ($v === null) {
+                    $sawNull = true;
+                }
+            }
+            return $sawNull ? null : false;
+        }
+        // Defensive: BoundExpr is an abstract base and we own every subtype.
+        // Unreachable in any test, but keep the return shape consistent.
+        return null;
+    }
+
+    /**
+     * Render a bound expression in source-form for error messages:
+     *   - Leaf            -> the bare FQN
+     *   - Intersection    -> "A & B & C"
+     *   - Union           -> "A | B | C"
+     *   - DNF             -> "(A & B) | C"  (parens around inner intersections)
+     */
+    private static function formatBound(BoundExpr $bound): string
+    {
+        if ($bound instanceof BoundLeaf) {
+            return $bound->type->name;
+        }
+        if ($bound instanceof BoundIntersection) {
+            // Symmetric to the Union branch below: when an inner operand is
+            // a Union (`(A | B) & C`), wrap it in parens so the rendered
+            // bound reflects PHP's & > | precedence convention. Without the
+            // wrap, `BoundIntersection(BoundUnion(A, B), C)` renders as
+            // `A | B & C` which a reader parses as `A | (B & C)` -- the
+            // wrong shape.
+            return implode(' & ', array_map(
+                static fn (BoundExpr $op): string => $op instanceof BoundUnion
+                    ? '(' . self::formatBound($op) . ')'
+                    : self::formatBound($op),
+                $bound->operands,
+            ));
+        }
+        if ($bound instanceof BoundUnion) {
+            return implode(' | ', array_map(
+                static fn (BoundExpr $op): string => $op instanceof BoundIntersection
+                    ? '(' . self::formatBound($op) . ')'
+                    : self::formatBound($op),
+                $bound->operands,
+            ));
+        }
+        return '<unknown bound>';
     }
 
     /**

@@ -19,7 +19,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Box',
             'Box',
-            [new TypeParam('T', 'Stringable')],
+            [new TypeParam('T', new BoundLeaf(new TypeRef('Stringable')))],
             new Class_(new Identifier('Box')),
             '/Box.xphp',
         );
@@ -40,7 +40,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Box',
             'Box',
-            [new TypeParam('T', 'Stringable')],
+            [new TypeParam('T', new BoundLeaf(new TypeRef('Stringable')))],
             new Class_(new Identifier('Box')),
             '/Box.xphp',
         );
@@ -57,7 +57,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Box',
             'Box',
-            [new TypeParam('T', 'Stringable')],
+            [new TypeParam('T', new BoundLeaf(new TypeRef('Stringable')))],
             new Class_(new Identifier('Box')),
             '/Box.xphp',
         );
@@ -76,7 +76,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Box',
             'Box',
-            [new TypeParam('T', 'Stringable')],
+            [new TypeParam('T', new BoundLeaf(new TypeRef('Stringable')))],
             new Class_(new Identifier('Box')),
             '/Box.xphp',
         );
@@ -96,7 +96,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Pair',
             'Pair',
-            [new TypeParam('K', 'Stringable'), new TypeParam('V')],
+            [new TypeParam('K', new BoundLeaf(new TypeRef('Stringable'))), new TypeParam('V')],
             new Class_(new Identifier('Pair')),
             '/Pair.xphp',
         );
@@ -118,7 +118,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Pair',
             'Pair',
-            [new TypeParam('K'), new TypeParam('V', 'Stringable')],
+            [new TypeParam('K'), new TypeParam('V', new BoundLeaf(new TypeRef('Stringable')))],
             new Class_(new Identifier('Pair')),
             '/Pair.xphp',
         );
@@ -154,7 +154,7 @@ final class RegistryBoundsTest extends TestCase
         $registry->recordDefinition(
             'App\\Pair',
             'Pair',
-            [new TypeParam('K', 'Stringable'), new TypeParam('V', 'Stringable')],
+            [new TypeParam('K', new BoundLeaf(new TypeRef('Stringable'))), new TypeParam('V', new BoundLeaf(new TypeRef('Stringable')))],
             new Class_(new Identifier('Pair')),
             '/Pair.xphp',
         );

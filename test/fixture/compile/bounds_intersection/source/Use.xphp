@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsIntersection;
+
+use App\BoundsIntersection\Containers\Box;
+use App\BoundsIntersection\Models\Tag;
+
+$tagBox = new Box::<Tag>(new Tag('hello'));

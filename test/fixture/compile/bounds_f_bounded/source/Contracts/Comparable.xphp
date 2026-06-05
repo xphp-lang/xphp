@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsFBounded\Contracts;
+
+// F-bounded recursion target: a concrete type T must implement `Comparable<T>`
+// (i.e. comparable to its own kind) to be a valid Sortable<T> argument.
+interface Comparable<T>
+{
+    public function compareTo(T $other): int;
+}

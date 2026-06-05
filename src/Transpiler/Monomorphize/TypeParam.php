@@ -7,20 +7,21 @@ namespace XPHP\Transpiler\Monomorphize;
 /**
  * A single type parameter on a generic template definition.
  *
- * `bound` is the optional upper bound: when present, every concrete instantiation must
- * satisfy it (concrete class extends / implements / equals the bound). The compiler
- * validates this at `Registry::recordInstantiation` time so violations fail the build
- * rather than waiting for a runtime TypeError.
+ * `bound` is the optional upper bound expression. When present, every concrete
+ * instantiation must satisfy it -- the verdict combines via
+ * `Registry::checkBounds` walking the `BoundExpr` tree against the concrete
+ * `TypeRef` for each operand. Composite bounds (intersection, union, DNF) are
+ * supported by the BoundIntersection / BoundUnion sub-types; a simple
+ * `class Box<T : Stringable>` is stored as `BoundLeaf(TypeRef('Stringable'))`.
  *
- * The bound is stored as a fully-qualified class/interface name with no leading
- * backslash — resolution against the source file's namespace + use statements happens
- * inside `XphpSourceParser::resolveAndAttach`.
+ * The bound expression is built by `XphpSourceParser::resolveAndAttach` after
+ * resolving each leaf class name against the file's namespace + use map.
  */
 final readonly class TypeParam
 {
     public function __construct(
         public string $name,
-        public ?string $boundFqn = null,
+        public ?BoundExpr $bound = null,
     ) {
     }
 }

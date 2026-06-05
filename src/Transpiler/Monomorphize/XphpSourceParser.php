@@ -162,7 +162,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}>, 3: string, 4: ByteOffsetMap}
+     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}>, 3: string, 4: ByteOffsetMap}
      */
     private function scanAndStrip(string $source): array
     {
@@ -374,12 +374,17 @@ final class XphpSourceParser
      * concrete + nested-generic args), this variant only fires on the class/interface/trait
      * header — so the `:` after a name is unambiguous and signals a bound.
      *
-     * Returns `[entries, endIdx]` where each entry is a `{name: string, boundName: ?string,
-     * boundIsFq: bool}` record; later resolved to a TypeParam(name, ?boundFqn) inside the
-     * AST traversal step (which has access to the namespace + use map).
+     * Returns `[entries, endIdx]` where each entry is a `{name: string, bound: ?array}`
+     * record. The bound (when present) is a structured tree:
+     *   - leaf:         `['kind' => 'leaf', 'name' => string, 'isFq' => bool, 'args' => list<TypeRef>]`
+     *   - intersection: `['kind' => 'and',  'operands' => list<bound>]`
+     *   - union:        `['kind' => 'or',   'operands' => list<bound>]`
+     *
+     * Later resolved to a `BoundExpr` tree by the AST traversal step (which has
+     * access to the namespace + use map for class-name resolution).
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: list<array{name: string, boundName: ?string, boundIsFq: bool}>, 1: int}|null
+     * @return array{0: list<array{name: string, bound: ?array}>, 1: int}|null
      */
     private static function parseTypeParamList(array $tokens, int $openIdx): ?array
     {
@@ -397,24 +402,20 @@ final class XphpSourceParser
             $paramName = ltrim($tokens[$i]->text, '\\');
             $i++;
 
-            $boundName = null;
-            $boundIsFq = false;
+            $bound = null;
             $afterName = self::skipWs($tokens, $i);
             if ($afterName < $n && $tokens[$afterName]->text === ':') {
                 $afterColon = self::skipWs($tokens, $afterName + 1);
-                if ($afterColon >= $n || !self::isNameToken($tokens[$afterColon])) {
+                $parsedBound = self::parseBoundExpr($tokens, $afterColon);
+                if ($parsedBound === null) {
                     return null;
                 }
-                $boundText = $tokens[$afterColon]->text;
-                $boundName = ltrim($boundText, '\\');
-                $boundIsFq = str_starts_with($boundText, '\\');
-                $i = $afterColon + 1;
+                [$bound, $i] = $parsedBound;
             }
 
             $entries[] = [
                 'name' => $paramName,
-                'boundName' => $boundName,
-                'boundIsFq' => $boundIsFq,
+                'bound' => $bound,
             ];
 
             $i = self::skipWs($tokens, $i);
@@ -441,30 +442,219 @@ final class XphpSourceParser
      * (`class A<T : Box<T>>`) is fine because the inner T is a generic argument
      * to a different type; only the bare-self case is rejected.
      *
-     * `boundIsFq` filters out `\T` (a global class named T), which is a real
-     * class reference rather than a type-parameter self-reference.
+     * The check fires for any leaf bound (including operands inside
+     * intersection / union) that bare-name-matches the param. `isFq` filters
+     * out `\T` (a global class named T), which is a real class reference
+     * rather than a type-parameter self-reference. Leaves with non-empty
+     * `args` are F-bounded shapes (`T : Box<T>`) and are explicitly allowed.
      *
-     * @param list<array{name: string, boundName: ?string, boundIsFq: bool}> $entries
+     * @param list<array{name: string, bound: ?array}> $entries
      */
     private static function assertNoTopLevelSelfReference(array $entries): void
     {
         foreach ($entries as $entry) {
-            if ($entry['boundName'] !== null
-                && !$entry['boundIsFq']
-                && $entry['boundName'] === $entry['name']
-            ) {
+            if ($entry['bound'] === null) {
+                continue;
+            }
+            if (self::boundContainsSelfReference($entry['bound'], $entry['name'])) {
+                // The guard fires for a bare-self leaf at ANY depth inside the
+                // bound tree, not just the outermost position. The message
+                // intentionally does NOT say "top-level" -- that wording would
+                // be misleading when the guard fires on `T : Foo | T` or
+                // `T : (A & T) | B` where the bare-self leaf is an operand.
                 throw new RuntimeException(sprintf(
-                    'Generic parameter `%s` cannot use itself as a bound (top-level '
-                    . 'self-reference in `<%s : %s>`). Use a nested form like '
-                    . '`%s : Box<%s>` for F-bounded recursion, or remove the bound.',
-                    $entry['name'],
-                    $entry['name'],
+                    'Generic parameter `%s` cannot use itself as a bound '
+                    . '(self-reference detected in the bound expression). '
+                    . 'Use a nested form like `%s : Box<%s>` for F-bounded '
+                    . 'recursion, or remove the bound.',
                     $entry['name'],
                     $entry['name'],
                     $entry['name'],
                 ));
             }
         }
+    }
+
+    /**
+     * Recursively check whether a bound tree contains a bare top-level
+     * self-reference (a leaf whose name equals `$paramName`, isn't fully
+     * qualified, and has no generic args).
+     *
+     * @param array{kind: string, ...} $bound
+     */
+    private static function boundContainsSelfReference(array $bound, string $paramName): bool
+    {
+        if ($bound['kind'] === 'leaf') {
+            return $bound['name'] === $paramName
+                && !$bound['isFq']
+                && $bound['args'] === [];
+        }
+        foreach ($bound['operands'] as $operand) {
+            if (self::boundContainsSelfReference($operand, $paramName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Recursive-descent parser for bound expressions:
+     *
+     *     bound      := orBound
+     *     orBound    := andBound ('|' andBound)*
+     *     andBound   := primary ('&' primary)*
+     *     primary    := '(' bound ')' | leaf
+     *     leaf       := Name typeArgList?      // typeArgList for F-bounded
+     *
+     * Returns `[bound_array, newIdx]` on success or null if the input from
+     * `$startIdx` isn't a well-formed bound expression. Single-operand `or`
+     * and `and` collapse to their inner operand so a plain `T : Foo` stays
+     * a leaf in the resulting tree.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: array, 1: int}|null
+     */
+    private static function parseBoundExpr(array $tokens, int $startIdx): ?array
+    {
+        return self::parseOrBound($tokens, $startIdx);
+    }
+
+    /**
+     * @param list<PhpToken> $tokens
+     * @return array{0: array, 1: int}|null
+     */
+    private static function parseOrBound(array $tokens, int $idx): ?array
+    {
+        $first = self::parseAndBound($tokens, $idx);
+        if ($first === null) {
+            return null;
+        }
+        [$result, $idx] = $first;
+        $operands = [$result];
+
+        while (true) {
+            $peek = self::skipWs($tokens, $idx);
+            if ($peek >= count($tokens) || $tokens[$peek]->text !== '|') {
+                break;
+            }
+            $next = self::parseAndBound($tokens, self::skipWs($tokens, $peek + 1));
+            if ($next === null) {
+                return null;
+            }
+            [$rhs, $idx] = $next;
+            $operands[] = $rhs;
+        }
+
+        if (count($operands) === 1) {
+            return [$operands[0], $idx];
+        }
+        return [['kind' => 'or', 'operands' => $operands], $idx];
+    }
+
+    /**
+     * @param list<PhpToken> $tokens
+     * @return array{0: array, 1: int}|null
+     */
+    private static function parseAndBound(array $tokens, int $idx): ?array
+    {
+        $first = self::parsePrimaryBound($tokens, $idx);
+        if ($first === null) {
+            return null;
+        }
+        [$result, $idx] = $first;
+        $operands = [$result];
+
+        while (true) {
+            $peek = self::skipWs($tokens, $idx);
+            if ($peek >= count($tokens) || $tokens[$peek]->text !== '&') {
+                break;
+            }
+            $next = self::parsePrimaryBound($tokens, self::skipWs($tokens, $peek + 1));
+            if ($next === null) {
+                return null;
+            }
+            [$rhs, $idx] = $next;
+            $operands[] = $rhs;
+        }
+
+        if (count($operands) === 1) {
+            return [$operands[0], $idx];
+        }
+        return [['kind' => 'and', 'operands' => $operands], $idx];
+    }
+
+    /**
+     * @param list<PhpToken> $tokens
+     * @return array{0: array, 1: int}|null
+     */
+    private static function parsePrimaryBound(array $tokens, int $idx): ?array
+    {
+        $n = count($tokens);
+        if ($idx >= $n) {
+            return null;
+        }
+        if ($tokens[$idx]->text === '(') {
+            $inner = self::parseBoundExpr($tokens, self::skipWs($tokens, $idx + 1));
+            if ($inner === null) {
+                return null;
+            }
+            [$boundInside, $afterInner] = $inner;
+            $closeIdx = self::skipWs($tokens, $afterInner);
+            if ($closeIdx >= $n || $tokens[$closeIdx]->text !== ')') {
+                return null;
+            }
+            return [$boundInside, $closeIdx + 1];
+        }
+        return self::parseLeafBound($tokens, $idx);
+    }
+
+    /**
+     * Leaf bound: a name token, optionally followed by a `< TypeArgList >` for
+     * F-bounded forms. The args use `parseTypeArgList` (the same machinery
+     * used at instantiation sites) so nested generic args resolve correctly.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: array, 1: int}|null
+     */
+    private static function parseLeafBound(array $tokens, int $idx): ?array
+    {
+        $n = count($tokens);
+        if ($idx >= $n || !self::isNameToken($tokens[$idx])) {
+            return null;
+        }
+        $rawName = $tokens[$idx]->text;
+        $idx++;
+
+        $args = [];
+        $afterName = self::skipWs($tokens, $idx);
+        if ($afterName < $n && $tokens[$afterName]->text === '<') {
+            $parsed = self::parseTypeArgList($tokens, $afterName);
+            if ($parsed === null) {
+                // The `<` wasn't a generic-args opener; backtrack and treat
+                // the name as a plain leaf.
+                return [
+                    [
+                        'kind' => 'leaf',
+                        'name' => ltrim($rawName, '\\'),
+                        'isFq' => str_starts_with($rawName, '\\'),
+                        'args' => [],
+                    ],
+                    $idx,
+                ];
+            }
+            [$args, $endIdx] = $parsed;
+            $idx = $endIdx + 1;
+        }
+
+        return [
+            [
+                'kind' => 'leaf',
+                'name' => ltrim($rawName, '\\'),
+                'isFq' => str_starts_with($rawName, '\\'),
+                'args' => $args,
+            ],
+            $idx,
+        ];
     }
 
     /**
@@ -733,9 +923,9 @@ final class XphpSourceParser
      * Walk the AST: attach markers to ClassLike and Name nodes by (line, name) + order; resolve TypeRef names.
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $classMarkers
+     * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $classMarkers
      * @param list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}> $nameMarkers
-     * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $methodMarkers
+     * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $methodMarkers
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
     {
@@ -748,9 +938,9 @@ final class XphpSourceParser
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $classMarkers
+             * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $classMarkers
              * @param list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}> $nameMarkers
-             * @param list<array{line:int, name:string, params:list<array{name:string, boundName:?string, boundIsFq:bool}>}> $methodMarkers
+             * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,
@@ -790,24 +980,27 @@ final class XphpSourceParser
                         }
                     }
                     if ($paramEntries !== null && $paramEntries !== []) {
+                        // Two-pass: push the param names onto the resolution
+                        // scope BEFORE building bounds. This lets F-bounded
+                        // bounds (`T : Box<T>`) resolve the inner T as a
+                        // type-param reference rather than qualifying it to
+                        // `App\T` (which would happen via resolveNameOnly's
+                        // namespace fallback).
+                        $paramNames = array_map(
+                            static fn (array $entry): string => $entry['name'],
+                            $paramEntries,
+                        );
+                        $this->typeParamStack[] = $paramNames;
                         $typeParams = [];
-                        $paramNames = [];
                         foreach ($paramEntries as $entry) {
-                            $boundFqn = null;
-                            if ($entry['boundName'] !== null) {
-                                $boundFqn = $entry['boundIsFq']
-                                    ? $entry['boundName']
-                                    : $this->resolveNameOnly($entry['boundName']);
-                            }
-                            $typeParams[] = new TypeParam($entry['name'], $boundFqn);
-                            $paramNames[] = $entry['name'];
+                            $bound = $this->buildBoundExpr($entry);
+                            $typeParams[] = new TypeParam($entry['name'], $bound);
                         }
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $typeParams);
                         $fqn = $this->currentNamespace !== ''
                             ? $this->currentNamespace . '\\' . $shortName
                             : $shortName;
                         $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
-                        $this->typeParamStack[] = $paramNames;
                     } else {
                         $this->typeParamStack[] = [];
                     }
@@ -820,20 +1013,23 @@ final class XphpSourceParser
                         // @infection-ignore-all -- markers are populated jointly by line + name,
                         // so neither half ever matches without the other; `&&` -> `||` is equivalent.
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $declName) {
+                            // Same two-pass scope-push-before-bound-build pattern
+                            // as the ClassLike branch above, so F-bounded method
+                            // generics see their own T on the resolution stack.
+                            $matchedParamNames = array_map(
+                                static fn (array $entry): string => $entry['name'],
+                                $marker['params'],
+                            );
+                            $this->typeParamStack[] = $matchedParamNames;
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
-                                $boundFqn = null;
-                                if ($entry['boundName'] !== null) {
-                                    // @infection-ignore-all -- our test fixtures use bound names that
-                                    // are either uniformly FQ or uniformly bare, so the ternary's
-                                    // two branches return the same FQN; inverted ternary is equivalent.
-                                    $boundFqn = $entry['boundIsFq']
-                                        ? $entry['boundName']
-                                        : $this->resolveNameOnly($entry['boundName']);
-                                }
-                                $typeParams[] = new TypeParam($entry['name'], $boundFqn);
-                                $matchedParamNames[] = $entry['name'];
+                                $bound = $this->buildBoundExpr($entry);
+                                $typeParams[] = new TypeParam($entry['name'], $bound);
                             }
+                            // Pop here — the method's own scope is pushed again
+                            // below to match the leaveNode pop pattern. This
+                            // intermediate push/pop only exists for bound resolution.
+                            array_pop($this->typeParamStack);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $typeParams);
                             unset($this->methodMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
@@ -932,6 +1128,50 @@ final class XphpSourceParser
                 return $this->currentNamespace !== ''
                     ? $this->currentNamespace . '\\' . $name
                     : $name;
+            }
+
+            /**
+             * Build a `BoundExpr` from a parsed type-param entry. Recursively
+             * walks the bound tree produced by `parseBoundExpr`:
+             *   - 'leaf' -> `BoundLeaf(TypeRef($fqn, $resolvedArgs))`
+             *   - 'and'  -> `BoundIntersection(...$operands)`
+             *   - 'or'   -> `BoundUnion(...$operands)`
+             *
+             * Leaf names route through `resolveNameOnly` for namespace + use-map
+             * resolution; leaf args route through `resolveTypeRefList` so
+             * F-bounded `Comparable<T>` resolves T against the enclosing
+             * type-param stack (marking it as `isTypeParam: true`).
+             *
+             * @param array{name: string, bound: ?array} $entry
+             */
+            private function buildBoundExpr(array $entry): ?BoundExpr
+            {
+                if ($entry['bound'] === null) {
+                    return null;
+                }
+                return $this->buildBoundExprNode($entry['bound']);
+            }
+
+            /**
+             * @param array{kind: string, ...} $node
+             */
+            private function buildBoundExprNode(array $node): BoundExpr
+            {
+                if ($node['kind'] === 'leaf') {
+                    $fqn = $node['isFq']
+                        ? $node['name']
+                        : $this->resolveNameOnly($node['name']);
+                    $resolvedArgs = $this->resolveTypeRefList($node['args']);
+                    return new BoundLeaf(new TypeRef($fqn, $resolvedArgs));
+                }
+                $operands = array_map(
+                    fn (array $op): BoundExpr => $this->buildBoundExprNode($op),
+                    $node['operands'],
+                );
+                if ($node['kind'] === 'and') {
+                    return new BoundIntersection(...$operands);
+                }
+                return new BoundUnion(...$operands);
             }
 
             public function leaveNode(Node $node): null

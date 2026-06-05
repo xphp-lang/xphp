@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsDnf\Models;
+
+// Satisfies the LEFT arm of `(Stringable & Countable) | Iterator`.
+final class StringableCountable implements \Stringable, \Countable
+{
+    public function __construct(public readonly string $label)
+    {
+    }
+
+    public function __toString(): string
+    {
+        return $this->label;
+    }
+
+    public function count(): int
+    {
+        return strlen($this->label);
+    }
+}

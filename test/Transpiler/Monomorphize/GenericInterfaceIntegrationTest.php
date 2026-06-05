@@ -65,10 +65,10 @@ final class GenericInterfaceIntegrationTest extends TestCase
 
     public function testGenericInterfaceTemplateIsReplacedByEmptyMarkerInOutput(): void
     {
-        // Item 5: instead of stripping the generic interface template outright (which would
-        // break `instanceof App\Containers\Container`), it gets replaced with an empty marker
-        // interface at the same FQN. The original `function get(): T` method signature is
-        // gone — only the empty marker remains.
+        // Instead of stripping the generic interface template outright (which would
+        // break `instanceof App\Containers\Container`), it gets replaced with an empty
+        // marker interface at the same FQN. The original `function get(): T` method
+        // signature is gone — only the empty marker remains.
         $this->compile();
 
         $rewrittenInterfacePath = $this->targetDir . '/Containers/Container.php';

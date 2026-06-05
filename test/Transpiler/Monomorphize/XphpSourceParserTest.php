@@ -126,7 +126,8 @@ PHP;
         self::assertIsArray($params);
         self::assertCount(1, $params);
         self::assertSame('T', $params[0]->name);
-        self::assertSame('Stringable', $params[0]->boundFqn, 'leading-\\ marks bound as fully qualified — must NOT get the App\\ prefix');
+        self::assertInstanceOf(BoundLeaf::class, $params[0]->bound);
+        self::assertSame('Stringable', $params[0]->bound->type->name, 'leading-\\ marks bound as fully qualified — must NOT get the App\\ prefix');
     }
 
     public function testBoundedTypeParamResolvesAgainstUseAlias(): void
@@ -150,7 +151,8 @@ PHP;
         $class = self::findFirstClass($ast);
         self::assertNotNull($class);
         $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-        self::assertSame('App\\Contracts\\HasName', $params[0]->boundFqn);
+        self::assertInstanceOf(BoundLeaf::class, $params[0]->bound);
+        self::assertSame('App\\Contracts\\HasName', $params[0]->bound->type->name);
     }
 
     public function testMixesBoundedAndUnboundedTypeParams(): void
@@ -173,9 +175,233 @@ PHP;
         $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
         self::assertCount(2, $params);
         self::assertSame('K', $params[0]->name);
-        self::assertSame('Stringable', $params[0]->boundFqn);
+        self::assertInstanceOf(BoundLeaf::class, $params[0]->bound);
+        self::assertSame('Stringable', $params[0]->bound->type->name);
         self::assertSame('V', $params[1]->name);
-        self::assertNull($params[1]->boundFqn, 'V has no bound — boundFqn must stay null');
+        self::assertNull($params[1]->bound, 'V has no bound — bound must stay null');
+    }
+
+    public function testIntersectionBoundIsParsedAsBoundIntersection(): void
+    {
+        // `T : A & B` parses as a BoundIntersection of two leaves.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Sortable<T: \Stringable & \Countable>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertCount(1, $params);
+        self::assertInstanceOf(BoundIntersection::class, $params[0]->bound);
+        self::assertCount(2, $params[0]->bound->operands);
+        self::assertInstanceOf(BoundLeaf::class, $params[0]->bound->operands[0]);
+        self::assertSame('Stringable', $params[0]->bound->operands[0]->type->name);
+        self::assertSame('Countable', $params[0]->bound->operands[1]->type->name);
+    }
+
+    public function testUnionBoundIsParsedAsBoundUnion(): void
+    {
+        // `T : A | B` parses as a BoundUnion of two leaves.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Either<T: \Stringable | \Countable>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertInstanceOf(BoundUnion::class, $params[0]->bound);
+        self::assertCount(2, $params[0]->bound->operands);
+    }
+
+    public function testDnfBoundIsParsedAsUnionOfIntersections(): void
+    {
+        // `(A & B) | C` builds Union(Intersection(A, B), C).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Combined<T: (\Stringable & \Countable) | \Iterator>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        $bound = $params[0]->bound;
+        self::assertInstanceOf(BoundUnion::class, $bound);
+        self::assertCount(2, $bound->operands);
+        self::assertInstanceOf(BoundIntersection::class, $bound->operands[0]);
+        self::assertCount(2, $bound->operands[0]->operands);
+        self::assertInstanceOf(BoundLeaf::class, $bound->operands[1]);
+        self::assertSame('Iterator', $bound->operands[1]->type->name);
+    }
+
+    public function testFBoundedRecursionAcceptsBoundWithGenericArgs(): void
+    {
+        // `T : Comparable<T>` parses as a leaf whose TypeRef carries
+        // a single arg (the T type-param), enabling F-bounded recursion. The
+        // top-level self-reference guard must NOT fire here because the inner
+        // T is nested inside Comparable's generic args, not bare.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Sortable<T: \Comparable<T>>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);    // must not throw
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertInstanceOf(BoundLeaf::class, $params[0]->bound);
+        self::assertSame('Comparable', $params[0]->bound->type->name);
+        self::assertCount(1, $params[0]->bound->type->args);
+        self::assertSame('T', $params[0]->bound->type->args[0]->name);
+        self::assertTrue($params[0]->bound->type->args[0]->isTypeParam, 'inner T must resolve as a type-param ref via the enclosing scope');
+    }
+
+    public function testSelfReferenceGuardFiresOnOperandOfCompoundBound(): void
+    {
+        // `T : T & Foo` is forbidden too (the bare-self leaf is an
+        // operand of an intersection, not the top-level node, but it still
+        // counts as self-reference).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class A<T : T & \Stringable> {
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot use itself as a bound');
+        $parser->parse($source);
+    }
+
+    public function testSelfReferenceGuardFiresOnRightOperandOfUnion(): void
+    {
+        // the recursion in `boundContainsSelfReference`
+        // walks every operand. A first-operand-only mutation would survive
+        // the existing `T : T & Foo` test (where T is the FIRST operand)
+        // but be killed by this test (where T is the SECOND operand of a
+        // union and the FIRST is a real class).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class A<T : \Stringable | T> {
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot use itself as a bound');
+        $parser->parse($source);
+    }
+
+    public function testSelfReferenceGuardFiresOnDeeplyNestedOperand(): void
+    {
+        // the bare-self leaf can be arbitrarily
+        // deep in the bound tree (`T : (A & T) | B` here). The recursion
+        // walks every operand level; any mutation that only checks the top
+        // level OR only one level deep would survive this test.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class A<T : (\Stringable & T) | \Iterator> {
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot use itself as a bound');
+        $parser->parse($source);
+    }
+
+    public function testSelfReferenceGuardSkipsEntriesWithoutBoundAndChecksLater(): void
+    {
+        // Mutation regression: assertNoTopLevelSelfReference's `continue` -> `break`
+        // would exit the loop on the first bound-less entry. Test shape:
+        // `<K, T : T>` -- K has no bound (triggers the `continue`), T has the
+        // self-reference. With `break`, K's entry would terminate the loop
+        // and T's self-reference would slip through.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Pair<K, T : T> {
+    public K $key;
+    public T $val;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot use itself as a bound');
+        $parser->parse($source);
+    }
+
+    public function testForwardReferenceBoundResolvesToTypeParamRef(): void
+    {
+        // `class C<K, T : K>` -- T's bound is the EARLIER type-param K, not a
+        // class. resolveNameOnly must short-circuit on `isEnclosingTypeParam`
+        // and return the param name as-is, NOT qualify it to `App\K`.
+        //
+        // Kills the ReturnRemoval mutant on resolveNameOnly's type-param branch
+        // (removing the `return $name` would fall through to namespace
+        // qualification, resolving K to `App\K` which doesn't exist as a class).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Container<K, T : K> {
+    public K $key;
+    public T $val;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $class = self::findFirstClass($ast);
+        self::assertNotNull($class);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertCount(2, $params);
+        self::assertSame('T', $params[1]->name);
+        self::assertInstanceOf(BoundLeaf::class, $params[1]->bound);
+        self::assertSame(
+            'K',
+            $params[1]->bound->type->name,
+            'forward-reference bound must resolve K as a bare type-param name, not App\\K',
+        );
     }
 
     public function testTopLevelSelfReferenceBoundIsRejectedAtDeclarationTime(): void
@@ -220,7 +446,8 @@ PHP;
         $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
         self::assertCount(1, $params);
         self::assertSame('T', $params[0]->name);
-        self::assertSame('T', $params[0]->boundFqn, 'leading-\\ marks bound as FQ -- resolves to global `T`, not the type-param');
+        self::assertInstanceOf(BoundLeaf::class, $params[0]->bound);
+        self::assertSame('T', $params[0]->bound->type->name, 'leading-\\ marks bound as FQ -- resolves to global `T`, not the type-param');
     }
 
     public function testSelfWithTypeArgsInReturnPositionIsAccepted(): void

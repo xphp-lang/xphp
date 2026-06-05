@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsDnf\Containers;
+
+class Box<T: (\Stringable & \Countable) | \Iterator>
+{
+    public function __construct(public T $item)
+    {
+    }
+}

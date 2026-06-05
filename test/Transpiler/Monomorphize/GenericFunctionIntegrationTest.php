@@ -187,10 +187,9 @@ final class GenericFunctionIntegrationTest extends TestCase
 
     public function testBareTopLevelFreeFunctionSpecializesEndToEnd(): void
     {
-        // P1.4 of the RFC alignment sprint: free generic functions declared at
-        // the bare top level (no enclosing `namespace { }` block) must also
-        // specialize. The original silently-drop behavior left users with
-        // broken output (literal `T` in the rewritten function signature).
+        // Free generic functions declared at the bare top level (no enclosing
+        // `namespace { }` block) must specialize. A prior silently-drop bug left
+        // users with broken output (literal `T` in the rewritten signature).
         $bareDir = sys_get_temp_dir() . '/xphp-bare-' . uniqid('', true);
         mkdir($bareDir, 0o755, true);
         $funcsPath = $bareDir . '/funcs.xphp';

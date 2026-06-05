@@ -1,0 +1,48 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsDnf\Models;
+
+/**
+ * Satisfies the RIGHT arm of `(Stringable & Countable) | Iterator` -- this
+ * class implements Iterator but neither Stringable nor Countable.
+ *
+ * @implements \Iterator<int, int>
+ */
+final class IteratorOnly implements \Iterator
+{
+    private int $position = 0;
+
+    /**
+     * @param list<int> $items
+     */
+    public function __construct(public readonly array $items)
+    {
+    }
+
+    public function current(): int
+    {
+        return $this->items[$this->position];
+    }
+
+    public function key(): int
+    {
+        return $this->position;
+    }
+
+    public function next(): void
+    {
+        $this->position++;
+    }
+
+    public function rewind(): void
+    {
+        $this->position = 0;
+    }
+
+    public function valid(): bool
+    {
+        return isset($this->items[$this->position]);
+    }
+}

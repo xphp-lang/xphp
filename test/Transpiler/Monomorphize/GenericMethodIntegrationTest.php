@@ -232,13 +232,13 @@ final class GenericMethodIntegrationTest extends TestCase
 
     public function testSelfWithTypeArgsCompilesEndToEnd(): void
     {
-        // P1.2 regression: the original beb4955 commit shipped only the
-        // scanner half -- `self<T>` was stripped from the source but the
-        // resolver then attached ATTR_GENERIC_ARGS to the bare `self` Name,
-        // making the Registry try to specialize a non-existent `App\…\self`
-        // template ("Generic template … was instantiated but never defined").
-        // This test compiles a fixture that uses `self<T>` in a return
-        // position and asserts the full pipeline (compile + runtime exec).
+        // Regression: an earlier change shipped only the scanner half --
+        // `self<T>` was stripped from the source but the resolver then attached
+        // ATTR_GENERIC_ARGS to the bare `self` Name, making the Registry try to
+        // specialize a non-existent `App\…\self` template ("Generic template …
+        // was instantiated but never defined"). This test compiles a fixture
+        // that uses `self<T>` in a return position and asserts the full
+        // pipeline (compile + runtime exec).
         $dir = sys_get_temp_dir() . '/xphp-self-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Container.xphp', <<<'PHP'

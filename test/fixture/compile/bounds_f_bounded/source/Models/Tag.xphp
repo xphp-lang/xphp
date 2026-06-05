@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsFBounded\Models;
+
+use App\BoundsFBounded\Contracts\Comparable;
+
+// Implements Comparable<Tag> -- comparable to its own kind, satisfying the
+// F-bounded constraint on Sortable<T: Comparable<T>>.
+final class Tag implements Comparable
+{
+    public function __construct(public readonly string $value)
+    {
+    }
+
+    public function compareTo(Tag $other): int
+    {
+        return strcmp($this->value, $other->value);
+    }
+}

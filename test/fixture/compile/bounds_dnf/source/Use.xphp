@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsDnf;
+
+use App\BoundsDnf\Containers\Box;
+use App\BoundsDnf\Models\IteratorOnly;
+use App\BoundsDnf\Models\StringableCountable;
+
+// Left arm: Stringable & Countable both satisfied by StringableCountable.
+$leftBox = new Box::<StringableCountable>(new StringableCountable('tag'));
+
+// Right arm: Iterator alone satisfies the bound.
+$rightBox = new Box::<IteratorOnly>(new IteratorOnly([1, 2, 3]));
