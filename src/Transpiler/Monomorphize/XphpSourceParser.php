@@ -306,12 +306,31 @@ final class XphpSourceParser
                         $isCallSite = ($afterClose < $n && $tokens[$afterClose]->text === '(')
                             || self::isPrecededByNew($tokens, $i);
                         if (!$isCallSite) {
-                            $nameMarkers[] = [
-                                'line' => $nameLine,
-                                'anchorLine' => $anchorLine,
-                                'name' => ltrim($nameText, '\\'),
-                                'args' => $args,
-                            ];
+                            // Pseudo-types (`self<T>` / `static<T>` / `parent<T>`):
+                            // strip the `<…>` clause so PHP can parse the source, but
+                            // skip the marker -- otherwise the resolver would attach
+                            // ATTR_GENERIC_ARGS to the bare `self` Name and the
+                            // Registry would try to specialize a non-existent
+                            // `App\…\self` template (which is the very bug that took
+                            // the strip-only fix from b88539c's review). With the
+                            // marker dropped, monomorphization on the enclosing
+                            // class -- which already specialized it with concrete
+                            // type args -- carries the `self` reference through
+                            // unchanged; PHP's runtime resolves it to the right
+                            // specialized class.
+                            $isPseudoType = in_array(
+                                strtolower($nameText),
+                                ['self', 'static', 'parent'],
+                                true,
+                            );
+                            if (!$isPseudoType) {
+                                $nameMarkers[] = [
+                                    'line' => $nameLine,
+                                    'anchorLine' => $anchorLine,
+                                    'name' => ltrim($nameText, '\\'),
+                                    'args' => $args,
+                                ];
+                            }
                             $startByte = $tokens[$j]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;

@@ -230,6 +230,94 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    public function testSelfWithTypeArgsCompilesEndToEnd(): void
+    {
+        // P1.2 regression: the original beb4955 commit shipped only the
+        // scanner half -- `self<T>` was stripped from the source but the
+        // resolver then attached ATTR_GENERIC_ARGS to the bare `self` Name,
+        // making the Registry try to specialize a non-existent `App\…\self`
+        // template ("Generic template … was instantiated but never defined").
+        // This test compiles a fixture that uses `self<T>` in a return
+        // position and asserts the full pipeline (compile + runtime exec).
+        $dir = sys_get_temp_dir() . '/xphp-self-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Container.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\SelfReturn;
+        class Container<T> {
+            public function __construct(public T $item) {}
+            public function withItem(T $n): self<T>
+            {
+                $this->item = $n;
+                return $this;
+            }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\SelfReturn;
+
+        $a = new Container::<int>(1);
+        $b = $a->withItem(2);
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($dir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $target = $dir . '/dist';
+        $cache = $dir . '/.xphp-cache';
+
+        try {
+            $compiler->compile($sources, $dir, $target, $cache);
+
+            // The specialized Container class lives under cache/Generated/...
+            $generated = self::globRecursive($cache . '/Generated', '*.php');
+            self::assertCount(1, $generated, 'one specialization (Container<int>)');
+            $specialized = file_get_contents($generated[0]);
+            self::assertIsString($specialized);
+
+            // self<T> in the source must become bare `self` in the
+            // specialized class -- `self` here resolves at runtime to the
+            // specialized class itself, which IS the correct semantics.
+            self::assertMatchesRegularExpression(
+                '/public function withItem\(int \$n\): self\b/',
+                $specialized,
+                'self<T> must lower to bare `self` in the specialization',
+            );
+            self::assertStringNotContainsString(
+                '\\App\\SelfReturn\\self',
+                $specialized,
+                'self must NOT be misresolved to a class FQN',
+            );
+
+            // Runtime sanity: instantiate, call withItem, read item back.
+            $runScript = $dir . '/run.php';
+            file_put_contents($runScript, <<<PHP
+            <?php
+            declare(strict_types=1);
+            spl_autoload_register(function (\$class) {
+                if (str_starts_with(\$class, 'XPHP\\\\Generated\\\\')) {
+                    \$rel = substr(\$class, strlen('XPHP\\\\Generated\\\\'));
+                    \$file = '{$cache}/Generated/' . str_replace('\\\\', '/', \$rel) . '.php';
+                    if (file_exists(\$file)) require \$file;
+                }
+            });
+            require '{$target}/Container.php';
+            require '{$target}/Use.php';
+            echo "item={\$b->item}";
+            PHP);
+            $output = [];
+            $exit = 0;
+            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
+            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
+            self::assertContains('item=2', $output);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     private function compile(): void
     {
         $compiler = $this->buildCompiler();

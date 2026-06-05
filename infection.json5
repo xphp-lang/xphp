@@ -129,6 +129,18 @@
             ]
         },
 
+        // scanAndStrip's `strtolower($nameText)` in the pseudo-type guard for
+        // self/static/parent. PHP convention -- enforced by every style guide
+        // and produced by every IDE -- is lowercase for these keywords. The
+        // mutant only differs for mixed-case spellings (`Self<T>`, `STATIC<T>`)
+        // that no real code uses; adding a test for those would lock a
+        // stylistic choice rather than a real contract.
+        "UnwrapStrToLower": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+
         // `<=` vs `<` on the suggested-length clamp — math makes both branches
         // produce identical output across the entire valid hashLength range (16..64).
         "LessThanOrEqualTo": {

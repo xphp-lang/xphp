@@ -226,9 +226,11 @@ PHP;
     public function testSelfWithTypeArgsInReturnPositionIsAccepted(): void
     {
         // RFC class pseudo-types: `self<T>`, `static<T>`, `parent<T>` are
-        // accepted in type-hint positions. Verifies the scanner accepts
-        // the bare `<T>` after `self` (which is in SCALAR_TYPES), strips it,
-        // and the resolver attaches the marker.
+        // accepted in type-hint positions. Verifies the scanner strips the
+        // `<T>` clause so PHP can parse the method signature, AND that no
+        // generic-args marker leaks onto the bare `self` Name node -- the
+        // pseudo-types are class references, not template references, so the
+        // Registry must never see them as templates to specialize.
         $source = <<<'PHP'
 <?php
 namespace App;
@@ -245,11 +247,16 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $ast = $parser->parse($source);
 
-        // The `<T>` clause on the `self` return type must be stripped from the
-        // cleaned source so PHP parses the method signature as `: self`.
         $stripped = $parser->strip($source);
         self::assertStringNotContainsString('self<T>', $stripped);
         self::assertStringContainsString(': self', $stripped);
+
+        // The pseudo-type's Name node must NOT carry ATTR_GENERIC_ARGS --
+        // otherwise the Registry would try to specialize `App\self`.
+        self::assertNull(
+            self::firstNameAttr($ast, 'self', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'self<T> must not attach generic-args marker; pseudo-types are class refs, not templates',
+        );
     }
 
     public function testStaticWithTypeArgsInReturnPositionIsAccepted(): void
@@ -271,7 +278,11 @@ PHP;
         self::assertStringNotContainsString('static<T>', $stripped);
         self::assertStringContainsString(': static', $stripped);
 
-        $parser->parse($source);    // must not throw
+        $ast = $parser->parse($source);
+        self::assertNull(
+            self::firstNameAttr($ast, 'static', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'static<T> must not attach generic-args marker',
+        );
     }
 
     public function testParentWithTypeArgsInReturnPositionIsAccepted(): void
@@ -293,6 +304,12 @@ PHP;
 
         self::assertStringNotContainsString('parent<T>', $stripped);
         self::assertStringContainsString(': parent', $stripped);
+
+        $ast = $parser->parse($source);
+        self::assertNull(
+            self::firstNameAttr($ast, 'parent', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'parent<T> must not attach generic-args marker',
+        );
 
         $parser->parse($source);    // must not throw
     }
