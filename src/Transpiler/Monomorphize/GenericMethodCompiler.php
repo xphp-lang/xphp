@@ -1066,16 +1066,26 @@ final class GenericMethodCompiler
             private function rewriteFuncCall(FuncCall $node): ?Node
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
-                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
+                if (!is_array($args)) {
                     return null;
                 }
-                // Variable turbofish `$var::<T>(...)`: dispatched to a separate
-                // path that looks up the variable's tracked closure template
-                // and hoists the body to a top-level Function_. Arrows and
-                // closures with `use`/static are rejected with a clear
-                // compile-time error (capture semantics aren't preserved by
-                // the hoist).
-                if ($node->name instanceof Variable && is_string($node->name->name)) {
+                $isVarTurbofish = $node->name instanceof Variable && is_string($node->name->name);
+                // Empty turbofish (`$f::<>(...)`) is the all-defaults shape for
+                // variable-turbofish call sites (P5.7); the dispatcher path
+                // pads via `Registry::padArgsWithDefaults`. For named-call
+                // turbofish, empty-args is still invalid -- the original
+                // call-site rewriter expects concrete args.
+                if (!$isVarTurbofish && ($args === [] || !self::allConcrete($args))) {
+                    return null;
+                }
+                if ($isVarTurbofish && $args !== [] && !self::allConcrete($args)) {
+                    return null;
+                }
+                // Variable turbofish `$var::<T>(...)` / `$var::<>(...)`:
+                // dispatched to a separate path that looks up the variable's
+                // tracked closure template and routes through the P5.4
+                // dispatcher. Defaults pad missing trailing args (P5.7).
+                if ($isVarTurbofish) {
                     return $this->rewriteVariableTurbofishCall($node, $args);
                 }
                 if (!$node->name instanceof Name) {
@@ -1204,7 +1214,16 @@ final class GenericMethodCompiler
                 }
 
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                if (!is_array($params) || count($params) !== count($args)) {
+                if (!is_array($params)) {
+                    return null;
+                }
+                // P5.7: pad missing trailing args with defaults BEFORE
+                // the arity check so `$f::<>()` works on an all-defaulted
+                // generic closure / arrow. Padding throws when leading
+                // required params are missing -- the throw surfaces with
+                // a clear `Registry::padArgsWithDefaults` message.
+                $args = Registry::padArgsWithDefaults($params, $args, 'closure<' . $varName . '>');
+                if (count($params) !== count($args)) {
                     return null;
                 }
                 if ($this->hierarchy !== null) {
@@ -1249,7 +1268,10 @@ final class GenericMethodCompiler
                     $entry['seenTagSet'][$tag] = true;
                     $entry['argSets'][] = $args;
                 }
-                $entry['callSites'][] = $node;
+                // Pair each call site with its PADDED tag so finalize doesn't
+                // recompute from the original `ATTR_METHOD_GENERIC_ARGS` (which
+                // may be empty for the `$f::<>()` default-padding shape).
+                $entry['callSites'][] = ['node' => $node, 'tag' => $tag];
                 unset($entry);
                 // Do NOT mutate the call site yet -- pass 2 prepends the tag arg
                 // once the dispatcher's specializations are known.
@@ -1410,11 +1432,12 @@ final class GenericMethodCompiler
             // Rewrite every recorded call site: prepend the tag arg, clear
             // the turbofish marker. The Variable receiver stays so the
             // dispatcher closure (now in `$varName`) is the call target.
-            foreach ($entry['callSites'] as $callSite) {
-                $tag = ClosureDispatcher::tagFor(
-                    $callSite->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS),
-                    $hashLength,
-                );
+            // Each call site carries its post-padding tag (computed at
+            // record time) so empty-turbofish defaults still route to
+            // the right specialization arm.
+            foreach ($entry['callSites'] as $callSiteEntry) {
+                $callSite = $callSiteEntry['node'];
+                $tag = $callSiteEntry['tag'];
                 $tagArg = new Arg(new String_($tag));
                 array_unshift($callSite->args, $tagArg);
                 $callSite->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);

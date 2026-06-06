@@ -188,10 +188,14 @@ final class XphpSourceParser
                 $anchorLine = $tok->line;
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->text === '<') {
+                    // P5.7: defaults allowed on anonymous closures + arrows
+                    // because their specialization paths shipped in
+                    // P5.5 / P5.6. `padArgsWithDefaults` at GMC call-site
+                    // time pads missing trailing args.
                     $parsed = self::parseTypeParamList(
                         $tokens,
                         $j,
-                        allowDefaults: false,
+                        allowDefaults: true,
                         allowVariance: false,
                     );
                     if ($parsed !== null) {
@@ -613,8 +617,8 @@ final class XphpSourceParser
                 if (!$allowDefaults) {
                     throw new RuntimeException(sprintf(
                         'Generic parameter `%s` has a default value, which is not yet '
-                        . 'supported on closures or arrow functions. Assign the closure '
-                        . 'to a named function or remove the default.',
+                        . 'supported on static closures. Drop the `static` modifier or '
+                        . 'assign the closure to a named function.',
                         $paramName,
                     ));
                 }
@@ -1413,11 +1417,14 @@ final class XphpSourceParser
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $bound = $this->buildBoundExpr($entry);
-                                // Method/function/closure/arrow entries never
-                                // carry variance markers (parseTypeParamList rejects
-                                // with allowVariance: false). Methods/functions
-                                // can carry defaults; closures/arrows cannot
-                                // (allowDefaults: false on the latter two).
+                                // Method / function / closure / arrow entries
+                                // never carry variance markers
+                                // (parseTypeParamList rejects with
+                                // `allowVariance: false`). Defaults are allowed
+                                // on methods, functions, anonymous closures
+                                // (P5.7), and arrows (P5.7); only `static`
+                                // closures still reject defaults at parse time
+                                // because their specialization path doesn't ship.
                                 $default = $this->buildDefault($entry);
                                 $typeParams[] = new TypeParam(
                                     $entry['name'],

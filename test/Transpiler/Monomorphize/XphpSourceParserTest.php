@@ -2597,20 +2597,21 @@ PHP;
         self::assertSame('T', $params[0]->name);
     }
 
-    public function testGenericClosureDefaultIsRejected(): void
+    public function testGenericClosureDefaultIsAccepted(): void
     {
+        // P5.7: defaults now allowed on anonymous closures; GMC pads
+        // missing trailing args via `Registry::padArgsWithDefaults`.
         $source = <<<'PHP'
 <?php
 namespace App;
 $f = function<T = string>(T $x): T { return $x; };
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('closures or arrow functions');
-        $parser->parse($source);
+        $ast = $parser->parse($source);
+        self::assertNotEmpty($ast);
     }
 
-    public function testGenericArrowFunctionDefaultIsRejected(): void
+    public function testGenericArrowFunctionDefaultIsAccepted(): void
     {
         $source = <<<'PHP'
 <?php
@@ -2618,8 +2619,22 @@ namespace App;
 $f = fn<T = string>(T $x): T => $x;
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        self::assertNotEmpty($ast);
+    }
+
+    public function testGenericStaticClosureDefaultStillRejected(): void
+    {
+        // P5.7's per-form gating: static closures still reject defaults
+        // because their specialization didn't ship.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = static function<T = string>(T $x): T { return $x; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('closures or arrow functions');
+        $this->expectExceptionMessage('static closures');
         $parser->parse($source);
     }
 
