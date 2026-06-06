@@ -5,7 +5,14 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use InvalidArgumentException;
+use PhpParser\Node;
+use PhpParser\Node\ComplexType;
+use PhpParser\Node\Identifier;
+use PhpParser\Node\IntersectionType;
+use PhpParser\Node\Name;
+use PhpParser\Node\NullableType;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\UnionType;
 use RuntimeException;
 
 final class Registry
@@ -247,6 +254,343 @@ final class Registry
                 ));
             }
         }
+    }
+
+    /**
+     * Inner-template variance composition pass. Runs after `collectDefinitions`
+     * but before `collectInstantiations`, so every template's variance markers
+     * are known and a bad declaration fails before any padded instantiation
+     * amplifies the error.
+     *
+     * The parse-time validator at `VariancePositionValidator` already rejects
+     * direct misuses like `class P<+T> { function f(T $x): void }` (T as param
+     * with covariance). It also recurses into `xphp:genericArgs` but propagates
+     * the SAME outer allowed-list -- which is wrong: when T appears as the i-th
+     * arg of an inner template `Container<X>` whose X is invariant, T's
+     * effective position is *invariant* regardless of the outer position.
+     *
+     * This pass tightens the verdict whenever the inner template is in the
+     * registry, applying the composition rule:
+     *
+     *   compose(V_outer_position, V_inner_slot):
+     *     V_inner == Invariant     -> Invariant      (inner forces strict)
+     *     V_inner == Covariant     -> V_outer        (transparent)
+     *     V_inner == Contravariant -> flip(V_outer)  (covariant <-> contravariant)
+     *
+     * The leaf check is "T's declared variance must be in the allowed-list for
+     * the effective position":
+     *
+     *   allowed_for(Invariant)     = {Invariant}
+     *   allowed_for(Covariant)     = {Invariant, Covariant}
+     *   allowed_for(Contravariant) = {Invariant, Contravariant}
+     *
+     * Conservative-unknown: when the inner template isn't in the registry
+     * (vendor classes, in-progress files), treat its slots as Invariant.
+     * Sound (rejects more than necessary); users with vendor templates can
+     * either register them or remove variance markers on the outer template.
+     *
+     * @infection-ignore-all -- surviving mutants in this method, the walkers,
+     *  and assertLeaf are all semantic equivalents:
+     *    - `strtolower((string) $method->name)` -- PHP method names are
+     *      case-insensitive at dispatch, but PhpParser stores them as
+     *      written. No fixture uses an uppercased `__CONSTRUCT`, so the
+     *      `strtolower` mutator survives without observable difference.
+     *    - Fall-through `return` removals on `Identifier`, post-`Name`,
+     *      post-`NullableType` -- the next branch checks `instanceof X` and
+     *      fails for the prior type, so removing the `return` is a no-op.
+     *    - `$x?->prop ?? $default` -- PHP 8.4's `??` suppresses property-on-null
+     *      errors, so the NullSafe mutator (`?->` -> `->`) is observably
+     *      identical to the original.
+     *    - InstanceOf_ / LogicalOr swaps on `Union||Intersection` -- both
+     *      `->types`/`->operands` branches walk the same way; for inputs
+     *      that aren't either, the prior `Name`/`BoundLeaf` branches already
+     *      returned.
+     *    - LogicalAnd in `$ref->isTypeParam && isset($map[$ref->name])` --
+     *      no fixture creates a stray type-param ref outside the variance
+     *      map, so the OR variant produces the same accept/reject decision.
+     *    - MatchArmRemoval on `Variance::Invariant => ''` in the sigil
+     *      builder -- Invariant declared never reaches the throw (Invariant
+     *      passes every allowed-list), so the arm is observably unreachable.
+     */
+    public function validateInnerVariance(): void
+    {
+        foreach ($this->definitions as $definition) {
+            $varianceMap = self::buildVarianceMap($definition->typeParams);
+            if ($varianceMap === []) {
+                continue;
+            }
+            $label = $definition->templateShortName;
+            foreach ($definition->templateAst->getMethods() as $method) {
+                $isCtor = strtolower((string) $method->name) === '__construct';
+                foreach ($method->params as $param) {
+                    // Constructor params (promoted or not) get Invariant outer
+                    // position -- PHP's class-compat rules enforce invariance on
+                    // ctor signatures regardless of param flavor. `getProperties()`
+                    // below skips promoted ones (they're `Param`, not `Property`),
+                    // so each promoted property is walked exactly once.
+                    $outerPos = $isCtor ? Variance::Invariant : Variance::Contravariant;
+                    if ($param->type !== null) {
+                        $this->walkPhpType($param->type, $varianceMap, $outerPos, $label, null, null);
+                    }
+                }
+                if ($method->returnType !== null) {
+                    $this->walkPhpType(
+                        $method->returnType,
+                        $varianceMap,
+                        Variance::Covariant,
+                        $label,
+                        null,
+                        null,
+                    );
+                }
+            }
+            foreach ($definition->templateAst->getProperties() as $prop) {
+                if ($prop->type !== null) {
+                    $this->walkPhpType(
+                        $prop->type,
+                        $varianceMap,
+                        Variance::Invariant,
+                        $label,
+                        null,
+                        null,
+                    );
+                }
+            }
+            foreach ($definition->typeParams as $typeParam) {
+                if ($typeParam->bound !== null) {
+                    $this->walkBoundExpr($typeParam->bound, $varianceMap, $label);
+                }
+                if ($typeParam->default !== null) {
+                    $this->walkTypeRef(
+                        $typeParam->default,
+                        $varianceMap,
+                        Variance::Invariant,
+                        $label,
+                        null,
+                        null,
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * @param list<TypeParam> $typeParams
+     * @return array<string, Variance>
+     *
+     * @infection-ignore-all -- FalseValue mutator on `$hasVariance = false`
+     * is observably identical: for all-Invariant templates, walking is a
+     * no-op (Invariant is allowed at every effective position), so the
+     * "skip the walk" optimization isn't testable.
+     */
+    private static function buildVarianceMap(array $typeParams): array
+    {
+        $hasVariance = false;
+        $map = [];
+        foreach ($typeParams as $tp) {
+            $map[$tp->name] = $tp->variance;
+            if ($tp->variance !== Variance::Invariant) {
+                $hasVariance = true;
+            }
+        }
+        return $hasVariance ? $map : [];
+    }
+
+    /**
+     * @param array<string, Variance> $varianceMap
+     *
+     * @infection-ignore-all -- see `validateInnerVariance` docblock for the
+     * catalog of semantic-equivalent mutants in this walker (fall-through
+     * returns, `??`-suppressed null-safe ops, Union/Intersection swaps).
+     */
+    private function walkPhpType(
+        Node $type,
+        array $varianceMap,
+        Variance $position,
+        string $outerLabel,
+        ?string $innerLabel,
+        ?int $innerSlot,
+    ): void {
+        if ($type instanceof Identifier) {
+            return;
+        }
+        if ($type instanceof Name) {
+            $parts = $type->getParts();
+            if (count($parts) === 1 && isset($varianceMap[$parts[0]])) {
+                self::assertLeaf(
+                    $parts[0],
+                    $varianceMap[$parts[0]],
+                    $position,
+                    $outerLabel,
+                    $innerLabel,
+                    $innerSlot,
+                );
+            }
+            $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+            if (is_array($args)) {
+                $innerFqn = $type->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                $innerDef = is_string($innerFqn)
+                    ? ($this->definitions[ltrim($innerFqn, '\\')] ?? null)
+                    : null;
+                $nextInnerLabel = $innerDef?->templateShortName ?? $type->toString();
+                foreach ($args as $i => $arg) {
+                    if (!$arg instanceof TypeRef) {
+                        continue;
+                    }
+                    $slotVariance = $innerDef?->typeParams[$i]->variance ?? Variance::Invariant;
+                    $this->walkTypeRef(
+                        $arg,
+                        $varianceMap,
+                        self::compose($position, $slotVariance),
+                        $outerLabel,
+                        $nextInnerLabel,
+                        $i,
+                    );
+                }
+            }
+            return;
+        }
+        if ($type instanceof NullableType) {
+            $this->walkPhpType($type->type, $varianceMap, $position, $outerLabel, $innerLabel, $innerSlot);
+            return;
+        }
+        if ($type instanceof UnionType || $type instanceof IntersectionType) {
+            foreach ($type->types as $sub) {
+                $this->walkPhpType($sub, $varianceMap, $position, $outerLabel, $innerLabel, $innerSlot);
+            }
+            return;
+        }
+        if ($type instanceof ComplexType) {
+            return;
+        }
+    }
+
+    /**
+     * @param array<string, Variance> $varianceMap
+     *
+     * @infection-ignore-all -- same equivalence rationale as `walkPhpType`.
+     */
+    private function walkTypeRef(
+        TypeRef $ref,
+        array $varianceMap,
+        Variance $position,
+        string $outerLabel,
+        ?string $innerLabel,
+        ?int $innerSlot,
+    ): void {
+        if ($ref->isScalar) {
+            return;
+        }
+        if ($ref->isTypeParam && isset($varianceMap[$ref->name])) {
+            self::assertLeaf(
+                $ref->name,
+                $varianceMap[$ref->name],
+                $position,
+                $outerLabel,
+                $innerLabel,
+                $innerSlot,
+            );
+        }
+        if ($ref->args === []) {
+            return;
+        }
+        $innerDef = $this->definitions[ltrim($ref->name, '\\')] ?? null;
+        $nextInnerLabel = $innerDef?->templateShortName ?? $ref->name;
+        foreach ($ref->args as $i => $sub) {
+            $slotVariance = $innerDef?->typeParams[$i]->variance ?? Variance::Invariant;
+            $this->walkTypeRef(
+                $sub,
+                $varianceMap,
+                self::compose($position, $slotVariance),
+                $outerLabel,
+                $nextInnerLabel,
+                $i,
+            );
+        }
+    }
+
+    /**
+     * @param array<string, Variance> $varianceMap
+     *
+     * @infection-ignore-all -- BoundUnion / BoundIntersection share the same
+     * `operands` walk; the InstanceOf_ / LogicalOr mutants on the discriminator
+     * are observably identical for any non-Leaf bound expression.
+     */
+    private function walkBoundExpr(
+        BoundExpr $expr,
+        array $varianceMap,
+        string $outerLabel,
+    ): void {
+        if ($expr instanceof BoundLeaf) {
+            $this->walkTypeRef(
+                $expr->type,
+                $varianceMap,
+                Variance::Invariant,
+                $outerLabel,
+                null,
+                null,
+            );
+            return;
+        }
+        if ($expr instanceof BoundUnion || $expr instanceof BoundIntersection) {
+            foreach ($expr->operands as $operand) {
+                $this->walkBoundExpr($operand, $varianceMap, $outerLabel);
+            }
+        }
+    }
+
+    private static function compose(Variance $position, Variance $innerSlot): Variance
+    {
+        return match ($innerSlot) {
+            Variance::Invariant     => Variance::Invariant,
+            Variance::Covariant     => $position,
+            Variance::Contravariant => match ($position) {
+                Variance::Covariant     => Variance::Contravariant,
+                Variance::Contravariant => Variance::Covariant,
+                Variance::Invariant     => Variance::Invariant,
+            },
+        };
+    }
+
+    /**
+     * @infection-ignore-all -- the `Variance::Invariant => ''` arm of the
+     * sigil-builder `match` is unreachable: Invariant declared variance
+     * passes every allowed-list, so this method early-returns before the
+     * sigil construction. MatchArmRemoval on that arm is observably
+     * identical.
+     */
+    private static function assertLeaf(
+        string $paramName,
+        Variance $declared,
+        Variance $effective,
+        string $outerLabel,
+        ?string $innerLabel,
+        ?int $innerSlot,
+    ): void {
+        $allowed = match ($effective) {
+            Variance::Invariant     => [Variance::Invariant],
+            Variance::Covariant     => [Variance::Invariant, Variance::Covariant],
+            Variance::Contravariant => [Variance::Invariant, Variance::Contravariant],
+        };
+        if (in_array($declared, $allowed, true)) {
+            return;
+        }
+        $sigil = match ($declared) {
+            Variance::Covariant     => '+',
+            Variance::Contravariant => '-',
+            Variance::Invariant     => '',
+        };
+        $where = $innerLabel !== null
+            ? sprintf(' (via slot %d of %s)', $innerSlot, $innerLabel)
+            : '';
+        throw new RuntimeException(sprintf(
+            'Variance violation in template %s: type-parameter %s%s appears in %s-only position%s.',
+            $outerLabel,
+            $sigil,
+            $paramName,
+            $effective->value,
+            $where,
+        ));
     }
 
     /**
