@@ -2216,6 +2216,130 @@ PHP;
         self::assertTrue(true);
     }
 
+    public function testGenericClosureWithoutUseHoistsAndSpecializes(): void
+    {
+        // Variable-turbofish call on a capture-free generic closure: GMC
+        // hoists the body to a top-level Function_ and rewrites the call
+        // site to invoke the hoisted function.
+        $workDir = sys_get_temp_dir() . '/xphp-closure-' . uniqid('', true);
+        mkdir($workDir, 0o755, true);
+        $sourceDir = $workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        file_put_contents($sourceDir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        $pair = function<K, V>(K $key, V $value): array {
+            return [$key, $value];
+        };
+        $pair::<string, int>('age', 42);
+        PHP);
+
+        $compiler = new Compiler(
+            new \XPHP\FileSystem\FileReader\NativeFileReader(),
+            new \XPHP\FileSystem\FileWriter\NativeFileWriter(),
+            new XphpSourceParser((new ParserFactory())->createForHostVersion()),
+            new Specializer(),
+            new SpecializedClassGenerator(
+                new \PhpParser\PrettyPrinter\Standard(),
+                new \XPHP\FileSystem\FileWriter\NativeFileWriter(),
+            ),
+            new \PhpParser\PrettyPrinter\Standard(),
+        );
+        $sources = (new \XPHP\FileSystem\FileFinder\NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $sourceDir, $workDir . '/dist', $workDir . '/.xphp-cache');
+
+        $rewritten = file_get_contents($workDir . '/dist/Use.php');
+        // The call site was rewritten to the hoisted function name.
+        self::assertStringContainsString('closure_pair_T_', $rewritten);
+        // The original `$pair(...)` call form is gone.
+        self::assertStringNotContainsString("\$pair('age', 42)", $rewritten);
+
+        self::rrmdir($workDir);
+    }
+
+    public function testGenericArrowFunctionRejectedAtCallSite(): void
+    {
+        $workDir = sys_get_temp_dir() . '/xphp-arrow-' . uniqid('', true);
+        mkdir($workDir, 0o755, true);
+        $sourceDir = $workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        file_put_contents($sourceDir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        $id = fn<T>(T $x): T => $x;
+        $id::<int>(42);
+        PHP);
+
+        $compiler = new Compiler(
+            new \XPHP\FileSystem\FileReader\NativeFileReader(),
+            new \XPHP\FileSystem\FileWriter\NativeFileWriter(),
+            new XphpSourceParser((new ParserFactory())->createForHostVersion()),
+            new Specializer(),
+            new SpecializedClassGenerator(
+                new \PhpParser\PrettyPrinter\Standard(),
+                new \XPHP\FileSystem\FileWriter\NativeFileWriter(),
+            ),
+            new \PhpParser\PrettyPrinter\Standard(),
+        );
+        $sources = (new \XPHP\FileSystem\FileFinder\NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Generic arrow functions cannot yet be specialized');
+        $compiler->compile($sources, $sourceDir, $workDir . '/dist', $workDir . '/.xphp-cache');
+        self::rrmdir($workDir);
+    }
+
+    public function testGenericClosureWithUseClauseRejectedAtCallSite(): void
+    {
+        $workDir = sys_get_temp_dir() . '/xphp-closure-use-' . uniqid('', true);
+        mkdir($workDir, 0o755, true);
+        $sourceDir = $workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        file_put_contents($sourceDir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        $y = 1;
+        $f = function<T>(T $x) use ($y) { return [$x, $y]; };
+        $f::<int>(42);
+        PHP);
+
+        $compiler = new Compiler(
+            new \XPHP\FileSystem\FileReader\NativeFileReader(),
+            new \XPHP\FileSystem\FileWriter\NativeFileWriter(),
+            new XphpSourceParser((new ParserFactory())->createForHostVersion()),
+            new Specializer(),
+            new SpecializedClassGenerator(
+                new \PhpParser\PrettyPrinter\Standard(),
+                new \XPHP\FileSystem\FileWriter\NativeFileWriter(),
+            ),
+            new \PhpParser\PrettyPrinter\Standard(),
+        );
+        $sources = (new \XPHP\FileSystem\FileFinder\NativeFileFinder())->find($sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('clauses cannot yet be specialized');
+        $compiler->compile($sources, $sourceDir, $workDir . '/dist', $workDir . '/.xphp-cache');
+        self::rrmdir($workDir);
+    }
+
+    private static function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            is_dir($path) ? self::rrmdir($path) : unlink($path);
+        }
+        rmdir($dir);
+    }
+
     public function testVariableTurbofishCallSiteIsRecognized(): void
     {
         // `$pair::<int>('x')` -- variable turbofish. After scanner strip,

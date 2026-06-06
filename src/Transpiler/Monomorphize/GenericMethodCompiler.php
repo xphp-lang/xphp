@@ -137,7 +137,13 @@ final class GenericMethodCompiler
             }
         }
 
-        if ($methodTemplates === [] && $functionTemplates === []) {
+        // Closure-template tracking happens lazily inside rewriteCallSites
+        // (every Assign with a Closure-with-genericParams RHS is tracked), so
+        // the early return must NOT fire just because the file has no named
+        // templates -- it might still have anonymous generic closures.
+        if ($methodTemplates === [] && $functionTemplates === []
+            && !self::hasAnonymousGenericCallSite($astSet)
+        ) {
             return;
         }
 
@@ -314,6 +320,7 @@ final class GenericMethodCompiler
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
         $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
+            private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
 
@@ -344,6 +351,16 @@ final class GenericMethodCompiler
              * @var array<string, string>
              */
             private array $currentScopeLocalTypes = [];
+            /**
+             * Variable name -> the Closure or ArrowFunction AST node that was
+             * assigned to it (only when the closure carries
+             * ATTR_METHOD_GENERIC_PARAMS, i.e. is a generic anonymous template).
+             * Lets the FuncCall-on-Variable rewriter find the template for
+             * `$var::<T>(...)` call sites assigned earlier in the same scope.
+             *
+             * @var array<string, Closure|ArrowFunction>
+             */
+            private array $currentScopeClosureTemplates = [];
             /**
              * Snapshot stack for scope isolation across nested
              * Function_/ClassMethod/Closure/ArrowFunction boundaries. On enter we push the
@@ -406,6 +423,7 @@ final class GenericMethodCompiler
             {
                 if ($node instanceof Namespace_) {
                     $this->currentNamespace = $node->name?->toString() ?? '';
+                    $this->currentNamespaceNode = $node;
                     $this->useMap = [];
                 }
                 if ($node instanceof Use_) {
@@ -528,6 +546,17 @@ final class GenericMethodCompiler
                         && $node->expr->class instanceof Name
                     ) {
                         $this->currentScopeLocalTypes[$assignedName] = $this->resolveClassName($node->expr->class);
+                    }
+                    // Track anonymous generic templates: `$id = fn<T>(T $x) => $x`
+                    // or `$id = function<T>(T $x): T { ... }`. The FuncCall-on-
+                    // Variable rewriter looks the variable up to find the
+                    // template body for `$id::<int>(...)` call-site
+                    // specialization.
+                    if (($node->expr instanceof Closure
+                            || $node->expr instanceof ArrowFunction)
+                        && is_array($node->expr->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
+                    ) {
+                        $this->currentScopeClosureTemplates[$assignedName] = $node->expr;
                     }
                 }
                 return null;
@@ -832,6 +861,15 @@ final class GenericMethodCompiler
                 if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
                     return null;
                 }
+                // Variable turbofish `$var::<T>(...)`: dispatched to a separate
+                // path that looks up the variable's tracked closure template
+                // and hoists the body to a top-level Function_. Arrows and
+                // closures with `use`/static are rejected with a clear
+                // compile-time error (capture semantics aren't preserved by
+                // the hoist).
+                if ($node->name instanceof Variable && is_string($node->name->name)) {
+                    return $this->rewriteVariableTurbofishCall($node, $args);
+                }
                 if (!$node->name instanceof Name) {
                     return null;
                 }
@@ -890,6 +928,134 @@ final class GenericMethodCompiler
                 $node->name = new FullyQualified($mangledFqn, $node->name->getAttributes());
                 $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
                 $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
+
+                return $node;
+            }
+
+            /**
+             * Specialize a `$var::<T>(...)` call site by hoisting the variable's
+             * assigned generic closure body to a top-level Function_ with the
+             * mangled name.
+             *
+             * Capture semantics are PRESERVED for the supported subset only:
+             *
+             *   - Capture-free `function<T>(...) { ... }`: hoists to a top-level
+             *     Function_ via Specializer::specializeFunction. No outer state
+             *     was captured, so the rewrite is semantically identical.
+             *
+             *   - `static function<T>(...) { ... }`: rejected. Static closures
+             *     have a different `$this` semantics (no implicit class binding);
+             *     hoisting would change observable behavior.
+             *
+             *   - Closures with `use (...)`: rejected. The `use` clause
+             *     evaluates captures at the closure construction site, not at
+             *     the call site; the hoist evaluates them never (top-level
+             *     functions have no captured scope).
+             *
+             *   - Arrow functions (`fn<T>(...) => ...`): rejected. Arrow
+             *     functions IMPLICITLY capture every outer variable by value
+             *     at expression-evaluation time; the hoist breaks that.
+             *
+             * Users hitting the rejection get a clear compile-time error
+             * pointing them to "lift to `function name<T>(...)` at file scope,
+             * or rewrite the call site to use a named function."
+             *
+             * @param list<TypeRef> $args
+             */
+            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): ?Node
+            {
+                $varName = $node->name->name; // already string-checked by caller
+                $template = $this->currentScopeClosureTemplates[$varName] ?? null;
+                if ($template === null) {
+                    return null;
+                }
+
+                if ($template instanceof ArrowFunction) {
+                    throw new RuntimeException(sprintf(
+                        'Generic arrow functions cannot yet be specialized at '
+                        . 'call sites (capture-by-value semantics aren\'t '
+                        . 'preserved by the current hoist). Rewrite the call '
+                        . 'site for `$%s::<...>(...)` to use a named generic '
+                        . 'function (`function name<T>(...) { ... }`) at file '
+                        . 'scope.',
+                        $varName,
+                    ));
+                }
+                if ($template instanceof Closure && $template->static) {
+                    throw new RuntimeException(sprintf(
+                        'Generic static closures cannot yet be specialized at '
+                        . 'call sites. Rewrite the call site for `$%s::<...>(...)` '
+                        . 'to use a named generic function at file scope.',
+                        $varName,
+                    ));
+                }
+                if ($template instanceof Closure && $template->uses !== []) {
+                    throw new RuntimeException(sprintf(
+                        'Generic closures with `use (...)` clauses cannot yet '
+                        . 'be specialized at call sites (captures aren\'t '
+                        . 'preserved by the top-level hoist). Rewrite the call '
+                        . 'site for `$%s::<...>(...)` to use a named generic '
+                        . 'function, or drop the `use` clause and read the '
+                        . 'captured values from inside the body.',
+                        $varName,
+                    ));
+                }
+
+                $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (!is_array($params) || count($params) !== count($args)) {
+                    return null;
+                }
+                if ($this->hierarchy !== null) {
+                    Registry::checkBounds(
+                        $params,
+                        $args,
+                        $this->hierarchy,
+                        'closure<' . self::formatArgList($args) . '>',
+                    );
+                }
+
+                // Build a synthetic Function_ from the closure body, then route
+                // through the existing specializeFunction path.
+                $syntheticName = 'closure_' . $varName;
+                $synthetic = new Function_(
+                    new Identifier($syntheticName),
+                    [
+                        'params' => $template->params,
+                        'returnType' => $template->returnType,
+                        'byRef' => $template->byRef,
+                        'stmts' => $template->stmts,
+                        'attrGroups' => $template->attrGroups,
+                    ],
+                    $template->getAttributes(),
+                );
+                $synthetic->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $params);
+
+                $mangled = self::mangleName($syntheticName, $args, $this->hashLength);
+                // Anchor by byte position to avoid cross-call collisions
+                // between closures with the same shape in different scopes.
+                $generatedKey = 'closure::' . $varName . '@' . $template->getStartFilePos();
+                $generatedKey .= '::' . $mangled;
+
+                $mangledFqn = $this->currentNamespace !== ''
+                    ? $this->currentNamespace . '\\' . $mangled
+                    : $mangled;
+
+                if (!isset($this->alreadyGenerated[$generatedKey])) {
+                    $substitution = [];
+                    foreach ($params as $i => $param) {
+                        $substitution[$param->name] = $args[$i];
+                    }
+                    $specialized = (new Specializer())->specializeFunction($synthetic, $substitution, $mangled);
+                    if ($this->currentNamespaceNode !== null) {
+                        $this->pendingAppends[] = [$this->currentNamespaceNode, $specialized];
+                    } else {
+                        $this->topLevelAppends[] = $specialized;
+                    }
+                    $this->alreadyGenerated[$generatedKey] = true;
+                }
+
+                $node->name = new FullyQualified($mangledFqn);
+                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
 
                 return $node;
             }
@@ -1039,6 +1205,52 @@ final class GenericMethodCompiler
      * enclosing `namespace { }` block. Returns the filtered statement list so the
      * caller can replace the slot in `$astSet` directly.
      *
+     * Does the AST set contain any `FuncCall(name: Variable, ...)` with
+     * `ATTR_METHOD_GENERIC_ARGS` attached? Used to keep `process()` from
+     * early-returning when the only generic call sites are
+     * `$var::<T>(...)` on anonymous closure/arrow templates.
+     *
+     * @param array<string, list<Node\Stmt>> $astSet
+     */
+    private static function hasAnonymousGenericCallSite(array $astSet): bool
+    {
+        $found = false;
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($found) extends NodeVisitorAbstract {
+            public function __construct(private bool &$found)
+            {
+            }
+            /**
+             * @infection-ignore-all -- pure perf optimization. Mutating the
+             * early-return or the instanceof guard just disables the fast-path
+             * exit; the subsequent rewriteCallSites pass is idempotent for
+             * files with no matching call sites, so observable behavior is
+             * identical with or without this pre-scan firing.
+             */
+            public function enterNode(Node $node): null
+            {
+                if ($this->found) {
+                    return null;
+                }
+                if ($node instanceof FuncCall
+                    && $node->name instanceof Variable
+                    && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS))
+                ) {
+                    $this->found = true;
+                }
+                return null;
+            }
+        });
+        foreach ($astSet as $ast) {
+            $traverser->traverse($ast);
+            if ($found) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * @param list<Node\Stmt> $ast
      * @return list<Node\Stmt>
      */

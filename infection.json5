@@ -399,6 +399,16 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
+        // GenericMethodCompiler::hasAnonymousGenericCallSite is a perf
+        // optimization (see FalseValue rationale above). LogicalAndNegation
+        // on the `FuncCall && instanceof Variable && is_array(...)` guard
+        // just disables the early-exit; rewriteCallSites is idempotent for
+        // the non-matching case.
+        "LogicalAndNegation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
         "LessThan": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
@@ -592,7 +602,17 @@
                 // surface because Infection mutates the literal `false`
                 // rather than the keyword-arg semantics; the test surface
                 // catches the observable behavior.
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
+                // GenericMethodCompiler::hasAnonymousGenericCallSite is a
+                // pure perf optimization: it pre-scans the AST set to skip
+                // rewriteCallSites when there are no generic call sites of
+                // any kind. Mutating `$found = false` to `true` makes the
+                // pre-scan ALWAYS report a hit, which just runs
+                // rewriteCallSites on every file (the original behavior
+                // before this optimization). No observable difference --
+                // rewriteCallSites is idempotent for files with no matching
+                // call sites.
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
         // XphpSourceParser::applyReplacements: dropping the usort() entirely.
