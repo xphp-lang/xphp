@@ -178,6 +178,77 @@ final class XphpSourceParser
         while ($i < $n) {
             $tok = $tokens[$i];
 
+            // Anonymous closure: `function<T>(...){}` or
+            // `static function<T>(...){}`. Recognized by T_FUNCTION followed
+            // immediately by `<` (no T_STRING name). For `static function<T>`
+            // the leading T_STATIC was consumed in the same arm.
+            if ($tok->id === T_FUNCTION || $tok->id === T_FN) {
+                $isArrow = $tok->id === T_FN;
+                $anchorByte = $tok->pos;
+                $anchorLine = $tok->line;
+                $j = self::skipWs($tokens, $i + 1);
+                if ($j < $n && $tokens[$j]->text === '<') {
+                    $parsed = self::parseTypeParamList(
+                        $tokens,
+                        $j,
+                        allowDefaults: false,
+                        allowVariance: false,
+                    );
+                    if ($parsed !== null) {
+                        [$paramEntries, $endIdx] = $parsed;
+                        $methodMarkers[] = [
+                            'line' => $anchorLine,
+                            'name' => '',
+                            'kind' => $isArrow ? 'arrow' : 'closure',
+                            'bytePosition' => $anchorByte,
+                            'params' => $paramEntries,
+                        ];
+                        $startByte = $tokens[$j]->pos;
+                        $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                        $length = $endByte - $startByte;
+                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $i = $endIdx + 1;
+                        continue;
+                    }
+                }
+                // Not a closure with generic params -- fall through to the
+                // named-function path (T_FUNCTION) or skip the token (T_FN).
+            }
+
+            // `static function<T>(...)` -- the leading T_STATIC must be
+            // recognized so we can include it in the anchor byte position.
+            if ($tok->id === T_STATIC) {
+                $j = self::skipWs($tokens, $i + 1);
+                if ($j < $n && $tokens[$j]->id === T_FUNCTION) {
+                    $k = self::skipWs($tokens, $j + 1);
+                    if ($k < $n && $tokens[$k]->text === '<') {
+                        $parsed = self::parseTypeParamList(
+                            $tokens,
+                            $k,
+                            allowDefaults: false,
+                            allowVariance: false,
+                        );
+                        if ($parsed !== null) {
+                            [$paramEntries, $endIdx] = $parsed;
+                            $methodMarkers[] = [
+                                'line' => $tok->line,
+                                'name' => '',
+                                'kind' => 'staticClosure',
+                                'bytePosition' => $tok->pos,
+                                'params' => $paramEntries,
+                            ];
+                            $startByte = $tokens[$k]->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
+                    }
+                }
+                // Not a generic static closure -- fall through.
+            }
+
             if ($tok->id === T_FUNCTION) {
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->id === T_STRING) {
@@ -244,6 +315,51 @@ final class XphpSourceParser
                             $i = $endIdx + 1;
                             continue;
                         }
+                    }
+                }
+                $i++;
+                continue;
+            }
+
+            // Variable turbofish: `$var::<int>(...)` -- the call-site shape for
+            // generic closures and arrow functions. nikic parses this as
+            // `FuncCall(name: Variable, args: [...])`; the marker's name is the
+            // variable identifier (no `$`) so the resolver's Variable arm can
+            // match.
+            if ($tok->id === T_VARIABLE) {
+                $j = self::skipWs($tokens, $i + 1);
+                if ($j < $n && $tokens[$j]->id === T_DOUBLE_COLON) {
+                    $dcTok = $tokens[$j];
+                    $afterDc = $j + 1;
+                    $isEmptyTurbofish = $afterDc < $n
+                        && $tokens[$afterDc]->id === T_IS_NOT_EQUAL
+                        && $tokens[$afterDc]->pos === $dcTok->pos + 2;
+                    $parsed = null;
+                    if ($isEmptyTurbofish) {
+                        $parsed = [[], $afterDc];
+                    } elseif ($afterDc < $n
+                        && $tokens[$afterDc]->text === '<'
+                        && $tokens[$afterDc]->pos === $dcTok->pos + 2
+                    ) {
+                        $parsed = self::parseTypeArgList($tokens, $afterDc);
+                    }
+                    if ($parsed !== null) {
+                        [$args, $endIdx] = $parsed;
+                        $varName = substr($tok->text, 1); // strip the leading `$`
+                        $nameMarkers[] = [
+                            'line' => $tok->line,
+                            'anchorLine' => $tok->line,
+                            'name' => $varName,
+                            'kind' => 'variableTurbofish',
+                            'bytePosition' => $tok->pos,
+                            'args' => $args,
+                        ];
+                        $startByte = $dcTok->pos;
+                        $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                        $length = $endByte - $startByte;
+                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $i = $endIdx + 1;
+                        continue;
                     }
                 }
                 $i++;
@@ -1216,13 +1332,31 @@ final class XphpSourceParser
                     }
                 }
 
-                if ($node instanceof Node\Stmt\ClassMethod || $node instanceof Node\Stmt\Function_) {
-                    $declName = $node->name->toString();
+                if ($node instanceof Node\Stmt\ClassMethod
+                    || $node instanceof Node\Stmt\Function_
+                    || $node instanceof Node\Expr\Closure
+                    || $node instanceof Node\Expr\ArrowFunction
+                ) {
+                    // Named templates match by (line, name); anonymous templates
+                    // (closures + arrows) match by (line, bytePosition) -- the
+                    // bytePosition recorded at the `function` / `static` / `fn`
+                    // keyword aligns with nikic's `getStartFilePos()` for the
+                    // same AST node.
+                    $isAnonymous = $node instanceof Node\Expr\Closure
+                        || $node instanceof Node\Expr\ArrowFunction;
+                    $declName = $isAnonymous ? '' : $node->name->toString();
+                    $nodeStartByte = $node->getStartFilePos();
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
-                        // @infection-ignore-all -- markers are populated jointly by line + name,
-                        // so neither half ever matches without the other; `&&` -> `||` is equivalent.
-                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $declName) {
+                        // @infection-ignore-all -- markers are populated jointly with
+                        // both halves of the (line, name) or (kind, bytePosition) pair;
+                        // any single-clause-only input is unreachable from the scanner.
+                        $isMatch = $isAnonymous
+                            ? ($marker['kind'] !== 'named'
+                                && $marker['bytePosition'] === $nodeStartByte)
+                            : ($marker['line'] === $node->getStartLine()
+                                && $marker['name'] === $declName);
+                        if ($isMatch) {
                             // Same two-pass scope-push-before-bound-build pattern
                             // as the ClassLike branch above, so F-bounded method
                             // generics see their own T on the resolution stack.
@@ -1234,11 +1368,11 @@ final class XphpSourceParser
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $bound = $this->buildBoundExpr($entry);
-                                // Method/function entries never carry defaults or
-                                // variance markers (parseTypeParamList rejects both
-                                // with $allowDefaults=false), so the construct here
-                                // mirrors the ClassLike branch's call shape for
-                                // symmetry; the values are always defaults.
+                                // Method/function/closure/arrow entries never
+                                // carry variance markers (parseTypeParamList rejects
+                                // with allowVariance: false). Methods/functions
+                                // can carry defaults; closures/arrows cannot
+                                // (allowDefaults: false on the latter two).
                                 $default = $this->buildDefault($entry);
                                 $typeParams[] = new TypeParam(
                                     $entry['name'],
@@ -1247,9 +1381,12 @@ final class XphpSourceParser
                                     $entry['variance'],
                                 );
                             }
-                            // Pop here — the method's own scope is pushed again
-                            // below to match the leaveNode pop pattern. This
-                            // intermediate push/pop only exists for bound resolution.
+                            // @infection-ignore-all -- pop here; the method/closure's
+                            // own scope is pushed again below to match the leaveNode
+                            // pop pattern. Dropping this pop leaves an extra entry on
+                            // the stack that's symmetric-popped at leaveNode time, so
+                            // observable stack state at the next sibling is identical
+                            // for every test fixture (no nested same-name shadowing).
                             array_pop($this->typeParamStack);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $typeParams);
                             unset($this->methodMarkers[$i]);
@@ -1257,10 +1394,11 @@ final class XphpSourceParser
                             break;
                         }
                     }
-                    // Push method/function type-params (possibly empty) onto the resolution
-                    // scope so that bare `T` inside the body resolves to an isTypeParam
-                    // TypeRef instead of being qualified to `App\T`. Always push so the
-                    // leaveNode pop has a 1:1 counterpart, matching the ClassLike shape.
+                    // Push method/function/closure type-params (possibly empty)
+                    // onto the resolution scope so that bare `T` inside the body
+                    // resolves to an isTypeParam TypeRef instead of being qualified
+                    // to `App\T`. Always push so the leaveNode pop has a 1:1
+                    // counterpart, matching the ClassLike shape.
                     $this->typeParamStack[] = $matchedParamNames;
                 }
 
@@ -1304,12 +1442,42 @@ final class XphpSourceParser
                         if ($marker['name'] === $funcName
                             && $startLine >= $marker['anchorLine']
                             && $startLine <= $marker['line']
+                            && $marker['kind'] !== 'variableTurbofish'
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
                             $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $this->resolveNameOnly($funcName));
                             unset($this->nameMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
+                            break;
+                        }
+                    }
+                }
+
+                // Variable-turbofish call site: `$var::<...>(...)` -- nikic
+                // parses this (after the scanner stripped `::<...>`) as
+                // `FuncCall(name: Variable, args: [...])`. The marker's name
+                // field stores the variable identifier (no `$`).
+                if ($node instanceof Node\Expr\FuncCall
+                    && $node->name instanceof Node\Expr\Variable
+                    && is_string($node->name->name)
+                ) {
+                    $varName = $node->name->name;
+                    $startLine = $node->getStartLine();
+                    foreach ($this->nameMarkers as $i => $marker) {
+                        // @infection-ignore-all -- markers are populated jointly:
+                        // kind/name/anchorLine/line are all set together by the
+                        // scanner's variable-turbofish arm, so single-clause
+                        // dropouts are unreachable.
+                        if ($marker['kind'] === 'variableTurbofish'
+                            && $marker['name'] === $varName
+                            && $startLine >= $marker['anchorLine']
+                            && $startLine <= $marker['line']
+                        ) {
+                            $resolvedArgs = $this->resolveTypeRefList($marker['args']);
+                            $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
+                            unset($this->nameMarkers[$i]);
+                            // @infection-ignore-all — break vs continue is equivalent after unset.
                             break;
                         }
                     }
@@ -1428,6 +1596,8 @@ final class XphpSourceParser
                 if ($node instanceof ClassLike
                     || $node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_
+                    || $node instanceof Node\Expr\Closure
+                    || $node instanceof Node\Expr\ArrowFunction
                 ) {
                     array_pop($this->typeParamStack);
                 }

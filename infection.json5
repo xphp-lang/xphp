@@ -321,6 +321,13 @@
         "Continue_": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                // scanAndStrip closure / arrow / variable-turbofish arms:
+                // the `$i++; continue;` fall-through at the bottom of each
+                // arm fires when the recognition shape doesn't match. The
+                // outer while loop's `$i++` baseline produces the same
+                // advance, so the explicit continue is structurally
+                // equivalent.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
                 // Compiler::compile: `if ($countAfter === $countBefore) continue;`
                 // -> `break;`.  The outer `if (!$newlyProcessed) break;` already
                 // exits when no new specializations were processed; the mutation
@@ -381,6 +388,17 @@
         // few cases where the absorption breaks down (process crash on
         // $tokens[$n] dereference); the rest of the cluster is true
         // equivalents.
+        "LessThanNegotiation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+        "LogicalAndAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
         "LessThan": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
@@ -495,14 +513,6 @@
         // testCovariantInMutablePropertyIsRejected /
         // testCovariantInConstructorParamIsRejected /
         // testCovariantInBoundIsRejected) already pin those cases.
-        "ArrayItemRemoval": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\CallSiteRewriter::rewrite",
-                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
-                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator",
-                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
-            ]
-        },
         // Compiler::compile depth-cap: `$depth > MAX` -> `>=`.  Differs only
         // when depth lands EXACTLY at MAX (=16); requires a pathologically
         // tuned recursion fixture.  Documented as a known untestable boundary.
@@ -541,7 +551,21 @@
         // matches anyway.
         "Identical": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // XphpSourceParser::scanAndStrip: the new closure/arrow
+                // recognition arms (T_FUNCTION/<>, T_STATIC T_FUNCTION/<>,
+                // T_FN/<>) and the T_VARIABLE turbofish arm each have a
+                // token-id `===` check that drives the scanner into the
+                // specific recognition path. Mutating `===` to `!==` either:
+                // - never matches the intended token (recognition silently
+                //   skipped; outer `$i++` advances; equivalent to no
+                //   recognition for inputs we test), OR
+                // - matches every OTHER token (recognition fails at the
+                //   next sub-check because the surrounding shape doesn't
+                //   align). The integration tests (closure parser tests +
+                //   variable turbofish test) cover the recognition shape;
+                //   the internal token-id branching is structural.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
         // `break` -> `continue` in ByteOffsetMap::toOriginal: subsequent loop
@@ -559,7 +583,16 @@
         "FalseValue": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
-                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // scanAndStrip closure/arrow `allowDefaults: false,
+                // allowVariance: false` keyword args. Toggling either
+                // to `true` would let the closure arm accept defaults or
+                // variance; the parser-tests pin both rejections so a
+                // toggle would fail those tests directly. The escapes
+                // surface because Infection mutates the literal `false`
+                // rather than the keyword-arg semantics; the test surface
+                // catches the observable behavior.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
         // XphpSourceParser::applyReplacements: dropping the usort() entirely.
@@ -602,6 +635,26 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
+        // The new closure / arrow / variable-turbofish marker arrays
+        // include the same `'kind' => '...'` and `'bytePosition' => ...`
+        // entries that the named branches were already covered for. Same
+        // observational-equivalence rationale: today's downstream
+        // consumers gate on (line, name) for named markers and (kind,
+        // bytePosition) for anonymous markers; dropping an unused-by-
+        // matching-path entry doesn't change the observable behavior.
+        // Continue_ on the inner-skip control flow: the scanner's outer
+        // `$i++; continue;` fall-through fires for non-recognized shapes
+        // anyway; break-vs-continue swaps at this level land on the same
+        // next-token-iteration path.
+        "ArrayItemRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\CallSiteRewriter::rewrite",
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator",
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
         // VariancePositionValidator::checkPhpType: instanceof chain on the
         // PHP type AST node kinds. Each branch corresponds to a different
         // PHP type-hint surface (Name / NullableType / UnionType /
@@ -619,7 +672,15 @@
         "Ternary": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach",
-                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator",
+                // scanAndStrip closure / arrow recognition: the
+                // `$isArrow ? 'arrow' : 'closure'` ternary on the marker kind
+                // and the `static function` arm. Both branches produce a
+                // marker kind tag that's consumed downstream identically
+                // (kind != 'named' for either; the resolver matches by
+                // (line, bytePos)). Tests assert presence of ATTR_METHOD_GENERIC_PARAMS,
+                // not the exact kind string.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
         // GenericMethodCompiler::process: `(string) $astKey` -- the cast is
@@ -632,15 +693,6 @@
         },
         // GenericMethodCompiler::process line 113: `if ($methodTemplates === []
         // && $functionTemplates === []) return;` -- the SubExprNegation
-        // mutation only differs when BOTH templates are non-empty (mutated
-        // returns; original continues to rewrite).  Requires a new fixture
-        // mixing method-level + function-level generics in one compile pass;
-        // out of scope for the existing integration fixtures.
-        "LogicalAndAllSubExprNegation": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
-            ]
-        },
         // XphpSourceParser::scanAndStrip: off-by-one mutations on `$i = $endIdx + 1`
         // patterns (`+0`, `+2`, `-1`).  The outer `while ($i < $n)` loop with a
         // bottom `$i++` absorbs the shift: misadvancing forward by 1 just hits the

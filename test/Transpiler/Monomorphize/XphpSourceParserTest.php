@@ -2216,6 +2216,119 @@ PHP;
         self::assertTrue(true);
     }
 
+    public function testVariableTurbofishCallSiteIsRecognized(): void
+    {
+        // `$pair::<int>('x')` -- variable turbofish. After scanner strip,
+        // nikic parses as `FuncCall(name: Variable($pair), args: [...])`.
+        // The resolver attaches ATTR_METHOD_GENERIC_ARGS to the FuncCall.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$pair = function<T>(T $x) { return $x; };
+$pair::<int>(42);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $funcCall = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\FuncCall::class);
+        self::assertNotNull($funcCall);
+        $args = $funcCall->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertCount(1, $args);
+        self::assertSame('int', $args[0]->name);
+        self::assertTrue($args[0]->isScalar);
+    }
+
+    public function testGenericClosureDeclarationIsParsed(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$pair = function<K, V>(K $k, V $v): array { return [$k, $v]; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $closure = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\Closure::class);
+        self::assertNotNull($closure);
+        $params = $closure->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertCount(2, $params);
+        self::assertSame('K', $params[0]->name);
+        self::assertSame('V', $params[1]->name);
+    }
+
+    public function testGenericStaticClosureDeclarationIsParsed(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$identity = static function<T>(T $x): T { return $x; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $closure = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\Closure::class);
+        self::assertNotNull($closure);
+        $params = $closure->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('T', $params[0]->name);
+        self::assertTrue($closure->static);
+    }
+
+    public function testGenericArrowFunctionIsParsed(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$id = fn<T>(T $x): T => $x;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $arrow = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\ArrowFunction::class);
+        self::assertNotNull($arrow);
+        $params = $arrow->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('T', $params[0]->name);
+    }
+
+    public function testGenericClosureDefaultIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = function<T = string>(T $x): T { return $x; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('closures or arrow functions');
+        $parser->parse($source);
+    }
+
+    public function testGenericArrowFunctionDefaultIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = fn<T = string>(T $x): T => $x;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('closures or arrow functions');
+        $parser->parse($source);
+    }
+
+    public function testGenericClosureVarianceIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = function<+T>(T $x): T { return $x; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Variance markers');
+        $this->expectExceptionMessage('closures, or arrow functions');
+        $parser->parse($source);
+    }
+
     public function testCovariantInNestedClosureParameterIsRejected(): void
     {
         // `+T` of the OUTER class appears in the parameter type of a nested
