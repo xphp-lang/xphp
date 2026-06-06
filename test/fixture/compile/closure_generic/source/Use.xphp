@@ -4,12 +4,11 @@ declare(strict_types=1);
 
 namespace App\ClosureGeneric;
 
-// Capture-free generic closure -- the P5.4 ClosureDispatcher rewrites
-// the Assign's RHS to a sentinel-arg-prefix dispatcher closure that
-// routes each call via a `match` on a `T_<hash>` tag. Specializations
-// land as top-level `closure_pair_T_<hash>` functions in the same
-// namespace. Call sites get the tag prepended as the first argument;
-// duplicate arg-tuples dedupe into a single match arm.
+// Capture-free generic closure. Each unique type-arg tuple produces
+// one specialized top-level function (`closure_pair_T_<hash>`); the
+// original closure variable is rewritten to a dispatcher that routes
+// runtime calls to the right specialization. Duplicate arg tuples
+// across call sites share a single specialization.
 $pair = function<K, V>(K $key, V $value): array {
     return [$key, $value];
 };

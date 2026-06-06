@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace App\ClosureDispatcherUseClause;
 
-// P5.6: closures with explicit `use (...)` clauses, including by-ref
-// captures. The dispatcher forwards `$template->uses` verbatim to its
-// own `use` clause; each capture is lifted as a trailing `mixed` (or
-// `mixed &`) param on every specialized function. The named-after-
-// unpack match-arm args preserve ref-ness across the call boundary,
-// so `$counter` mutations inside the body write through to the outer
-// scope.
+// Generic closure with an explicit `use (...)` clause. By-ref captures
+// (`&$counter`) survive the rewrite: mutations to `$counter` inside the
+// body still write through to the outer scope. By-value captures
+// (`$base`) behave as a snapshot. Two distinct type-args produce two
+// distinct specialized functions, both sharing the same captured state.
 $base = 10;
 $counter = 0;
 $f = function<T>(T $x) use ($base, &$counter): array {

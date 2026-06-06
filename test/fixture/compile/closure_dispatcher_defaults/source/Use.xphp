@@ -4,15 +4,14 @@ declare(strict_types=1);
 
 namespace App\ClosureDispatcherDefaults;
 
-// P5.7: defaults on closure / arrow type-params. Anonymous closures and
-// arrows accept `= Default` at parse time (static closures still reject
-// per the per-form gating). The call-site rewriter pads missing trailing
-// args via `Registry::padArgsWithDefaults` before computing the tag,
-// so `$f::<>()` routes correctly to the all-defaults specialization.
+// Default type arguments on generic closures and arrows. Anonymous
+// closures and arrows accept `T = Default`; the empty-turbofish
+// `$f::<>()` shape pads missing trailing args from the default. Mixes
+// freely with explicit `use ()` captures and with explicit arg tuples
+// (`$f::<string>('hi')`).
 //
-// Composes with `use (...)` (P5.6): defaults + captures work together.
-// The single specialization shared by `$g::<>(...)` calls dedupes via
-// the padded-args tag.
+// Note: `static function<T = ...>` is not supported (defaults on static
+// closures stay rejected at parse time).
 $prefix = '#';
 
 $f = function<T = int>(T $x) use ($prefix): string {

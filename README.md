@@ -3,8 +3,8 @@
 ## What it is
 
 `xphp` is a superset of `php` that gives developers real generics,
-powered by [monomorphization](https://en.wikipedia.org/wiki/Monomorphization) at
-compile time.
+powered by monomorphization at compile time -- one specialized class
+per concrete instantiation, no runtime dispatch overhead.
 
 In a more inspirational mood, it is a fast lane for the `php` language, a bridge
 between what developers need today and what `php` will support in the future.
@@ -28,9 +28,9 @@ between what developers need today and what `php` will support in the future.
 Generics specialize into concrete classes with native typehints the engine
 enforces, so the safety is real and the abstraction compiles away to nothing.
 
-The compiler turns `xphp` into regular `php`. In the end it's good ~~old~~
-modern `php`, but developers and AI agents have richer abstractions to design
-better solutions.
+The compiler turns `xphp` into regular `php`. The runtime sees ordinary
+classes; richer abstractions live entirely in the source you write and
+at build time.
 
 ## Ecosystem and community first
 
@@ -90,143 +90,59 @@ type-system additions. The remaining features are on
 the [roadmap](docs/roadmap.md):
 type aliases, literal types, mapped and conditional types to name a few.
 
-## Getting started
-
-### 1. Install the xphp package
+## Quick start
 
 ```bash
 composer require --dev xphp-lang/xphp
 ```
 
-### 2. Enhance your PSR-4 autoload config
+Add the autoload mapping to your `composer.json` and run
+`composer dump-autoload`:
 
-Add a PSR-4 entry to `composer.json` so the standard autoloader finds the
-specialized classes without manual `require`.
-
-```json5
+```json
 {
   "autoload": {
     "psr-4": {
-      // generics will be converted into specialized classes,
-      // they need to have their own namespace.
-      "XPHP\\Generated\\": "<cache>/Generated/",
-      "App\\": [
-        // path to your normal/regular php code
-        "<source>",
-        // some `xphp` files just need to be rewritten into native php to use specialized classes,
-        // but their namespace will remain the same.
-        "<target>"
-      ],
+      "XPHP\\Generated\\": ".xphp-cache/Generated/",
+      "App\\": ["src", "dist"]
     }
   }
 }
 ```
 
-After that, update your autoload file via `composer dump-autoload`.
-
-### 3. Write `xphp` code
-
-You can define a generic class and instantiate it exactly as you would expect:
+Write a generic class and use it:
 
 ```php
-// <source>/Collection.xphp
+// src/Collection.xphp
 namespace App;
 
 class Collection<T> {
-    private T[] $items;
-
-    // The generic 'T' is used directly in the constructor signature
-    public function __construct(T ...$items) {
-        $this->items = $items;
-    }
-
-    public function first(): ?T {
-        return $this->items[0] ?? null;
-    }
+    public function __construct(public T ...$items) {}
+    public function first(): ?T { return $this->items[0] ?? null; }
 }
 
-// <source>/main.xphp
+// src/Use.xphp
 namespace App;
 
-$users = new Collection::<User>(
-    new User('Alice'),
-    new User('Bob')
-);
+$users = new Collection::<User>(new User('Alice'), new User('Bob'));
+echo $users->first()->name;
 ```
 
-### 4. Compile
+Compile:
 
 ```bash
-vendor/bin/xphp compile <source> <target> <cache>
+vendor/bin/xphp compile src dist .xphp-cache
 ```
 
-| Argument   | Required | Default       | Purpose                                                                              |
-|------------|----------|---------------|--------------------------------------------------------------------------------------|
-| `<source>` | yes      | --            | Directory of `.xphp` files (PSR-4 layout)                                            |
-| `<target>` | no       | `dist`        | Where rewritten `.php` files land -- your user code with generic call sites replaced |
-| `<cache>`  | no       | `.xphp-cache` | Where specialized classes live                                                       |
-
-p.s. you can `gitignore` files in `<target>` and `<cache>` as they can be
-generated in your CI/CD pipeline.
-
-#### Sample output
-
-The sample below uses a readable name (`Collection_User`) for clarity. The
-compiler actually emits hashed FQNs of the form
-`\XPHP\Generated\App\Collection\T_<hash>` -- see
-the [generics reference](docs/type-system/generics/index.md) for the real
-scheme.
-
-```php
-// <cache>/Generated/Collection_User.php
-namespace XPHP\Generated;
-
-use App\User;
-
-class Collection_User {
-    private array $items;
-
-    // The generic 'T' is replaced natively with the concrete 'User' type
-    public function __construct(User ...$items) {
-        $this->items = $items;
-    }
-
-    public function first(): ?User {
-        return $this->items[0] ?? null;
-    }
-}
-
-// <target>/main.php
-namespace App;
-
-use XPHP\Generated\Collection_User;
-
-// The generic instantiation is mapped directly to the generated class
-$users = new Collection_User(
-    new User('Alice'),
-    new User('Bob')
-);
-```
-
-### 5. Deploy
-
-The compiler monomorphizes the generic classes and converts downstream code
-into native `php` code.
-
-Meaning every place where generics are declared or used is converted into normal
-`php` code. No impact on the runtime. You still deploy `php` code.
-
-### Project structure
-
-```
-<root>/
-├── <source>         # php/xphp source files (PSR-4: namespace mirrors directory structure)
-├── <target>         # rewritten .php (gitignored, generated)
-├── <cache>          # specialized classes (gitignored, generated)
-└── composer.json    # PSR-4: XPHP\Generated\ => <cache>/Generated/
-```
+That's the whole loop: install, set up autoload, write `.xphp`,
+compile. `dist/` holds your rewritten code; `.xphp-cache/Generated/`
+holds the specialized classes. Both can be gitignored and rebuilt
+in CI.
 
 ## See also
 
-- [Type-system comparison](docs/type-system/comparison.md)
-- [Full generics reference](docs/type-system/generics/index.md)
+- [Getting started](docs/getting-started.md) -- full walkthrough including PSR-4 details, runtime semantics, and what the generated PHP looks like
+- [Syntax tour](docs/syntax/index.md)
+- [Caveats](docs/caveats.md)
+- [Type-system comparison](docs/guides/comparison.md)
+- [Roadmap](docs/roadmap.md)

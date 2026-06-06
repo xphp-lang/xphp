@@ -2,29 +2,34 @@
 
 Narrative walkthrough of the compile pipeline -- what `bin/xphp compile`
 does between reading `.xphp` source and writing vanilla `.php` files
-that any stock PHP 8.4 runtime can execute. Each phase is paired with
+that any stock PHP 8.4 runtime can execute. Each stage is paired with
 a Mermaid diagram so the same information is available both
 visually and in prose.
 
-For the feature inventory ("what does xphp support today?") see
-[generics reference](type-system/generics/index.md). For the strategic
-comparison against TypeScript / Kotlin / Rust see
-[comparison](type-system/comparison.md). For the forward-looking inventory
-see [roadmap](roadmap.md).
+For the feature inventory ("what does xphp support today?") see the
+[syntax tour](../syntax/index.md). For the strategic comparison against
+TypeScript / Kotlin / Rust see [comparison](comparison.md). For the
+forward-looking inventory see [roadmap](../roadmap.md).
 
 ---
 
 ## Pipeline overview
 
 `bin/xphp compile <source-dir> [target-dir] [cache-dir]` runs a single
-function -- [`Compiler::compile()`](../src/Transpiler/Monomorphize/Compiler.php)
--- that orchestrates five phases. Only `<source-dir>` is required; `[target-dir]`
+function -- [`Compiler::compile()`](../../src/Transpiler/Monomorphize/Compiler.php)
+-- that orchestrates six stages. Only `<source-dir>` is required; `[target-dir]`
 defaults to `dist` and `[cache-dir]` defaults to `.xphp-cache`. The data flows top-down: source bytes
 turn into AST, the AST populates a Registry and a TypeHierarchy, a
 fixed-point loop expands every concrete instantiation into a specialized
 class file, and finally the rewritten user code lands in the target
 directory while specialized classes land in a cache directory under
 `XPHP\Generated\<template>\T_<hash>.php`.
+
+> The code's internal labels (`Phase 0`, `Phase 1a`, `Phase 1b.i`,
+> `Phase 1b.ii`, `Phase 2`, `Phase 2.5`, `Phase 3`, `Phase 4`,
+> `Phase 5`) are finer-grained than the six narrative stages below.
+> The stages group related phases for explanation; the source
+> docblock comments are the authority on exact ordering.
 
 ```mermaid
 flowchart TD
@@ -84,13 +89,13 @@ sequenceDiagram
 
 ---
 
-## Phase 1 -- Source parsing
+## Stage 1 -- Source parsing
 
 PHP doesn't recognise `class Box<T>` or `function identity<T>(T $x)`
 as legal syntax. nikic/php-parser would reject the source at the
 first `<`. The compiler works around this with a token-level **strip
 and reattach** trick implemented in
-[`XphpSourceParser`](../src/Transpiler/Monomorphize/XphpSourceParser.php):
+[`XphpSourceParser`](../../src/Transpiler/Monomorphize/XphpSourceParser.php):
 
 1. **Tokenise** the source via PHP's own `token_get_all`.
 2. **Scan** for generic clauses -- `Name<...>` patterns -- with
@@ -108,11 +113,11 @@ and reattach** trick implemented in
 The strip step would lose original-source positions, which matters
 for editor diagnostics ("the offending `<int>` is at line 12, column
 5"). That's what
-[`ByteOffsetMap`](../src/Transpiler/Monomorphize/ByteOffsetMap.php)
+[`ByteOffsetMap`](../../src/Transpiler/Monomorphize/ByteOffsetMap.php)
 solves: it records each removal so any later byte offset in the
 stripped source can be translated back into the original. The pair
 of (AST, ByteOffsetMap) is returned together as
-[`ParseWithMapResult`](../src/Transpiler/Monomorphize/ParseWithMapResult.php).
+[`ParseWithMapResult`](../../src/Transpiler/Monomorphize/ParseWithMapResult.php).
 
 Two parser entry points exist:
 
@@ -126,11 +131,11 @@ Two parser entry points exist:
 
 ---
 
-## Phase 2 -- Hierarchy and Registry construction
+## Stage 2 -- Hierarchy and Registry construction
 
 Two parallel structures get populated from the parsed ASTs.
 
-**`TypeHierarchy`** ([source](../src/Transpiler/Monomorphize/TypeHierarchy.php))
+**`TypeHierarchy`** ([source](../../src/Transpiler/Monomorphize/TypeHierarchy.php))
 is a direct-ancestor map keyed by FQN: for every `class Foo extends Bar
 implements Baz` declaration, it records `Foo => [Bar, Baz]`. Transitive
 ancestors are walked on demand via `isSubtype()`. A small whitelist of
@@ -140,7 +145,7 @@ even without a source declaration -- a user class that explicitly
 `implements \Stringable` resolves its bound without the hierarchy
 needing to model PHP's internal class table.
 
-**`Registry`** ([source](../src/Transpiler/Monomorphize/Registry.php))
+**`Registry`** ([source](../../src/Transpiler/Monomorphize/Registry.php))
 is the bookkeeping core of monomorphization. It holds two maps:
 
 - `definitions: array<string, GenericDefinition>` keyed by template
@@ -153,13 +158,13 @@ is the bookkeeping core of monomorphization. It holds two maps:
 
 Each map value is a small value object:
 
-- [`GenericDefinition`](../src/Transpiler/Monomorphize/GenericDefinition.php)
+- [`GenericDefinition`](../../src/Transpiler/Monomorphize/GenericDefinition.php)
   carries `(templateFqn, templateShortName, typeParams, templateAst,
   sourceFile)`.
-- [`GenericInstantiation`](../src/Transpiler/Monomorphize/GenericInstantiation.php)
+- [`GenericInstantiation`](../../src/Transpiler/Monomorphize/GenericInstantiation.php)
   carries `(templateFqn, concreteTypes, generatedFqn)`.
 
-**`RegistryCollector`** ([source](../src/Transpiler/Monomorphize/RegistryCollector.php))
+**`RegistryCollector`** ([source](../../src/Transpiler/Monomorphize/RegistryCollector.php))
 walks an AST and calls `Registry::recordDefinition()` for every
 template ClassLike and `Registry::recordInstantiation()` for every
 Name node carrying concrete generic args.
@@ -167,12 +172,12 @@ Name node carrying concrete generic args.
 `recordInstantiation()` is recursive: when called on
 `Wrapper<Box<Plastic>>`, it first records `Box<Plastic>` (so the
 inner generic shows up before the outer one) and then `Wrapper<...>`.
-Bounds are validated inside `recordInstantiation()` -- see Phase 6
+Bounds are validated inside `recordInstantiation()` -- see Stage 6
 below.
 
 ---
 
-## Phase 3 -- Method- and function-scope specialization
+## Stage 3 -- Method- and function-scope specialization
 
 Method-scoped generics (`Cls::method::<T>(...)`) and free generic
 functions (`function f<T>(...)`) are handled by a separate pass
@@ -181,7 +186,7 @@ their specialization is **call-site driven**: each unique arg list
 mints one mangled method or function appended to the same class /
 namespace.
 
-[`GenericMethodCompiler::process()`](../src/Transpiler/Monomorphize/GenericMethodCompiler.php)
+[`GenericMethodCompiler::process()`](../../src/Transpiler/Monomorphize/GenericMethodCompiler.php)
 runs on the full `astPerFile` map and:
 
 1. Collects every method-template (`ClassFqn::methodName`) and
@@ -198,20 +203,27 @@ runs on the full `astPerFile` map and:
 4. Strips the original template `ClassMethod` / `Function_`.
 5. Rewrites each call site's identifier to the mangled name.
 
-**MVP scope:** static calls only (`Cls::method::<int>(...)`) -- instance
-calls `$obj->method::<int>(...)` are deferred (the compiler can't pick
-the receiver class without proper type inference). Method-scoped
-generics are also restricted to methods on non-generic enclosing
-classes; combining method-level and class-level type-params would
-require merging two type-param scopes.
+**Call-site coverage**: static calls (`Cls::method::<int>(...)`),
+instance calls (`$obj->method::<int>(...)`), and the nullsafe variant
+(`$obj?->method::<int>(...)`) all rewrite. Receiver-type analysis
+walks the AST tracking each variable's class from typed parameters,
+typed properties, `$this`, and local `$x = new Foo()` assignments;
+when the receiver class is unambiguous, the call binds to the right
+specialization. When the analysis can't prove a single class (e.g.,
+after a branching reassignment whose arms disagree), the call falls
+back to the non-specialized path rather than risking a wrong dispatch
+— see the [branching narrowing caveat](../caveats.md#branching-narrowing-precision-loss).
+
+Method-scoped generics work on non-generic AND generic enclosing
+classes; the type-param scopes from each layer are kept distinct.
 
 ---
 
-## Phase 4 -- Class-level fixed-point specialization
+## Stage 4 -- Class-level fixed-point specialization
 
 After method-scope specialization is done, the class-level loop runs
-inside [`Compiler::compile()`](../src/Transpiler/Monomorphize/Compiler.php)
-to drive the [`Specializer`](../src/Transpiler/Monomorphize/Specializer.php).
+inside [`Compiler::compile()`](../../src/Transpiler/Monomorphize/Compiler.php)
+to drive the [`Specializer`](../../src/Transpiler/Monomorphize/Specializer.php).
 
 The loop is fixed-point because **specialization can introduce new
 instantiations**. The textbook example: `class Wrapper<T> { public
@@ -253,10 +265,10 @@ the runaway.
 
 ---
 
-## Phase 5 -- Rewriting and emission
+## Stage 5 -- Rewriting and emission
 
 Two transformations happen during rewrite, both implemented in
-[`CallSiteRewriter`](../src/Transpiler/Monomorphize/CallSiteRewriter.php):
+[`CallSiteRewriter`](../../src/Transpiler/Monomorphize/CallSiteRewriter.php):
 
 1. **Generic Name nodes become FullyQualified references.** Every
    Name node carrying `ATTR_GENERIC_ARGS` (with all args fully
@@ -275,7 +287,7 @@ After the rewrite, two file groups get written:
 
 - **Specialized classes** to `<cacheDir>/Generated/<template-path>/T_<hash>.php`,
   one per unique `(template, args)` instantiation. Emitted by
-  [`SpecializedClassGenerator::emit()`](../src/Transpiler/Monomorphize/SpecializedClassGenerator.php).
+  [`SpecializedClassGenerator::emit()`](../../src/Transpiler/Monomorphize/SpecializedClassGenerator.php).
 - **Rewritten user files** to `<targetDir>/<mirrored-source-path>.php`,
   preserving the source's PSR-4 layout. The original `.xphp`
   is pretty-printed back to PHP via `nikic/php-parser`'s
@@ -287,7 +299,7 @@ the final step.
 
 ---
 
-## Phase 6 -- Bound validation
+## Stage 6 -- Bound validation
 
 Bound checks happen inside the Registry when an instantiation is
 recorded. The validation is integrated into the recording flow so
@@ -379,7 +391,7 @@ the original `.xphp` source.
 ## Class roster
 
 Every class under
-[`src/Transpiler/Monomorphize/`](../src/Transpiler/Monomorphize/),
+[`src/Transpiler/Monomorphize/`](../../src/Transpiler/Monomorphize/),
 grouped by role.
 
 ```mermaid
