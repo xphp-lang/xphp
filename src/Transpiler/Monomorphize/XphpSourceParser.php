@@ -410,18 +410,38 @@ final class XphpSourceParser
                     }
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;
-                        // Instance-method turbofish (`$obj->m::<…>(...)`) markers are
-                        // claimed by the MethodCall / NullsafeMethodCall resolver branch
-                        // alongside StaticCall (item #11). GenericMethodCompiler does
-                        // receiver-type analysis to pick the right method template.
-                        $nameMarkers[] = [
-                            'line' => $nameLine,
-                            'anchorLine' => $anchorLine,
-                            'name' => ltrim($nameText, '\\'),
-                            'kind' => 'named',
-                            'bytePosition' => $tok->pos,
-                            'args' => $args,
-                        ];
+                        // Pseudo-type turbofish (`new self::<T>()`, `new parent::<T>()`,
+                        // `new static::<T>()`) -- strip the `::<...>` clause so PHP
+                        // can parse the source, but SKIP the marker. Otherwise the
+                        // resolver would attach ATTR_TEMPLATE_FQN = `App\…\self` and
+                        // CallSiteRewriter would try to specialize a template that
+                        // doesn't exist. The bare `new self()` / `new parent()` /
+                        // `new static()` survives unchanged; PHP's runtime resolves
+                        // it against the currently-executing specialized class.
+                        //
+                        // Static-method calls on pseudo-types (`self::method::<T>()`,
+                        // `static::method::<T>()`, `parent::method::<T>()`) are
+                        // unaffected -- those land on `method`, not on the leading
+                        // self/static/parent, and GMC's `resolveClassName` already
+                        // short-circuits the pseudo-type to currentClassFqn.
+                        //
+                        // Note: `new parent::<T>()` on a class whose parent is NOT
+                        // generic strips cleanly and PHP runtime decides validity.
+                        // We don't validate the parent-is-generic invariant here.
+                        if (!self::isPseudoType($nameText)) {
+                            // Instance-method turbofish (`$obj->m::<…>(...)`) markers are
+                            // claimed by the MethodCall / NullsafeMethodCall resolver branch
+                            // alongside StaticCall (item #11). GenericMethodCompiler does
+                            // receiver-type analysis to pick the right method template.
+                            $nameMarkers[] = [
+                                'line' => $nameLine,
+                                'anchorLine' => $anchorLine,
+                                'name' => ltrim($nameText, '\\'),
+                                'kind' => 'named',
+                                'bytePosition' => $tok->pos,
+                                'args' => $args,
+                            ];
+                        }
                         // Strip from `::` start through `>` end so the cleaned
                         // source reads as a plain `Name(...)` / `Recv::Name(...)`
                         // / `$obj->Name(...)` call.
@@ -462,12 +482,7 @@ final class XphpSourceParser
                             // type args -- carries the `self` reference through
                             // unchanged; PHP's runtime resolves it to the right
                             // specialized class.
-                            $isPseudoType = in_array(
-                                strtolower($nameText),
-                                ['self', 'static', 'parent'],
-                                true,
-                            );
-                            if (!$isPseudoType) {
+                            if (!self::isPseudoType($nameText)) {
                                 $nameMarkers[] = [
                                     'line' => $nameLine,
                                     'anchorLine' => $anchorLine,
@@ -1210,6 +1225,36 @@ final class XphpSourceParser
             || $tok->id === T_NAME_QUALIFIED
             || $tok->id === T_NAME_FULLY_QUALIFIED
             || $tok->id === T_NAME_RELATIVE;
+    }
+
+    /**
+     * `self` / `static` / `parent` are PHP keywords that resolve dynamically
+     * at runtime against the currently-executing class. xphp's scanner sees
+     * them in two positions that need special handling:
+     *
+     *  - Type-hint position (`function f(): self<T>`): strip the `<T>` so PHP
+     *    can parse the source, but DON'T record a marker -- the resolver
+     *    would otherwise attach ATTR_TEMPLATE_FQN = `App\…\self` and the
+     *    Registry would fail looking up the (non-existent) template.
+     *
+     *  - Constructor-turbofish position (`new self::<T>()`): same shape --
+     *    strip `::<T>` but skip the marker. Monomorphization on the
+     *    enclosing class preserves the bare `self` / `static` / `parent`
+     *    reference, and PHP's runtime resolves it.
+     *
+     * `self` / `parent` / `static` are case-insensitive PHP keywords --
+     * `new SELF::<T>()` and `new Self::<T>()` parse the same as the
+     * lowercase form. `strtolower` + strict literal comparison covers
+     * all spellings the parser accepts; pinned by
+     * `testTurbofishOnMixedCaseSelfIsStrippedWithoutMarker`.
+     */
+    private static function isPseudoType(string $name): bool
+    {
+        return in_array(
+            strtolower($name),
+            ['self', 'static', 'parent'],
+            true,
+        );
     }
 
     /**

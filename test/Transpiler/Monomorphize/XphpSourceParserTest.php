@@ -1533,6 +1533,166 @@ PHP;
         self::assertSame('int', $args[0]->name);
     }
 
+    public function testTurbofishOnSelfConstructorIsStrippedWithoutMarker(): void
+    {
+        // `new self::<T>(...)` -- pseudo-type at constructor position. Same
+        // shape as the bare `self<T>` filter above: strip the `::<T>` clause
+        // so nikic parses `new self(...)`, but DON'T record a marker.
+        // Otherwise the resolver would attach ATTR_TEMPLATE_FQN = `App\…\self`
+        // and the Registry would fail looking up the non-existent template.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Container<T> {
+    public T $item;
+    public function __construct(T $item) {
+        $this->item = $item;
+    }
+    public function with(T $newItem): self {
+        return new self::<T>($newItem);
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<T>', $stripped);
+        self::assertStringNotContainsString('self<T>', $stripped);
+        self::assertStringContainsString('new self', $stripped);
+
+        $ast = $parser->parse($source);
+        self::assertNull(
+            self::firstNameAttr($ast, 'self', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'new self::<T>() must not attach generic-args marker; pseudo-types are class refs',
+        );
+    }
+
+    public function testTurbofishOnParentConstructorIsStrippedWithoutMarker(): void
+    {
+        // `new parent::<T>(...)` -- pseudo-type at constructor position.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Child<T> extends Parent_ {
+    public function clone(T $v): self {
+        return new parent::<T>($v);
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<T>', $stripped);
+        self::assertStringContainsString('new parent', $stripped);
+
+        $ast = $parser->parse($source);
+        self::assertNull(
+            self::firstNameAttr($ast, 'parent', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'new parent::<T>() must not attach generic-args marker',
+        );
+    }
+
+    public function testTurbofishOnStaticConstructorIsStrippedWithoutMarker(): void
+    {
+        // `new static::<T>(...)` -- late-static-bound pseudo-type at constructor
+        // position. PHP resolves `static` against the currently-executing class
+        // at runtime, which after monomorphization is the specialized class.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Builder<T> {
+    public function fresh(T $v): static {
+        return new static::<T>($v);
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<T>', $stripped);
+        self::assertStringContainsString('new static', $stripped);
+
+        $ast = $parser->parse($source);
+        self::assertNull(
+            self::firstNameAttr($ast, 'static', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'new static::<T>() must not attach generic-args marker',
+        );
+    }
+
+    public function testTurbofishOnMixedCaseSelfIsStrippedWithoutMarker(): void
+    {
+        // `self` / `parent` / `static` are case-insensitive PHP keywords --
+        // `new SELF::<T>()` parses the same as `new self::<T>()`. The
+        // pseudo-type filter normalizes via strtolower; this test pins
+        // that behavior so the strtolower call can't be silently mutated
+        // away (and a future contributor can't forget the case insensitivity).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Container<T> {
+    public T $item;
+    public function __construct(T $item) {
+        $this->item = $item;
+    }
+    public function with(T $newItem): self {
+        return new SELF::<T>($newItem);
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertStringNotContainsString('::<T>', $stripped);
+        self::assertStringContainsString('new SELF', $stripped);
+
+        $ast = $parser->parse($source);
+        self::assertNull(
+            self::firstNameAttr($ast, 'SELF', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'mixed-case new SELF::<T>() must not attach generic-args marker',
+        );
+        self::assertNull(
+            self::firstNameAttr($ast, 'self', XphpSourceParser::ATTR_GENERIC_ARGS),
+        );
+    }
+
+    public function testTurbofishOnSelfStaticMethodCallStripsAndAttachesMarkerToMethod(): void
+    {
+        // Regression guard for the existing `self::method::<T>()` path: the
+        // marker is attached to `method`, not to `self`. The pseudo-type
+        // filter on the turbofish branch must NOT swallow this marker --
+        // it only fires on the LEADING name, and here `self` is followed by
+        // `::method::<...>` not `::<...>`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Util<T> {
+    public static function make(T $x): T { return $x; }
+    public function call(T $x): T {
+        return self::make::<T>($x);
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $ast = $parser->parse($source);
+        $call = self::findFirstNodeOfType($ast, Node\Expr\StaticCall::class);
+        self::assertNotNull($call);
+        $args = $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertCount(1, $args);
+        self::assertSame('T', $args[0]->name);
+
+        // And the bare `self` Name receives no generic-args marker.
+        self::assertNull(
+            self::firstNameAttr($ast, 'self', XphpSourceParser::ATTR_GENERIC_ARGS),
+        );
+    }
+
     public function testTurbofishOnInstanceMethodCallIsRecognized(): void
     {
         // Instance-method turbofish (`$obj->method::<T>(...)`) -- the resolver

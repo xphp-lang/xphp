@@ -1309,6 +1309,212 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    public function testNewSelfTurbofishCompilesEndToEnd(): void
+    {
+        // `new self::<T>(...)` -- the scanner strips `::<T>`, no marker fires,
+        // monomorphization preserves the bare `new self(...)` in the
+        // specialization. PHP's runtime resolves `self` against the
+        // specialized class, which IS the right answer.
+        $dir = sys_get_temp_dir() . '/xphp-pseudo-self-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Container.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoSelf;
+        class Container<T> {
+            public function __construct(public T $item) {}
+            public function with(T $n): self {
+                return new self::<T>($n);
+            }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoSelf;
+
+        $a = new Container::<int>(42);
+        $b = $a->with(13);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
+            self::assertCount(1, $generated, 'one specialization (Container<int>)');
+            $specialized = file_get_contents($generated[0]);
+            self::assertIsString($specialized);
+
+            // `new self::<T>(...)` lowers to plain `new self(...)`.
+            self::assertMatchesRegularExpression(
+                '/return new self\(\$n\);/',
+                $specialized,
+                'new self::<T>() must lower to bare `new self(...)`',
+            );
+            self::assertStringNotContainsString('App\\PseudoSelf\\self', $specialized);
+            self::assertStringNotContainsString('::<', $specialized);
+
+            // Runtime sanity: the specialized `with` builds a fresh
+            // Container<int> via `new self()`.
+            $cache = $dir . '/.xphp-cache';
+            $target = $dir . '/dist';
+            $runScript = $dir . '/run.php';
+            file_put_contents($runScript, <<<PHP
+            <?php
+            declare(strict_types=1);
+            spl_autoload_register(function (\$class) {
+                if (str_starts_with(\$class, 'XPHP\\\\Generated\\\\')) {
+                    \$rel = substr(\$class, strlen('XPHP\\\\Generated\\\\'));
+                    \$file = '{$cache}/Generated/' . str_replace('\\\\', '/', \$rel) . '.php';
+                    if (file_exists(\$file)) require \$file;
+                }
+            });
+            require '{$target}/Container.php';
+            require '{$target}/Use.php';
+            echo "item={\$b->item};same=" . (get_class(\$a) === get_class(\$b) ? 'yes' : 'no');
+            PHP);
+            $output = [];
+            $exit = 0;
+            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
+            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
+            self::assertContains('item=13;same=yes', $output);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testNewStaticTurbofishCompilesEndToEnd(): void
+    {
+        // `new static::<T>(...)` -- the late-static-bound pseudo-type. After
+        // monomorphization, `static` resolves to the specialized class at
+        // runtime (same class instance, no subclassing in this fixture).
+        $dir = sys_get_temp_dir() . '/xphp-pseudo-static-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Builder.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoStatic;
+        class Builder<T> {
+            public function __construct(public T $value) {}
+            public function fresh(T $v): static {
+                return new static::<T>($v);
+            }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoStatic;
+
+        $a = new Builder::<int>(1);
+        $b = $a->fresh(2);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
+            self::assertCount(1, $generated);
+            $specialized = file_get_contents($generated[0]);
+            self::assertIsString($specialized);
+
+            self::assertMatchesRegularExpression(
+                '/return new static\(\$v\);/',
+                $specialized,
+                'new static::<T>() must lower to bare `new static(...)`',
+            );
+            self::assertStringNotContainsString('App\\PseudoStatic\\static', $specialized);
+            self::assertStringNotContainsString('::<', $specialized);
+
+            // Runtime sanity: late-static-binding resolves `static` against
+            // the specialized class.
+            $cache = $dir . '/.xphp-cache';
+            $target = $dir . '/dist';
+            $runScript = $dir . '/run.php';
+            file_put_contents($runScript, <<<PHP
+            <?php
+            declare(strict_types=1);
+            spl_autoload_register(function (\$class) {
+                if (str_starts_with(\$class, 'XPHP\\\\Generated\\\\')) {
+                    \$rel = substr(\$class, strlen('XPHP\\\\Generated\\\\'));
+                    \$file = '{$cache}/Generated/' . str_replace('\\\\', '/', \$rel) . '.php';
+                    if (file_exists(\$file)) require \$file;
+                }
+            });
+            require '{$target}/Builder.php';
+            require '{$target}/Use.php';
+            echo "value={\$b->value};same=" . (get_class(\$a) === get_class(\$b) ? 'yes' : 'no');
+            PHP);
+            $output = [];
+            $exit = 0;
+            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
+            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
+            self::assertContains('value=2;same=yes', $output);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testNewParentTurbofishCompilesEndToEnd(): void
+    {
+        // `new parent::<T>(...)` -- the parent-class pseudo-type. Different
+        // structure: requires a Parent_<T> base class so `parent` resolves
+        // to a real, distinct specialization.
+        $dir = sys_get_temp_dir() . '/xphp-pseudo-parent-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Parent_.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoParent;
+        class Parent_<T> {
+            public function __construct(public T $value) {}
+        }
+        PHP);
+        file_put_contents($dir . '/Child.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoParent;
+        class Child<T> extends Parent_<T> {
+            public function makeParent(T $v): Parent_<T> {
+                return new parent::<T>($v);
+            }
+        }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PseudoParent;
+
+        $c = new Child::<int>(1);
+        $p = $c->makeParent(2);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            // Specializations: Parent_<int> and Child<int>.
+            $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
+            self::assertGreaterThanOrEqual(2, count($generated));
+
+            $childSpec = null;
+            foreach ($generated as $f) {
+                if (str_contains($f, '/Child/T_')) {
+                    $childSpec = file_get_contents($f);
+                    break;
+                }
+            }
+            self::assertIsString($childSpec, 'expected a Child<int> specialization at /Child/T_*.php');
+
+            // `new parent::<T>($v)` lowers to bare `new parent($v)`.
+            self::assertMatchesRegularExpression(
+                '/return new parent\(\$v\);/',
+                $childSpec,
+                'new parent::<T>() must lower to bare `new parent(...)`',
+            );
+            self::assertStringNotContainsString('App\\PseudoParent\\parent', $childSpec);
+            self::assertStringNotContainsString('::<', $childSpec);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     private function compileFrom(string $dir): void
     {
         $compiler = $this->buildCompiler();
