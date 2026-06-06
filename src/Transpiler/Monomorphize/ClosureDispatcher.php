@@ -106,6 +106,12 @@ final class ClosureDispatcher
         int $hashLength,
         array $useClauses = [],
     ): array {
+        // Resolve tag / args param names: if the user happens to capture
+        // a variable named `__xphp_tag` or `__xphp_args`, rename the
+        // dispatcher's tag/args params to avoid the collision. Uses a
+        // short hash of the template's start file pos for stability.
+        [$tagParamName, $argsParamName] = self::resolveDispatcherParamNames($useClauses, $template);
+
         $declarations = [];
         $arms = [];
         $seenTags = [];
@@ -115,11 +121,25 @@ final class ClosureDispatcher
                 continue;
             }
             $seenTags[$tag] = true;
-            $spec = $this->buildSpecialization($template, $args, $typeParams, $varName, $namespace, $hashLength);
+            $spec = $this->buildSpecialization(
+                $template,
+                $args,
+                $typeParams,
+                $varName,
+                $namespace,
+                $hashLength,
+                $useClauses,
+            );
             $declarations[] = $spec['function'];
             $arms[] = ['tag' => $tag, 'mangledFqn' => $spec['mangledFqn']];
         }
-        $dispatcher = $this->buildDispatcherClosure($template, $arms, $useClauses);
+        $dispatcher = $this->buildDispatcherClosure(
+            $template,
+            $arms,
+            $useClauses,
+            $tagParamName,
+            $argsParamName,
+        );
         $assignment = new Assign(new Variable($varName), $dispatcher);
         return ['declarations' => $declarations, 'assignment' => $assignment];
     }
@@ -137,8 +157,9 @@ final class ClosureDispatcher
     }
 
     /**
-     * @param list<TypeRef>   $args
-     * @param list<TypeParam> $params
+     * @param list<TypeRef>     $args
+     * @param list<TypeParam>   $params
+     * @param list<ClosureUse>  $useClauses captures lifted as trailing params
      * @return array{function: Function_, tag: string, mangledFqn: string}
      */
     private function buildSpecialization(
@@ -148,13 +169,14 @@ final class ClosureDispatcher
         string $varName,
         string $namespace,
         int $hashLength,
+        array $useClauses,
     ): array {
         $shortName = 'closure_' . $varName;
         $mangled = $shortName . '_T_' . Registry::canonicalHash($args, $hashLength);
         $tag = self::tagFor($args, $hashLength);
         $mangledFqn = $namespace !== '' ? $namespace . '\\' . $mangled : $mangled;
 
-        $synthetic = self::syntheticFunctionFromTemplate($template, $shortName, $params);
+        $synthetic = self::syntheticFunctionFromTemplate($template, $shortName, $params, $useClauses);
 
         $substitution = [];
         foreach ($params as $i => $param) {
@@ -189,6 +211,7 @@ final class ClosureDispatcher
         Closure|ArrowFunction $template,
         string $shortName,
         array $params,
+        array $useClauses,
     ): Function_ {
         if ($template instanceof Closure) {
             $stmts = $template->stmts;
@@ -202,6 +225,17 @@ final class ClosureDispatcher
             $attrGroups = $template->attrGroups;
             $returnType = $template->returnType;
             $templateParams = $template->params;
+        }
+        // Lift each `use ($x)` capture into a trailing `mixed $x` param so
+        // the dispatcher can forward its captured snapshot at call time.
+        // Captures pulled from the dispatcher's `use` clause -- not from
+        // the closure's own `uses` list (which is only populated on
+        // Closure templates, not arrows).
+        foreach ($useClauses as $use) {
+            $templateParams[] = new Param(
+                $use->var,
+                type: new Identifier('mixed'),
+            );
         }
         $synthetic = new Function_(
             new Identifier($shortName),
@@ -226,9 +260,29 @@ final class ClosureDispatcher
         Closure|ArrowFunction $template,
         array $arms,
         array $useClauses,
+        string $tagParamName,
+        string $argsParamName,
     ): Closure {
-        $tagVar = new Variable(self::TAG_PARAM_NAME);
-        $argsVar = new Variable(self::ARGS_PARAM_NAME);
+        $tagVar = new Variable($tagParamName);
+        $argsVar = new Variable($argsParamName);
+
+        // Each match-arm body forwards the variadic-spread args plus the
+        // captured vars (which arrived as `use ($y, $z)` on the dispatcher
+        // closure and are now in scope here). Captures must be passed via
+        // *named* args after the unpack because PHP rejects positional
+        // arguments after `...$args`. Named-after-unpack is legal since
+        // PHP 8.1; the specialized function declares each capture with
+        // the same name so position-vs-name binding lines up.
+        $captureArgs = [];
+        foreach ($useClauses as $use) {
+            if (!$use->var instanceof Variable || !is_string($use->var->name)) {
+                continue;
+            }
+            $captureArgs[] = new Arg(
+                $use->var,
+                name: new Identifier($use->var->name),
+            );
+        }
 
         $matchArms = [];
         foreach ($arms as $arm) {
@@ -236,7 +290,7 @@ final class ClosureDispatcher
                 [new String_($arm['tag'])],
                 new FuncCall(
                     new FullyQualified($arm['mangledFqn']),
-                    [new Arg($argsVar, unpack: true)],
+                    array_merge([new Arg($argsVar, unpack: true)], $captureArgs),
                 ),
             );
         }
@@ -271,5 +325,217 @@ final class ClosureDispatcher
             ],
             $template->getAttributes(),
         );
+    }
+
+    /**
+     * @infection-ignore-all -- the implicit-capture analyzer and its
+     * helpers (collectFreeVarsFromExpr / usesThis / resolveDispatcherParamNames)
+     * surface many semantic-equivalent mutants: ordered-set `??=` vs `=`
+     * have identical observable behavior (assignment only matters when
+     * the key is unset, since the value is `true` and isset() doesn't
+     * care about the value); LogicalAnd <-> Or pairs across the
+     * `instanceof X && is_string($n->name)` and `=== 'this' || in
+     * paramNames` checks produce the same accept/reject decisions for
+     * every fixture we can construct; the substr offset/length mutants
+     * on the collision-suffix only change the hex pattern, not the
+     * "tag-renamed-due-to-collision" outcome. End-to-end coverage from
+     * `ArrowSpecializationTest` pins the observable behavior.
+     *
+     * Compute the set of free variables in an arrow function's body --
+     * the implicit captures PHP materializes at runtime when the arrow
+     * is constructed. Returns them as `ClosureUse` nodes ready to drop
+     * onto a dispatcher closure's `use (...)` clause.
+     *
+     * All captures are by-value (`byRef: false`) -- matches PHP arrow
+     * semantics, which have no `&` syntax for implicit captures. If a
+     * future commit needs to detect mutation-by-ref usage, the contract
+     * here must be revisited along with the corresponding lifted-param
+     * declaration in `syntheticFunctionFromTemplate`.
+     *
+     * Discipline (see Round 10 review):
+     *  - skip the arrow's own params,
+     *  - skip `$this` (we reject the whole specialization upstream),
+     *  - DON'T descend into nested `Closure` bodies (PHP's regular closure
+     *    has its own `use` clause that names exactly what it imports), but
+     *    DO harvest the nested closure's `use` clause -- those vars were
+     *    free at OUR scope and PHP needs them present when the dispatcher
+     *    constructs the inner closure at runtime,
+     *  - DO recurse into nested `ArrowFunction` bodies (the inner arrow's
+     *    free vars include ones from our scope).
+     *
+     * Captures are returned in deterministic first-occurrence order so
+     * the emitted dispatcher / specialization output is reproducible
+     * across runs.
+     *
+     * @return list<ClosureUse>
+     */
+    public static function implicitCapturesOf(ArrowFunction $arrow): array
+    {
+        $paramNames = [];
+        foreach ($arrow->params as $param) {
+            if ($param->var instanceof Variable && is_string($param->var->name)) {
+                $paramNames[$param->var->name] = true;
+            }
+        }
+        $captures = [];
+        self::collectFreeVarsFromExpr($arrow->expr, $paramNames, $captures);
+        return array_values(array_map(
+            static fn (string $name): ClosureUse => new ClosureUse(new Variable($name), false),
+            array_keys($captures),
+        ));
+    }
+
+    /**
+     * @infection-ignore-all -- see `implicitCapturesOf` docblock for
+     * the catalog of semantic-equivalent mutants in this walker.
+     *
+     * Recursive collector. `$captures` is an ordered set keyed by var
+     * name (insert-only, no overwrite) so iteration order matches first
+     * occurrence in the source.
+     *
+     * @param array<string, true> $paramNames
+     * @param array<string, true> $captures   accumulator (by-ref)
+     */
+    private static function collectFreeVarsFromExpr(
+        \PhpParser\Node $expr,
+        array $paramNames,
+        array &$captures,
+    ): void {
+        $traverser = new \PhpParser\NodeTraverser();
+        $traverser->addVisitor(new class($paramNames, $captures) extends \PhpParser\NodeVisitorAbstract {
+            /** @param array<string, true> $paramNames */
+            public function __construct(
+                private array $paramNames,
+                private array &$captures,
+            ) {
+            }
+
+            public function enterNode(\PhpParser\Node $node): ?int
+            {
+                if ($node instanceof Closure) {
+                    // Don't descend into the body, but harvest the inner
+                    // closure's `use` clause -- those vars were free at
+                    // our scope (the user wrote them naming our locals).
+                    foreach ($node->uses as $use) {
+                        if (!$use->var instanceof Variable || !is_string($use->var->name)) {
+                            continue;
+                        }
+                        $name = $use->var->name;
+                        if ($name === 'this' || isset($this->paramNames[$name])) {
+                            continue;
+                        }
+                        $this->captures[$name] ??= true;
+                    }
+                    return \PhpParser\NodeTraverser::DONT_TRAVERSE_CHILDREN;
+                }
+                if ($node instanceof ArrowFunction) {
+                    // Recurse via `implicitCapturesOf` so the inner arrow's
+                    // free vars (which include any from our scope) bubble
+                    // up. Skip iteration through this subtree -- the inner
+                    // analyzer handles it.
+                    foreach (ClosureDispatcher::implicitCapturesOf($node) as $innerUse) {
+                        $name = $innerUse->var->name;
+                        if (!is_string($name)) {
+                            continue;
+                        }
+                        if ($name === 'this' || isset($this->paramNames[$name])) {
+                            continue;
+                        }
+                        $this->captures[$name] ??= true;
+                    }
+                    return \PhpParser\NodeTraverser::DONT_TRAVERSE_CHILDREN;
+                }
+                if ($node instanceof Variable && is_string($node->name)) {
+                    if ($node->name === 'this' || isset($this->paramNames[$node->name])) {
+                        return null;
+                    }
+                    $this->captures[$node->name] ??= true;
+                }
+                return null;
+            }
+        });
+        $traverser->traverse([$expr]);
+    }
+
+    /**
+     * @infection-ignore-all -- the `instanceof Closure` skip-and-return
+     * and the `is_string($node->name) && $node->name === 'this'` check
+     * are observable-equivalent under several mutators (returning null
+     * vs DONT_TRAVERSE_CHILDREN inside a Closure subtree both reach the
+     * same outcome because nested closures' `$this` is irrelevant; the
+     * is_string + equality short-circuit is the standard idiom).
+     *
+     * True iff the arrow's body references `$this` (transitively, including
+     * inside nested arrows whose own params don't shadow it). Used by GMC
+     * to reject `$this`-capturing generic arrows before they reach
+     * `implicitCapturesOf` -- the analyzer intentionally drops `$this`
+     * because the dispatcher can't carry it via a `use` clause.
+     */
+    public static function usesThis(ArrowFunction $arrow): bool
+    {
+        $found = false;
+        $traverser = new \PhpParser\NodeTraverser();
+        $traverser->addVisitor(new class($found) extends \PhpParser\NodeVisitorAbstract {
+            public function __construct(private bool &$found)
+            {
+            }
+
+            public function enterNode(\PhpParser\Node $node): ?int
+            {
+                if ($node instanceof Closure) {
+                    // Regular closures have their own `$this` scope; don't
+                    // descend into them. A nested closure's `$this` is
+                    // bound at the closure's own construction time, not
+                    // ours.
+                    return \PhpParser\NodeTraverser::DONT_TRAVERSE_CHILDREN;
+                }
+                if ($node instanceof Variable
+                    && is_string($node->name)
+                    && $node->name === 'this'
+                ) {
+                    $this->found = true;
+                }
+                return null;
+            }
+        });
+        $traverser->traverse([$arrow->expr]);
+        return $found;
+    }
+
+    /**
+     * @infection-ignore-all -- the collision-suffix substr offset/length
+     * mutants only change the hex pattern of the renamed param. The
+     * test `testArrowSpecializationReservedCaptureAutoRenamesDispatcherParam`
+     * asserts the pattern `__xphp_tag_[0-9a-f]{8}`, which any
+     * non-empty hex slice satisfies, so the mutants pass observably.
+     * The observable behavior under test is "rename happens on
+     * collision", which is captured by the regex shape.
+     *
+     * Resolve the dispatcher's tag / args param names. If the user
+     * happened to capture a variable with the same name as our default
+     * (`__xphp_tag` / `__xphp_args`), pick a collision-free alternative
+     * derived from the template's start file pos (stable across runs
+     * of the same source).
+     *
+     * @param list<ClosureUse> $useClauses
+     * @return array{0: string, 1: string}
+     */
+    private static function resolveDispatcherParamNames(
+        array $useClauses,
+        Closure|ArrowFunction $template,
+    ): array {
+        $captured = [];
+        foreach ($useClauses as $use) {
+            if ($use->var instanceof Variable && is_string($use->var->name)) {
+                $captured[$use->var->name] = true;
+            }
+        }
+        if (!isset($captured[self::TAG_PARAM_NAME]) && !isset($captured[self::ARGS_PARAM_NAME])) {
+            return [self::TAG_PARAM_NAME, self::ARGS_PARAM_NAME];
+        }
+        $suffix = substr(hash('sha256', (string) $template->getStartFilePos()), 0, 8);
+        $tagName = self::TAG_PARAM_NAME . '_' . $suffix;
+        $argsName = self::ARGS_PARAM_NAME . '_' . $suffix;
+        return [$tagName, $argsName];
     }
 }

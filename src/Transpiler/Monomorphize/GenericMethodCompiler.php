@@ -1170,16 +1170,21 @@ final class GenericMethodCompiler
 
                 // Eager rejections -- preserved from pre-P5.4 behavior so the
                 // throw fires at the first offending call site, before the
-                // bag mutates. P5.5 / P5.6 will lift these for arrow + use
-                // forms once their dispatcher consumers ship.
-                if ($template instanceof ArrowFunction) {
+                // bag mutates. P5.5 lifted the arrow rejection by routing
+                // implicit captures through the dispatcher's `use (...)`
+                // clause; static closures and explicit `use (...)` closures
+                // are still pending (P5.6).
+                if ($template instanceof ArrowFunction && ClosureDispatcher::usesThis($template)) {
+                    // P5.5 rejects `$this`-capturing generic arrows. The
+                    // dispatcher closure can't carry `$this` through its
+                    // `use` clause (PHP rejects `use ($this)`); a future
+                    // commit can rewrite `$this->v` to a lifted param.
                     throw new RuntimeException(sprintf(
-                        'Generic arrow functions cannot yet be specialized at '
-                        . 'call sites (capture-by-value semantics aren\'t '
-                        . 'preserved by the current hoist). Rewrite the call '
-                        . 'site for `$%s::<...>(...)` to use a named generic '
-                        . 'function (`function name<T>(...) { ... }`) at file '
-                        . 'scope.',
+                        'Generic arrow `$%s::<...>(...)` captures `$this`, '
+                        . 'which is not yet supported. Rewrite as a method '
+                        . 'on the enclosing class, or extract the value of '
+                        . '$this->property into a local variable before '
+                        . 'the arrow.',
                         $varName,
                     ));
                 }
@@ -1222,6 +1227,14 @@ final class GenericMethodCompiler
 
                 $planKey = $varName . '@' . $template->getStartFilePos();
                 if (!isset($this->closureDispatchPlan[$planKey])) {
+                    // Compute the dispatcher's `use (...)` clause once per
+                    // template -- captures don't change between call sites.
+                    // Arrows get implicit-capture analysis; closures use
+                    // their explicit `use` list (empty for the capture-free
+                    // case P5.4 shipped).
+                    $useClauses = $template instanceof ArrowFunction
+                        ? ClosureDispatcher::implicitCapturesOf($template)
+                        : $template->uses;
                     $this->closureDispatchPlan[$planKey] = [
                         'template'      => $template,
                         'varName'       => $varName,
@@ -1232,6 +1245,7 @@ final class GenericMethodCompiler
                         'callSites'     => [],
                         'argSets'       => [],
                         'seenTagSet'    => [],
+                        'useClauses'    => $useClauses,
                     ];
                 }
                 $entry = &$this->closureDispatchPlan[$planKey];
@@ -1368,13 +1382,6 @@ final class GenericMethodCompiler
      * but never called via turbofish keeps its original Assign untouched,
      * so reflection on unused templates stays faithful.
      *
-     * @infection-ignore-all -- the `instanceof Closure ? $template->uses : []`
-     *   ternary is observably identical until P5.6 lifts the `use ($x)`
-     *   rejection: for the only flavor that reaches finalize in P5.4
-     *   (capture-free `function<T>(...)`), `$template->uses === []` always
-     *   (the rejection above filters out non-empty uses), so both branches
-     *   produce the same `[]`. Same logic applies to ArrowFunction, which
-     *   is rejected upstream.
      */
     private function finalizeClosureDispatchers(object $visitor, int $hashLength): void
     {
@@ -1384,9 +1391,7 @@ final class GenericMethodCompiler
                 continue;
             }
             $template = $entry['template'];
-            $useClauses = $template instanceof Closure
-                ? $template->uses
-                : [];
+            $useClauses = $entry['useClauses'];
             $result = $dispatcher->dispatch(
                 $template,
                 $entry['argSets'],

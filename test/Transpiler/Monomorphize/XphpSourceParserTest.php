@@ -2418,8 +2418,11 @@ PHP;
         self::rrmdir($workDir);
     }
 
-    public function testGenericArrowFunctionRejectedAtCallSite(): void
+    public function testGenericArrowFunctionSpecializesViaDispatcher(): void
     {
+        // P5.5: generic arrow functions now specialize end-to-end via the
+        // P5.4 dispatcher. The arrow's implicit captures (none here) are
+        // synthesized as a `use (...)` clause on the dispatcher closure.
         $workDir = sys_get_temp_dir() . '/xphp-arrow-' . uniqid('', true);
         mkdir($workDir, 0o755, true);
         $sourceDir = $workDir . '/src';
@@ -2445,9 +2448,17 @@ PHP;
         $sources = (new \XPHP\FileSystem\FileFinder\NativeFileFinder())->find($sourceDir)
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Generic arrow functions cannot yet be specialized');
         $compiler->compile($sources, $sourceDir, $workDir . '/dist', $workDir . '/.xphp-cache');
+
+        $rewritten = file_get_contents($workDir . '/dist/Use.php');
+        self::assertStringContainsString('closure_id_T_', $rewritten);
+        self::assertStringContainsString('__xphp_tag', $rewritten);
+        // Call site rewritten with the tag prefix.
+        self::assertMatchesRegularExpression(
+            "/\\\$id\\('T_[0-9a-f]+', 42\\)/",
+            $rewritten,
+        );
+
         self::rrmdir($workDir);
     }
 

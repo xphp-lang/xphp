@@ -199,8 +199,10 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
-    public function testArrowRejectionStillFires(): void
+    public function testArrowSpecializesViaDispatcher(): void
     {
+        // P5.5: arrow rejection lifted. Capture-free arrow specializes
+        // through the same dispatcher path as capture-free closures.
         $dir = $this->mkdir('disp-arrow');
         file_put_contents($dir . '/Use.xphp', <<<'PHP'
         <?php
@@ -209,9 +211,11 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $id::<int>(1);
         PHP);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Generic arrow functions cannot yet be specialized');
         $this->compile($dir);
+        $out = file_get_contents($dir . '/dist/Use.php');
+        self::assertIsString($out);
+        self::assertStringContainsString('closure_id_T_', $out);
+        self::assertStringContainsString('__xphp_tag', $out);
         $this->rrmdir(dirname($dir));
     }
 
