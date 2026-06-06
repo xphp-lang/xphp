@@ -16,7 +16,7 @@ test/unit:
 # the test that kills it is being written.  Raise to 100% once the
 # repo is stable enough that no new test gaps are expected.
 test/mutation:
-	php vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
+	php -d memory_limit=-1 vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
 
 # Humbug Box is the standard tool for compiling a Composer-managed
 # PHP project into a single self-contained PHAR.  Pinned to a known-
