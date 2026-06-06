@@ -2462,8 +2462,12 @@ PHP;
         self::rrmdir($workDir);
     }
 
-    public function testGenericClosureWithUseClauseRejectedAtCallSite(): void
+    public function testGenericClosureWithUseClauseSpecializesViaDispatcher(): void
     {
+        // P5.6: closures with explicit `use (...)` now specialize via
+        // the dispatcher path; the `use` clause is forwarded onto the
+        // dispatcher closure and each capture is lifted as a trailing
+        // `mixed` param on the specialized function.
         $workDir = sys_get_temp_dir() . '/xphp-closure-use-' . uniqid('', true);
         mkdir($workDir, 0o755, true);
         $sourceDir = $workDir . '/src';
@@ -2490,9 +2494,18 @@ PHP;
         $sources = (new \XPHP\FileSystem\FileFinder\NativeFileFinder())->find($sourceDir)
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('clauses cannot yet be specialized');
         $compiler->compile($sources, $sourceDir, $workDir . '/dist', $workDir . '/.xphp-cache');
+
+        $rewritten = file_get_contents($workDir . '/dist/Use.php');
+        self::assertStringContainsString('closure_f_T_', $rewritten);
+        // Dispatcher closure's `use ($y)` clause forwards the capture.
+        self::assertStringContainsString('use ($y)', $rewritten);
+        // Specialized function carries the lifted `mixed $y` trailing param.
+        self::assertMatchesRegularExpression(
+            '/function closure_f_T_[0-9a-f]+\(int \$x, mixed \$y\)/',
+            $rewritten,
+        );
+
         self::rrmdir($workDir);
     }
 

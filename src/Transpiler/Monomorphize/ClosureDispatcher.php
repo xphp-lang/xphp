@@ -226,15 +226,20 @@ final class ClosureDispatcher
             $returnType = $template->returnType;
             $templateParams = $template->params;
         }
-        // Lift each `use ($x)` capture into a trailing `mixed $x` param so
-        // the dispatcher can forward its captured snapshot at call time.
-        // Captures pulled from the dispatcher's `use` clause -- not from
-        // the closure's own `uses` list (which is only populated on
-        // Closure templates, not arrows).
+        // Lift each `use ($x)` / `use (&$x)` capture into a trailing
+        // `mixed $x` / `mixed &$x` param so the dispatcher can forward
+        // its captured snapshot at call time. `byRef` is preserved from
+        // the user's original `use` clause -- crucial for P5.6 where
+        // `use (&$y)` lets the body mutate the outer scope. Captures
+        // are pulled from the dispatcher's `use` clause (set by the
+        // caller); for arrows we synthesize them via the implicit-
+        // capture analyzer, for `use(...)`-closures we forward
+        // `$template->uses` verbatim.
         foreach ($useClauses as $use) {
             $templateParams[] = new Param(
                 $use->var,
                 type: new Identifier('mixed'),
+                byRef: $use->byRef,
             );
         }
         $synthetic = new Function_(
@@ -465,13 +470,19 @@ final class ClosureDispatcher
      * same outcome because nested closures' `$this` is irrelevant; the
      * is_string + equality short-circuit is the standard idiom).
      *
-     * True iff the arrow's body references `$this` (transitively, including
-     * inside nested arrows whose own params don't shadow it). Used by GMC
-     * to reject `$this`-capturing generic arrows before they reach
-     * `implicitCapturesOf` -- the analyzer intentionally drops `$this`
-     * because the dispatcher can't carry it via a `use` clause.
+     * True iff the template's body references `$this`. Used by GMC to
+     * reject `$this`-capturing generic arrows and `use (...)`-closures
+     * before they reach the dispatcher path -- PHP doesn't allow
+     * `use ($this)`, and the specialized top-level function can't see
+     * the enclosing class's `$this`.
+     *
+     * For `ArrowFunction`, walks the single body expression.
+     * For `Closure`, walks every statement in `$template->stmts`.
+     * Either way, descent stops at nested regular `Closure` boundaries
+     * (a nested closure's `$this` is bound at ITS own construction
+     * time, not ours).
      */
-    public static function usesThis(ArrowFunction $arrow): bool
+    public static function usesThis(Closure|ArrowFunction $template): bool
     {
         $found = false;
         $traverser = new \PhpParser\NodeTraverser();
@@ -483,10 +494,6 @@ final class ClosureDispatcher
             public function enterNode(\PhpParser\Node $node): ?int
             {
                 if ($node instanceof Closure) {
-                    // Regular closures have their own `$this` scope; don't
-                    // descend into them. A nested closure's `$this` is
-                    // bound at the closure's own construction time, not
-                    // ours.
                     return \PhpParser\NodeTraverser::DONT_TRAVERSE_CHILDREN;
                 }
                 if ($node instanceof Variable
@@ -498,7 +505,10 @@ final class ClosureDispatcher
                 return null;
             }
         });
-        $traverser->traverse([$arrow->expr]);
+        $nodes = $template instanceof ArrowFunction
+            ? [$template->expr]
+            : $template->stmts;
+        $traverser->traverse($nodes);
         return $found;
     }
 

@@ -1174,18 +1174,24 @@ final class GenericMethodCompiler
                 // implicit captures through the dispatcher's `use (...)`
                 // clause; static closures and explicit `use (...)` closures
                 // are still pending (P5.6).
-                if ($template instanceof ArrowFunction && ClosureDispatcher::usesThis($template)) {
-                    // P5.5 rejects `$this`-capturing generic arrows. The
-                    // dispatcher closure can't carry `$this` through its
-                    // `use` clause (PHP rejects `use ($this)`); a future
-                    // commit can rewrite `$this->v` to a lifted param.
+                if (ClosureDispatcher::usesThis($template)) {
+                    // P5.5 / P5.6 reject `$this`-capturing generic
+                    // anonymous templates. The dispatcher closure can't
+                    // carry `$this` through its `use` clause (PHP rejects
+                    // `use ($this)`); the specialized top-level function
+                    // also can't see the enclosing class's `$this`.
+                    // A future commit can rewrite `$this->v` to a lifted
+                    // param.
+                    $flavor = $template instanceof ArrowFunction ? 'arrow' : 'closure';
                     throw new RuntimeException(sprintf(
-                        'Generic arrow `$%s::<...>(...)` captures `$this`, '
+                        'Generic %s `$%s::<...>(...)` captures `$this`, '
                         . 'which is not yet supported. Rewrite as a method '
                         . 'on the enclosing class, or extract the value of '
                         . '$this->property into a local variable before '
-                        . 'the arrow.',
+                        . 'the %s.',
+                        $flavor,
                         $varName,
+                        $flavor,
                     ));
                 }
                 if ($template instanceof Closure && $template->static) {
@@ -1193,17 +1199,6 @@ final class GenericMethodCompiler
                         'Generic static closures cannot yet be specialized at '
                         . 'call sites. Rewrite the call site for `$%s::<...>(...)` '
                         . 'to use a named generic function at file scope.',
-                        $varName,
-                    ));
-                }
-                if ($template instanceof Closure && $template->uses !== []) {
-                    throw new RuntimeException(sprintf(
-                        'Generic closures with `use (...)` clauses cannot yet '
-                        . 'be specialized at call sites (captures aren\'t '
-                        . 'preserved by the top-level hoist). Rewrite the call '
-                        . 'site for `$%s::<...>(...)` to use a named generic '
-                        . 'function, or drop the `use` clause and read the '
-                        . 'captured values from inside the body.',
                         $varName,
                     ));
                 }

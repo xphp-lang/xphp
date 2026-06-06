@@ -219,8 +219,12 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
-    public function testUseClauseRejectionStillFires(): void
+    public function testUseClauseClosureSpecializesViaDispatcher(): void
     {
+        // P5.6: closure-with-`use` rejection lifted. The dispatcher
+        // forwards the user's `use (...)` clause onto itself and lifts
+        // each capture as a trailing `mixed` param on the specialized
+        // function.
         $dir = $this->mkdir('disp-use');
         file_put_contents($dir . '/Use.xphp', <<<'PHP'
         <?php
@@ -230,9 +234,11 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $f::<int>(42);
         PHP);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('clauses cannot yet be specialized');
         $this->compile($dir);
+        $out = file_get_contents($dir . '/dist/Use.php');
+        self::assertIsString($out);
+        self::assertStringContainsString('closure_f_T_', $out);
+        self::assertStringContainsString('use ($y)', $out);
         $this->rrmdir(dirname($dir));
     }
 
