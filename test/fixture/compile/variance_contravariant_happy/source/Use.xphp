@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\VarianceContravariantHappy;
+
+use App\VarianceContravariantHappy\Containers\Consumer;
+use App\VarianceContravariantHappy\Models\Animal;
+use App\VarianceContravariantHappy\Models\Dog;
+
+$consumerAnimal = new Consumer::<Animal>;
+$consumerDog = new Consumer::<Dog>;

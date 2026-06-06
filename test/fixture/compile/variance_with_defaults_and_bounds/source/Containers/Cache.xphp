@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\VarianceWithDefaultsAndBounds\Containers;
+
+// All three features composed:
+//  - Covariant +K (output-only): method return type.
+//  - Intersection bound on K: K must be Stringable AND Countable.
+//  - Defaulted V: invariant, defaults to `mixed`.
+//
+// Properties are bound-typed (Stringable) because PHP enforces invariant
+// property types, so storing +K directly would PHP-fatal at autoload when
+// the variance edge lands.
+class Cache<+K : \Stringable & \Countable, V = mixed>
+{
+    private ?\Stringable $key = null;
+    public V $value;
+
+    public function getKey(): K
+    {
+        return $this->key;
+    }
+}

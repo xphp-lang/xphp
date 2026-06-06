@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\VarianceContravariantHappy\Containers;
+
+// Contravariant T -- T only appears in input position (method parameter).
+// With Dog <: Animal, the emitter adds the FLIPPED edge:
+// Consumer_Animal extends Consumer_Dog (so anywhere a Consumer<Dog> is
+// expected, a Consumer<Animal> works -- it accepts a wider input).
+class Consumer<-T>
+{
+    public function consume(T $value): void
+    {
+    }
+}

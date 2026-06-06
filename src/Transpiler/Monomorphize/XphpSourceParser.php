@@ -402,7 +402,7 @@ final class XphpSourceParser
      * (forward references are rejected at parse time).
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: list<array{name: string, bound: ?array, default: ?TypeRef}>, 1: int}|null
+     * @return array{0: list<array{name: string, bound: ?array, default: ?TypeRef, variance: Variance}>, 1: int}|null
      */
     private static function parseTypeParamList(array $tokens, int $openIdx, bool $allowDefaults): ?array
     {
@@ -415,6 +415,25 @@ final class XphpSourceParser
         $sawDefault = false;
         $i = self::skipWs($tokens, $openIdx + 1);
         while ($i < $n) {
+            // Variance prefix `+` (covariant) or `-` (contravariant). Both are
+            // single-char tokens at this position. Class-level only -- method/
+            // function-level type-params get the same "not yet supported"
+            // rejection family as defaults.
+            $variance = Variance::Invariant;
+            if ($i < $n && ($tokens[$i]->text === '+' || $tokens[$i]->text === '-')) {
+                if (!$allowDefaults) {
+                    throw new RuntimeException(
+                        'Variance markers `+T` / `-T` are not yet supported on '
+                        . 'methods or functions; remove the prefix or move the '
+                        . 'generic to a class-level type parameter.',
+                    );
+                }
+                $variance = $tokens[$i]->text === '+'
+                    ? Variance::Covariant
+                    : Variance::Contravariant;
+                $i++;
+            }
+
             if (!self::isNameToken($tokens[$i])) {
                 return null;
             }
@@ -482,6 +501,7 @@ final class XphpSourceParser
                 'name' => $paramName,
                 'bound' => $bound,
                 'default' => $default,
+                'variance' => $variance,
             ];
 
             $i = self::skipWs($tokens, $i);
@@ -1140,8 +1160,20 @@ final class XphpSourceParser
                         foreach ($paramEntries as $entry) {
                             $bound = $this->buildBoundExpr($entry);
                             $default = $this->buildDefault($entry);
-                            $typeParams[] = new TypeParam($entry['name'], $bound, $default);
+                            $typeParams[] = new TypeParam(
+                                $entry['name'],
+                                $bound,
+                                $default,
+                                $entry['variance'],
+                            );
                         }
+                        // ATTR_GENERIC_PARAMS is set on enterNode so
+                        // leaveNode (where the variance position validator
+                        // runs) can read it back. The body's nested
+                        // ATTR_GENERIC_ARGS aren't populated until the
+                        // resolver walks each Name node, which only happens
+                        // BETWEEN this class's enterNode and leaveNode --
+                        // hence the deferred validation.
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, $typeParams);
                         $currentNamespace = $this->ctx->currentNamespace();
                         $fqn = $currentNamespace !== ''
@@ -1171,12 +1203,18 @@ final class XphpSourceParser
                             $typeParams = [];
                             foreach ($marker['params'] as $entry) {
                                 $bound = $this->buildBoundExpr($entry);
-                                // Method/function entries never carry defaults (parseTypeParamList
-                                // rejects `=` with $allowDefaults=false), so buildDefault is null
-                                // by construction; the explicit call documents the symmetry with
-                                // the ClassLike branch.
+                                // Method/function entries never carry defaults or
+                                // variance markers (parseTypeParamList rejects both
+                                // with $allowDefaults=false), so the construct here
+                                // mirrors the ClassLike branch's call shape for
+                                // symmetry; the values are always defaults.
                                 $default = $this->buildDefault($entry);
-                                $typeParams[] = new TypeParam($entry['name'], $bound, $default);
+                                $typeParams[] = new TypeParam(
+                                    $entry['name'],
+                                    $bound,
+                                    $default,
+                                    $entry['variance'],
+                                );
                             }
                             // Pop here — the method's own scope is pushed again
                             // below to match the leaveNode pop pattern. This
@@ -1338,6 +1376,19 @@ final class XphpSourceParser
 
             public function leaveNode(Node $node): null
             {
+                // Variance position check fires once per class definition,
+                // AFTER the body has been fully resolved -- so any Name nodes
+                // inside the body that carry nested ATTR_GENERIC_ARGS are
+                // visible to the validator. Rejects covariant T in input
+                // position, contravariant T in output, either in
+                // bound/default/property/constructor positions, and
+                // F-bounded variance (`+T : Box<T>`).
+                if ($node instanceof ClassLike && $node->name !== null) {
+                    $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                    if (is_array($params) && $params !== []) {
+                        VariancePositionValidator::assertPositions($node, $params);
+                    }
+                }
                 // @infection-ignore-all -- the instanceof chain mirrors enterNode's push;
                 // restructuring `||` as `&&` produces a leaveNode that no longer pops the
                 // stack for any node, but the test suite's AST shapes never re-use the

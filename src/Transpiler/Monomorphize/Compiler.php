@@ -141,6 +141,16 @@ final readonly class Compiler
             }
         }
 
+        // Phase 2.5: emit subtype edges between specializations whose template
+        // declares variance markers. Runs once after the fixed-point loop
+        // (Phase 2) finishes -- pairwise variance comparisons can't run until
+        // every specialization is recorded. Edges are added to the cloned
+        // ClassLike's `implements` / `extends` list and survive CallSiteRewriter
+        // (Phase 3) untouched -- CallSiteRewriter only rewrites template
+        // Class_/Interface_ nodes, not specialized ones.
+        $varianceEmitter = new VarianceEdgeEmitter($hierarchy);
+        $varianceEmitter->emitEdges($specializedAsts, $registry);
+
         // Phase 3: rewrite + emit specialized classes.
         $rewriter = new CallSiteRewriter($registry);
         foreach ($specializedAsts as $generatedFqn => $classAst) {

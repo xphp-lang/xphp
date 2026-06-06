@@ -22,6 +22,10 @@ namespace XPHP\Transpiler\Monomorphize;
  * supplied args with these defaults, substituting earlier args into any
  * type-param references in the default.
  *
+ * `variance` controls whether subtype edges are emitted between specializations.
+ * `Invariant` (no prefix) is the default. `Covariant` (`+T`) lifts `T1 <: T2`
+ * to `Box<T1> <: Box<T2>`. `Contravariant` (`-T`) flips the direction.
+ *
  * Both expressions are built by `XphpSourceParser::resolveAndAttach` after
  * resolving each leaf class name against the file's namespace + use map.
  */
@@ -31,6 +35,7 @@ final readonly class TypeParam
         public string $name,
         public ?BoundExpr $bound = null,
         public ?TypeRef $default = null,
+        public Variance $variance = Variance::Invariant,
     ) {
     }
 }

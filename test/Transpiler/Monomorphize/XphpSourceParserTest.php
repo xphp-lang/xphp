@@ -1968,6 +1968,300 @@ PHP;
         $parser->parse($source);
     }
 
+    public function testCovariantTypeParamIsParsedAndStored(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public function get(): T { throw new \LogicException; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame(Variance::Covariant, $params[0]->variance);
+    }
+
+    public function testContravariantTypeParamIsParsedAndStored(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Consumer<-T>
+{
+    public function set(T $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame(Variance::Contravariant, $params[0]->variance);
+    }
+
+    public function testInvariantTypeParamRemainsTheDefault(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public T $item; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $params = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame(Variance::Invariant, $params[0]->variance);
+    }
+
+    public function testMixedVarianceTypeParamsAreParsed(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+interface Iter<K, +V>
+{
+    public function key(): K;
+    public function current(): V;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        $params = $iface?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame(Variance::Invariant, $params[0]->variance);
+        self::assertSame(Variance::Covariant, $params[1]->variance);
+    }
+
+    public function testMethodLevelVarianceIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class C
+{
+    public function id<+T>(T $x): T { return $x; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Variance markers `+T` / `-T` are not yet supported on methods or functions');
+        $parser->parse($source);
+    }
+
+    public function testFreeFunctionVarianceIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+function id<-T>(T $x): T { return $x; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('not yet supported on methods or functions');
+        $parser->parse($source);
+    }
+
+    public function testCovariantInInputPositionIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public function set(T $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('+T');
+        $this->expectExceptionMessage('method parameter');
+        $parser->parse($source);
+    }
+
+    public function testContravariantInOutputPositionIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Consumer<-T>
+{
+    public function get(): T { throw new \LogicException; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('-T');
+        $this->expectExceptionMessage('method return');
+        $parser->parse($source);
+    }
+
+    public function testCovariantInMutablePropertyIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public T $item;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('mutable property');
+        $parser->parse($source);
+    }
+
+    public function testCovariantInReadonlyPropertyIsAlsoRejected(): void
+    {
+        // PHP enforces invariant property types across `extends` chains
+        // regardless of `readonly`. Even though a readonly property is
+        // semantically "output-only", PHP's static type system rejects
+        // covariance on the property declaration -- so we reject it at
+        // declaration time to avoid an autoload-time fatal.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public readonly T $item;
+    public function get(): T { return $this->item; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('readonly property');
+        $parser->parse($source);
+    }
+
+    public function testCovariantInBoundIsRejected(): void
+    {
+        // F-bounded with variance: `+T : Box<T>` rejected because T appears
+        // inside its own bound (an invariant position).
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Sortable<+T : Box<T>>
+{
+    public function get(): T { throw new \LogicException; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('bound');
+        $parser->parse($source);
+    }
+
+    public function testCovariantInConstructorParamIsRejected(): void
+    {
+        // xphp deviates from RFC: constructor params are invariant because
+        // PHP's autoload-time signature compatibility check applies to
+        // __construct on `Producer_Banana implements Producer_Fruit`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public function __construct(T $item) {}
+    public function get(): T { throw new \LogicException; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('constructor parameter');
+        $parser->parse($source);
+    }
+
+    public function testContravariantInInputPositionIsAccepted(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Consumer<-T>
+{
+    public function set(T $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $parser->parse($source);
+        self::assertTrue(true);
+    }
+
+    public function testInvariantTypeParamAcceptsBothPositions(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T>
+{
+    public T $item;
+    public function get(): T { return $this->item; }
+    public function set(T $x): void { $this->item = $x; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $parser->parse($source);
+        self::assertTrue(true);
+    }
+
+    public function testCovariantInNestedGenericInputPositionIsRejected(): void
+    {
+        // `+T` inside `Box<T>` in a method parameter position. The validator
+        // walks into the inner generic args attached via xphp:genericArgs;
+        // the +T leaf is rejected just as if it appeared directly.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public function set(Box<T> $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('+T');
+        $this->expectExceptionMessage('method parameter');
+        $parser->parse($source);
+    }
+
+    public function testContravariantInNestedGenericReturnPositionIsRejected(): void
+    {
+        // Symmetric case: `-T` inside `Box<T>` in a method return type.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Consumer<-T>
+{
+    public function fetch(): Box<T> { throw new \LogicException; }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('-T');
+        $this->expectExceptionMessage('method return');
+        $parser->parse($source);
+    }
+
+    public function testInterfaceMethodSignatureIsValidatedForVariance(): void
+    {
+        // Variance rules apply to interface methods too.
+        $source = <<<'PHP'
+<?php
+namespace App;
+interface Producer<+T>
+{
+    public function feed(T $x): void;
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('+T');
+        $parser->parse($source);
+    }
+
     /**
      * @template TNode of Node
      * @param array<int, mixed> $ast

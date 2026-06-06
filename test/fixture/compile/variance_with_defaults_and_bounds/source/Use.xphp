@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\VarianceWithDefaultsAndBounds;
+
+use App\VarianceWithDefaultsAndBounds\Containers\Cache;
+use App\VarianceWithDefaultsAndBounds\Models\Tag;
+
+// Defaulted V exercised: Cache<Tag> pads to Cache<Tag, mixed>.
+$cache = new Cache::<Tag>;
