@@ -183,6 +183,7 @@ final class XphpSourceParser
                 if ($j < $n && $tokens[$j]->id === T_STRING) {
                     $methodName = $tokens[$j]->text;
                     $methodLine = $tokens[$j]->line;
+                    $methodAnchorByte = $tokens[$j]->pos;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
                         $parsed = self::parseTypeParamList($tokens, $k, allowDefaults: false);
@@ -191,6 +192,8 @@ final class XphpSourceParser
                             $methodMarkers[] = [
                                 'line' => $methodLine,
                                 'name' => $methodName,
+                                'kind' => 'named',
+                                'bytePosition' => $methodAnchorByte,
                                 'params' => $paramEntries,
                             ];
                             $startByte = $tokens[$k]->pos;
@@ -211,6 +214,7 @@ final class XphpSourceParser
                 if ($j < $n && $tokens[$j]->id === T_STRING) {
                     $className = $tokens[$j]->text;
                     $classLine = $tokens[$j]->line;
+                    $classAnchorByte = $tokens[$j]->pos;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
                         $parsed = self::parseTypeParamList($tokens, $k, allowDefaults: true);
@@ -219,6 +223,8 @@ final class XphpSourceParser
                             $classMarkers[] = [
                                 'line' => $classLine,
                                 'name' => $className,
+                                'kind' => 'named',
+                                'bytePosition' => $classAnchorByte,
                                 'params' => $paramEntries,
                             ];
                             $startByte = $tokens[$k]->pos;
@@ -286,6 +292,8 @@ final class XphpSourceParser
                             'line' => $nameLine,
                             'anchorLine' => $anchorLine,
                             'name' => ltrim($nameText, '\\'),
+                            'kind' => 'named',
+                            'bytePosition' => $tok->pos,
                             'args' => $args,
                         ];
                         // Strip from `::` start through `>` end so the cleaned
@@ -338,6 +346,8 @@ final class XphpSourceParser
                                     'line' => $nameLine,
                                     'anchorLine' => $anchorLine,
                                     'name' => ltrim($nameText, '\\'),
+                                    'kind' => 'named',
+                                    'bytePosition' => $tok->pos,
                                     'args' => $args,
                                 ];
                             }
@@ -1088,10 +1098,16 @@ final class XphpSourceParser
     /**
      * Walk the AST: attach markers to ClassLike and Name nodes by (line, name) + order; resolve TypeRef names.
      *
+     * Marker entries carry both a `name` (for legacy (line, name) matching on
+     * named templates) and a `bytePosition` of the anchor token in the
+     * source. The `kind` field tags the marker so anonymous-template
+     * recognition (closures / arrows, Phase 4) can dispatch to a different
+     * matcher without having to peek at the rest of the marker shape.
+     *
      * @param list<Node\Stmt> $ast
-     * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $classMarkers
-     * @param list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}> $nameMarkers
-     * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $methodMarkers
+     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $classMarkers
+     * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
+     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $methodMarkers
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
     {
@@ -1102,9 +1118,9 @@ final class XphpSourceParser
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $classMarkers
-             * @param list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}> $nameMarkers
-             * @param list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}> $methodMarkers
+             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $classMarkers
+             * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
+             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,

@@ -587,6 +587,18 @@
                 "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
             ]
         },
+        // XphpSourceParser::scanAndStrip: the `'kind' => 'named'` and
+        // `'bytePosition' => $tok->pos` entries on marker arrays are reserved
+        // for the closure/arrow recognition path that hasn't shipped yet --
+        // current consumers only read `line`/`name`/`anchorLine`/`args`/`params`,
+        // so dropping the kind/bytePosition entries is observationally
+        // equivalent today. Once the closure code lands those entries become
+        // load-bearing and the ignore will be removed.
+        "ArrayItem": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
         // VariancePositionValidator::checkPhpType: instanceof chain on the
         // PHP type AST node kinds. Each branch corresponds to a different
         // PHP type-hint surface (Name / NullableType / UnionType /
