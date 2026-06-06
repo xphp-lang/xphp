@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDispatcherUseClause;
+
+// P5.6: closures with explicit `use (...)` clauses, including by-ref
+// captures. The dispatcher forwards `$template->uses` verbatim to its
+// own `use` clause; each capture is lifted as a trailing `mixed` (or
+// `mixed &`) param on every specialized function. The named-after-
+// unpack match-arm args preserve ref-ness across the call boundary,
+// so `$counter` mutations inside the body write through to the outer
+// scope.
+$base = 10;
+$counter = 0;
+$f = function<T>(T $x) use ($base, &$counter): array {
+    $counter++;
+    return [$x, $base, $counter];
+};
+
+$callA = $f::<int>(1);   // [1, 10, 1] -- $counter mutated to 1 in outer scope.
+$callB = $f::<int>(2);   // [2, 10, 2] -- $counter mutated to 2 in outer scope.
+$callC = $f::<string>('hi');     // ['hi', 10, 3] -- new specialization, same captures.

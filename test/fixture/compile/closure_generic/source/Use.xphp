@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace App\ClosureGeneric;
 
-// Capture-free generic closure -- hoists to a top-level Function_ at
-// specialization time. The variable assignment site stays as-is; the call
-// site `$pair::<...>(...)` rewrites to the hoisted function call.
+// Capture-free generic closure -- the P5.4 ClosureDispatcher rewrites
+// the Assign's RHS to a sentinel-arg-prefix dispatcher closure that
+// routes each call via a `match` on a `T_<hash>` tag. Specializations
+// land as top-level `closure_pair_T_<hash>` functions in the same
+// namespace. Call sites get the tag prepended as the first argument;
+// duplicate arg-tuples dedupe into a single match arm.
 $pair = function<K, V>(K $key, V $value): array {
     return [$key, $value];
 };
 
 $pair::<string, int>('age', 42);
-$pair::<string, int>('count', 7); // same specialization -- de-duped via alreadyGenerated.
+$pair::<string, int>('count', 7); // same specialization -- de-duped via the tag set.

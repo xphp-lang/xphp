@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDispatcherArrow;
+
+// P5.5: arrow with implicit-capture specialization. The arrow's free
+// variable `$y` is harvested by `ClosureDispatcher::implicitCapturesOf`
+// and lifted in two places:
+//   1. as a `use ($y)` clause on the dispatcher closure (captures at
+//      the original assign site, by-value-at-evaluation-time),
+//   2. as a trailing `mixed $y` param on each specialized function,
+//      forwarded via named-after-unpack arg from the match arm.
+// The post-call mutation of $y proves the capture was by-value, not
+// an alias to the outer scope.
+$y = 1;
+$id = fn<T>(T $x): T => $x + $y;
+$y = 2;
+$resultArrow = $id::<int>(42);   // expect 43 (uses captured $y = 1).
