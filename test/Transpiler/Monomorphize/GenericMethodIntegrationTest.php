@@ -821,6 +821,417 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    public function testBranchingSameClassMergeKeepsSpecialization(): void
+    {
+        // P5.1: if every reachable arm assigns $x to the same class, post-
+        // branch $x keeps that class and the call site specializes.
+        $dir = sys_get_temp_dir() . '/xphp-br-merge-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrMerge;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrMerge;
+
+        if (mt_rand(0, 1)) {
+            $x = new Foo();
+        } else {
+            $x = new Foo();
+        }
+        $r = $x->fooId::<int>(11);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(11\)/',
+                $use,
+                'all-siblings-agree merge must keep $x = Foo post-branch',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingIfWithoutElseStillDeSpecializes(): void
+    {
+        // P5.1: if-without-else has an implicit empty arm. Even when both
+        // reachable paths agree on Foo (the pre-branch assignment matches
+        // the if-body's), the merge MUST de-specialize because the
+        // expectedArmCount guard trips. This is deliberate -- the implicit
+        // arm doesn't appear in perBranchTypes, and special-casing it
+        // would be fragile against refactors.
+        $dir = sys_get_temp_dir() . '/xphp-br-noelse-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrNoElse;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrNoElse;
+
+        $x = new Foo();
+        if (mt_rand(0, 1)) {
+            $x = new Foo();
+        }
+        $r = $x->fooId::<int>(12);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertStringNotContainsString(
+                'fooId_T_',
+                $use,
+                'if-without-else must de-specialize even when both paths agree',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingThreeArmsAgreeKeepsSpecialization(): void
+    {
+        // P5.1: if/elseif/else with all three arms assigning the same class
+        // exercises the per-arm equality loop's iteration count.
+        $dir = sys_get_temp_dir() . '/xphp-br-3arm-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\Br3Arm;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\Br3Arm;
+
+        $n = mt_rand(0, 2);
+        if ($n === 0) {
+            $x = new Foo();
+        } elseif ($n === 1) {
+            $x = new Foo();
+        } else {
+            $x = new Foo();
+        }
+        $r = $x->fooId::<int>(13);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(13\)/',
+                $use,
+                'three-arm all-agree merge must keep $x = Foo',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingSwitchWithDefaultAllSameKeepsSpecialization(): void
+    {
+        // P5.1: switch with default + all cases assign same class merges.
+        $dir = sys_get_temp_dir() . '/xphp-br-sw-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrSw;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrSw;
+
+        $n = mt_rand(0, 5);
+        switch ($n) {
+            case 1: $x = new Foo(); break;
+            case 2: $x = new Foo(); break;
+            default: $x = new Foo();
+        }
+        $r = $x->fooId::<int>(14);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(14\)/',
+                $use,
+                'switch with default + all-arms-agree must merge',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingSwitchWithoutDefaultStillDeSpecializes(): void
+    {
+        // P5.1: no `default` case = implicit fall-through = no merge.
+        $dir = sys_get_temp_dir() . '/xphp-br-swnod-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrSwNoD;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrSwNoD;
+
+        $x = new Foo();
+        $n = mt_rand(0, 5);
+        switch ($n) {
+            case 1: $x = new Foo(); break;
+            case 2: $x = new Foo(); break;
+        }
+        $r = $x->fooId::<int>(15);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertStringNotContainsString(
+                'fooId_T_',
+                $use,
+                'switch without default must de-specialize',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingMixedInnerAndOuterMerge(): void
+    {
+        // P5.1: nested branching where the inner if (both arms = Foo) merges
+        // its result into $x, then the outer if (else also = Foo) merges
+        // across the outer-inner boundary.
+        $dir = sys_get_temp_dir() . '/xphp-br-nested-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrNested;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrNested;
+
+        if (mt_rand(0, 1)) {
+            if (mt_rand(0, 1)) {
+                $x = new Foo();
+            } else {
+                $x = new Foo();
+            }
+        } else {
+            $x = new Foo();
+        }
+        $r = $x->fooId::<int>(16);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(16\)/',
+                $use,
+                'nested merges chain: inner merge -> outer merge',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingOneArmAssignsUntrackedRhsStillDeSpecializes(): void
+    {
+        // P5.1: one arm assigns the same class via `new Foo()`, the other
+        // via an untracked RHS (a function call). The untracked arm captures
+        // null, the merge fails, $x de-specializes.
+        $dir = sys_get_temp_dir() . '/xphp-br-untracked-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrUnt;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        function computeFoo(): Foo { return new Foo(); }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrUnt;
+
+        if (mt_rand(0, 1)) {
+            $x = new Foo();
+        } else {
+            $x = computeFoo();
+        }
+        $r = $x->fooId::<int>(17);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertStringNotContainsString(
+                'fooId_T_',
+                $use,
+                'untracked RHS in one arm must de-specialize',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingMatchAllArmsAgreeKeepsSpecialization(): void
+    {
+        // P5.1: match with default arm + all arms assign same class merges.
+        $dir = sys_get_temp_dir() . '/xphp-br-mtch-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrMtch;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrMtch;
+
+        $n = mt_rand(0, 5);
+        match (true) {
+            $n === 1 => $x = new Foo(),
+            $n === 2 => $x = new Foo(),
+            default  => $x = new Foo(),
+        };
+        $r = $x->fooId::<int>(18);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertMatchesRegularExpression(
+                '/\$x->fooId_T_[0-9a-f]+\(18\)/',
+                $use,
+                'match with default + all-arms-agree must merge',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingMatchWithoutDefaultStillDeSpecializes(): void
+    {
+        // P5.1: match without default = canMergeOnLeave returns false.
+        // (Match would runtime-throw on unmatched value, but we're
+        // conservative.)
+        $dir = sys_get_temp_dir() . '/xphp-br-mtchnod-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrMtchNoD;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrMtchNoD;
+
+        $x = new Foo();
+        $n = mt_rand(0, 5);
+        match (true) {
+            $n === 1 => $x = new Foo(),
+            $n === 2 => $x = new Foo(),
+        };
+        $r = $x->fooId::<int>(19);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertStringNotContainsString(
+                'fooId_T_',
+                $use,
+                'match without default must de-specialize',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testBranchingElseifMiddleArmDiffersStillDeSpecializes(): void
+    {
+        // P5.1: three-arm if/elseif/else where the middle arm assigns Bar
+        // instead of Foo. Locks the per-arm equality loop -- if the loop
+        // accidentally only checks the first vs last arm, this test would
+        // wrongly merge against Foo.
+        $dir = sys_get_temp_dir() . '/xphp-br-elsmid-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Foo.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrElsMid;
+        class Foo { public function fooId<T>(T $x): T { return $x; } }
+        class Bar { }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\BrElsMid;
+
+        $n = mt_rand(0, 2);
+        if ($n === 0) {
+            $x = new Foo();
+        } elseif ($n === 1) {
+            $x = new Bar();
+        } else {
+            $x = new Foo();
+        }
+        $r = $x->fooId::<int>(20);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertStringNotContainsString(
+                'fooId_T_',
+                $use,
+                'middle elseif disagreeing must de-specialize the merge',
+            );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     public function testClosureUseImportPreservesReceiverType(): void
     {
         // Bug fix: closures with explicit `use ($x)` now import the type of

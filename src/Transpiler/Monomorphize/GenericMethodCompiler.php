@@ -395,7 +395,19 @@ final class GenericMethodCompiler
              * picks Bar (the last lexical write) regardless of whether the branch
              * fired -- the original bug review of the post-b88539c work flagged.
              *
-             * @var list<array{snapshot: array<string,string>, assigned: array<string,bool>}>
+             * `perBranchTypes` records the end-of-arm `currentScopeLocalTypes[$x]`
+             * value (or `null` if untracked at arm end) for every variable in
+             * `assigned`, one slot per arm visited so far. `armIndex` is the
+             * 0-based index of the currently-active arm, starting at 0 for
+             * `If_` (whose body is the first arm) and `-1` for `Switch_` /
+             * `Match_` (whose parent body is the switch/match expression --
+             * not an arm; the first `Case_` / `MatchArm` enter is the first
+             * arm). On leave, if every captured slot agrees on the same FQN
+             * AND the slot count matches the structural arm count, the merge
+             * keeps `$x` instead of invalidating. See `P5.1-same-class-merge.md`
+             * and the `computeMergedTypes` / `canMergeOnLeave` helpers below.
+             *
+             * @var list<array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>
              */
             private array $branchSnapshots = [];
 
@@ -517,10 +529,29 @@ final class GenericMethodCompiler
                     $this->branchSnapshots[] = [
                         'snapshot' => $this->currentScopeLocalTypes,
                         'assigned' => [],
+                        'perBranchTypes' => [],
+                        // If_'s body is the first arm (armIndex=0).
+                        // Switch_ / Match_ have no parent body arm; the first
+                        // sibling enter promotes armIndex from -1 to 0.
+                        // For loops + TryCatch the value doesn't matter
+                        // (canMergeOnLeave returns false).
+                        'armIndex' => ($node instanceof Switch_ || $node instanceof Match_) ? -1 : 0,
                     ];
                 }
                 if (self::isSiblingBranch($node) && $this->branchSnapshots !== []) {
                     $top = count($this->branchSnapshots) - 1;
+                    // If a prior arm was active (armIndex >= 0), capture its
+                    // end-state before resetting for the new arm. The
+                    // armIndex == -1 case is the first Case_/MatchArm enter
+                    // on Switch_/Match_, where no prior arm existed.
+                    if ($this->branchSnapshots[$top]['armIndex'] >= 0) {
+                        $this->branchSnapshots[$top]['perBranchTypes'][] =
+                            self::captureArmTypes(
+                                $this->branchSnapshots[$top]['assigned'],
+                                $this->currentScopeLocalTypes,
+                            );
+                    }
+                    $this->branchSnapshots[$top]['armIndex']++;
                     $this->currentScopeLocalTypes = $this->branchSnapshots[$top]['snapshot'];
                 }
                 // Stage B flow typing: `$x = new ClassName(...)` records `$x`'s receiver
@@ -604,9 +635,31 @@ final class GenericMethodCompiler
                 if (self::isBranchingParent($node)) {
                     $popped = array_pop($this->branchSnapshots);
                     if ($popped !== null) {
+                        // Capture the final arm's end-state (symmetric with
+                        // the per-sibling-enter capture above). Only when
+                        // armIndex >= 0 -- a Switch_/Match_ with zero
+                        // cases/arms would leave armIndex at -1.
+                        if ($popped['armIndex'] >= 0) {
+                            $popped['perBranchTypes'][] = self::captureArmTypes(
+                                $popped['assigned'],
+                                $this->currentScopeLocalTypes,
+                            );
+                        }
+
+                        // Restore to pre-branch state.
                         $this->currentScopeLocalTypes = $popped['snapshot'];
+
+                        // P5.1 same-class merge: try to keep variables whose
+                        // every reachable arm assigned the same FQN, instead
+                        // of unconditionally invalidating below.
+                        $merged = self::computeMergedTypes($node, $popped);
+
                         foreach ($popped['assigned'] as $assignedName => $_true) {
-                            unset($this->currentScopeLocalTypes[$assignedName]);
+                            if (isset($merged[$assignedName])) {
+                                $this->currentScopeLocalTypes[$assignedName] = $merged[$assignedName];
+                            } else {
+                                unset($this->currentScopeLocalTypes[$assignedName]);
+                            }
                             if ($this->branchSnapshots !== []) {
                                 $parentTop = count($this->branchSnapshots) - 1;
                                 $this->branchSnapshots[$parentTop]['assigned'][$assignedName] = true;
@@ -650,6 +703,124 @@ final class GenericMethodCompiler
                     || $node instanceof MatchArm
                     || $node instanceof Catch_
                     || $node instanceof Finally_;
+            }
+
+            /**
+             * Snapshot the end-of-arm state of every name in the frame's
+             * `assigned` set. Returns a map name -> ?FQN where `null` means
+             * "this arm did not finish with a tracked FQN for that name".
+             *
+             * @param array<string, bool> $assigned
+             * @param array<string, string> $currentTypes
+             * @return array<string, ?string>
+             */
+            private static function captureArmTypes(array $assigned, array $currentTypes): array
+            {
+                $out = [];
+                foreach ($assigned as $name => $_true) {
+                    $out[$name] = $currentTypes[$name] ?? null;
+                }
+                return $out;
+            }
+
+            /**
+             * Same-class merge eligibility: only the all-arms-reachable
+             * branching parents can participate. Loops always have an
+             * implicit zero-iteration path; `if` without `else` has an
+             * implicit empty path; switch without `default` and match
+             * without `default` likewise. TryCatch is conservatively never
+             * merged (the exception-not-thrown case is implicit).
+             */
+            private static function canMergeOnLeave(Node $node): bool
+            {
+                if ($node instanceof If_) {
+                    return $node->else !== null;
+                }
+                if ($node instanceof Switch_) {
+                    foreach ($node->cases as $case) {
+                        if ($case->cond === null) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                if ($node instanceof Match_) {
+                    foreach ($node->arms as $arm) {
+                        if ($arm->conds === null) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                return false;
+            }
+
+            /**
+             * Structural arm count for the merge guard. Only called when
+             * `canMergeOnLeave($node)` is true, so `If_` is guaranteed to
+             * have an `else`.
+             *
+             *   If_:     2 + count(elseifs)            (if-body + else + each elseif)
+             *   Switch_: count(cases)                  (default already guaranteed)
+             *   Match_:  count(arms)                   (default already guaranteed)
+             */
+            private static function expectedArmCount(Node $node): int
+            {
+                if ($node instanceof If_) {
+                    return 2 + count($node->elseifs);
+                }
+                if ($node instanceof Switch_) {
+                    return count($node->cases);
+                }
+                if ($node instanceof Match_) {
+                    return count($node->arms);
+                }
+                return 0;
+            }
+
+            /**
+             * Walk the captured per-arm types and return name -> FQN for
+             * every name whose every arm ended with the same FQN. Returns
+             * an empty map when the merge isn't allowed (canMergeOnLeave
+             * false) or when the visited arm count doesn't match the
+             * structural arm count (implicit empty arm).
+             *
+             * @param array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>} $popped
+             * @return array<string, string>
+             */
+            private static function computeMergedTypes(Node $node, array $popped): array
+            {
+                if (!self::canMergeOnLeave($node)) {
+                    return [];
+                }
+                $expected = self::expectedArmCount($node);
+                if (count($popped['perBranchTypes']) !== $expected) {
+                    return [];
+                }
+                $merged = [];
+                foreach ($popped['assigned'] as $name => $_true) {
+                    $firstType = null;
+                    $allAgree = true;
+                    foreach ($popped['perBranchTypes'] as $i => $armTypes) {
+                        $type = $armTypes[$name] ?? null;
+                        if ($type === null) {
+                            $allAgree = false;
+                            break;
+                        }
+                        if ($i === 0) {
+                            $firstType = $type;
+                            continue;
+                        }
+                        if ($type !== $firstType) {
+                            $allAgree = false;
+                            break;
+                        }
+                    }
+                    if ($allAgree && $firstType !== null) {
+                        $merged[$name] = $firstType;
+                    }
+                }
+                return $merged;
             }
 
             private function rewriteStaticCall(StaticCall $node): ?Node
