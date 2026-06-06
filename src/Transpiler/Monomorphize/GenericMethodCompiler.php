@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Arg;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\Closure;
@@ -21,6 +22,7 @@ use PhpParser\Node\MatchArm;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\Stmt\Case_;
 use PhpParser\Node\Stmt\Catch_;
 use PhpParser\Node\Stmt\ClassLike;
@@ -362,6 +364,36 @@ final class GenericMethodCompiler
              */
             private array $currentScopeClosureTemplates = [];
             /**
+             * Parallel to `currentScopeClosureTemplates`: the Assign node and
+             * lexical-scope info that introduced each generic anonymous template.
+             * Populated alongside the template; consumed by the dispatcher
+             * finalize phase to know where to patch the original Assign's RHS
+             * and where to append specialized declarations.
+             *
+             * @var array<string, array{assign: Assign, namespace: string, namespaceNode: ?Namespace_}>
+             */
+            private array $currentScopeClosureContexts = [];
+            /**
+             * Per-template dispatch plan keyed by `varName . '@' . startFilePos`
+             * so two same-named templates in different scopes don't collide.
+             * Each entry collects the arg-tuples seen at call sites and the
+             * FuncCall nodes themselves, then the post-traversal finalize
+             * phase materializes one dispatcher closure per entry.
+             *
+             * @var array<string, array{
+             *   template: Closure|ArrowFunction,
+             *   varName: string,
+             *   assignNode: Assign,
+             *   namespace: string,
+             *   namespaceNode: ?Namespace_,
+             *   typeParams: list<TypeParam>,
+             *   callSites: list<FuncCall>,
+             *   argSets: list<list<TypeRef>>,
+             *   seenTagSet: array<string, true>
+             * }>
+             */
+            public array $closureDispatchPlan = [];
+            /**
              * Snapshot stack for scope isolation across nested
              * Function_/ClassMethod/Closure/ArrowFunction boundaries. On enter we push the
              * outgoing `(params, locals, branches)` triple; on leave we pop and restore.
@@ -427,7 +459,7 @@ final class GenericMethodCompiler
                 private array &$alreadyGenerated,
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
-                private array &$topLevelAppends,
+                public array &$topLevelAppends,
             ) {
             }
 
@@ -588,6 +620,11 @@ final class GenericMethodCompiler
                         && is_array($node->expr->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
                     ) {
                         $this->currentScopeClosureTemplates[$assignedName] = $node->expr;
+                        $this->currentScopeClosureContexts[$assignedName] = [
+                            'assign'        => $node,
+                            'namespace'     => $this->currentNamespace,
+                            'namespaceNode' => $this->currentNamespaceNode,
+                        ];
                     }
                 }
                 return null;
@@ -1104,32 +1141,22 @@ final class GenericMethodCompiler
             }
 
             /**
-             * Specialize a `$var::<T>(...)` call site by hoisting the variable's
-             * assigned generic closure body to a top-level Function_ with the
-             * mangled name.
+             * Record a `$var::<T>(...)` call site against the in-flight closure
+             * dispatch plan. Rejections for arrow / `use` / static closures
+             * fire EAGERLY (same throws as pre-P5.4), before any bag mutation.
              *
-             * Capture semantics are PRESERVED for the supported subset only:
+             * Two-pass model (P5.4):
              *
-             *   - Capture-free `function<T>(...) { ... }`: hoists to a top-level
-             *     Function_ via Specializer::specializeFunction. No outer state
-             *     was captured, so the rewrite is semantically identical.
+             *   Pass 1 (this method): per call site, validate eagerly and
+             *   record the arg-tuple + FuncCall node into a per-template bag
+             *   keyed by `(varName, $template->getStartFilePos())`. NO
+             *   immediate rewrite or emit.
              *
-             *   - `static function<T>(...) { ... }`: rejected. Static closures
-             *     have a different `$this` semantics (no implicit class binding);
-             *     hoisting would change observable behavior.
-             *
-             *   - Closures with `use (...)`: rejected. The `use` clause
-             *     evaluates captures at the closure construction site, not at
-             *     the call site; the hoist evaluates them never (top-level
-             *     functions have no captured scope).
-             *
-             *   - Arrow functions (`fn<T>(...) => ...`): rejected. Arrow
-             *     functions IMPLICITLY capture every outer variable by value
-             *     at expression-evaluation time; the hoist breaks that.
-             *
-             * Users hitting the rejection get a clear compile-time error
-             * pointing them to "lift to `function name<T>(...)` at file scope,
-             * or rewrite the call site to use a named function."
+             *   Pass 2 (`finalizeClosureDispatchers`): after the traverser
+             *   returns, materialize ONE dispatcher closure per bag entry
+             *   via `ClosureDispatcher::dispatch(...)`, replace the original
+             *   Assign's RHS in place, append specialized declarations, and
+             *   rewrite every recorded FuncCall to inject the tag arg.
              *
              * @param list<TypeRef> $args
              */
@@ -1141,6 +1168,10 @@ final class GenericMethodCompiler
                     return null;
                 }
 
+                // Eager rejections -- preserved from pre-P5.4 behavior so the
+                // throw fires at the first offending call site, before the
+                // bag mutates. P5.5 / P5.6 will lift these for arrow + use
+                // forms once their dispatcher consumers ship.
                 if ($template instanceof ArrowFunction) {
                     throw new RuntimeException(sprintf(
                         'Generic arrow functions cannot yet be specialized at '
@@ -1184,51 +1215,36 @@ final class GenericMethodCompiler
                         'closure<' . self::formatArgList($args) . '>',
                     );
                 }
-
-                // Build a synthetic Function_ from the closure body, then route
-                // through the existing specializeFunction path.
-                $syntheticName = 'closure_' . $varName;
-                $synthetic = new Function_(
-                    new Identifier($syntheticName),
-                    [
-                        'params' => $template->params,
-                        'returnType' => $template->returnType,
-                        'byRef' => $template->byRef,
-                        'stmts' => $template->stmts,
-                        'attrGroups' => $template->attrGroups,
-                    ],
-                    $template->getAttributes(),
-                );
-                $synthetic->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $params);
-
-                $mangled = self::mangleName($syntheticName, $args, $this->hashLength);
-                // Anchor by byte position to avoid cross-call collisions
-                // between closures with the same shape in different scopes.
-                $generatedKey = 'closure::' . $varName . '@' . $template->getStartFilePos();
-                $generatedKey .= '::' . $mangled;
-
-                $mangledFqn = $this->currentNamespace !== ''
-                    ? $this->currentNamespace . '\\' . $mangled
-                    : $mangled;
-
-                if (!isset($this->alreadyGenerated[$generatedKey])) {
-                    $substitution = [];
-                    foreach ($params as $i => $param) {
-                        $substitution[$param->name] = $args[$i];
-                    }
-                    $specialized = (new Specializer())->specializeFunction($synthetic, $substitution, $mangled);
-                    if ($this->currentNamespaceNode !== null) {
-                        $this->pendingAppends[] = [$this->currentNamespaceNode, $specialized];
-                    } else {
-                        $this->topLevelAppends[] = $specialized;
-                    }
-                    $this->alreadyGenerated[$generatedKey] = true;
+                $context = $this->currentScopeClosureContexts[$varName] ?? null;
+                if ($context === null) {
+                    return null;
                 }
 
-                $node->name = new FullyQualified($mangledFqn);
-                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
-
-                return $node;
+                $planKey = $varName . '@' . $template->getStartFilePos();
+                if (!isset($this->closureDispatchPlan[$planKey])) {
+                    $this->closureDispatchPlan[$planKey] = [
+                        'template'      => $template,
+                        'varName'       => $varName,
+                        'assignNode'    => $context['assign'],
+                        'namespace'     => $context['namespace'],
+                        'namespaceNode' => $context['namespaceNode'],
+                        'typeParams'    => $params,
+                        'callSites'     => [],
+                        'argSets'       => [],
+                        'seenTagSet'    => [],
+                    ];
+                }
+                $entry = &$this->closureDispatchPlan[$planKey];
+                $tag = ClosureDispatcher::tagFor($args, $this->hashLength);
+                if (!isset($entry['seenTagSet'][$tag])) {
+                    $entry['seenTagSet'][$tag] = true;
+                    $entry['argSets'][] = $args;
+                }
+                $entry['callSites'][] = $node;
+                unset($entry);
+                // Do NOT mutate the call site yet -- pass 2 prepends the tag arg
+                // once the dispatcher's specializations are known.
+                return null;
             }
 
             private function resolveClassName(Name $name): string
@@ -1332,10 +1348,78 @@ final class GenericMethodCompiler
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
 
+        // Pass 2 of the closure-dispatcher pipeline: materialize a dispatcher
+        // closure per recorded template, replace the original Assign's RHS,
+        // append specialized declarations, and rewrite each collected call
+        // site to inject the tag arg.
+        $this->finalizeClosureDispatchers($visitor, $hashLength);
+
         // Apply buffered appends now that the traversal has finished, so we don't fight
         // nikic's NodeTraverser's child-array iteration semantics mid-walk.
         foreach ($visitor->pendingAppends as [$container, $stmt]) {
             $container->stmts[] = $stmt;
+        }
+    }
+
+    /**
+     * Pass 2: turn each collected dispatch-plan entry into a dispatcher
+     * closure plus specialized top-level functions. Skips entries whose
+     * argSets are empty -- a generic closure template that was declared
+     * but never called via turbofish keeps its original Assign untouched,
+     * so reflection on unused templates stays faithful.
+     *
+     * @infection-ignore-all -- the `instanceof Closure ? $template->uses : []`
+     *   ternary is observably identical until P5.6 lifts the `use ($x)`
+     *   rejection: for the only flavor that reaches finalize in P5.4
+     *   (capture-free `function<T>(...)`), `$template->uses === []` always
+     *   (the rejection above filters out non-empty uses), so both branches
+     *   produce the same `[]`. Same logic applies to ArrowFunction, which
+     *   is rejected upstream.
+     */
+    private function finalizeClosureDispatchers(object $visitor, int $hashLength): void
+    {
+        $dispatcher = new ClosureDispatcher();
+        foreach ($visitor->closureDispatchPlan as $entry) {
+            if ($entry['argSets'] === []) {
+                continue;
+            }
+            $template = $entry['template'];
+            $useClauses = $template instanceof Closure
+                ? $template->uses
+                : [];
+            $result = $dispatcher->dispatch(
+                $template,
+                $entry['argSets'],
+                $entry['typeParams'],
+                $entry['varName'],
+                $entry['namespace'],
+                $hashLength,
+                $useClauses,
+            );
+            // Replace the original Assign's RHS in place; the AST node's
+            // source-position attributes survive so stack traces still
+            // point at the user's `$pair = ...` line.
+            $entry['assignNode']->expr = $result['assignment']->expr;
+            foreach ($result['declarations'] as $specialized) {
+                if ($entry['namespaceNode'] !== null) {
+                    $visitor->pendingAppends[] = [$entry['namespaceNode'], $specialized];
+                } else {
+                    $visitor->topLevelAppends[] = $specialized;
+                }
+            }
+            // Rewrite every recorded call site: prepend the tag arg, clear
+            // the turbofish marker. The Variable receiver stays so the
+            // dispatcher closure (now in `$varName`) is the call target.
+            foreach ($entry['callSites'] as $callSite) {
+                $tag = ClosureDispatcher::tagFor(
+                    $callSite->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS),
+                    $hashLength,
+                );
+                $tagArg = new Arg(new String_($tag));
+                array_unshift($callSite->args, $tagArg);
+                $callSite->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+                $callSite->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
+            }
         }
     }
 
