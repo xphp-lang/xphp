@@ -2216,6 +2216,53 @@ PHP;
         self::assertTrue(true);
     }
 
+    public function testCovariantInNestedClosureParameterIsRejected(): void
+    {
+        // `+T` of the OUTER class appears in the parameter type of a nested
+        // CLOSURE -- the variance validator must recurse into method bodies.
+        // Without the recursion the inner closure's param `T $x` slips
+        // through, and at PHP autoload time the variance edge produces a
+        // signature-compat fatal.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Producer<+T>
+{
+    public function emit(): array
+    {
+        $f = function (T $x) {};
+        return [];
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('nested closure/arrow parameter');
+        $parser->parse($source);
+    }
+
+    public function testContravariantInNestedArrowReturnIsRejected(): void
+    {
+        // `-T` in the return position of a nested ARROW FUNCTION inside a
+        // contravariant Consumer's method body.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Consumer<-T>
+{
+    public function pipe(): array
+    {
+        $f = fn (): T => null;
+        return [];
+    }
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('nested closure/arrow return');
+        $parser->parse($source);
+    }
+
     public function testCovariantInNestedGenericInputPositionIsRejected(): void
     {
         // `+T` inside `Box<T>` in a method parameter position. The validator

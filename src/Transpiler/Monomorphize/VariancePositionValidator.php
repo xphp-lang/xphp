@@ -6,6 +6,8 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
 use PhpParser\Node\ComplexType;
+use PhpParser\Node\Expr\ArrowFunction;
+use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
@@ -175,6 +177,65 @@ final class VariancePositionValidator
                 [Variance::Invariant, Variance::Covariant],
                 'method return',
             );
+        }
+
+        // Recurse into the method body for nested closures / arrow functions.
+        // A closure that captures the OUTER class's T (via implicit capture or
+        // a `use ($x)` clause) and uses it in a method-param or return position
+        // counts as outer-T input/output. The position rules apply to the
+        // OUTER class's variance markers; the inner closure's own type-params
+        // (when item 16 lands) will shadow same-named outer T's, but until
+        // then nested closures have no type-params and every name in their
+        // signature is an outer reference.
+        if ($method->stmts !== null) {
+            self::walkBodyForNestedClosures($method->stmts, $varianceByName);
+        }
+    }
+
+    /**
+     * Recursively walk a list of statements (or an expression tree), looking
+     * for Closure / ArrowFunction nodes whose params or return types reference
+     * an outer-variance-marked T.
+     *
+     * Cheap hand-rolled recursive walk -- avoids spinning up a NodeTraverser
+     * inside the per-class validator hot path.
+     *
+     * @param array<string, Variance> $varianceByName
+     */
+    private static function walkBodyForNestedClosures(mixed $node, array $varianceByName): void
+    {
+        if ($node instanceof Closure || $node instanceof ArrowFunction) {
+            foreach ($node->params as $param) {
+                if ($param instanceof Param && $param->type !== null) {
+                    self::checkPhpType(
+                        $param->type,
+                        $varianceByName,
+                        [Variance::Invariant, Variance::Contravariant],
+                        'nested closure/arrow parameter',
+                    );
+                }
+            }
+            if ($node->returnType !== null) {
+                self::checkPhpType(
+                    $node->returnType,
+                    $varianceByName,
+                    [Variance::Invariant, Variance::Covariant],
+                    'nested closure/arrow return',
+                );
+            }
+            // Don't stop -- a closure body may contain further closures.
+        }
+
+        if (is_array($node)) {
+            foreach ($node as $child) {
+                self::walkBodyForNestedClosures($child, $varianceByName);
+            }
+            return;
+        }
+        if ($node instanceof Node) {
+            foreach ($node->getSubNodeNames() as $subName) {
+                self::walkBodyForNestedClosures($node->$subName, $varianceByName);
+            }
         }
     }
 
