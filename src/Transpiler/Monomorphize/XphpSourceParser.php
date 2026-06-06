@@ -186,7 +186,12 @@ final class XphpSourceParser
                     $methodAnchorByte = $tokens[$j]->pos;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
-                        $parsed = self::parseTypeParamList($tokens, $k, allowDefaults: false);
+                        $parsed = self::parseTypeParamList(
+                            $tokens,
+                            $k,
+                            allowDefaults: true,
+                            allowVariance: false,
+                        );
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
                             $methodMarkers[] = [
@@ -217,7 +222,12 @@ final class XphpSourceParser
                     $classAnchorByte = $tokens[$j]->pos;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
-                        $parsed = self::parseTypeParamList($tokens, $k, allowDefaults: true);
+                        $parsed = self::parseTypeParamList(
+                            $tokens,
+                            $k,
+                            allowDefaults: true,
+                            allowVariance: true,
+                        );
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
                             $classMarkers[] = [
@@ -414,8 +424,12 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: list<array{name: string, bound: ?array, default: ?TypeRef, variance: Variance}>, 1: int}|null
      */
-    private static function parseTypeParamList(array $tokens, int $openIdx, bool $allowDefaults): ?array
-    {
+    private static function parseTypeParamList(
+        array $tokens,
+        int $openIdx,
+        bool $allowDefaults,
+        bool $allowVariance,
+    ): ?array {
         $n = count($tokens);
         if ($openIdx >= $n || $tokens[$openIdx]->text !== '<') {
             return null;
@@ -426,16 +440,17 @@ final class XphpSourceParser
         $i = self::skipWs($tokens, $openIdx + 1);
         while ($i < $n) {
             // Variance prefix `+` (covariant) or `-` (contravariant). Both are
-            // single-char tokens at this position. Class-level only -- method/
-            // function-level type-params get the same "not yet supported"
-            // rejection family as defaults.
+            // single-char tokens at this position. Class-level only -- methods,
+            // functions, closures, and arrow functions reject them because
+            // their specializations aren't keyed by stable identities that
+            // PHP would resolve via `extends` chains.
             $variance = Variance::Invariant;
             if ($i < $n && ($tokens[$i]->text === '+' || $tokens[$i]->text === '-')) {
-                if (!$allowDefaults) {
+                if (!$allowVariance) {
                     throw new RuntimeException(
                         'Variance markers `+T` / `-T` are not yet supported on '
-                        . 'methods or functions; remove the prefix or move the '
-                        . 'generic to a class-level type parameter.',
+                        . 'methods, functions, closures, or arrow functions; '
+                        . 'move the generic to a class-level type parameter.',
                     );
                 }
                 $variance = $tokens[$i]->text === '+'
@@ -467,8 +482,8 @@ final class XphpSourceParser
                 if (!$allowDefaults) {
                     throw new RuntimeException(sprintf(
                         'Generic parameter `%s` has a default value, which is not yet '
-                        . 'supported on methods or functions. Move the generic to a '
-                        . 'class-level type parameter, or remove the default.',
+                        . 'supported on closures or arrow functions. Assign the closure '
+                        . 'to a named function or remove the default.',
                         $paramName,
                     ));
                 }

@@ -1846,8 +1846,10 @@ PHP;
         self::assertTrue(true);
     }
 
-    public function testMethodLevelDefaultIsRejectedWithClearError(): void
+    public function testMethodLevelDefaultIsAcceptedAndStored(): void
     {
+        // Method-level defaults now ship. The marker carries the default
+        // through to the resolver's TypeParam construction.
         $source = <<<'PHP'
 <?php
 namespace App;
@@ -1857,12 +1859,16 @@ class C
 }
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('not yet supported on methods or functions');
-        $parser->parse($source);
+        $ast = $parser->parse($source);
+        $class = self::findFirstClass($ast);
+        $method = $class?->getMethods()[0] ?? null;
+        self::assertNotNull($method);
+        $params = $method->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('string', $params[0]->default?->name);
     }
 
-    public function testFreeFunctionLevelDefaultIsRejected(): void
+    public function testFreeFunctionLevelDefaultIsAcceptedAndStored(): void
     {
         $source = <<<'PHP'
 <?php
@@ -1870,9 +1876,11 @@ namespace App;
 function id<T = string>(T $x): T { return $x; }
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('not yet supported on methods or functions');
-        $parser->parse($source);
+        $ast = $parser->parse($source);
+        $fn = self::findFirstNodeOfType($ast, \PhpParser\Node\Stmt\Function_::class);
+        $params = $fn?->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('string', $params[0]->default?->name);
     }
 
     public function testNullableDefaultIsRejectedWithClearError(): void
@@ -2048,7 +2056,7 @@ class C
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Variance markers `+T` / `-T` are not yet supported on methods or functions');
+        $this->expectExceptionMessage('Variance markers `+T` / `-T` are not yet supported on methods, functions, closures, or arrow functions');
         $parser->parse($source);
     }
 
@@ -2061,7 +2069,8 @@ function id<-T>(T $x): T { return $x; }
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('not yet supported on methods or functions');
+        $this->expectExceptionMessage('Variance markers');
+        $this->expectExceptionMessage('methods, functions, closures, or arrow functions');
         $parser->parse($source);
     }
 

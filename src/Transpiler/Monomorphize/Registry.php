@@ -136,7 +136,34 @@ final class Registry
         if ($definition === null) {
             return $args;
         }
-        $params = $definition->typeParams;
+        return self::padArgsWithDefaults(
+            $definition->typeParams,
+            $args,
+            ltrim($templateFqn, '\\'),
+        );
+    }
+
+    /**
+     * Pad an arg list with defaults declared on `$params`, substituting
+     * already-positional concretes into any type-param references in the
+     * default. Shared between `recordInstantiation` (class/interface/trait
+     * templates) and `GenericMethodCompiler` (method/function/closure
+     * templates) so the padding semantics stay identical regardless of
+     * the call-site shape.
+     *
+     * Throws when a non-defaulted param is missing and there are fewer
+     * supplied args than required. Returns `$args` unchanged when the
+     * supplied count already matches or exceeds the param count.
+     *
+     * @param list<TypeParam> $params
+     * @param list<TypeRef> $args
+     * @return list<TypeRef>
+     */
+    public static function padArgsWithDefaults(
+        array $params,
+        array $args,
+        string $templateLabel,
+    ): array {
         $supplied = count($args);
         $needed = count($params);
         if ($supplied >= $needed) {
@@ -150,7 +177,7 @@ final class Registry
                     'Generic template "%s" was instantiated with %d type argument(s) '
                     . 'but parameter `%s` (position %d) has no default; supply it '
                     . 'explicitly or add defaults to every preceding required parameter.',
-                    ltrim($templateFqn, '\\'),
+                    $templateLabel,
                     $supplied,
                     $params[$i]->name,
                     $i + 1,

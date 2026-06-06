@@ -192,11 +192,44 @@ final class DefaultedGenericIntegrationTest extends TestCase
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
     }
 
-    public function testMethodLevelDefaultDeclarationIsRejected(): void
+    public function testMethodLevelBareCallPadsFromDefaults(): void
     {
-        // Confirms the parse-time rejection lives in the integration path too;
-        // there's no clean way to express a method-level default in the per-class
-        // fixtures, so we exercise the message end-to-end here.
+        // `$m->id(42)` (no turbofish) on a method declared `id<T = string>`.
+        // GMC's bare-call padding fires: empty args -> pad to [string] ->
+        // mangle to id_T_<string-hash>. The rewritten user file must
+        // reference the mangled name.
+        $sourceDir = $this->workDir . '/src-bare-method';
+        mkdir($sourceDir, 0o755, true);
+        $file = $sourceDir . '/M.xphp';
+        file_put_contents($file, <<<'PHP'
+        <?php
+        namespace App;
+        class M
+        {
+            public function id<T = string>(T $x): T { return $x; }
+        }
+        $m = new M();
+        $m->id('hello');
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($file);
+        $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+
+        $rewritten = file_get_contents($this->targetDir . '/M.php');
+        // The bare call gets rewritten to the mangled name.
+        self::assertStringContainsString('id_T_', $rewritten);
+        // And the original `id` call site no longer appears verbatim
+        // (the mangled name replaces it).
+        self::assertStringNotContainsString("->id('hello')", $rewritten);
+    }
+
+    public function testMethodLevelDefaultDeclarationIsAcceptedAndCompiles(): void
+    {
+        // Method-level defaults now parse + compile end-to-end. With a
+        // turbofish call site we hit the existing specialization path; with
+        // a bare call (no `::<...>`), the registry pads from defaults via
+        // GenericMethodCompiler's bare-call padding wiring.
         $sourceDir = $this->workDir . '/src-method-default';
         mkdir($sourceDir, 0o755, true);
         $file = $sourceDir . '/M.xphp';
@@ -207,14 +240,21 @@ final class DefaultedGenericIntegrationTest extends TestCase
         {
             public function id<T = string>(T $x): T { return $x; }
         }
+        $m = new M();
+        $m->id::<int>(42);
         PHP);
 
         $compiler = $this->buildCompiler();
         $sources = new FilepathArray($file);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('not yet supported on methods or functions');
+        // Must not throw -- compile cleanly. Method-level specializations
+        // get appended to the owning class rather than producing a new class
+        // file (so generatedCount stays 0 here); the proof of success is
+        // that compile finishes and the rewritten user file references the
+        // mangled method name.
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+        $rewritten = file_get_contents($this->targetDir . '/M.php');
+        self::assertStringContainsString('id_T_', $rewritten);
     }
 
     public function testTooFewArgsWithoutDefaultsFailsCompile(): void

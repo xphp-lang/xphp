@@ -626,9 +626,6 @@ final class GenericMethodCompiler
             private function rewriteStaticCall(StaticCall $node): ?Node
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
-                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
-                    return null;
-                }
                 if (!$node->name instanceof Identifier) {
                     return null;
                 }
@@ -644,7 +641,21 @@ final class GenericMethodCompiler
                     return null;
                 }
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                if (!is_array($params) || count($params) !== count($args)) {
+                if (!is_array($params)) {
+                    return null;
+                }
+                // Bare call (no `::<...>`) on a generic method with all
+                // defaults: pad to []. Already-tagged turbofish calls go
+                // through padArgsWithDefaults too so partial-arg shapes are
+                // filled in the same way class-level instantiations are.
+                if (!is_array($args)) {
+                    if (!self::hasAllDefaults($params)) {
+                        return null;
+                    }
+                    $args = [];
+                }
+                $args = Registry::padArgsWithDefaults($params, $args, $key);
+                if (!self::allConcrete($args) || count($params) !== count($args)) {
                     return null;
                 }
 
@@ -703,9 +714,6 @@ final class GenericMethodCompiler
             private function rewriteInstanceMethodCall(MethodCall|NullsafeMethodCall $node): ?Node
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
-                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
-                    return null;
-                }
                 if (!$node->name instanceof Identifier) {
                     return null;
                 }
@@ -721,7 +729,17 @@ final class GenericMethodCompiler
                     return null;
                 }
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                if (!is_array($params) || count($params) !== count($args)) {
+                if (!is_array($params)) {
+                    return null;
+                }
+                if (!is_array($args)) {
+                    if (!self::hasAllDefaults($params)) {
+                        return null;
+                    }
+                    $args = [];
+                }
+                $args = Registry::padArgsWithDefaults($params, $args, $key);
+                if (!self::allConcrete($args) || count($params) !== count($args)) {
                     return null;
                 }
 
@@ -916,6 +934,26 @@ final class GenericMethodCompiler
             {
                 foreach ($args as $a) {
                     if (!$a->isConcrete()) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            /**
+             * True iff every TypeParam in the template carries a default.
+             * Bare calls (no `::<...>`) can specialize only against all-defaults
+             * templates -- otherwise there's no way to derive the type-args.
+             *
+             * @param list<TypeParam> $params
+             */
+            private static function hasAllDefaults(array $params): bool
+            {
+                if ($params === []) {
+                    return false;
+                }
+                foreach ($params as $param) {
+                    if ($param->default === null) {
                         return false;
                     }
                 }

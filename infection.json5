@@ -111,11 +111,11 @@
                 // as a bound" which survives every reordering. Same justification
                 // as the Registry::validateBounds entries above.
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference",
-                // Registry::padWithDefaults + Registry::validateDefaultsAgainstBounds:
+                // Registry::padArgsWithDefaults + Registry::validateDefaultsAgainstBounds:
                 // sprintf-friendly error messages. Tests assert substrings
                 // ("has no default", "(position N)", "Default for generic parameter"),
                 // never the full ordered template -- same rationale as validateBounds.
-                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateDefaultsAgainstBounds",
                 // assertDefaultsReferenceOnlyEarlierParams + assertDefaultRefsEarlierOnly:
                 // the human-facing "default references X declared later" / "cannot reference
@@ -148,7 +148,7 @@
                 // as a bound" substring intact, which is what the test asserts on.
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference",
                 // Defaults error messages -- same rationale as the Concat entries above.
-                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateDefaultsAgainstBounds",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultRefsEarlierOnly",
@@ -223,11 +223,14 @@
                 "XPHP\\Transpiler\\Monomorphize\\Registry::isSameInstantiation",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
-                // Registry::padWithDefaults: `ltrim($templateFqn, '\\')` on the lookup
-                // + the error-message version. Callers (RegistryCollector + the
+                // Registry::padArgsWithDefaults + Registry::padWithDefaults (the
+                // wrapper that resolves a `templateFqn` against `$this->definitions`
+                // and delegates): `ltrim($templateFqn, '\\')` on the lookup AND on
+                // the error-message version. Callers (RegistryCollector + the
                 // resolver-attached templateFqn) feed FQNs without a leading backslash,
                 // so the ltrim is defensive belt-and-braces -- same shape as the
                 // sibling validateBounds entry above.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
             ]
         },
@@ -284,13 +287,13 @@
                 // shortcut falls through to `usort` on an empty array + `new self([])`,
                 // which is exactly what identity() already returns.
                 "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::fromReplacements",
-                // Registry::padWithDefaults: early `return $args` on the no-definition
+                // Registry::padArgsWithDefaults: early `return $args` on the no-definition
                 // and no-padding-needed branches. Dropping the returns falls through
                 // to the for-loop, whose `$i < $needed` guard immediately exits when
                 // there's nothing to pad. `$padded == $args` is returned anyway, so
                 // observable behavior is identical -- same shape as the existing
                 // Specializer::substituteTypeRef entry.
-                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
                 // VarianceEdgeEmitter::isNestedSubtype + ::isVarianceSubtype:
                 // intermediate `return false` branches that fall through to a
                 // following `return false` at the end of the function. The
@@ -387,13 +390,13 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::skipWs",
-                // Registry::padWithDefaults: the `for ($i = $supplied; $i < $needed; $i++)`
+                // Registry::padArgsWithDefaults: the `for ($i = $supplied; $i < $needed; $i++)`
                 // loop bound. `<` -> `<=` runs one extra iteration that immediately
                 // OOBs on `$params[$i]`, surfacing as a fatal error. Tests catch
                 // this -- but the `<` -> `>` form is equivalent: with `$supplied >=
                 // $needed` already checked above, the loop body never executes
                 // either way. Same shape as the existing parseTypeArgList entries.
-                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
                 // Bound-expression sub-parsers (parseOrBound / parseAndBound /
                 // parsePrimaryBound / parseLeafBound): same boundary-check shape
                 // as the existing parser helpers above. `<=` / `<` mutations on
@@ -463,12 +466,12 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parsePrimaryBound",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
-                // Registry::padWithDefaults: `if ($supplied >= $needed) return $args` ->
+                // Registry::padArgsWithDefaults: `if ($supplied >= $needed) return $args` ->
                 // `>` flips at the equality boundary. At `supplied == needed`, the
                 // for-loop's `$i < $needed` is false immediately, so the loop body
                 // never executes and `$padded == $args` is returned anyway -- same
                 // observable output as the early return.
-                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults"
             ]
         },
         // CallSiteRewriter::rewrite: `['stmts' => []]` -> `[]` on the
@@ -647,7 +650,7 @@
         "Plus": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
-                // Registry::padWithDefaults: `$i + 1` in the error message's
+                // Registry::padArgsWithDefaults: `$i + 1` in the error message's
                 // human-readable position display. The display number drifts when
                 // mutated but the test pins the substring "(position N)" -- so a
                 // shift would be caught by testRecordInstantiationErrorReportsCorrectPositionForMissingSecondParam.
@@ -656,10 +659,10 @@
                 // pad-substitute math either -- the only Plus mutant is on the
                 // error message position. Tests assert the substring, so leaving
                 // this ignored is intentional.
-                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults"
             ]
         },
-        // Registry::padWithDefaults: `$i + 1` -> `$i + 2` / `$i + 0` (Increment /
+        // Registry::padArgsWithDefaults: `$i + 1` -> `$i + 2` / `$i + 0` (Increment /
         // Decrement). Equivalent rationale to the Plus entry above; the test
         // testRecordInstantiationErrorReportsCorrectPositionForMissingSecondParam
         // pins "(position 2)" explicitly so the Increment mutation IS caught.
@@ -741,6 +744,7 @@
         // `isVarianceSubtype` (`hasNonInvariantParam` returns false first).
         "ArrayOneItem": {
             "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
                 "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
             ]
