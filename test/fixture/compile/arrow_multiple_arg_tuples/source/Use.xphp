@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowMultipleArgTuples;
+
+// Two distinct turbofish call sites produce two specializations.
+$f = fn<T>(T $x): T => $x;
+$a = $f::<int>(10);
+$b = $f::<string>('hi');

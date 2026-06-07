@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureUseMultipleArgTuples;
+
+// Two distinct turbofish call sites produce two specializations, both
+// sharing the by-value captured $tag = 'pre'.
+$tag = 'pre';
+$f = function<T>(T $x) use ($tag) { return $tag . ':' . $x; };
+$a = $f::<int>(1);
+$b = $f::<string>('two');

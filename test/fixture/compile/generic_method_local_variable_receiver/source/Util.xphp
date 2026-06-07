@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodLocalVariableReceiver;
+
+class Util
+{
+    public function identity<T>(T $x): T
+    {
+        return $x;
+    }
+}

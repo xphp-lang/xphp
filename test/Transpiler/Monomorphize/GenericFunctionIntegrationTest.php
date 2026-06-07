@@ -12,6 +12,9 @@ use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 final class GenericFunctionIntegrationTest extends TestCase
 {
@@ -45,14 +48,17 @@ final class GenericFunctionIntegrationTest extends TestCase
         self::assertFileExists($funcsPath);
         $content = file_get_contents($funcsPath);
 
+        // Structural invariant: exactly two specializations.
         self::assertSame(
             2,
             preg_match_all('/function identity_T_[0-9a-f]+\(/', $content),
-            'expected two specialized identity_T_<hash> functions (one per unique call-site arg)',
         );
-        self::assertMatchesRegularExpression('/function identity_T_[0-9a-f]+\(int \$x\): int/', $content);
-        self::assertMatchesRegularExpression('/function identity_T_[0-9a-f]+\(string \$x\): string/', $content);
-        self::assertStringNotContainsString('function identity(', $content, 'original template must be stripped');
+        // Negative invariant kept: original template stripped.
+        self::assertStringNotContainsString('function identity(', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/generic_function/verify/testGenericFunctionSpecializesPerUniqueCallSiteArgs/funcs.expected.php',
+            $content,
+        );
     }
 
     public function testFunctionCallSitesAreRewrittenToMangledFqnNames(): void
@@ -63,42 +69,25 @@ final class GenericFunctionIntegrationTest extends TestCase
         self::assertFileExists($usePath);
         $content = file_get_contents($usePath);
 
+        // Structural invariant: two distinct call sites get rewritten.
         self::assertSame(2, preg_match_all('/\\\\App\\\\GenericFunction\\\\identity_T_[0-9a-f]+\(/', $content));
+        // Negative invariant: turbofish call site must not survive.
         self::assertStringNotContainsString('identity<', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/generic_function/verify/testFunctionCallSitesAreRewrittenToMangledFqnNames/Use.expected.php',
+            $content,
+        );
     }
 
+    #[RunInSeparateProcess]
     public function testRuntimeExecutionOfSpecializedFunctions(): void
     {
-        $this->compile();
-
-        $funcsPath = $this->targetDir . '/funcs.php';
-        $usePath = $this->targetDir . '/Use.php';
-
-        $runScript = $this->workDir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        declare(strict_types=1);
-        require '{$funcsPath}';
-
-        // Pull mangled names out of funcs.php and call directly.
-        \$content = file_get_contents('{$funcsPath}');
-        preg_match_all('/function (identity_T_[0-9a-f]+)\\((\\w+) \\\$x\\): \\\\2/', \$content, \$m);
-        foreach (\$m[1] as \$i => \$mangled) {
-            \$type = \$m[2][\$i];
-            \$sample = \$type === 'int' ? 42 : 'hi';
-            \$fqn = '\\\\App\\\\GenericFunction\\\\' . \$mangled;
-            \$out = \$fqn(\$sample);
-            \$expected = \$type === 'int' ? 'integer' : 'string';
-            echo gettype(\$out) === \$expected ? "OK_{\$type}" : "BAD_{\$type}", "\\n";
+        $fixture = CompiledFixture::compile($this->sourceDir, 'genfn-runtime');
+        try {
+            require __DIR__ . '/../../fixture/compile/generic_function/verify/runtime_execution.php';
+        } finally {
+            $fixture->cleanup();
         }
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('OK_int', $output);
-        self::assertContains('OK_string', $output);
     }
 
     public function testFunctionLevelBoundViolationFailsCompilation(): void
@@ -222,42 +211,22 @@ final class GenericFunctionIntegrationTest extends TestCase
 
             $funcsOut = file_get_contents($bareTarget . '/funcs.php');
             self::assertIsString($funcsOut);
-            self::assertStringNotContainsString(
-                'function identity(',
-                $funcsOut,
-                'original template must be stripped from the top-level AST too',
-            );
-            self::assertStringNotContainsString(
-                ' T ',
-                $funcsOut,
-                'no leftover `T` type-param literal in the rewritten output',
-            );
+            // Negative invariants kept: original template stripped from
+            // top-level AST and no leftover `T` type-param literal.
+            self::assertStringNotContainsString('function identity(', $funcsOut);
+            self::assertStringNotContainsString(' T ', $funcsOut);
 
             $useOut = file_get_contents($bareTarget . '/Use.php');
             self::assertIsString($useOut);
-            self::assertMatchesRegularExpression(
-                '/identity_T_[0-9a-f]+\(42\)/',
-                $useOut,
-                'int call site rewritten to mangled name',
-            );
-            self::assertMatchesRegularExpression(
-                "/identity_T_[0-9a-f]+\\('world'\\)/",
-                $useOut,
-                'string call site rewritten to mangled name',
-            );
+            // Structural invariant: two specializations appended to top-level AST.
             self::assertSame(
                 2,
                 preg_match_all('/function identity_T_[0-9a-f]+\(/', $useOut),
-                'specialized functions appended to top-level AST -- one per unique arg',
             );
-            self::assertMatchesRegularExpression(
-                '/function identity_T_[0-9a-f]+\(int \$x\): int/',
-                $useOut,
-            );
-            self::assertMatchesRegularExpression(
-                '/function identity_T_[0-9a-f]+\(string \$x\): string/',
-                $useOut,
-            );
+
+            $snapshotDir = __DIR__ . '/GenericFunctionIntegrationTest/testBareTopLevelFreeFunctionSpecializesEndToEnd';
+            SnapshotHash::assertMatches($snapshotDir . '/funcs.expected.php', $funcsOut);
+            SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useOut);
 
             // Both rewritten files must be syntactically valid PHP -- the strongest
             // proof that the specialization landed in the right place.
@@ -274,6 +243,7 @@ final class GenericFunctionIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
     public function testBareTopLevelStripPreservesAllNonTemplateStatements(): void
     {
         // Locks the contract that `stripTopLevelFunction` only removes the
@@ -284,65 +254,24 @@ final class GenericFunctionIntegrationTest extends TestCase
         // Without this test, a Continue_ -> Break_ mutation on the strip loop
         // (or an ArrayOneItem mutation on the return value) would silently
         // drop the trailing statements; this fixture catches both.
-        $bareDir = sys_get_temp_dir() . '/xphp-bare-multi-' . uniqid('', true);
-        mkdir($bareDir, 0o755, true);
-        $funcsPath = $bareDir . '/funcs.xphp';
-        $usePath = $bareDir . '/Use.xphp';
-        file_put_contents($funcsPath, <<<'PHP'
-        <?php
-        declare(strict_types=1);
-
-        function identity<T>(T $x): T
-        {
-            return $x;
-        }
-
-        function nonGenericDouble(int $x): int
-        {
-            return $x * 2;
-        }
-        PHP);
-        file_put_contents($usePath, <<<'PHP'
-        <?php
-        declare(strict_types=1);
-
-        $asInt = identity::<int>(42);
-        $doubled = nonGenericDouble(21);
-        PHP);
-
-        $compiler = $this->buildCompiler();
-        $sources = (new NativeFileFinder())->find($bareDir)
-            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
-        $bareTarget = $bareDir . '/dist';
-        $bareCache = $bareDir . '/.xphp-cache';
-
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_bare_top_level/source',
+            'genfn-bare-top',
+        );
         try {
-            $compiler->compile($sources, $bareDir, $bareTarget, $bareCache);
-
-            $funcsOut = file_get_contents($bareTarget . '/funcs.php');
+            $funcsOut = file_get_contents($fixture->targetDir . '/funcs.php');
             self::assertIsString($funcsOut);
 
-            // Generic template stripped.
+            // Negative invariant: generic template stripped.
             self::assertStringNotContainsString('function identity(', $funcsOut);
-            // Non-generic neighbour preserved — kills the Continue_/Break_ + ArrayOneItem
-            // mutations that would silently drop trailing statements.
-            self::assertStringContainsString('function nonGenericDouble(int $x): int', $funcsOut);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_function_bare_top_level/verify/testBareTopLevelStripPreservesAllNonTemplateStatements/funcs.expected.php',
+                $funcsOut,
+            );
 
-            // Both call sites resolve at runtime.
-            $runScript = $bareDir . '/run.php';
-            file_put_contents($runScript, "<?php
-declare(strict_types=1);
-require '" . $bareTarget . "/funcs.php';
-require '" . $bareTarget . "/Use.php';
-echo \"doubled={\$doubled};asInt={\$asInt}\";
-");
-            $output = [];
-            $exit = 0;
-            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-            self::assertContains('doubled=42;asInt=42', $output);
+            require __DIR__ . '/../../fixture/compile/generic_function_bare_top_level/verify/runtime.php';
         } finally {
-            self::rrmdir($bareDir);
+            $fixture->cleanup();
         }
     }
 
@@ -404,22 +333,22 @@ echo \"doubled={\$doubled};asInt={\$asInt}\";
         try {
             $compiler->compile($sources, $mixedDir, $target, $cache);
 
-            // Namespaced template stripped from its namespace.
             $nsOut = file_get_contents($target . '/namespaced.php');
             self::assertIsString($nsOut);
-            self::assertStringNotContainsString('function namespacedId(', $nsOut);
-
-            // Bare top-level template stripped -- this assertion is what kills
-            // the Continue_ -> Break_ mutant on the namespaced strip branch.
             $bareOut = file_get_contents($target . '/bare.php');
             self::assertIsString($bareOut);
-            self::assertStringNotContainsString('function bareId(', $bareOut);
-
-            // Both call sites rewritten to mangled names.
             $useOut = file_get_contents($target . '/Use.php');
             self::assertIsString($useOut);
-            self::assertMatchesRegularExpression('/bareId_T_[0-9a-f]+\(7\)/', $useOut);
-            self::assertMatchesRegularExpression('/namespacedId_T_[0-9a-f]+\(13\)/', $useOut);
+
+            // Negative invariants kept: both templates stripped (kills the
+            // Continue_/Break_ mutant on the strip-loop branch separator).
+            self::assertStringNotContainsString('function namespacedId(', $nsOut);
+            self::assertStringNotContainsString('function bareId(', $bareOut);
+
+            $snapshotDir = __DIR__ . '/GenericFunctionIntegrationTest/testMixedTopLevelAndNamespacedTemplatesBothGetStripped';
+            SnapshotHash::assertMatches($snapshotDir . '/namespaced.expected.php', $nsOut);
+            SnapshotHash::assertMatches($snapshotDir . '/bare.expected.php', $bareOut);
+            SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useOut);
         } finally {
             self::rrmdir($mixedDir);
         }

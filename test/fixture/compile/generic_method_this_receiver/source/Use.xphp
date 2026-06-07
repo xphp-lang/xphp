@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodThisReceiver;
+
+$u = new Util();
+$i = $u->callIntIdentity();
+$s = $u->callStringIdentity();

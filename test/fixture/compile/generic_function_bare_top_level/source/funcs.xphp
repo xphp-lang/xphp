@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+function identity<T>(T $x): T
+{
+    return $x;
+}
+
+function nonGenericDouble(int $x): int
+{
+    return $x * 2;
+}

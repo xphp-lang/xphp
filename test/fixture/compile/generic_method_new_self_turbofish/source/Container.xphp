@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodNewSelfTurbofish;
+
+class Container<T>
+{
+    public function __construct(public T $item) {}
+
+    public function with(T $n): self
+    {
+        return new self::<T>($n);
+    }
+}

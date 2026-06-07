@@ -11,6 +11,8 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 final class ArraySugarIntegrationTest extends TestCase
 {
@@ -47,18 +49,9 @@ final class ArraySugarIntegrationTest extends TestCase
         $file = $this->fqnToPath($fqn);
         self::assertFileExists($file);
 
-        $content = file_get_contents($file);
-        self::assertStringContainsString('private array $items', $content, 'T[] property must lower to `array`');
-        self::assertStringContainsString('public function all(): array', $content, 'T[] return type must lower to `array`');
-        self::assertStringContainsString(
-            'public function first(): ?\\App\\ArraySugar\\Models\\User',
-            $content,
-            '?T return type must specialize to ?<concrete>',
-        );
-        self::assertStringContainsString(
-            'public function __construct(\\App\\ArraySugar\\Models\\User ...$items)',
-            $content,
-            'variadic T must specialize to <concrete>',
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/array_sugar/verify/testCollectionWithArraySugarSpecializesToArray/Collection.expected.php',
+            file_get_contents($file),
         );
     }
 
@@ -80,55 +73,21 @@ final class ArraySugarIntegrationTest extends TestCase
         }
     }
 
-    public function testRuntimeNullableReturnEnforcesConcreteType(): void
+    /**
+     * Verify-file tests autoload generated classes whose definitions PHP
+     * cannot unload from the process symbol table. Run in a fresh PHP
+     * subprocess so no class definitions leak into sibling tests.
+     */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testNullableReturnEnforcesConcreteType(): void
     {
-        $this->compile();
-
-        $fqn = Registry::generatedFqn(
-            'App\\ArraySugar\\Containers\\Collection',
-            [new TypeRef('App\\ArraySugar\\Models\\User')],
-        );
-        $collectionFile = $this->fqnToPath($fqn);
-
-        $runScript = $this->workDir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        declare(strict_types=1);
-        require '{$this->targetDir}/Models/User.php';
-        require '{$this->targetDir}/Containers/Collection.php';
-        require '{$collectionFile}';
-
-        \$c = new \\{$fqn}(new \\App\\ArraySugar\\Models\\User('alice'), new \\App\\ArraySugar\\Models\\User('bob'));
-
-        \$first = \$c->first();
-        echo \$first instanceof \\App\\ArraySugar\\Models\\User ? "FIRST_OK" : "FIRST_BAD";
-        echo "\\n";
-
-        \$all = \$c->all();
-        echo (is_array(\$all) && count(\$all) === 2) ? "ALL_OK" : "ALL_BAD";
-        echo "\\n";
-
-        \$empty = new \\{$fqn}();
-        echo \$empty->first() === null ? "EMPTY_NULL_OK" : "EMPTY_NULL_BAD";
-        echo "\\n";
-
-        // Reflection: the ?T return type must show the concrete class, not "T" or "mixed".
-        \$rt = (new \\ReflectionMethod('\\{$fqn}', 'first'))->getReturnType();
-        echo \$rt instanceof \\ReflectionNamedType ? \$rt->getName() : 'UNEXPECTED_TYPE';
-        echo "\\n";
-        echo \$rt instanceof \\ReflectionNamedType && \$rt->allowsNull() ? "NULLABLE_OK" : "NULLABLE_BAD";
-        echo "\\n";
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "run.php failed:\n" . implode("\n", $output));
-        self::assertSame('FIRST_OK', $output[0]);
-        self::assertSame('ALL_OK', $output[1]);
-        self::assertSame('EMPTY_NULL_OK', $output[2]);
-        self::assertSame('App\\ArraySugar\\Models\\User', $output[3]);
-        self::assertSame('NULLABLE_OK', $output[4]);
+        $fixture = CompiledFixture::compile($this->sourceDir, 'array-sugar-verify');
+        $fixture->registerAutoload('App\\ArraySugar\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/array_sugar/verify/nullable_return.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     private function compile(): void

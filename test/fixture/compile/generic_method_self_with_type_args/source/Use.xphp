@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodSelfReturnTypeArgs;
+
+$a = new Container::<int>(1);
+$b = $a->withItem(2);

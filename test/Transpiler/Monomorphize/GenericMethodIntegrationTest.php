@@ -6,11 +6,14 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 final class GenericMethodIntegrationTest extends TestCase
 {
@@ -44,16 +47,16 @@ final class GenericMethodIntegrationTest extends TestCase
         self::assertFileExists($utilPath);
         $content = file_get_contents($utilPath);
 
-        // Two unique args (int, string) -> two mangled methods.
-        self::assertSame(2, preg_match_all('/function identity_T_[0-9a-f]+\\(/', $content), 'expected two mangled identity_T_<hash> methods (one per unique call-site arg)');
-        // Each specialized method takes its concrete type.
-        self::assertStringContainsString('public static function identity_T_', $content);
-        self::assertMatchesRegularExpression('/public static function identity_T_[0-9a-f]+\\(int \\$x\\): int/', $content);
-        self::assertMatchesRegularExpression('/public static function identity_T_[0-9a-f]+\\(string \\$x\\): string/', $content);
-
-        // Original generic-method template must be removed from the emitted class.
+        // Structural invariant: two unique args -> two mangled methods.
+        self::assertSame(2, preg_match_all('/function identity_T_[0-9a-f]+\\(/', $content));
+        // Negative invariants: the original generic-method template must
+        // be removed from the emitted class.
         self::assertStringNotContainsString('function identity(', $content);
         self::assertStringNotContainsString('function identity ', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/generic_method/verify/testGenericMethodSpecializesPerUniqueCallSiteArgs/Util.expected.php',
+            $content,
+        );
     }
 
     public function testCallSitesAreRewrittenToMangledNames(): void
@@ -64,57 +67,35 @@ final class GenericMethodIntegrationTest extends TestCase
         self::assertFileExists($usePath);
         $content = file_get_contents($usePath);
 
-        // Three call sites (2 int + 1 string), all rewritten to fully-qualified mangled refs.
+        // Structural invariants: three call sites total, the two int
+        // call sites share a mangled name, int and string mangles differ.
         self::assertSame(3, preg_match_all('/\\\\App\\\\GenericMethod\\\\Util::identity_T_[0-9a-f]+\\(/', $content));
-        // The two int call sites must share the same mangled name (single specialization
-        // per unique arg list, not per call site — locks the alreadyGenerated dedupe).
         \preg_match_all('/identity_T_([0-9a-f]+)/', $content, $matches);
         self::assertCount(3, $matches[1]);
-        self::assertSame($matches[1][0], $matches[1][2], 'both `identity<int>` call sites must share a mangled name');
-        self::assertNotSame($matches[1][0], $matches[1][1], 'int and string mangles must differ');
-        // No raw `identity<int>` left over (the generic-args clause must be stripped or rewritten).
+        self::assertSame($matches[1][0], $matches[1][2]);
+        self::assertNotSame($matches[1][0], $matches[1][1]);
+        // Negative invariants: no raw `identity<` or bare `::identity(`
+        // call site survives.
         self::assertStringNotContainsString('identity<', $content);
-        // No bare `identity(` either — every call should be mangled.
         self::assertStringNotContainsString('::identity(', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/generic_method/verify/testCallSitesAreRewrittenToMangledNames/Use.expected.php',
+            $content,
+        );
     }
 
+    #[RunInSeparateProcess]
     public function testRuntimeExecutionPreservesGenericMethodSemantics(): void
     {
-        $this->compile();
-
-        $utilPath = $this->targetDir . '/Util.php';
-        $usePath = $this->targetDir . '/Use.php';
-
-        $runScript = $this->workDir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        declare(strict_types=1);
-        require '{$utilPath}';
-
-        \$asInt = \\App\\GenericMethod\\Util::identity_T_FILLED_AT_RUNTIME(42);
-        PHP);
-
-        // Pull the mangled FQNs out of Util.php and call them directly. We assert each
-        // one round-trips its arg through the matching native type.
-        \preg_match_all('/function (identity_T_[0-9a-f]+)\((\w+) \$x\): \2/', file_get_contents($utilPath), $matches);
-        self::assertCount(2, $matches[1], 'expected to find two mangled methods');
-        $gettypeName = ['int' => 'integer', 'string' => 'string'];
-        $script = "<?php\ndeclare(strict_types=1);\nrequire " . var_export($utilPath, true) . ";\n";
-        foreach ($matches[1] as $i => $mangled) {
-            $type = $matches[2][$i];
-            $sample = $type === 'int' ? '42' : "'hello'";
-            $expected = $gettypeName[$type];
-            $script .= "\$out{$i} = \\App\\GenericMethod\\Util::{$mangled}({$sample});\n";
-            $script .= "echo gettype(\$out{$i}) === '{$expected}' ? 'OK_{$type}' : 'BAD_{$type}', \"\\n\";\n";
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method/source',
+            'genmethod-runtime',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/generic_method/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
         }
-        file_put_contents($runScript, $script);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('OK_int', $output);
-        self::assertContains('OK_string', $output);
     }
 
     public function testMethodLevelBoundViolationFailsCompilation(): void
@@ -198,10 +179,9 @@ final class GenericMethodIntegrationTest extends TestCase
         try {
             $compiler->compile($sources, $sourceDir, $targetDir, $cacheDir);
             $useContent = file_get_contents($targetDir . '/Use.php');
-            self::assertMatchesRegularExpression(
-                '/Util::identity_T_[0-9a-f]+\(42\)/',
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testMultilineStaticCallSiteIsStillRewrittenToMangledName/Use.expected.php',
                 $useContent,
-                'multi-line `Util::\n    identity<int>` must still rewrite to the mangled name',
             );
         } finally {
             unlink($utilPath);
@@ -230,6 +210,7 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
     public function testSelfWithTypeArgsCompilesEndToEnd(): void
     {
         // Regression: an earlier change shipped only the scanner half --
@@ -239,155 +220,60 @@ final class GenericMethodIntegrationTest extends TestCase
         // was instantiated but never defined"). This test compiles a fixture
         // that uses `self<T>` in a return position and asserts the full
         // pipeline (compile + runtime exec).
-        $dir = sys_get_temp_dir() . '/xphp-self-' . uniqid('', true);
-        mkdir($dir, 0o755, true);
-        file_put_contents($dir . '/Container.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\SelfReturn;
-        class Container<T> {
-            public function __construct(public T $item) {}
-            public function withItem(T $n): self<T>
-            {
-                $this->item = $n;
-                return $this;
-            }
-        }
-        PHP);
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\SelfReturn;
-
-        $a = new Container::<int>(1);
-        $b = $a->withItem(2);
-        PHP);
-
-        $compiler = $this->buildCompiler();
-        $sources = (new NativeFileFinder())->find($dir)
-            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
-        $target = $dir . '/dist';
-        $cache = $dir . '/.xphp-cache';
-
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_self_with_type_args/source',
+            'genmethod-self-type-args',
+        );
         try {
-            $compiler->compile($sources, $dir, $target, $cache);
-
             // The specialized Container class lives under cache/Generated/...
-            $generated = self::globRecursive($cache . '/Generated', '*.php');
+            $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
             self::assertCount(1, $generated, 'one specialization (Container<int>)');
             $specialized = file_get_contents($generated[0]);
             self::assertIsString($specialized);
 
-            // self<T> in the source must become bare `self` in the
-            // specialized class -- `self` here resolves at runtime to the
-            // specialized class itself, which IS the correct semantics.
-            self::assertMatchesRegularExpression(
-                '/public function withItem\(int \$n\): self\b/',
+            // Negative invariant kept: self must NOT be misresolved to a
+            // class FQN (the bug this regression was for).
+            self::assertStringNotContainsString('\\App\\GenericMethodSelfReturnTypeArgs\\self', $specialized);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_method_self_with_type_args/verify/testSelfWithTypeArgsCompilesEndToEnd/Container.expected.php',
                 $specialized,
-                'self<T> must lower to bare `self` in the specialization',
-            );
-            self::assertStringNotContainsString(
-                '\\App\\SelfReturn\\self',
-                $specialized,
-                'self must NOT be misresolved to a class FQN',
             );
 
-            // Runtime sanity: instantiate, call withItem, read item back.
-            $runScript = $dir . '/run.php';
-            file_put_contents($runScript, <<<PHP
-            <?php
-            declare(strict_types=1);
-            spl_autoload_register(function (\$class) {
-                if (str_starts_with(\$class, 'XPHP\\\\Generated\\\\')) {
-                    \$rel = substr(\$class, strlen('XPHP\\\\Generated\\\\'));
-                    \$file = '{$cache}/Generated/' . str_replace('\\\\', '/', \$rel) . '.php';
-                    if (file_exists(\$file)) require \$file;
-                }
-            });
-            require '{$target}/Container.php';
-            require '{$target}/Use.php';
-            echo "item={\$b->item}";
-            PHP);
-            $output = [];
-            $exit = 0;
-            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-            self::assertContains('item=2', $output);
+            $fixture->registerAutoload('App\\GenericMethodSelfReturnTypeArgs');
+            require __DIR__ . '/../../fixture/compile/generic_method_self_with_type_args/verify/runtime.php';
         } finally {
-            self::rrmdir($dir);
+            $fixture->cleanup();
         }
     }
 
+    #[RunInSeparateProcess]
     public function testInstanceMethodGenericThisReceiverSpecializes(): void
     {
         // Phase 2 Stage A1: `$this->method::<T>(...)` -- the most common shape.
         // Receiver type is the enclosing class, no flow analysis needed.
-        $dir = sys_get_temp_dir() . '/xphp-inst-this-' . uniqid('', true);
-        mkdir($dir, 0o755, true);
-        file_put_contents($dir . '/Util.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\InstThis;
-
-        class Util {
-            public function identity<T>(T $x): T { return $x; }
-            public function callIntIdentity(): int
-            {
-                return $this->identity::<int>(42);
-            }
-            public function callStringIdentity(): string
-            {
-                return $this->identity::<string>('hi');
-            }
-        }
-        PHP);
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\InstThis;
-
-        $u = new Util();
-        $i = $u->callIntIdentity();
-        $s = $u->callStringIdentity();
-        PHP);
-
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_this_receiver/source',
+            'genmethod-this',
+        );
         try {
-            $this->compileFrom($dir);
-            $util = file_get_contents($dir . '/dist/Util.php');
+            $util = file_get_contents($fixture->targetDir . '/Util.php');
             self::assertIsString($util);
-            // Both turbofish call sites rewritten to mangled identifiers.
-            self::assertMatchesRegularExpression(
-                '/\$this->identity_T_[0-9a-f]+\(42\)/',
-                $util,
-                '$this->identity::<int> rewritten to mangled name',
-            );
-            self::assertMatchesRegularExpression(
-                "/\\\$this->identity_T_[0-9a-f]+\\('hi'\\)/",
-                $util,
-            );
-            // Two specialized methods appended to Util.
+
+            // Structural invariant: two specialized methods appended.
             self::assertSame(
                 2,
                 preg_match_all('/public function identity_T_[0-9a-f]+\(/', $util),
             );
+            // Negative invariant: original generic-method template removed.
             self::assertStringNotContainsString('function identity(', $util);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_method_this_receiver/verify/testInstanceMethodGenericThisReceiverSpecializes/Util.expected.php',
+                $util,
+            );
 
-            // Runtime sanity: the rewritten class actually executes.
-            $runScript = $dir . '/run.php';
-            file_put_contents($runScript, <<<PHP
-            <?php
-            declare(strict_types=1);
-            require '{$dir}/dist/Util.php';
-            require '{$dir}/dist/Use.php';
-            echo "i={\$i};s={\$s}";
-            PHP);
-            $output = [];
-            $exit = 0;
-            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-            self::assertContains('i=42;s=hi', $output);
+            require __DIR__ . '/../../fixture/compile/generic_method_this_receiver/verify/runtime.php';
         } finally {
-            self::rrmdir($dir);
+            $fixture->cleanup();
         }
     }
 
@@ -426,81 +312,39 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $caller = file_get_contents($dir . '/dist/Caller.php');
             self::assertIsString($caller);
-            self::assertMatchesRegularExpression(
-                '/\$u->identity_T_[0-9a-f]+\(7\)/',
-                $caller,
-                'parameter receiver: $u resolved via param type',
-            );
-            self::assertMatchesRegularExpression(
-                '/\$u\?->identity_T_[0-9a-f]+\(11\)/',
-                $caller,
-                'nullable parameter receiver: nullable wrapper stripped before type lookup',
-            );
-
             $util = file_get_contents($dir . '/dist/Util.php');
             self::assertIsString($util);
-            self::assertMatchesRegularExpression('/public function identity_T_[0-9a-f]+\(int \$x\): int/', $util);
+
+            $snapshotDir = __DIR__ . '/GenericMethodIntegrationTest/testInstanceMethodGenericParamReceiverSpecializes';
+            SnapshotHash::assertMatches($snapshotDir . '/Caller.expected.php', $caller);
+            SnapshotHash::assertMatches($snapshotDir . '/Util.expected.php', $util);
         } finally {
             self::rrmdir($dir);
         }
     }
 
+    #[RunInSeparateProcess]
     public function testInstanceMethodGenericLocalVariableReceiverSpecializes(): void
     {
         // Phase 2 Stage B: local flow typing. `$u = new Util(); $u->m::<T>(...)`
         // -- the visitor records `$u`'s type from the assignment so the later
         // method call can specialize. Lexical last-write wins; we don't model
         // branches or method-return-typed reassignments.
-        $dir = sys_get_temp_dir() . '/xphp-inst-local-' . uniqid('', true);
-        mkdir($dir, 0o755, true);
-        file_put_contents($dir . '/Util.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\InstLocal;
-        class Util {
-            public function identity<T>(T $x): T { return $x; }
-        }
-        PHP);
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\InstLocal;
-
-        $u = new Util();
-        $i = $u->identity::<int>(99);
-        $s = $u->identity::<string>('world');
-        PHP);
-
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_local_variable_receiver/source',
+            'genmethod-local',
+        );
         try {
-            $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
+            $use = file_get_contents($fixture->targetDir . '/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$u->identity_T_[0-9a-f]+\(99\)/',
-                $use,
-                'local var: $u flow-typed from `new Util()`',
-            );
-            self::assertMatchesRegularExpression(
-                "/\\\$u->identity_T_[0-9a-f]+\\('world'\\)/",
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_method_local_variable_receiver/verify/testInstanceMethodGenericLocalVariableReceiverSpecializes/Use.expected.php',
                 $use,
             );
 
-            // Runtime sanity check.
-            $runScript = $dir . '/run.php';
-            file_put_contents($runScript, <<<PHP
-            <?php
-            declare(strict_types=1);
-            require '{$dir}/dist/Util.php';
-            require '{$dir}/dist/Use.php';
-            echo "i={\$i};s={\$s}";
-            PHP);
-            $output = [];
-            $exit = 0;
-            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-            self::assertContains('i=99;s=world', $output);
+            require __DIR__ . '/../../fixture/compile/generic_method_local_variable_receiver/verify/runtime.php';
         } finally {
-            self::rrmdir($dir);
+            $fixture->cleanup();
         }
     }
 
@@ -538,10 +382,9 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $owner = file_get_contents($dir . '/dist/Owner.php');
             self::assertIsString($owner);
-            self::assertMatchesRegularExpression(
-                '/\$this->util->identity_T_[0-9a-f]+\(123\)/',
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testInstanceMethodGenericPropertyReceiverSpecializes/Owner.expected.php',
                 $owner,
-                'property receiver: $this->util resolved via property type declaration',
             );
         } finally {
             self::rrmdir($dir);
@@ -596,37 +439,17 @@ final class GenericMethodIntegrationTest extends TestCase
         try {
             $this->compileFrom($dir);
 
-            // Foo must receive its `fooId_T_<hash>` specialization, NOT silently
-            // get nothing (which was the original failure mode).
             $foo = file_get_contents($dir . '/dist/Foo.php');
             self::assertIsString($foo);
-            self::assertMatchesRegularExpression(
-                '/public function fooId_T_[0-9a-f]+\(int \$x\): int/',
-                $foo,
-                'Foo must receive its specialized method -- the outer-scope receiver',
-            );
-
-            // Bar still gets its inner-scope specialization.
             $bar = file_get_contents($dir . '/dist/Bar.php');
             self::assertIsString($bar);
-            self::assertMatchesRegularExpression(
-                '/public function barId_T_[0-9a-f]+\(int \$x\): int/',
-                $bar,
-            );
-
-            // Call sites: inner uses Bar's mangled name, outer uses Foo's.
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->barId_T_[0-9a-f]+\(11\)/',
-                $use,
-                'inner closure call uses Bar barId mangled name',
-            );
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(22\)/',
-                $use,
-                'outer call uses Foo fooId mangled name -- proves the scope was restored',
-            );
+
+            $snapshotDir = __DIR__ . '/GenericMethodIntegrationTest/testReceiverTypeAnalysisDoesNotLeakAcrossClosureScopes';
+            SnapshotHash::assertMatches($snapshotDir . '/Foo.expected.php', $foo);
+            SnapshotHash::assertMatches($snapshotDir . '/Bar.expected.php', $bar);
+            SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $use);
         } finally {
             self::rrmdir($dir);
         }
@@ -667,18 +490,12 @@ final class GenericMethodIntegrationTest extends TestCase
 
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(7\)/',
-                $use,
-                'outer Foo call survives the arrow function body',
-            );
-
             $foo = file_get_contents($dir . '/dist/Foo.php');
             self::assertIsString($foo);
-            self::assertMatchesRegularExpression(
-                '/public function fooId_T_[0-9a-f]+\(int \$x\): int/',
-                $foo,
-            );
+
+            $snapshotDir = __DIR__ . '/GenericMethodIntegrationTest/testReceiverTypeAnalysisDoesNotLeakAcrossArrowFunction';
+            SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $use);
+            SnapshotHash::assertMatches($snapshotDir . '/Foo.expected.php', $foo);
         } finally {
             self::rrmdir($dir);
         }
@@ -722,15 +539,13 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            // Post-branch call must NOT be specialized -- the receiver type is
-            // ambiguous after the conditional reassignment.
-            self::assertStringNotContainsString(
-                'fooId_T_',
+            // Negative invariant kept: ambiguous post-branch type must
+            // de-specialize, leaving the bare unmangled call.
+            self::assertStringNotContainsString('fooId_T_', $use);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingReassignmentInvalidatesPostBranchSpecialization/Use.expected.php',
                 $use,
-                'post-branch call must not specialize when receiver was conditionally reassigned',
             );
-            // The bare unmangled name should survive into the cleaned output.
-            self::assertStringContainsString('$x->fooId(7)', $use);
         } finally {
             self::rrmdir($dir);
         }
@@ -764,10 +579,13 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(1\)/',
+            // Positive invariant: exactly one specialization survived
+            // the merge -- defense against a snapshot refresh that
+            // captures a regressed (e.g. de-specialized) output.
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingIntraBranchSpecializationStillWorks/Use.expected.php',
                 $use,
-                'intra-branch call site must specialize -- the branch knows the type',
             );
         } finally {
             self::rrmdir($dir);
@@ -811,10 +629,10 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$y->fooId_T_[0-9a-f]+\(2\)/',
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingElseBranchSeesPreBranchState/Use.expected.php',
                 $use,
-                'else branch must see the pre-if state of $y (Foo, not Bar)',
             );
         } finally {
             self::rrmdir($dir);
@@ -850,10 +668,10 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(11\)/',
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingSameClassMergeKeepsSpecialization/Use.expected.php',
                 $use,
-                'all-siblings-agree merge must keep $x = Foo post-branch',
             );
         } finally {
             self::rrmdir($dir);
@@ -892,10 +710,11 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertStringNotContainsString(
-                'fooId_T_',
+            // Negative invariant kept: if-without-else must de-specialize.
+            self::assertStringNotContainsString('fooId_T_', $use);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingIfWithoutElseStillDeSpecializes/Use.expected.php',
                 $use,
-                'if-without-else must de-specialize even when both paths agree',
             );
         } finally {
             self::rrmdir($dir);
@@ -934,10 +753,10 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(13\)/',
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingThreeArmsAgreeKeepsSpecialization/Use.expected.php',
                 $use,
-                'three-arm all-agree merge must keep $x = Foo',
             );
         } finally {
             self::rrmdir($dir);
@@ -973,10 +792,10 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(14\)/',
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingSwitchWithDefaultAllSameKeepsSpecialization/Use.expected.php',
                 $use,
-                'switch with default + all-arms-agree must merge',
             );
         } finally {
             self::rrmdir($dir);
@@ -1012,10 +831,11 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertStringNotContainsString(
-                'fooId_T_',
+            // Negative invariant kept: switch without default must de-specialize.
+            self::assertStringNotContainsString('fooId_T_', $use);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingSwitchWithoutDefaultStillDeSpecializes/Use.expected.php',
                 $use,
-                'switch without default must de-specialize',
             );
         } finally {
             self::rrmdir($dir);
@@ -1056,10 +876,10 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(16\)/',
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingMixedInnerAndOuterMerge/Use.expected.php',
                 $use,
-                'nested merges chain: inner merge -> outer merge',
             );
         } finally {
             self::rrmdir($dir);
@@ -1097,10 +917,11 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertStringNotContainsString(
-                'fooId_T_',
+            // Negative invariant kept: untracked-RHS arm forces de-specialization.
+            self::assertStringNotContainsString('fooId_T_', $use);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingOneArmAssignsUntrackedRhsStillDeSpecializes/Use.expected.php',
                 $use,
-                'untracked RHS in one arm must de-specialize',
             );
         } finally {
             self::rrmdir($dir);
@@ -1136,10 +957,10 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->fooId_T_[0-9a-f]+\(18\)/',
+            self::assertSame(1, preg_match_all('/fooId_T_[0-9a-f]+\(/', $use));
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingMatchAllArmsAgreeKeepsSpecialization/Use.expected.php',
                 $use,
-                'match with default + all-arms-agree must merge',
             );
         } finally {
             self::rrmdir($dir);
@@ -1177,10 +998,11 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertStringNotContainsString(
-                'fooId_T_',
+            // Negative invariant kept: match without default must de-specialize.
+            self::assertStringNotContainsString('fooId_T_', $use);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingMatchWithoutDefaultStillDeSpecializes/Use.expected.php',
                 $use,
-                'match without default must de-specialize',
             );
         } finally {
             self::rrmdir($dir);
@@ -1222,10 +1044,11 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertStringNotContainsString(
-                'fooId_T_',
+            // Negative invariant kept: middle-arm disagreement must de-specialize.
+            self::assertStringNotContainsString('fooId_T_', $use);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testBranchingElseifMiddleArmDiffersStillDeSpecializes/Use.expected.php',
                 $use,
-                'middle elseif disagreeing must de-specialize the merge',
             );
         } finally {
             self::rrmdir($dir);
@@ -1262,10 +1085,9 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->id_T_[0-9a-f]+\(11\)/',
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testClosureUseImportPreservesReceiverType/Use.expected.php',
                 $use,
-                'closure with `use ($x)` must specialize $x->id::<int> via the imported type',
             );
         } finally {
             self::rrmdir($dir);
@@ -1299,157 +1121,77 @@ final class GenericMethodIntegrationTest extends TestCase
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            self::assertMatchesRegularExpression(
-                '/\$x->id_T_[0-9a-f]+\(22\)/',
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testArrowFunctionImplicitCapturePreservesReceiverType/Use.expected.php',
                 $use,
-                'arrow function must inherit outer $x type via implicit capture',
             );
         } finally {
             self::rrmdir($dir);
         }
     }
 
+    #[RunInSeparateProcess]
     public function testNewSelfTurbofishCompilesEndToEnd(): void
     {
         // `new self::<T>(...)` -- the scanner strips `::<T>`, no marker fires,
         // monomorphization preserves the bare `new self(...)` in the
         // specialization. PHP's runtime resolves `self` against the
         // specialized class, which IS the right answer.
-        $dir = sys_get_temp_dir() . '/xphp-pseudo-self-' . uniqid('', true);
-        mkdir($dir, 0o755, true);
-        file_put_contents($dir . '/Container.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\PseudoSelf;
-        class Container<T> {
-            public function __construct(public T $item) {}
-            public function with(T $n): self {
-                return new self::<T>($n);
-            }
-        }
-        PHP);
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\PseudoSelf;
-
-        $a = new Container::<int>(42);
-        $b = $a->with(13);
-        PHP);
-
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_new_self_turbofish/source',
+            'genmethod-pseudo-self',
+        );
         try {
-            $this->compileFrom($dir);
-            $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
+            $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
             self::assertCount(1, $generated, 'one specialization (Container<int>)');
             $specialized = file_get_contents($generated[0]);
             self::assertIsString($specialized);
 
-            // `new self::<T>(...)` lowers to plain `new self(...)`.
-            self::assertMatchesRegularExpression(
-                '/return new self\(\$n\);/',
-                $specialized,
-                'new self::<T>() must lower to bare `new self(...)`',
-            );
-            self::assertStringNotContainsString('App\\PseudoSelf\\self', $specialized);
+            // Negative invariants kept: self must NOT be misresolved to a
+            // class FQN, and no leftover turbofish marker survives.
+            self::assertStringNotContainsString('App\\GenericMethodNewSelfTurbofish\\self', $specialized);
             self::assertStringNotContainsString('::<', $specialized);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_method_new_self_turbofish/verify/testNewSelfTurbofishCompilesEndToEnd/Container.expected.php',
+                $specialized,
+            );
 
-            // Runtime sanity: the specialized `with` builds a fresh
-            // Container<int> via `new self()`.
-            $cache = $dir . '/.xphp-cache';
-            $target = $dir . '/dist';
-            $runScript = $dir . '/run.php';
-            file_put_contents($runScript, <<<PHP
-            <?php
-            declare(strict_types=1);
-            spl_autoload_register(function (\$class) {
-                if (str_starts_with(\$class, 'XPHP\\\\Generated\\\\')) {
-                    \$rel = substr(\$class, strlen('XPHP\\\\Generated\\\\'));
-                    \$file = '{$cache}/Generated/' . str_replace('\\\\', '/', \$rel) . '.php';
-                    if (file_exists(\$file)) require \$file;
-                }
-            });
-            require '{$target}/Container.php';
-            require '{$target}/Use.php';
-            echo "item={\$b->item};same=" . (get_class(\$a) === get_class(\$b) ? 'yes' : 'no');
-            PHP);
-            $output = [];
-            $exit = 0;
-            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-            self::assertContains('item=13;same=yes', $output);
+            $fixture->registerAutoload('App\\GenericMethodNewSelfTurbofish');
+            require __DIR__ . '/../../fixture/compile/generic_method_new_self_turbofish/verify/runtime.php';
         } finally {
-            self::rrmdir($dir);
+            $fixture->cleanup();
         }
     }
 
+    #[RunInSeparateProcess]
     public function testNewStaticTurbofishCompilesEndToEnd(): void
     {
         // `new static::<T>(...)` -- the late-static-bound pseudo-type. After
         // monomorphization, `static` resolves to the specialized class at
         // runtime (same class instance, no subclassing in this fixture).
-        $dir = sys_get_temp_dir() . '/xphp-pseudo-static-' . uniqid('', true);
-        mkdir($dir, 0o755, true);
-        file_put_contents($dir . '/Builder.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\PseudoStatic;
-        class Builder<T> {
-            public function __construct(public T $value) {}
-            public function fresh(T $v): static {
-                return new static::<T>($v);
-            }
-        }
-        PHP);
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        declare(strict_types=1);
-        namespace App\PseudoStatic;
-
-        $a = new Builder::<int>(1);
-        $b = $a->fresh(2);
-        PHP);
-
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_new_static_turbofish/source',
+            'genmethod-pseudo-static',
+        );
         try {
-            $this->compileFrom($dir);
-            $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
+            $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
             self::assertCount(1, $generated);
             $specialized = file_get_contents($generated[0]);
             self::assertIsString($specialized);
 
-            self::assertMatchesRegularExpression(
-                '/return new static\(\$v\);/',
-                $specialized,
-                'new static::<T>() must lower to bare `new static(...)`',
-            );
-            self::assertStringNotContainsString('App\\PseudoStatic\\static', $specialized);
+            // Negative invariants kept: static must not be misresolved
+            // to a class FQN; no leftover turbofish marker.
+            self::assertStringNotContainsString('App\\GenericMethodNewStaticTurbofish\\static', $specialized);
             self::assertStringNotContainsString('::<', $specialized);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_method_new_static_turbofish/verify/testNewStaticTurbofishCompilesEndToEnd/Builder.expected.php',
+                $specialized,
+            );
 
-            // Runtime sanity: late-static-binding resolves `static` against
-            // the specialized class.
-            $cache = $dir . '/.xphp-cache';
-            $target = $dir . '/dist';
-            $runScript = $dir . '/run.php';
-            file_put_contents($runScript, <<<PHP
-            <?php
-            declare(strict_types=1);
-            spl_autoload_register(function (\$class) {
-                if (str_starts_with(\$class, 'XPHP\\\\Generated\\\\')) {
-                    \$rel = substr(\$class, strlen('XPHP\\\\Generated\\\\'));
-                    \$file = '{$cache}/Generated/' . str_replace('\\\\', '/', \$rel) . '.php';
-                    if (file_exists(\$file)) require \$file;
-                }
-            });
-            require '{$target}/Builder.php';
-            require '{$target}/Use.php';
-            echo "value={\$b->value};same=" . (get_class(\$a) === get_class(\$b) ? 'yes' : 'no');
-            PHP);
-            $output = [];
-            $exit = 0;
-            exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-            self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-            self::assertContains('value=2;same=yes', $output);
+            $fixture->registerAutoload('App\\GenericMethodNewStaticTurbofish');
+            require __DIR__ . '/../../fixture/compile/generic_method_new_static_turbofish/verify/runtime.php';
         } finally {
-            self::rrmdir($dir);
+            $fixture->cleanup();
         }
     }
 
@@ -1502,14 +1244,14 @@ final class GenericMethodIntegrationTest extends TestCase
             }
             self::assertIsString($childSpec, 'expected a Child<int> specialization at /Child/T_*.php');
 
-            // `new parent::<T>($v)` lowers to bare `new parent($v)`.
-            self::assertMatchesRegularExpression(
-                '/return new parent\(\$v\);/',
-                $childSpec,
-                'new parent::<T>() must lower to bare `new parent(...)`',
-            );
+            // Negative invariants kept: parent must not be misresolved
+            // to a class FQN; no leftover turbofish marker.
             self::assertStringNotContainsString('App\\PseudoParent\\parent', $childSpec);
             self::assertStringNotContainsString('::<', $childSpec);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/GenericMethodIntegrationTest/testNewParentTurbofishCompilesEndToEnd/Child.expected.php',
+                $childSpec,
+            );
         } finally {
             self::rrmdir($dir);
         }

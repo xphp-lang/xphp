@@ -11,6 +11,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 final class NestedGenericsIntegrationTest extends TestCase
 {
@@ -54,20 +57,23 @@ final class NestedGenericsIntegrationTest extends TestCase
         self::assertFileExists($boxFile, "expected {$boxFile}");
 
         $lstContent = file_get_contents($lstFile);
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\NestedInstantiation\\Containers\\Lst', $lstContent);
-        self::assertStringContainsString('public function push(\\App\\NestedInstantiation\\Models\\Plastic $val)', $lstContent);
-        self::assertStringContainsString('public function first(): \\App\\NestedInstantiation\\Models\\Plastic', $lstContent);
-
         $boxContent = file_get_contents($boxFile);
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\NestedInstantiation\\Containers\\Box', $boxContent);
+
+        // Pin parent identities for the nested instantiation: Box<Lst<Plastic>>'s
+        // `$item` must point at the Lst<Plastic> specialization specifically.
         self::assertStringContainsString('public \\' . $lstFqn . ' $item', $boxContent);
-        self::assertStringContainsString('public function set(\\' . $lstFqn . ' $val)', $boxContent);
 
         $useFile = $this->targetDir . '/Use.php';
         self::assertFileExists($useFile);
         $useContent = file_get_contents($useFile);
+        // Pin which specialized FQN each `new` call refers to.
         self::assertStringContainsString('new \\' . $boxFqn . '()', $useContent);
         self::assertStringContainsString('new \\' . $lstFqn . '()', $useContent);
+
+        $snapshotDir = __DIR__ . '/../../fixture/compile/nested_instantiation/verify/testNestedInstantiationGeneratesInnerAndOuterSpecializations';
+        SnapshotHash::assertMatches($snapshotDir . '/Lst_Plastic.expected.php', $lstContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Box_Lst_Plastic.expected.php', $boxContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useContent);
 
         $this->assertAllSyntacticallyValid();
     }
@@ -91,18 +97,22 @@ final class NestedGenericsIntegrationTest extends TestCase
         self::assertFileExists($boxFile);
 
         $wrapperContent = file_get_contents($wrapperFile);
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\NestedTypehint\\Containers\\Wrapper', $wrapperContent);
+        $boxContent = file_get_contents($boxFile);
+
+        // Pin parent identities: the Wrapper specialization must point at
+        // the transitively-discovered Box<Plastic> specialization for both
+        // the property declaration and the `new` site.
         self::assertStringContainsString('public \\' . $boxFqn . ' $box', $wrapperContent);
         self::assertStringContainsString('$this->box = new \\' . $boxFqn . '()', $wrapperContent);
-        self::assertStringContainsString('public function setBoxed(\\App\\NestedTypehint\\Models\\Plastic $val)', $wrapperContent);
-        self::assertStringContainsString('public function getBoxed(): \\App\\NestedTypehint\\Models\\Plastic', $wrapperContent);
-
-        $boxContent = file_get_contents($boxFile);
-        self::assertStringContainsString('public \\App\\NestedTypehint\\Models\\Plastic $item', $boxContent);
 
         $useFile = $this->targetDir . '/Use.php';
         $useContent = file_get_contents($useFile);
         self::assertStringContainsString('new \\' . $wrapperFqn . '()', $useContent);
+
+        $snapshotDir = __DIR__ . '/../../fixture/compile/nested_typehint/verify/testTypeHintInsideTemplateBodyGeneratesTransitiveSpecialization';
+        SnapshotHash::assertMatches($snapshotDir . '/Wrapper_Plastic.expected.php', $wrapperContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Box_Plastic.expected.php', $boxContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useContent);
 
         $this->assertAllSyntacticallyValid();
     }
@@ -129,48 +139,19 @@ final class NestedGenericsIntegrationTest extends TestCase
         self::assertCount(2, $fqns);
     }
 
+    #[RunInSeparateProcess]
     public function testRuntimeReflectionAndTypeErrorOnNestedSpecialization(): void
     {
         $sourceDir = realpath(__DIR__ . '/../../fixture/compile/nested_typehint/source')
             ?: throw new RuntimeException('Fixture missing');
 
-        $this->compile($sourceDir);
-
-        $plastic = new TypeRef('App\\NestedTypehint\\Models\\Plastic');
-        $boxFqn = Registry::generatedFqn('App\\NestedTypehint\\Containers\\Box', [$plastic]);
-        $wrapperFqn = Registry::generatedFqn('App\\NestedTypehint\\Containers\\Wrapper', [$plastic]);
-        $boxFile = $this->fqnToPath($boxFqn);
-        $wrapperFile = $this->fqnToPath($wrapperFqn);
-
-        $runScript = $this->workDir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        declare(strict_types=1);
-        require '{$this->targetDir}/Models/Plastic.php';
-        require '{$this->targetDir}/Containers/Box.php';
-        require '{$this->targetDir}/Containers/Wrapper.php';
-        require '{$boxFile}';
-        require '{$wrapperFile}';
-        \$type = (new ReflectionProperty('{$wrapperFqn}', 'box'))->getType();
-        echo \$type instanceof ReflectionNamedType ? \$type->getName() : 'unknown';
-        echo "\\n";
+        $fixture = CompiledFixture::compile($sourceDir, 'nested-runtime');
+        $fixture->registerAutoload('App\\NestedTypehint\\');
         try {
-            \$cls = '{$wrapperFqn}';
-            \$w = new \$cls();
-            \$w->setBoxed('not a plastic');
-            echo "MISSED_TYPE_ERROR";
-        } catch (TypeError \$e) {
-            echo "TYPE_ERROR_OK";
+            require __DIR__ . '/../../fixture/compile/nested_typehint/verify/nested_specialization_runtime.php';
+        } finally {
+            $fixture->cleanup();
         }
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-
-        self::assertSame(0, $exit, "run.php failed:\n" . implode("\n", $output));
-        self::assertSame($boxFqn, $output[0]);
-        self::assertSame('TYPE_ERROR_OK', $output[1]);
     }
 
     private function compile(string $sourceDir): CompileResult

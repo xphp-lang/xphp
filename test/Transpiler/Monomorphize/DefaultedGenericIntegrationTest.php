@@ -12,6 +12,7 @@ use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\SnapshotHash;
 
 final class DefaultedGenericIntegrationTest extends TestCase
 {
@@ -71,9 +72,19 @@ final class DefaultedGenericIntegrationTest extends TestCase
                 new TypeRef('App\\DefaultsFull\\Models\\Tag'),
             ],
         );
-        self::assertFileExists($this->fqnToPath($fqnAllDefaults));
-        self::assertFileExists($this->fqnToPath($fqnPartial));
-        self::assertFileExists($this->fqnToPath($fqnExplicit));
+        $snapshotDir = __DIR__ . '/../../fixture/compile/defaults_full/verify/testFullDefaultsFixtureGeneratesExpectedSpecializations';
+        SnapshotHash::assertMatches(
+            $snapshotDir . '/Cache_all_defaults.expected.php',
+            file_get_contents($this->fqnToPath($fqnAllDefaults)),
+        );
+        SnapshotHash::assertMatches(
+            $snapshotDir . '/Cache_partial.expected.php',
+            file_get_contents($this->fqnToPath($fqnPartial)),
+        );
+        SnapshotHash::assertMatches(
+            $snapshotDir . '/Cache_explicit.expected.php',
+            file_get_contents($this->fqnToPath($fqnExplicit)),
+        );
     }
 
     public function testEmptyTurbofishAndBareNewProduceSameSpecialization(): void
@@ -217,11 +228,13 @@ final class DefaultedGenericIntegrationTest extends TestCase
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
 
         $rewritten = file_get_contents($this->targetDir . '/M.php');
-        // The bare call gets rewritten to the mangled name.
-        self::assertStringContainsString('id_T_', $rewritten);
-        // And the original `id` call site no longer appears verbatim
-        // (the mangled name replaces it).
+        // Negative invariant kept alongside the snapshot: the original
+        // `id` call site must not survive in the rewritten file.
         self::assertStringNotContainsString("->id('hello')", $rewritten);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/DefaultedGenericIntegrationTest/testMethodLevelBareCallPadsFromDefaults/M.expected.php',
+            $rewritten,
+        );
     }
 
     public function testMethodLevelDefaultDeclarationIsAcceptedAndCompiles(): void
@@ -254,7 +267,10 @@ final class DefaultedGenericIntegrationTest extends TestCase
         // mangled method name.
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
         $rewritten = file_get_contents($this->targetDir . '/M.php');
-        self::assertStringContainsString('id_T_', $rewritten);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/DefaultedGenericIntegrationTest/testMethodLevelDefaultDeclarationIsAcceptedAndCompiles/M.expected.php',
+            $rewritten,
+        );
     }
 
     public function testTooFewArgsWithoutDefaultsFailsCompile(): void

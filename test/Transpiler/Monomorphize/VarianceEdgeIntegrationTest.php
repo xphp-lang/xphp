@@ -11,6 +11,7 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\SnapshotHash;
 
 final class VarianceEdgeIntegrationTest extends TestCase
 {
@@ -57,9 +58,18 @@ final class VarianceEdgeIntegrationTest extends TestCase
         );
         $bananaFile = $this->fqnToPath($bananaFqn);
         self::assertFileExists($bananaFile);
-        // The Banana specialization must extend the Fruit specialization.
         $bananaContent = file_get_contents($bananaFile);
+
+        // SnapshotHash::normalize() renames hashes in first-seen byte order.
+        // A regression that re-targeted the `extends` to the *wrong*
+        // specialization wouldn't shift first-seen order, so the snapshot
+        // alone could miss it. The explicit FQN-substring check below
+        // pins the parent identity; the snapshot pins everything else.
         self::assertStringContainsString('extends \\' . $fruitFqn, $bananaContent);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/variance_covariant_happy/verify/testCovariantSubtypeEdgeIsEmittedAsExtendsForClassSpecializations/Producer_Banana.expected.php',
+            $bananaContent,
+        );
     }
 
     public function testContravariantSubtypeEdgeFlipsDirection(): void
@@ -85,7 +95,13 @@ final class VarianceEdgeIntegrationTest extends TestCase
             [new TypeRef('App\\VarianceContravariantHappy\\Models\\Dog')],
         );
         $animalContent = file_get_contents($this->fqnToPath($animalFqn));
+
+        // Pin the parent identity (flipped from covariance: Animal extends Dog).
         self::assertStringContainsString('extends \\' . $dogFqn, $animalContent);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/variance_contravariant_happy/verify/testContravariantSubtypeEdgeFlipsDirection/Consumer_Animal.expected.php',
+            $animalContent,
+        );
     }
 
     public function testEmittedSubtypeChainAutoloadsWithoutPhpFatal(): void
@@ -178,8 +194,13 @@ final class VarianceEdgeIntegrationTest extends TestCase
         $bananaContent = file_get_contents($this->fqnToPath($bananaFqn));
         $appleContent = file_get_contents($this->fqnToPath($appleFqn));
 
+        // Negative invariants kept: neither specialization may reference
+        // the other (no PHP-level subtype between Banana and Apple).
         self::assertStringNotContainsString($appleFqn, $bananaContent);
         self::assertStringNotContainsString($bananaFqn, $appleContent);
+        $snapshotDir = __DIR__ . '/VarianceEdgeIntegrationTest/testNoEdgeBetweenUnrelatedSpecializations';
+        SnapshotHash::assertMatches($snapshotDir . '/Producer_Banana.expected.php', $bananaContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Producer_Apple.expected.php', $appleContent);
     }
 
     public function testScalarArgsSkipVarianceEdgeEmission(): void
@@ -220,8 +241,13 @@ final class VarianceEdgeIntegrationTest extends TestCase
         $intContent = file_get_contents($this->fqnToPath($intFqn));
         $stringContent = file_get_contents($this->fqnToPath($stringFqn));
 
+        // Negative invariants kept: scalars have no PHP-level subtype
+        // relationship, so neither specialization may reference the other.
         self::assertStringNotContainsString($stringFqn, $intContent);
         self::assertStringNotContainsString($intFqn, $stringContent);
+        $snapshotDir = __DIR__ . '/VarianceEdgeIntegrationTest/testScalarArgsSkipVarianceEdgeEmission';
+        SnapshotHash::assertMatches($snapshotDir . '/Producer_int.expected.php', $intContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Producer_string.expected.php', $stringContent);
     }
 
     public function testTransitiveEdgesCollapseToDirectParent(): void
@@ -272,12 +298,16 @@ final class VarianceEdgeIntegrationTest extends TestCase
         $bananaContent = file_get_contents($this->fqnToPath($bananaFqn));
         $appleContent = file_get_contents($this->fqnToPath($appleFqn));
 
-        // Direct parent: Banana extends Apple.
+        // Pin parent identities (the snapshot's first-seen-order
+        // normalization can't tell apart hash swaps within a file).
         self::assertStringContainsString('extends \\' . $appleFqn, $bananaContent);
-        // Transitive: Banana does NOT need a direct extends to Fruit.
-        self::assertStringNotContainsString('extends \\' . $fruitFqn, $bananaContent);
-        // Apple's direct parent IS Fruit.
         self::assertStringContainsString('extends \\' . $fruitFqn, $appleContent);
+        // Negative invariant kept: Banana does NOT inherit transitively.
+        self::assertStringNotContainsString('extends \\' . $fruitFqn, $bananaContent);
+
+        $snapshotDir = __DIR__ . '/VarianceEdgeIntegrationTest/testTransitiveEdgesCollapseToDirectParent';
+        SnapshotHash::assertMatches($snapshotDir . '/P_Banana.expected.php', $bananaContent);
+        SnapshotHash::assertMatches($snapshotDir . '/P_Apple.expected.php', $appleContent);
     }
 
     public function testAllThreeFeaturesCompose(): void
@@ -356,12 +386,15 @@ final class VarianceEdgeIntegrationTest extends TestCase
         $bananaContent = file_get_contents($this->fqnToPath($bananaFqn));
         $appleContent = file_get_contents($this->fqnToPath($appleFqn));
 
-        // Banana's interface extends list contains Apple (direct).
-        // Banana does NOT extend Fruit (transitive via Apple).
+        // Pin parent identities for both interface specializations.
         self::assertStringContainsString($appleFqn, $bananaContent);
-        self::assertStringNotContainsString($fruitFqn, $bananaContent);
-        // Apple's interface extends list contains Fruit (direct).
         self::assertStringContainsString($fruitFqn, $appleContent);
+        // Negative invariant kept: Banana must NOT extend Fruit transitively.
+        self::assertStringNotContainsString($fruitFqn, $bananaContent);
+
+        $snapshotDir = __DIR__ . '/VarianceEdgeIntegrationTest/testInterfaceSpecializationsGetMultiExtendsButFilterTransitives';
+        SnapshotHash::assertMatches($snapshotDir . '/IProducer_Banana.expected.php', $bananaContent);
+        SnapshotHash::assertMatches($snapshotDir . '/IProducer_Apple.expected.php', $appleContent);
     }
 
     public function testInvariantTemplateProducesNoVarianceEdges(): void
@@ -404,8 +437,12 @@ final class VarianceEdgeIntegrationTest extends TestCase
         $bananaFqn = Registry::generatedFqn('App\\Box', [new TypeRef('App\\Banana')]);
         $bananaContent = file_get_contents($this->fqnToPath($bananaFqn));
 
-        // No extends to the Fruit specialization (invariant -- no variance edges).
+        // Negative invariant kept: invariant template -- no variance edges.
         self::assertStringNotContainsString($fruitFqn, $bananaContent);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/VarianceEdgeIntegrationTest/testInvariantTemplateProducesNoVarianceEdges/Box_Banana.expected.php',
+            $bananaContent,
+        );
     }
 
     /**

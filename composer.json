@@ -38,7 +38,8 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "XPHP\\": "test/"
+            "XPHP\\": "test/",
+            "XPHP\\TestSupport\\": "test/TestSupport/"
         }
     },
     "bin": [

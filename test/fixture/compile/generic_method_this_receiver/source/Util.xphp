@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodThisReceiver;
+
+class Util
+{
+    public function identity<T>(T $x): T
+    {
+        return $x;
+    }
+
+    public function callIntIdentity(): int
+    {
+        return $this->identity::<int>(42);
+    }
+
+    public function callStringIdentity(): string
+    {
+        return $this->identity::<string>('hi');
+    }
+}

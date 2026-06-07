@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowDefaultsWithImplicitCapture;
+
+// Default type param composes with arrow implicit capture of $y.
+// Empty turbofish padding selects T=int; the body adds the implicit-
+// capture $y to the typed argument.
+$y = 10;
+$f = fn<T = int>(T $x): T => $x + $y;
+$r = $f::<>(3);

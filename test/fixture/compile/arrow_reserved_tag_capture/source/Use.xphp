@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowReservedTagCapture;
+
+// Capture name `__xphp_tag` collides with the dispatcher's tag param.
+// The dispatcher auto-renames its tag param to a collision-free
+// alternative; the user's `$__xphp_tag` keeps its name. Body adds 100
+// to the typed argument, yielding 105.
+$__xphp_tag = 100;
+$f = fn<T>(T $x): T => $x + $__xphp_tag;
+$result = $f::<int>(5);

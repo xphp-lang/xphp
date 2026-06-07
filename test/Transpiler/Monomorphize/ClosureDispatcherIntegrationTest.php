@@ -11,6 +11,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 /**
  * End-to-end integration tests for the closure-dispatcher pipeline.
@@ -38,29 +41,14 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
 
-        self::assertMatchesRegularExpression(
-            '/function closure_pair_T_[0-9a-f]+\(string \$key, int \$value\): array/',
-            $out,
-        );
-        // The specialization must land INSIDE `namespace App` so its FQN
-        // matches what the dispatcher's match-arm calls (which uses the
-        // fully-qualified `\App\closure_pair_T_<hash>`).
-        self::assertMatchesRegularExpression(
-            '/namespace App;[\s\S]*function closure_pair_T_/',
-            $out,
-            'specialization must live inside the namespace block, not at top level',
-        );
-        // The original `$pair('age', 42)` call form should no longer exist;
-        // it's been rewritten with the tag prefix.
+        // Negative invariants kept: the original call site form must NOT
+        // survive, nor must the generic template syntax.
         self::assertStringNotContainsString("\$pair('age', 42)", $out);
-        self::assertMatchesRegularExpression(
-            "/\\\$pair\\('T_[0-9a-f]+', 'age', 42\\)/",
+        self::assertStringNotContainsString('function<K, V>', $out);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testCaptureFreeFixtureStillCompilesViaDispatcher/Use.expected.php',
             $out,
         );
-        // The original `function<K, V>` template's body is gone; the
-        // Assign's RHS is now the dispatcher closure.
-        self::assertStringNotContainsString('function<K, V>', $out);
-        self::assertStringContainsString('__xphp_tag', $out);
 
         $this->rrmdir(dirname($dir));
     }
@@ -82,22 +70,13 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
 
-        // Two specialized declarations -- different hashes for (string,int)
-        // and (int,string).
+        // Structural invariants: two specializations + two dispatcher arms.
         preg_match_all('/function closure_pair_T_[0-9a-f]+\(/', $out, $matches);
         self::assertCount(2, $matches[0]);
-
-        // Dispatcher has exactly two non-default arms.
         preg_match_all("/'T_[0-9a-f]+' => /", $out, $armMatches);
         self::assertCount(2, $armMatches[0]);
-
-        // Both call sites carry their respective tags.
-        self::assertMatchesRegularExpression(
-            "/\\\$pair\\('T_[0-9a-f]+', 'age', 42\\)/",
-            $out,
-        );
-        self::assertMatchesRegularExpression(
-            "/\\\$pair\\('T_[0-9a-f]+', 7, 'lucky'\\)/",
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testTwoTupleEndToEnd/Use.expected.php',
             $out,
         );
 
@@ -123,80 +102,50 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
 
+        // Structural invariants: one specialization + one match arm even
+        // though there are two call sites with the same arg tuple.
         preg_match_all('/function closure_pair_T_[0-9a-f]+\(/', $out, $matches);
-        self::assertCount(1, $matches[0], 'one specialization despite two call sites');
-
+        self::assertCount(1, $matches[0]);
         preg_match_all("/'T_[0-9a-f]+' => /", $out, $armMatches);
         self::assertCount(1, $armMatches[0]);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testDuplicateCallSitesShareSingleSpecialization/Use.expected.php',
+            $out,
+        );
 
         $this->rrmdir(dirname($dir));
     }
 
+    #[RunInSeparateProcess]
     public function testRuntimeRoutingThroughDispatcher(): void
     {
-        // Full runtime exec: compile, then execute the resulting PHP and
-        // observe the routed return values.
-        $dir = $this->mkdir('disp-runtime');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\DispRun;
-        $id = function<T>(T $x): T {
-            return $x;
-        };
-        $a = $id::<int>(42);
-        $b = $id::<string>('hello');
-        PHP);
-
-        $this->compile($dir);
-
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "a={\$a};b={\$b};";
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('a=42;b=hello;', $output);
-
-        $this->rrmdir(dirname($dir));
+        // Two distinct turbofish call sites route through the
+        // dispatcher's match arms back to the right return values.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_dispatcher_runtime_routing/source',
+            'disp-routing',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_dispatcher_runtime_routing/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testUnknownTagAtRuntimeThrows(): void
     {
-        // Compile + run, then call the dispatcher with a bogus tag.
-        $dir = $this->mkdir('disp-bogus');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\DispBogus;
-        $id = function<T>(T $x): T { return $x; };
-        $id::<int>(1);
-        PHP);
-
-        $this->compile($dir);
-
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
+        // The dispatcher's synthesized `default => throw RuntimeException`
+        // arm fires when invoked with a tag that has no specialization.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_dispatcher_unknown_tag/source',
+            'disp-unknown',
+        );
         try {
-            \$id('T_bogus', 99);
-            echo 'noexc';
-        } catch (\\RuntimeException \$e) {
-            echo 'caught:' . \$e->getMessage();
+            require __DIR__ . '/../../fixture/compile/closure_dispatcher_unknown_tag/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
         }
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('caught:Unknown generic specialization tag: T_bogus', $output);
-
-        $this->rrmdir(dirname($dir));
     }
 
     public function testArrowSpecializesViaDispatcher(): void
@@ -214,8 +163,10 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->compile($dir);
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
-        self::assertStringContainsString('closure_id_T_', $out);
-        self::assertStringContainsString('__xphp_tag', $out);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testArrowSpecializesViaDispatcher/Use.expected.php',
+            $out,
+        );
         $this->rrmdir(dirname($dir));
     }
 
@@ -237,8 +188,10 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->compile($dir);
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
-        self::assertStringContainsString('closure_f_T_', $out);
-        self::assertStringContainsString('use ($y)', $out);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testUseClauseClosureSpecializesViaDispatcher/Use.expected.php',
+            $out,
+        );
         $this->rrmdir(dirname($dir));
     }
 
@@ -256,11 +209,14 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->compile($dir);
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
-        // No dispatcher tag-parameter; no specialized function emitted.
+        // Negative invariants kept: no dispatcher tag-parameter and no
+        // specialized function emitted when the template is never called.
         self::assertStringNotContainsString('__xphp_tag', $out);
         self::assertStringNotContainsString('closure_id_T_', $out);
-        // The original closure (after generic-param strip) survives.
-        self::assertStringContainsString('return $x;', $out);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testEmptyArgSetsLeavesOriginalAssignUntouched/Use.expected.php',
+            $out,
+        );
 
         $this->rrmdir(dirname($dir));
     }
@@ -292,9 +248,13 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
 
-        // Single specialization shared by both calls.
+        // Structural invariant: single specialization shared by both calls.
         preg_match_all('/function closure_id_T_[0-9a-f]+\(/', $out, $matches);
         self::assertCount(1, $matches[0]);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureDispatcherIntegrationTest/testNestedScopeCallsShareDispatcher/Use.expected.php',
+            $out,
+        );
 
         $this->rrmdir(dirname($dir));
     }

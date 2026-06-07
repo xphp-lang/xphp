@@ -1,0 +1,36 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Runtime verify for `generic_interface`: the specialized class
+ * implements the specialized interface, and the interface's
+ * `get()` reflection reports the concrete substituted return type.
+ *
+ * Driver contract: `$fixture` (CompiledFixture) in scope, autoload
+ * registered for `App\GenericInterface\` + the generated namespace.
+ */
+
+use PHPUnit\Framework\Assert;
+use XPHP\Transpiler\Monomorphize\Registry;
+use XPHP\Transpiler\Monomorphize\TypeRef;
+
+$ifaceFqn = Registry::generatedFqn(
+    'App\\GenericInterface\\Containers\\Container',
+    [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
+);
+$boxFqn = Registry::generatedFqn(
+    'App\\GenericInterface\\Containers\\Box',
+    [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
+);
+
+$box = new $boxFqn(new \App\GenericInterface\Models\Plastic('red'));
+
+Assert::assertInstanceOf($ifaceFqn, $box);
+Assert::assertSame('red', $box->get()->color);
+
+// Reflection: the interface's get() return type must be the
+// concrete substituted class, not the unspecialized `T`.
+$returnType = (new \ReflectionMethod($ifaceFqn, 'get'))->getReturnType();
+Assert::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+Assert::assertSame('App\\GenericInterface\\Models\\Plastic', $returnType->getName());

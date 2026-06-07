@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodLocalVariableReceiver;
+
+$u = new Util();
+$i = $u->identity::<int>(99);
+$s = $u->identity::<string>('world');

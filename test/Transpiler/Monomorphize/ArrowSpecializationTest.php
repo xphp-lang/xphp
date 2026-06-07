@@ -14,6 +14,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 /**
  * Tests for P5.5 arrow specialization: the implicit-capture analyzer
@@ -83,148 +86,88 @@ final class ArrowSpecializationTest extends TestCase
 
     // ----- end-to-end integration tests -----------------------------------
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationEndToEndSingleCapture(): void
     {
-        // The sprint plan's canonical test:
-        //   $y = 1; $id = fn<T>(T $x): T => $x + $y; $y = 2; $id::<int>(42);
-        // Expected: 43 (capture moment is the arrow's evaluation, not the call).
-        $dir = $this->mkdir('arrow-capture');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowCapture;
-        $y = 1;
-        $id = fn<T>(T $x): T => $x + $y;
-        $y = 2;
-        $result = $id::<int>(42);
-        PHP);
-
-        $this->compile($dir);
-
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};y={\$y};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        // Capture-at-declaration: $y inside the closure stayed at 1
-        // even though the outer $y reassigned to 2 before the call.
-        self::assertContains('result=43;y=2;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_capture_at_declaration/source',
+            'arrow-capture',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/arrow_capture_at_declaration/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationEndToEndMultipleCaptures(): void
     {
-        $dir = $this->mkdir('arrow-multi');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowMulti;
-        $a = 10;
-        $b = 20;
-        $f = fn<T>(T $x): T => $x + $a + $b;
-        $result = $f::<int>(1);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('result=31;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_multiple_captures/source',
+            'arrow-multi',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/arrow_multiple_captures/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationEndToEndNoCaptures(): void
     {
-        $dir = $this->mkdir('arrow-empty');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowEmpty;
-        $f = fn<T>(T $x): T => $x;
-        $result = $f::<int>(42);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('result=42;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_no_captures/source',
+            'arrow-empty',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/arrow_no_captures/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationCaptureShadowingParamName(): void
     {
         // Param wins -- the outer $x = 99 is NOT captured because `x`
         // is in the arrow's param-set.
-        $dir = $this->mkdir('arrow-shadow');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowShadow;
-        $x = 99;
-        $f = fn<T>(T $x): T => $x;
-        $result = $f::<int>(7);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('result=7;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_capture_shadowing/source',
+            'arrow-shadow',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/arrow_capture_shadowing/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationMultipleArgTuples(): void
     {
-        $dir = $this->mkdir('arrow-multitup');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowMultiTup;
-        $f = fn<T>(T $x): T => $x;
-        $a = $f::<int>(10);
-        $b = $f::<string>('hi');
-        PHP);
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_multiple_arg_tuples/source',
+            'arrow-multitup',
+        );
+        try {
+            $out = file_get_contents($fixture->targetDir . '/Use.php');
+            self::assertIsString($out);
 
-        $this->compile($dir);
-        $out = file_get_contents($dir . '/dist/Use.php');
-        self::assertIsString($out);
-        preg_match_all('/function closure_f_T_[0-9a-f]+\(/', $out, $matches);
-        self::assertCount(2, $matches[0]);
+            // Structural invariant kept: two distinct specializations
+            // (T=int and T=string).
+            preg_match_all('/function closure_f_T_[0-9a-f]+\(/', $out, $matches);
+            self::assertCount(2, $matches[0]);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/arrow_multiple_arg_tuples/verify/testArrowSpecializationMultipleArgTuples/Use.expected.php',
+                $out,
+            );
 
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "a={\$a};b={\$b};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('a=10;b=hi;', $output);
-
-        $this->rrmdir(dirname($dir));
+            require __DIR__ . '/../../fixture/compile/arrow_multiple_arg_tuples/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     public function testArrowSpecializationThisCaptureRejected(): void
@@ -251,76 +194,66 @@ final class ArrowSpecializationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationReservedArgsCaptureAlsoTriggersRename(): void
     {
         // Symmetric to the `__xphp_tag` test -- a capture named
         // `__xphp_args` collides with the dispatcher's variadic param.
         // Both the tag AND args params get renamed together.
-        $dir = $this->mkdir('arrow-reserved-args');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowReservedArgs;
-        $__xphp_args = 200;
-        $f = fn<T>(T $x): T => $x + $__xphp_args;
-        $result = $f::<int>(3);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('result=203;', $output);
-
-        $out = file_get_contents($dir . '/dist/Use.php');
-        self::assertMatchesRegularExpression(
-            '/mixed \.\.\.\$__xphp_args_[0-9a-f]{8}/',
-            $out,
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_reserved_args_capture/source',
+            'arrow-reserved-args',
         );
+        try {
+            $out = file_get_contents($fixture->targetDir . '/Use.php');
+            self::assertIsString($out);
 
-        $this->rrmdir(dirname($dir));
+            // Structural invariant: the dispatcher's args param was renamed.
+            self::assertMatchesRegularExpression(
+                '/mixed \.\.\.\$__xphp_args_[0-9a-f]{8}/',
+                $out,
+            );
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/arrow_reserved_args_capture/verify/testArrowSpecializationReservedArgsCaptureAlsoTriggersRename/Use.expected.php',
+                $out,
+            );
+
+            require __DIR__ . '/../../fixture/compile/arrow_reserved_args_capture/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testArrowSpecializationReservedCaptureAutoRenamesDispatcherParam(): void
     {
         // Capture name `__xphp_tag` collides with the dispatcher's
         // tag param. The dispatcher should auto-rename its own tag
         // param to a collision-free alternative; the user's
         // `$__xphp_tag` keeps its name.
-        $dir = $this->mkdir('arrow-reserved');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ArrowReserved;
-        $__xphp_tag = 100;
-        $f = fn<T>(T $x): T => $x + $__xphp_tag;
-        $result = $f::<int>(5);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};";
-        PHP);
-
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('result=105;', $output);
-
-        // The dispatcher's tag param was renamed (not the default).
-        $out = file_get_contents($dir . '/dist/Use.php');
-        self::assertMatchesRegularExpression(
-            '/string \$__xphp_tag_[0-9a-f]{8}/',
-            $out,
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_reserved_tag_capture/source',
+            'arrow-reserved',
         );
+        try {
+            $out = file_get_contents($fixture->targetDir . '/Use.php');
+            self::assertIsString($out);
 
-        $this->rrmdir(dirname($dir));
+            // Structural invariant: the dispatcher's tag param was renamed
+            // (not the default), since the user's capture collides.
+            self::assertMatchesRegularExpression(
+                '/string \$__xphp_tag_[0-9a-f]{8}/',
+                $out,
+            );
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/arrow_reserved_tag_capture/verify/testArrowSpecializationReservedCaptureAutoRenamesDispatcherParam/Use.expected.php',
+                $out,
+            );
+
+            require __DIR__ . '/../../fixture/compile/arrow_reserved_tag_capture/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     // ----- helpers --------------------------------------------------------
@@ -358,17 +291,6 @@ final class ArrowSpecializationTest extends TestCase
         if (is_dir($dist) && !is_dir($sourceDir . '/dist')) {
             symlink($dist, $sourceDir . '/dist');
         }
-    }
-
-    /**
-     * @return array{0: int, 1: list<string>}
-     */
-    private function execScript(string $script): array
-    {
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($script) . ' 2>&1', $output, $exit);
-        return [$exit, $output];
     }
 
     private function buildCompiler(): Compiler

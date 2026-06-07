@@ -12,6 +12,7 @@ use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\SnapshotHash;
 
 final class BoundedGenericIntegrationTest extends TestCase
 {
@@ -48,8 +49,10 @@ final class BoundedGenericIntegrationTest extends TestCase
         $boxFile = $this->fqnToPath($boxFqn);
         self::assertFileExists($boxFile, 'Box<Tag> must specialize when Tag implements \\Stringable (bound satisfied via hierarchy)');
 
-        $content = file_get_contents($boxFile);
-        self::assertStringContainsString('public \\App\\BoundsHappy\\Models\\Tag $item', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/bounds_happy/verify/testBoundIsSatisfiedByImplementingClass/Box.expected.php',
+            file_get_contents($boxFile),
+        );
 
         self::assertGreaterThan(0, $result->generatedCount);
     }

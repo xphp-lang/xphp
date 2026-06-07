@@ -11,6 +11,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 final class GenericInterfaceIntegrationTest extends TestCase
 {
@@ -54,13 +57,14 @@ final class GenericInterfaceIntegrationTest extends TestCase
         self::assertFileExists($ifaceFile, 'specialized interface must be emitted');
         self::assertFileExists($boxFile, 'specialized class must be emitted');
 
-        $ifaceContent = file_get_contents($ifaceFile);
-        self::assertStringContainsString('interface ' . self::shortName($ifaceFqn), $ifaceContent, 'specialized declaration must remain an interface');
-        self::assertStringContainsString('public function get(): \\App\\GenericInterface\\Models\\Plastic', $ifaceContent, 'T return type must be substituted in the interface signature');
-
         $boxContent = file_get_contents($boxFile);
-        self::assertStringContainsString('class ' . self::shortName($boxFqn), $boxContent);
-        self::assertStringContainsString('implements \\' . $ifaceFqn, $boxContent, 'specialized class must implement the matching specialized interface');
+        // Pin the implements target identity (snapshot's first-seen-order
+        // normalization can't distinguish which specialized FQN gets used).
+        self::assertStringContainsString('implements \\' . $ifaceFqn, $boxContent);
+
+        $snapshotDir = __DIR__ . '/../../fixture/compile/generic_interface/verify/testGenericInterfaceSpecializesAndIsImplementedBySpecializedClass';
+        SnapshotHash::assertMatches($snapshotDir . '/Container_Plastic.expected.php', file_get_contents($ifaceFile));
+        SnapshotHash::assertMatches($snapshotDir . '/Box_Plastic.expected.php', $boxContent);
     }
 
     public function testGenericInterfaceTemplateIsReplacedByEmptyMarkerInOutput(): void
@@ -74,8 +78,13 @@ final class GenericInterfaceIntegrationTest extends TestCase
         $rewrittenInterfacePath = $this->targetDir . '/Containers/Container.php';
         self::assertFileExists($rewrittenInterfacePath);
         $content = file_get_contents($rewrittenInterfacePath);
-        self::assertStringContainsString('interface Container', $content, 'marker interface must be emitted at the original FQN');
-        self::assertStringNotContainsString('function get()', $content, 'original generic method signature must NOT survive on the marker');
+        // Negative invariant kept: the generic method signature must not
+        // survive on the marker interface.
+        self::assertStringNotContainsString('function get()', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/generic_interface/verify/testGenericInterfaceTemplateIsReplacedByEmptyMarkerInOutput/Container.expected.php',
+            $content,
+        );
     }
 
     public function testSpecializedClassIsInstanceOfOriginalInterfaceMarker(): void
@@ -104,51 +113,16 @@ final class GenericInterfaceIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
     public function testSpecializedClassIsInstanceOfSpecializedInterfaceAtRuntime(): void
     {
-        $this->compile();
-
-        $ifaceFqn = Registry::generatedFqn(
-            'App\\GenericInterface\\Containers\\Container',
-            [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
-        );
-        $boxFqn = Registry::generatedFqn(
-            'App\\GenericInterface\\Containers\\Box',
-            [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
-        );
-
-        $ifaceFile = $this->fqnToPath($ifaceFqn);
-        $boxFile = $this->fqnToPath($boxFqn);
-
-        $runScript = $this->workDir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        declare(strict_types=1);
-        require '{$this->targetDir}/Models/Plastic.php';
-        require '{$this->targetDir}/Containers/Container.php';
-        require '{$this->targetDir}/Containers/Box.php';
-        require '{$ifaceFile}';
-        require '{$boxFile}';
-
-        \$box = new \\{$boxFqn}(new \\App\\GenericInterface\\Models\\Plastic('red'));
-        echo \$box instanceof \\{$ifaceFqn} ? "INSTANCEOF_OK" : "INSTANCEOF_BAD";
-        echo "\\n";
-        echo \$box->get()->color === 'red' ? "GET_OK" : "GET_BAD";
-        echo "\\n";
-
-        // Reflection: the interface's get() return type must be the concrete class.
-        \$rt = (new \\ReflectionMethod('\\{$ifaceFqn}', 'get'))->getReturnType();
-        echo \$rt instanceof \\ReflectionNamedType ? \$rt->getName() : 'UNEXPECTED';
-        echo "\\n";
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "runtime check failed:\n" . implode("\n", $output));
-        self::assertSame('INSTANCEOF_OK', $output[0]);
-        self::assertSame('GET_OK', $output[1]);
-        self::assertSame('App\\GenericInterface\\Models\\Plastic', $output[2]);
+        $fixture = CompiledFixture::compile($this->sourceDir, 'generic-iface-runtime');
+        $fixture->registerAutoload('App\\GenericInterface\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/generic_interface/verify/specialized_interface_runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     public function testAllOutputFilesAreSyntacticallyValid(): void

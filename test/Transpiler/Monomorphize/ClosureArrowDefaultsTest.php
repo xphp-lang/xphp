@@ -11,6 +11,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 /**
  * Tests for P5.7: defaults on closure / arrow generic parameters
@@ -18,52 +21,32 @@ use XPHP\FileSystem\FileWriter\NativeFileWriter;
  */
 final class ClosureArrowDefaultsTest extends TestCase
 {
+    #[RunInSeparateProcess]
     public function testClosureWithSingleDefaultUsesPadding(): void
     {
-        $dir = $this->mkdir('cdef-single');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\CDefSingle;
-        $f = function<T = int>(T $x): T { return $x; };
-        $r = $f::<>(42);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "r={\$r};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('r=42;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_defaults_single/source',
+            'cdef-single',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_defaults_single/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testArrowWithSingleDefaultUsesPadding(): void
     {
-        $dir = $this->mkdir('adef-single');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ADefSingle;
-        $f = fn<T = int>(T $x): T => $x;
-        $r = $f::<>(7);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "r={\$r};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('r=7;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_defaults_single/source',
+            'adef-single',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/arrow_defaults_single/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     public function testClosureWithTrailingDefaultPadsAtCallSite(): void
@@ -79,9 +62,8 @@ final class ClosureArrowDefaultsTest extends TestCase
         $this->compile($dir);
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
-        // Padded to <int, string> -- the specialized function reflects that.
-        self::assertMatchesRegularExpression(
-            '/function closure_f_T_[0-9a-f]+\(int \$a, string \$b\)/',
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureArrowDefaultsTest/testClosureWithTrailingDefaultPadsAtCallSite/Use.expected.php',
             $out,
         );
 
@@ -101,9 +83,8 @@ final class ClosureArrowDefaultsTest extends TestCase
         $this->compile($dir);
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
-        // B padded to int (same as A), so both params end up as int.
-        self::assertMatchesRegularExpression(
-            '/function closure_f_T_[0-9a-f]+\(int \$a, int \$b\)/',
+        SnapshotHash::assertMatches(
+            __DIR__ . '/ClosureArrowDefaultsTest/testClosureWithDefaultReferringToEarlierParam/Use.expected.php',
             $out,
         );
 
@@ -145,56 +126,34 @@ final class ClosureArrowDefaultsTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
+    #[RunInSeparateProcess]
     public function testDefaultOnClosureWithUseClause(): void
     {
         // Defaults + use(): both features compose.
-        $dir = $this->mkdir('cdef-use');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\CDefUse;
-        $base = 100;
-        $f = function<T = int>(T $x) use ($base) { return $x + $base; };
-        $r = $f::<>(5);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "r={\$r};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('r=105;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_defaults_with_use/source',
+            'cdef-use',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_defaults_with_use/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testDefaultOnArrowWithImplicitCapture(): void
     {
         // Defaults + arrow implicit captures together.
-        $dir = $this->mkdir('adef-cap');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\ADefCap;
-        $y = 10;
-        $f = fn<T = int>(T $x): T => $x + $y;
-        $r = $f::<>(3);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "r={\$r};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('r=13;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/arrow_defaults_with_implicit_capture/source',
+            'adef-cap',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/arrow_defaults_with_implicit_capture/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     // ----- helpers --------------------------------------------------------
@@ -222,17 +181,6 @@ final class ClosureArrowDefaultsTest extends TestCase
         if (is_dir($dist) && !is_dir($sourceDir . '/dist')) {
             symlink($dist, $sourceDir . '/dist');
         }
-    }
-
-    /**
-     * @return array{0: int, 1: list<string>}
-     */
-    private function execScript(string $script): array
-    {
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($script) . ' 2>&1', $output, $exit);
-        return [$exit, $output];
     }
 
     private function buildCompiler(): Compiler

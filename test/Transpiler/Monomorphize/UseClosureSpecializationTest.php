@@ -11,6 +11,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 /**
  * Tests for P5.6: generic closures with explicit `use (...)` clauses.
@@ -20,64 +23,32 @@ use XPHP\FileSystem\FileWriter\NativeFileWriter;
  */
 final class UseClosureSpecializationTest extends TestCase
 {
+    #[RunInSeparateProcess]
     public function testUseClauseByValueRuntimeContract(): void
     {
-        // Capture-at-declaration semantics: `use ($y)` snapshots $y=1
-        // even though the outer $y reassigns to 2 before the call.
-        $dir = $this->mkdir('use-byval');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\UseByVal;
-        $y = 1;
-        $f = function<T>(T $x) use ($y) { return $x + $y; };
-        $y = 2;
-        $result = $f::<int>(42);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "result={\$result};y={\$y};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('result=43;y=2;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_use_by_value/source',
+            'use-byval',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_use_by_value/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testUseClauseByRefCaptureMutatesOuter(): void
     {
-        // `use (&$y)`: mutations inside the body propagate to the outer
-        // scope. The dispatcher's `use (&$y)` plus the lifted `mixed &$y`
-        // param + named-arg forwarding preserves the reference all the
-        // way to the specialized function's body.
-        $dir = $this->mkdir('use-byref');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\UseByRef;
-        $y = 1;
-        $f = function<T>(T $x) use (&$y): T {
-            $y = $x;
-            return $y;
-        };
-        $a = $f::<int>(99);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "a={\$a};y={\$y};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('a=99;y=99;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_use_by_ref/source',
+            'use-byref',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_use_by_ref/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     public function testUseClauseByRefIsEmittedInBothDispatcherAndSpecialization(): void
@@ -96,77 +67,52 @@ final class UseClosureSpecializationTest extends TestCase
         $this->compile($dir);
         $out = file_get_contents($dir . '/dist/Use.php');
         self::assertIsString($out);
-
-        // Dispatcher's use clause has the `&`.
-        self::assertStringContainsString('use (&$y)', $out);
-        // Specialized function declares the lifted param with `&`.
-        self::assertMatchesRegularExpression(
-            '/function closure_f_T_[0-9a-f]+\(int \$x, mixed &\$y\)/',
+        SnapshotHash::assertMatches(
+            __DIR__ . '/UseClosureSpecializationTest/testUseClauseByRefIsEmittedInBothDispatcherAndSpecialization/Use.expected.php',
             $out,
         );
 
         $this->rrmdir(dirname($dir));
     }
 
+    #[RunInSeparateProcess]
     public function testUseClauseMultipleMixedRefAndValueCaptures(): void
     {
-        $dir = $this->mkdir('use-mixed');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\UseMixed;
-        $a = 10;
-        $b = 20;
-        $f = function<T>(T $x) use ($a, &$b) {
-            $b = $b + 5;       // mutates outer $b
-            return $x + $a + $b;
-        };
-        $r = $f::<int>(1);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "r={\$r};a={\$a};b={\$b};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        // r = 1 + 10 + 25 = 36; a stays at 10; b mutated to 25.
-        self::assertContains('r=36;a=10;b=25;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_use_multiple_mixed_captures/source',
+            'use-mixed',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_use_multiple_mixed_captures/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
+    #[RunInSeparateProcess]
     public function testUseClauseMultipleArgTuples(): void
     {
-        $dir = $this->mkdir('use-tuples');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\UseTuples;
-        $tag = 'pre';
-        $f = function<T>(T $x) use ($tag) { return $tag . ':' . $x; };
-        $a = $f::<int>(1);
-        $b = $f::<string>('two');
-        PHP);
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_use_multiple_arg_tuples/source',
+            'use-tuples',
+        );
+        try {
+            $out = file_get_contents($fixture->targetDir . '/Use.php');
+            self::assertIsString($out);
 
-        $this->compile($dir);
-        $out = file_get_contents($dir . '/dist/Use.php');
-        self::assertIsString($out);
-        preg_match_all('/function closure_f_T_[0-9a-f]+\(/', $out, $matches);
-        self::assertCount(2, $matches[0]);
+            // Structural invariant kept: two distinct specializations
+            // (T=int and T=string).
+            preg_match_all('/function closure_f_T_[0-9a-f]+\(/', $out, $matches);
+            self::assertCount(2, $matches[0]);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/closure_use_multiple_arg_tuples/verify/testUseClauseMultipleArgTuples/Use.expected.php',
+                $out,
+            );
 
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "a={\$a};b={\$b};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('a=pre:1;b=pre:two;', $output);
-
-        $this->rrmdir(dirname($dir));
+            require __DIR__ . '/../../fixture/compile/closure_use_multiple_arg_tuples/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     public function testUseClauseStaticClosureStillRejected(): void
@@ -216,32 +162,21 @@ final class UseClosureSpecializationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
+    #[RunInSeparateProcess]
     public function testUseClauseCaptureNamedXphpArgsAutoRenames(): void
     {
         // Regression guard: a user variable captured via `use ($__xphp_args)`
         // collides with the dispatcher's own variadic param name. The
         // auto-rename machinery from P5.5 applies to closures too.
-        $dir = $this->mkdir('use-reserved');
-        file_put_contents($dir . '/Use.xphp', <<<'PHP'
-        <?php
-        namespace App\UseReserved;
-        $__xphp_args = 200;
-        $f = function<T>(T $x) use ($__xphp_args) { return $x + $__xphp_args; };
-        $r = $f::<int>(3);
-        PHP);
-
-        $this->compile($dir);
-        $runScript = $dir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        require '{$dir}/dist/Use.php';
-        echo "r={\$r};";
-        PHP);
-        [$exit, $output] = $this->execScript($runScript);
-        self::assertSame(0, $exit, "Run failed:\n" . implode("\n", $output));
-        self::assertContains('r=203;', $output);
-
-        $this->rrmdir(dirname($dir));
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_use_capture_named_xphp_args/source',
+            'use-reserved',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_use_capture_named_xphp_args/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     // ----- helpers --------------------------------------------------------

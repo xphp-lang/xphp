@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDispatcherRuntimeRouting;
+
+// Two distinct turbofish call sites generate two specializations and
+// two dispatcher arms; routing at runtime returns the right value
+// from each arm.
+$id = function<T>(T $x): T {
+    return $x;
+};
+$a = $id::<int>(42);
+$b = $id::<string>('hello');

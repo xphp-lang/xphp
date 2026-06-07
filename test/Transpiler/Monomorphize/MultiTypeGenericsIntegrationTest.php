@@ -11,6 +11,9 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use XPHP\TestSupport\CompiledFixture;
+use XPHP\TestSupport\SnapshotHash;
 
 final class MultiTypeGenericsIntegrationTest extends TestCase
 {
@@ -44,12 +47,22 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
             'App\\MultiType\\Containers\\Pair',
             [new TypeRef('App\\MultiType\\Models\\User'), new TypeRef('App\\MultiType\\Models\\Plastic')],
         );
+        $pairPlasticUserFqn = Registry::generatedFqn(
+            'App\\MultiType\\Containers\\Pair',
+            [new TypeRef('App\\MultiType\\Models\\Plastic'), new TypeRef('App\\MultiType\\Models\\User')],
+        );
         $file = $this->fqnToPath($pairUserPlasticFqn);
         self::assertFileExists($file);
 
         $content = file_get_contents($file);
-        self::assertStringContainsString('public \\App\\MultiType\\Models\\User $first', $content);
-        self::assertStringContainsString('public \\App\\MultiType\\Models\\Plastic $second', $content);
+        // Pin the swap-return identity: the file contains two distinct
+        // hashes (own class + swap return Pair<Plastic, User>). First-
+        // seen-order normalization can't distinguish a role swap.
+        self::assertStringContainsString('swap(): \\' . $pairPlasticUserFqn, $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/multi_type/verify/testDistinctTwoClassParamsGenerateSpecialization/Pair_User_Plastic.expected.php',
+            $content,
+        );
     }
 
     public function testSameClassUsedForBothParamsStillGeneratesOneSpecialization(): void
@@ -63,9 +76,10 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $file = $this->fqnToPath($pairPlasticPlasticFqn);
         self::assertFileExists($file);
 
-        $content = file_get_contents($file);
-        self::assertStringContainsString('public \\App\\MultiType\\Models\\Plastic $first', $content);
-        self::assertStringContainsString('public \\App\\MultiType\\Models\\Plastic $second', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/multi_type/verify/testSameClassUsedForBothParamsStillGeneratesOneSpecialization/Pair_Plastic_Plastic.expected.php',
+            file_get_contents($file),
+        );
     }
 
     public function testMixedScalarAndScalarParams(): void
@@ -82,10 +96,10 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $file = $this->fqnToPath($mapFqn);
         self::assertFileExists($file);
 
-        $content = file_get_contents($file);
-        self::assertStringContainsString('public function set(string $key, int $value)', $content);
-        self::assertStringContainsString('public function firstKey(): string', $content);
-        self::assertStringContainsString('public function firstValue(): int', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/multi_type/verify/testMixedScalarAndScalarParams/Map_string_int.expected.php',
+            file_get_contents($file),
+        );
     }
 
     public function testParamOrderMattersForHash(): void
@@ -143,8 +157,20 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
             new TypeRef('App\\MultiType\\Models\\Plastic'),
             new TypeRef('App\\MultiType\\Models\\User'),
         ]);
+        // The outer Pair's swap return is Pair<innerPair, innerMap> --
+        // the same outer-args swapped.
+        $swapReturnFqn = Registry::generatedFqn('App\\MultiType\\Containers\\Pair', [$pairPlasticUser, $mapStringInt]);
+        // Pin inner-FQN identities: the snapshot file contains four
+        // distinct hashes (outer self, Map<string,int>, Pair<Plastic,User>,
+        // and the swap return). First-seen-order normalization can't
+        // tell apart a regression that swaps roles among these four.
         self::assertStringContainsString('public \\' . $innerMapFqn . ' $first', $content);
         self::assertStringContainsString('public \\' . $innerPairFqn . ' $second', $content);
+        self::assertStringContainsString('swap(): \\' . $swapReturnFqn, $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/multi_type/verify/testDeeplyNestedMultiTypeArgs/Pair_outer.expected.php',
+            $content,
+        );
     }
 
     public function testAllOutputFilesAreSyntacticallyValid(): void
@@ -165,49 +191,16 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
     public function testRuntimeTypeErrorOnWrongSlotType(): void
     {
-        $this->compile();
-
-        $pairUserPlasticFqn = Registry::generatedFqn(
-            'App\\MultiType\\Containers\\Pair',
-            [new TypeRef('App\\MultiType\\Models\\User'), new TypeRef('App\\MultiType\\Models\\Plastic')],
-        );
-        $pairFile = $this->fqnToPath($pairUserPlasticFqn);
-
-        $runScript = $this->workDir . '/run.php';
-        file_put_contents($runScript, <<<PHP
-        <?php
-        declare(strict_types=1);
-        require '{$this->targetDir}/Models/User.php';
-        require '{$this->targetDir}/Models/Plastic.php';
-        require '{$this->targetDir}/Containers/Pair.php';
-        require '{$pairFile}';
-        \$pair = '{$pairUserPlasticFqn}';
-
-        // Correct order
+        $fixture = CompiledFixture::compile($this->sourceDir, 'multi-type-runtime');
+        $fixture->registerAutoload('App\\MultiType\\');
         try {
-            \$ok = new \$pair(new \\App\\MultiType\\Models\\User('alice'), new \\App\\MultiType\\Models\\Plastic('red'));
-            echo "OK\\n";
-        } catch (\\Throwable \$e) {
-            echo "UNEXPECTED:" . \$e->getMessage() . "\\n";
+            require __DIR__ . '/../../fixture/compile/multi_type/verify/type_error_on_wrong_slot.php';
+        } finally {
+            $fixture->cleanup();
         }
-
-        // Swap arg order — should fail on first slot (User vs Plastic) AND second slot (Plastic vs User)
-        try {
-            \$bad = new \$pair(new \\App\\MultiType\\Models\\Plastic('red'), new \\App\\MultiType\\Models\\User('alice'));
-            echo "MISSED_TYPE_ERROR\\n";
-        } catch (\\TypeError \$e) {
-            echo "TYPE_ERROR_OK\\n";
-        }
-        PHP);
-
-        $output = [];
-        $exit = 0;
-        exec('php ' . escapeshellarg($runScript) . ' 2>&1', $output, $exit);
-        self::assertSame(0, $exit, "run.php failed:\n" . implode("\n", $output));
-        self::assertSame('OK', $output[0]);
-        self::assertSame('TYPE_ERROR_OK', $output[1]);
     }
 
     private function compile(): void
