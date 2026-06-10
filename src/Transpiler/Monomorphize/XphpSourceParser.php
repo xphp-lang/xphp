@@ -50,7 +50,13 @@ use RuntimeException;
  *  - `Name<Args>[]` (array of a generic) is not supported — generics-after-array-sugar would
  *    need extra wiring; users get a native PHP parse error today.
  *
- * @phpstan-type BoundDict array<string, mixed>
+ * The bound dict shape is polymorphic by `kind` (declared more precisely in
+ * `parseTypeParamList`'s docblock). We can't encode that polymorphism in a
+ * recursive type alias (PHPStan rejects recursive aliases as circular), so
+ * the `operands` recursion bottoms out at `array<string, mixed>` and the
+ * shape-narrowing happens dynamically at access sites.
+ *
+ * @phpstan-type BoundDict array{kind: 'leaf', name: string, isFq: bool, args: list<TypeRef>}|array{kind: 'and'|'or', operands: list<array<string, mixed>>}
  */
 final class XphpSourceParser
 {
@@ -99,6 +105,7 @@ final class XphpSourceParser
         if ($ast === null) {
             throw new RuntimeException('Parser returned null AST.');
         }
+        /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
         $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
@@ -137,6 +144,7 @@ final class XphpSourceParser
         if ($ast === null) {
             return null;
         }
+        /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
         $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
 
@@ -167,7 +175,9 @@ final class XphpSourceParser
      */
     private function scanAndStrip(string $source): array
     {
-        $tokens = self::splitMergedAngleTokens(PhpToken::tokenize($source));
+        $rawTokens = PhpToken::tokenize($source);
+        /** @var list<PhpToken> $rawTokens — PhpToken::tokenize() returns array<PhpToken>; keys are always 0..N-1. */
+        $tokens = self::splitMergedAngleTokens($rawTokens);
         $n = count($tokens);
 
         $classMarkers = [];
@@ -801,7 +811,7 @@ final class XphpSourceParser
      * self-reference (a leaf whose name equals `$paramName`, isn't fully
      * qualified, and has no generic args).
      *
-     * @param array{kind: string, ...} $bound
+     * @param BoundDict $bound
      */
     private static function boundContainsSelfReference(array $bound, string $paramName): bool
     {
@@ -811,6 +821,7 @@ final class XphpSourceParser
                 && $bound['args'] === [];
         }
         foreach ($bound['operands'] as $operand) {
+            /** @var BoundDict $operand — operands at the recursion boundary lose precision in the alias; the parser guarantees the shape. */
             if (self::boundContainsSelfReference($operand, $paramName)) {
                 return true;
             }
@@ -1304,9 +1315,14 @@ final class XphpSourceParser
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
-             * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
-             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
+             * Marker arrays start as lists but become sparse after `unset(...[$i])` as
+             * each marker is consumed; foreach iteration order still walks them in
+             * insertion order. Typed as `array<int, ...>` rather than `list<...>` so
+             * the unset doesn't drift the property type.
+             *
+             * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
+             * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
+             * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,
@@ -1610,7 +1626,7 @@ final class XphpSourceParser
             }
 
             /**
-             * @param array{kind: string, ...} $node
+             * @param BoundDict $node
              */
             private function buildBoundExprNode(array $node): BoundExpr
             {
@@ -1621,10 +1637,11 @@ final class XphpSourceParser
                     $resolvedArgs = $this->resolveTypeRefList($node['args']);
                     return new BoundLeaf(new TypeRef($fqn, $resolvedArgs));
                 }
-                $operands = array_map(
-                    fn (array $op): BoundExpr => $this->buildBoundExprNode($op),
-                    $node['operands'],
-                );
+                $operands = [];
+                foreach ($node['operands'] as $op) {
+                    /** @var BoundDict $op — operands at the recursion boundary lose precision in the alias; the parser guarantees the shape. */
+                    $operands[] = $this->buildBoundExprNode($op);
+                }
                 if ($node['kind'] === 'and') {
                     return new BoundIntersection(...$operands);
                 }
@@ -1642,8 +1659,11 @@ final class XphpSourceParser
                 // F-bounded variance (`+T : Box<T>`).
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-                    if (is_array($params) && $params !== []) {
-                        VariancePositionValidator::assertPositions($node, $params);
+                    if (is_array($params)) {
+                        /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
+                        if ($params !== []) {
+                            VariancePositionValidator::assertPositions($node, $params);
+                        }
                     }
                 }
                 // @infection-ignore-all -- the instanceof chain mirrors enterNode's push;

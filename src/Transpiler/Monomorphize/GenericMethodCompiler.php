@@ -883,6 +883,7 @@ final class GenericMethodCompiler
                 if (!is_array($params)) {
                     return null;
                 }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
                 // Bare call (no `::<...>`) on a generic method with all
                 // defaults: pad to []. Already-tagged turbofish calls go
                 // through padArgsWithDefaults too so partial-arg shapes are
@@ -893,10 +894,12 @@ final class GenericMethodCompiler
                     }
                     $args = [];
                 }
-                $args = Registry::padArgsWithDefaults($params, $args, $key);
-                if (!self::allConcrete($args) || count($params) !== count($args)) {
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
+                $padded = Registry::padArgsWithDefaults($params, $args, $key);
+                if (!self::allConcrete($padded) || count($params) !== count($padded)) {
                     return null;
                 }
+                $args = $padded;
 
                 if ($this->hierarchy !== null) {
                     Registry::checkBounds(
@@ -971,16 +974,19 @@ final class GenericMethodCompiler
                 if (!is_array($params)) {
                     return null;
                 }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
                 if (!is_array($args)) {
                     if (!self::hasAllDefaults($params)) {
                         return null;
                     }
                     $args = [];
                 }
-                $args = Registry::padArgsWithDefaults($params, $args, $key);
-                if (!self::allConcrete($args) || count($params) !== count($args)) {
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
+                $padded = Registry::padArgsWithDefaults($params, $args, $key);
+                if (!self::allConcrete($padded) || count($params) !== count($padded)) {
                     return null;
                 }
+                $args = $padded;
 
                 if ($this->hierarchy !== null) {
                     Registry::checkBounds(
@@ -1071,6 +1077,7 @@ final class GenericMethodCompiler
                 if (!is_array($args)) {
                     return null;
                 }
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
                 $isVarTurbofish = $node->name instanceof Variable && is_string($node->name->name);
                 // Empty turbofish (`$f::<>(...)`) is the all-defaults shape for
                 // variable-turbofish call sites (P5.7); the dispatcher path
@@ -1106,6 +1113,7 @@ final class GenericMethodCompiler
                 if (!is_array($params) || count($params) !== count($args)) {
                     return null;
                 }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
 
                 if ($this->hierarchy !== null) {
                     Registry::checkBounds(
@@ -1174,7 +1182,8 @@ final class GenericMethodCompiler
              */
             private function rewriteVariableTurbofishCall(FuncCall $node, array $args): null
             {
-                $varName = $node->name->name; // already string-checked by caller
+                assert($node->name instanceof Variable && is_string($node->name->name));
+                $varName = $node->name->name;
                 $template = $this->currentScopeClosureTemplates[$varName] ?? null;
                 if ($template === null) {
                     return null;
@@ -1219,6 +1228,7 @@ final class GenericMethodCompiler
                 if (!is_array($params)) {
                     return null;
                 }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
                 // P5.7: pad missing trailing args with defaults BEFORE
                 // the arity check so `$f::<>()` works on an all-defaulted
                 // generic closure / arrow. Padding throws when leading
@@ -1405,6 +1415,7 @@ final class GenericMethodCompiler
     private function finalizeClosureDispatchers(object $visitor, int $hashLength): void
     {
         $dispatcher = new ClosureDispatcher();
+        // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
         foreach ($visitor->closureDispatchPlan as $entry) {
             if ($entry['argSets'] === []) {
                 continue;
@@ -1426,8 +1437,10 @@ final class GenericMethodCompiler
             $entry['assignNode']->expr = $result['assignment']->expr;
             foreach ($result['declarations'] as $specialized) {
                 if ($entry['namespaceNode'] !== null) {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
                     $visitor->pendingAppends[] = [$entry['namespaceNode'], $specialized];
                 } else {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
                     $visitor->topLevelAppends[] = $specialized;
                 }
             }

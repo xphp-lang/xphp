@@ -19,6 +19,6 @@ final readonly class BoundIntersection extends BoundExpr
 
     public function __construct(BoundExpr ...$operands)
     {
-        $this->operands = $operands;
+        $this->operands = array_values($operands);
     }
 }

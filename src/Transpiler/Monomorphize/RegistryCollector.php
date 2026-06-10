@@ -75,6 +75,7 @@ final class RegistryCollector extends NodeVisitorAbstract
 
     /**
      * @param list<Node\Stmt> $ast
+     * @param self::MODE_*    $mode
      */
     private function runPass(array $ast, string $sourceFile, string $mode): void
     {
@@ -112,22 +113,28 @@ final class RegistryCollector extends NodeVisitorAbstract
             && $node instanceof ClassLike && $node->name !== null) {
             $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
             $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-            if (is_array($params) && $params !== [] && is_string($fqn) && !$this->isAlreadyRecorded($fqn)) {
-                $this->registry->recordDefinition(
-                    $fqn,
-                    $node->name->toString(),
-                    $params,
-                    $node,
-                    $this->currentFile,
-                );
+            if (is_array($params)) {
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
+                if ($params !== [] && is_string($fqn) && !$this->isAlreadyRecorded($fqn)) {
+                    $this->registry->recordDefinition(
+                        $fqn,
+                        $node->name->toString(),
+                        $params,
+                        $node,
+                        $this->currentFile,
+                    );
+                }
             }
         }
 
         if ($this->mode !== self::MODE_DEFINITIONS && $node instanceof Name) {
             $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
             $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-            if (is_array($args) && is_string($fqn) && self::allConcrete($args)) {
-                $this->registry->recordInstantiation($fqn, $args);
+            if (is_array($args)) {
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
+                if (is_string($fqn) && self::allConcrete($args)) {
+                    $this->registry->recordInstantiation($fqn, $args);
+                }
             }
         }
 

@@ -53,9 +53,12 @@ final class CallSiteRewriter
                     // entirely from defaults (`new Cache::<>` or a synthesized bare
                     // `new Cache;`). Both shapes route through the same recordInstantiation
                     // path, which pads, validates, and hashes against the padded tuple.
-                    if (is_array($args) && is_string($fqn) && self::allConcrete($args)) {
-                        $instantiation = $this->registry->recordInstantiation($fqn, $args);
-                        return new FullyQualified($instantiation->generatedFqn, $node->getAttributes());
+                    if (is_array($args)) {
+                        /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
+                        if (is_string($fqn) && self::allConcrete($args)) {
+                            $instantiation = $this->registry->recordInstantiation($fqn, $args);
+                            return new FullyQualified($instantiation->generatedFqn, $node->getAttributes());
+                        }
                     }
                 }
 
