@@ -10,6 +10,13 @@
 test/unit:
 	php vendor/bin/phpunit
 
+.PHONY: lint/phpstan
+# Static analysis at level 7. Memory limit lifted because deep generic
+# array shapes (BoundDict's recursive operand chains, marker shape
+# stacks) push the default 256M ceiling.
+lint/phpstan:
+	php vendor/bin/phpstan analyse --memory-limit=2G --no-progress
+
 .PHONY: test/mutation
 # Gate at 95% (current is 100%): keeps a small headroom so a single
 # new mutation can land in a follow-up commit and still pass while
