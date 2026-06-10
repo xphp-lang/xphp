@@ -97,6 +97,9 @@ final class CallSiteRewriter
         });
 
         $result = $traverser->traverse($ast);
+        // @infection-ignore-all — this foreach is an assert-only type-narrowing
+        // guard for static analysis; `return $result` below is unaffected, so
+        // mutating the loop source to `[]` produces identical output.
         foreach ($result as $node) {
             assert($node instanceof Node\Stmt);
         }

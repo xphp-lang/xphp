@@ -32,10 +32,15 @@
         // FilepathArray::filter's own array_values is also redundant because the constructor
         // re-indexes everything (whatever spread gives it gets passed back through __construct's
         // array_values), so removing the inner call produces an identical end-state.
+        // BoundIntersection/BoundUnion::__construct: same shape — `array_values(...$operands)`
+        // on a variadic that PHP already delivers as a 0-indexed list. Every consumer only
+        // foreach-iterates `->operands`, so re-indexing is unobservable.
         "UnwrapArrayValues": {
             "ignore": [
                 "XPHP\\FileSystem\\FilepathArray::__construct",
-                "XPHP\\FileSystem\\FilepathArray::filter"
+                "XPHP\\FileSystem\\FilepathArray::filter",
+                "XPHP\\Transpiler\\Monomorphize\\BoundIntersection::__construct",
+                "XPHP\\Transpiler\\Monomorphize\\BoundUnion::__construct"
             ]
         },
 
@@ -244,6 +249,13 @@
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // ClosureDispatcher::buildDispatcherClosure: the `!$use->var
+                // instanceof Variable || !is_string($use->var->name)` capture
+                // guard. PHP `use(...)` clauses can't hold variable-variables,
+                // so `$use->var` is always a string-named Variable -- the guard
+                // never `continue`s under `||` OR `&&`. Documented at the call
+                // site with a matching `@phpstan-ignore instanceof.alwaysTrue`.
+                "XPHP\\Transpiler\\Monomorphize\\ClosureDispatcher::buildDispatcherClosure",
                 // VarianceEdgeEmitter::isVarianceSubtype: `$a1->isScalar ||
                 // $a2->isScalar` mixed-scalar shortcut. `||` -> `&&` would only
                 // fire when BOTH args are scalar, but the canonical-equality
@@ -363,7 +375,14 @@
         // valid type expression — observable behavior identical to original.
         "LogicalOrAllSubExprNegation": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isNameToken"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isNameToken",
+                // VariancePositionValidator::checkBoundExpr: the
+                // `assert($bound instanceof BoundIntersection || $bound instanceof
+                // BoundUnion)` type-narrowing guard (the BoundLeaf case returns
+                // just above). Negating both sub-exprs yields `!A || !B`, which is
+                // ALWAYS true because $bound can't be both operand types at once --
+                // the mutated assert can never fail. Observationally equivalent.
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator::checkBoundExpr"
             ]
         },
 
@@ -774,6 +793,22 @@
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
+        // GenericMethodCompiler::finalizeClosureDispatchers: the
+        // `$entry['namespaceNode'] !== null` -> `=== null` flip routes a
+        // specialized closure declaration to topLevelAppends (file-level
+        // `$ast[]`) instead of pendingAppends (`$namespaceNode->stmts[]`).
+        // Under our emission model every source file uses the UNBRACED
+        // `namespace App\X;` form, so a function appended at file scope still
+        // prints textually after `namespace App\X;` -- re-parsing resolves it
+        // into the same namespace. Both append targets therefore yield
+        // byte-equivalent output; the full closure/dispatcher suite (82 tests)
+        // passes identically with the flip applied. Catching it would require
+        // a contrived braced-namespace fixture our grammar never emits.
+        "NotIdentical": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler::finalizeClosureDispatchers"
+            ]
+        },
         "MethodCallRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
@@ -795,6 +830,10 @@
         "Foreach_": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // (CallSiteRewriter::rewrite's assert-only foreach is suppressed
+                // inline with @infection-ignore-all instead -- the method holds an
+                // anonymous class, so the per-method `ignore` matcher can't bind to
+                // it, same reason as the inline Interface_ suppression in that file.)
                 // VarianceEdgeEmitter: dropping the inner foreach on the
                 // pair-collection loop. Same rationale as the LogicalAnd /
                 // Continue_ entries above -- the integration tests assert
