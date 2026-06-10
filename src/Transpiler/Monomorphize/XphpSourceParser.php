@@ -49,6 +49,8 @@ use RuntimeException;
  *  - Generic syntax inside strings/comments is correctly ignored (tokenizer handles it).
  *  - `Name<Args>[]` (array of a generic) is not supported — generics-after-array-sugar would
  *    need extra wiring; users get a native PHP parse error today.
+ *
+ * @phpstan-type BoundDict array<string, mixed>
  */
 final class XphpSourceParser
 {
@@ -161,7 +163,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap}
      */
     private function scanAndStrip(string $source): array
     {
@@ -557,7 +559,7 @@ final class XphpSourceParser
      * (forward references are rejected at parse time).
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: list<array{name: string, bound: ?array, default: ?TypeRef, variance: Variance}>, 1: int}|null
+     * @return array{0: list<array{name: string, bound:?BoundDict, default: ?TypeRef, variance: Variance}>, 1: int}|null
      */
     private static function parseTypeParamList(
         array $tokens,
@@ -693,7 +695,7 @@ final class XphpSourceParser
      * class named T) is allowed because the FQ form unambiguously refers to a
      * class and not the same-named type-param.
      *
-     * @param list<array{name: string, bound: ?array, default: ?TypeRef}> $entries
+     * @param list<array{name: string, bound:?BoundDict, default: ?TypeRef}> $entries
      */
     private static function assertDefaultsReferenceOnlyEarlierParams(array $entries): void
     {
@@ -767,7 +769,7 @@ final class XphpSourceParser
      * rather than a type-parameter self-reference. Leaves with non-empty
      * `args` are F-bounded shapes (`T : Box<T>`) and are explicitly allowed.
      *
-     * @param list<array{name: string, bound: ?array}> $entries
+     * @param list<array{name: string, bound:?BoundDict}> $entries
      */
     private static function assertNoTopLevelSelfReference(array $entries): void
     {
@@ -831,7 +833,7 @@ final class XphpSourceParser
      * a leaf in the resulting tree.
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: array, 1: int}|null
+     * @return array{0: BoundDict, 1: int}|null
      */
     private static function parseBoundExpr(array $tokens, int $startIdx): ?array
     {
@@ -840,7 +842,7 @@ final class XphpSourceParser
 
     /**
      * @param list<PhpToken> $tokens
-     * @return array{0: array, 1: int}|null
+     * @return array{0: BoundDict, 1: int}|null
      */
     private static function parseOrBound(array $tokens, int $idx): ?array
     {
@@ -872,7 +874,7 @@ final class XphpSourceParser
 
     /**
      * @param list<PhpToken> $tokens
-     * @return array{0: array, 1: int}|null
+     * @return array{0: BoundDict, 1: int}|null
      */
     private static function parseAndBound(array $tokens, int $idx): ?array
     {
@@ -904,7 +906,7 @@ final class XphpSourceParser
 
     /**
      * @param list<PhpToken> $tokens
-     * @return array{0: array, 1: int}|null
+     * @return array{0: BoundDict, 1: int}|null
      */
     private static function parsePrimaryBound(array $tokens, int $idx): ?array
     {
@@ -933,7 +935,7 @@ final class XphpSourceParser
      * used at instantiation sites) so nested generic args resolve correctly.
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: array, 1: int}|null
+     * @return array{0: BoundDict, 1: int}|null
      */
     private static function parseLeafBound(array $tokens, int $idx): ?array
     {
@@ -1285,22 +1287,26 @@ final class XphpSourceParser
      * matcher without having to peek at the rest of the marker shape.
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $classMarkers
+     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
-     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $methodMarkers
+     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
     {
         $traverser = new NodeTraverser();
-        $traverser->addVisitor(new class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
+        $traverser->addVisitor(new
+            /**
+             * @phpstan-import-type BoundDict from XphpSourceParser
+             */
+            class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
             private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $classMarkers
+             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
              * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
-             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $methodMarkers
+             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,
@@ -1576,7 +1582,7 @@ final class XphpSourceParser
              * F-bounded `Comparable<T>` resolves T against the enclosing
              * type-param stack (marking it as `isTypeParam: true`).
              *
-             * @param array{name: string, bound: ?array} $entry
+             * @param array{name: string, bound:?BoundDict} $entry
              */
             private function buildBoundExpr(array $entry): ?BoundExpr
             {
@@ -1593,7 +1599,7 @@ final class XphpSourceParser
              * into nested args (so `B = Box<A>` becomes
              * `TypeRef('App\Box', [TypeRef('A', isTypeParam: true)])`).
              *
-             * @param array{name: string, bound: ?array, default: ?TypeRef, variance: Variance} $entry
+             * @param array{name: string, bound:?BoundDict, default: ?TypeRef, variance: Variance} $entry
              */
             private function buildDefault(array $entry): ?TypeRef
             {

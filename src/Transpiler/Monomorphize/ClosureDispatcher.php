@@ -199,6 +199,7 @@ final class ClosureDispatcher
      * anonymous template flavor came in.
      *
      * @param list<TypeParam> $params
+     * @param list<ClosureUse> $useClauses
      *
      * @infection-ignore-all -- the final `setAttribute(ATTR_METHOD_GENERIC_PARAMS, ...)`
      *   call is defensive bookkeeping. `Specializer::specializeFunction` takes
