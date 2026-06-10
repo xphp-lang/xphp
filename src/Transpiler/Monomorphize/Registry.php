@@ -432,7 +432,7 @@ final class Registry
                 $innerDef = is_string($innerFqn)
                     ? ($this->definitions[ltrim($innerFqn, '\\')] ?? null)
                     : null;
-                $nextInnerLabel = $innerDef?->templateShortName ?? $type->toString();
+                $nextInnerLabel = $innerDef !== null ? $innerDef->templateShortName : $type->toString();
                 foreach ($args as $i => $arg) {
                     if (!$arg instanceof TypeRef) {
                         continue;
@@ -495,7 +495,7 @@ final class Registry
             return;
         }
         $innerDef = $this->definitions[ltrim($ref->name, '\\')] ?? null;
-        $nextInnerLabel = $innerDef?->templateShortName ?? $ref->name;
+        $nextInnerLabel = $innerDef !== null ? $innerDef->templateShortName : $ref->name;
         foreach ($ref->args as $i => $sub) {
             $slotVariance = $innerDef?->typeParams[$i]->variance ?? Variance::Invariant;
             $this->walkTypeRef(
@@ -575,11 +575,9 @@ final class Registry
         if (in_array($declared, $allowed, true)) {
             return;
         }
-        $sigil = match ($declared) {
-            Variance::Covariant     => '+',
-            Variance::Contravariant => '-',
-            Variance::Invariant     => '',
-        };
+        // $declared is Covariant or Contravariant at this point — the Invariant
+        // case passes every allowed-list and early-returns above.
+        $sigil = $declared === Variance::Covariant ? '+' : '-';
         $where = $innerLabel !== null
             ? sprintf(' (via slot %d of %s)', $innerSlot, $innerLabel)
             : '';

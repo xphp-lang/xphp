@@ -228,7 +228,8 @@ final class VarianceEdgeEmitter
         if ($child->isGeneric() && $parent->isGeneric()
             && ltrim($child->name, '\\') === ltrim($parent->name, '\\')
         ) {
-            $innerParams = $registry->definition(ltrim($child->name, '\\'))?->typeParams ?? [];
+            $innerDef = $registry->definition(ltrim($child->name, '\\'));
+            $innerParams = $innerDef !== null ? $innerDef->typeParams : [];
             if ($innerParams === []) {
                 return false;
             }

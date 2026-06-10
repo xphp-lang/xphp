@@ -101,6 +101,7 @@ final class VariancePositionValidator
             self::checkTypeRef($bound->type, $varianceByName, $hostParam, $hostPosition);
             return;
         }
+        assert($bound instanceof BoundIntersection || $bound instanceof BoundUnion);
         foreach ($bound->operands as $operand) {
             self::checkBoundExpr($operand, $varianceByName, $hostParam, $hostPosition);
         }
@@ -160,6 +161,7 @@ final class VariancePositionValidator
             : [Variance::Invariant, Variance::Contravariant];
         $paramPosition = $isConstructor ? 'constructor parameter' : 'method parameter';
         foreach ($method->params as $param) {
+            // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
             if (!$param instanceof Param) {
                 continue;
             }
@@ -206,6 +208,7 @@ final class VariancePositionValidator
     {
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
             foreach ($node->params as $param) {
+                // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
                 if ($param instanceof Param && $param->type !== null) {
                     self::checkPhpType(
                         $param->type,

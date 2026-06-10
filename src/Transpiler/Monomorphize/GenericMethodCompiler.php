@@ -400,7 +400,7 @@ final class GenericMethodCompiler
              * Branch snapshots are nested per-scope so that branches inside a closure
              * don't leak to branches in the enclosing function.
              *
-             * @var list<array{params: array<string,string>, locals: array<string,string>, branches: list<array{snapshot: array<string,string>, assigned: array<string,bool>}>}>
+             * @var list<array{params: array<string,string>, locals: array<string,string>, branches: list<array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>}>
              */
             private array $scopeSnapshots = [];
             /**
@@ -472,6 +472,7 @@ final class GenericMethodCompiler
                 }
                 if ($node instanceof Use_) {
                     foreach ($node->uses as $u) {
+                        // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed Use_::$uses (pre-5.x emitted UseUse, current emits UseItem).
                         if (!$u instanceof UseItem) {
                             continue;
                         }
@@ -509,6 +510,7 @@ final class GenericMethodCompiler
                     // closure body can specialize `$x->m::<T>(...)` correctly.
                     if ($node instanceof Closure) {
                         foreach ($node->uses as $use) {
+                            // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed ClosureUse::$var.
                             if (!$use->var instanceof Variable || !is_string($use->var->name)) {
                                 continue;
                             }
@@ -1170,7 +1172,7 @@ final class GenericMethodCompiler
              *
              * @param list<TypeRef> $args
              */
-            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): ?Node
+            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): null
             {
                 $varName = $node->name->name; // already string-checked by caller
                 $template = $this->currentScopeClosureTemplates[$varName] ?? null;

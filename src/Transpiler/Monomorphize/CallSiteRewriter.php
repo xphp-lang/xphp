@@ -93,6 +93,11 @@ final class CallSiteRewriter
             }
         });
 
-        return $traverser->traverse($ast);
+        $result = $traverser->traverse($ast);
+        foreach ($result as $node) {
+            assert($node instanceof Node\Stmt);
+        }
+        /** @var list<Node\Stmt> $result */
+        return $result;
     }
 }

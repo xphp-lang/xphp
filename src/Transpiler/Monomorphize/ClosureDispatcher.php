@@ -280,6 +280,7 @@ final class ClosureDispatcher
         // the same name so position-vs-name binding lines up.
         $captureArgs = [];
         foreach ($useClauses as $use) {
+            // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed ClosureUse::$var; older parser versions may emit a non-Variable here.
             if (!$use->var instanceof Variable || !is_string($use->var->name)) {
                 continue;
             }
@@ -384,10 +385,10 @@ final class ClosureDispatcher
         }
         $captures = [];
         self::collectFreeVarsFromExpr($arrow->expr, $paramNames, $captures);
-        return array_values(array_map(
+        return array_map(
             static fn (string $name): ClosureUse => new ClosureUse(new Variable($name), false),
             array_keys($captures),
-        ));
+        );
     }
 
     /**
@@ -408,7 +409,10 @@ final class ClosureDispatcher
     ): void {
         $traverser = new \PhpParser\NodeTraverser();
         $traverser->addVisitor(new class($paramNames, $captures) extends \PhpParser\NodeVisitorAbstract {
-            /** @param array<string, true> $paramNames */
+            /**
+             * @param array<string, true> $paramNames
+             * @param array<string, true> $captures
+             */
             public function __construct(
                 private array $paramNames,
                 private array &$captures,
@@ -422,6 +426,7 @@ final class ClosureDispatcher
                     // closure's `use` clause -- those vars were free at
                     // our scope (the user wrote them naming our locals).
                     foreach ($node->uses as $use) {
+                        // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed ClosureUse::$var.
                         if (!$use->var instanceof Variable || !is_string($use->var->name)) {
                             continue;
                         }
@@ -487,6 +492,7 @@ final class ClosureDispatcher
         $found = false;
         $traverser = new \PhpParser\NodeTraverser();
         $traverser->addVisitor(new class($found) extends \PhpParser\NodeVisitorAbstract {
+            /** @phpstan-ignore-next-line property.onlyWritten — by-ref property; the outer $found is read at line 512 via this reference */
             public function __construct(private bool &$found)
             {
             }
@@ -536,6 +542,7 @@ final class ClosureDispatcher
     ): array {
         $captured = [];
         foreach ($useClauses as $use) {
+            // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed ClosureUse::$var.
             if ($use->var instanceof Variable && is_string($use->var->name)) {
                 $captured[$use->var->name] = true;
             }

@@ -161,7 +161,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}>, 1: list<array{line:int, anchorLine:int, name:string, args:list<TypeRef>}>, 2: list<array{line:int, name:string, params:list<array{name:string, bound:?array}>}>, 3: string, 4: ByteOffsetMap}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap}
      */
     private function scanAndStrip(string $source): array
     {
@@ -1285,9 +1285,9 @@ final class XphpSourceParser
      * matcher without having to peek at the rest of the marker shape.
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $classMarkers
+     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $classMarkers
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
-     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $methodMarkers
+     * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $methodMarkers
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
     {
@@ -1298,9 +1298,9 @@ final class XphpSourceParser
             private array $typeParamStack = [];
 
             /**
-             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $classMarkers
+             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $classMarkers
              * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
-             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array}>}> $methodMarkers
+             * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?array, default:?TypeRef, variance:Variance}>}> $methodMarkers
              */
             public function __construct(
                 private array $classMarkers,
@@ -1317,7 +1317,7 @@ final class XphpSourceParser
                     // fixture; the null-coalesce branch never observably differs from a missing name.
                     $this->ctx->enterNamespace($node->name?->toString());
                     // @infection-ignore-all — redundant with the standalone Use_ branch below; dead loop.
-                    foreach ($node->stmts ?? [] as $inner) {
+                    foreach ($node->stmts as $inner) {
                         if ($inner instanceof Use_) {
                             $this->ctx->indexUse($inner);
                         }
@@ -1593,7 +1593,7 @@ final class XphpSourceParser
              * into nested args (so `B = Box<A>` becomes
              * `TypeRef('App\Box', [TypeRef('A', isTypeParam: true)])`).
              *
-             * @param array{name: string, bound: ?array, default: ?TypeRef} $entry
+             * @param array{name: string, bound: ?array, default: ?TypeRef, variance: Variance} $entry
              */
             private function buildDefault(array $entry): ?TypeRef
             {

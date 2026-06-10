@@ -96,7 +96,7 @@ final class RegistryCollector extends NodeVisitorAbstract
             // identical to the non-null version on every test input.
             $this->ctx->enterNamespace($node->name?->toString());
             // @infection-ignore-all — dual-handled by the standalone Use_ branch below; dead loop.
-            foreach ($node->stmts ?? [] as $inner) {
+            foreach ($node->stmts as $inner) {
                 if ($inner instanceof Use_) {
                     $this->ctx->indexUse($inner);
                 }

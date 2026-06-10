@@ -161,7 +161,9 @@ final readonly class Compiler
         $rewriter = new CallSiteRewriter($registry);
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             $rewritten = $rewriter->rewrite([$classAst]);
-            $specializedAsts[$generatedFqn] = $rewritten[0];
+            $first = $rewritten[0];
+            assert($first instanceof \PhpParser\Node\Stmt\ClassLike);
+            $specializedAsts[$generatedFqn] = $first;
         }
 
         // Note for future-proofing (review F9): method-level specialization runs in Phase 1a

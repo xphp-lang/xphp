@@ -29,7 +29,8 @@
     },
     "require-dev": {
         "phpunit/phpunit": "^13.0",
-        "infection/infection": "^0.33"
+        "infection/infection": "^0.33",
+        "phpstan/phpstan": "^2.2"
     },
     "autoload": {
         "psr-4": {
