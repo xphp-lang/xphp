@@ -10,6 +10,7 @@ use PHPUnit\Framework\TestCase;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\SnapshotHash;
 
 final class CompilerIntegrationTest extends TestCase
 {
@@ -57,23 +58,26 @@ final class CompilerIntegrationTest extends TestCase
         self::assertFileExists($boxMetalFile);
 
         $boxPlasticContent = file_get_contents($boxPlasticFile);
-        self::assertStringContainsString('declare (strict_types=1)', $boxPlasticContent, 'specialized class must opt in to strict types');
-        self::assertStringContainsString('namespace XPHP\\Generated\\App\\BoxGeneric\\Containers\\Box', $boxPlasticContent);
-        self::assertStringContainsString('class ' . self::shortName($boxPlasticFqn), $boxPlasticContent);
-        self::assertStringContainsString('public \\App\\BoxGeneric\\Models\\Plastic $item', $boxPlasticContent);
-        self::assertStringContainsString('public function set(\\App\\BoxGeneric\\Models\\Plastic $val)', $boxPlasticContent);
-        self::assertStringContainsString('public function get(): \\App\\BoxGeneric\\Models\\Plastic', $boxPlasticContent);
-
         $useFile = $this->targetDir . '/Use.php';
         self::assertFileExists($useFile);
         $useContent = file_get_contents($useFile);
-        self::assertStringContainsString('new \\' . $boxPlasticFqn . '()', $useContent);
-        self::assertStringContainsString('new \\' . $boxMetalFqn . '()', $useContent);
-
         $boxFile = $this->targetDir . '/Containers/Box.php';
         self::assertFileExists($boxFile);
         $boxContent = file_get_contents($boxFile);
-        self::assertStringNotContainsString('class Box', $boxContent, 'generic template definition must be stripped from target');
+
+        // Pin parent identities: the rewritten Use.php must reference
+        // both specialized FQNs by their exact paths (snapshot's
+        // first-seen-order normalization can't distinguish them).
+        self::assertStringContainsString('new \\' . $boxPlasticFqn . '()', $useContent);
+        self::assertStringContainsString('new \\' . $boxMetalFqn . '()', $useContent);
+        // Negative invariant kept: the generic template definition must
+        // not survive at the original FQN.
+        self::assertStringNotContainsString('class Box', $boxContent);
+
+        $snapshotDir = __DIR__ . '/../../fixture/compile/box_generic/verify/testCompilesGenericFixtureEndToEnd';
+        SnapshotHash::assertMatches($snapshotDir . '/Box_Plastic.expected.php', $boxPlasticContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Box_marker.expected.php', $boxContent);
 
         $registryPath = $this->cacheDir . '/registry.json';
         self::assertFileExists($registryPath);

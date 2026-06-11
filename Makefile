@@ -10,13 +10,20 @@
 test/unit:
 	php vendor/bin/phpunit
 
+.PHONY: lint/phpstan
+# Static analysis at level 7. Memory limit lifted because deep generic
+# array shapes (BoundDict's recursive operand chains, marker shape
+# stacks) push the default 256M ceiling.
+lint/phpstan:
+	php vendor/bin/phpstan analyse --memory-limit=2G --no-progress
+
 .PHONY: test/mutation
 # Gate at 95% (current is 100%): keeps a small headroom so a single
 # new mutation can land in a follow-up commit and still pass while
 # the test that kills it is being written.  Raise to 100% once the
 # repo is stable enough that no new test gaps are expected.
 test/mutation:
-	php vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
+	php -d memory_limit=-1 vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
 
 # Humbug Box is the standard tool for compiling a Composer-managed
 # PHP project into a single self-contained PHAR.  Pinned to a known-

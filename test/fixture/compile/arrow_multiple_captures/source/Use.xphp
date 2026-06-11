@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowMultipleCaptures;
+
+// Two implicit captures: $a and $b. result = 1 + 10 + 20 = 31.
+$a = 10;
+$b = 20;
+$f = fn<T>(T $x): T => $x + $a + $b;
+$result = $f::<int>(1);

@@ -5,16 +5,42 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Arg;
+use PhpParser\Node\Expr\ArrowFunction;
+use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\Match_;
+use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\New_;
+use PhpParser\Node\Expr\NullsafeMethodCall;
+use PhpParser\Node\Expr\PropertyFetch;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
+use PhpParser\Node\MatchArm;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
+use PhpParser\Node\NullableType;
+use PhpParser\Node\Scalar\String_;
+use PhpParser\Node\Stmt\Case_;
+use PhpParser\Node\Stmt\Catch_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Do_;
+use PhpParser\Node\Stmt\Else_;
+use PhpParser\Node\Stmt\ElseIf_;
+use PhpParser\Node\Stmt\Finally_;
+use PhpParser\Node\Stmt\For_;
+use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\If_;
 use PhpParser\Node\Stmt\Namespace_;
+use PhpParser\Node\Stmt\Property;
+use PhpParser\Node\Stmt\Switch_;
+use PhpParser\Node\Stmt\TryCatch;
 use PhpParser\Node\Stmt\Use_;
+use PhpParser\Node\Stmt\While_;
 use PhpParser\Node\UseItem;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
@@ -60,7 +86,7 @@ final class GenericMethodCompiler
      * @param array<string, list<Node\Stmt>> $astSet keyed by an arbitrary string id (filepath
      *     or "<specialized:fqcn>"). The values are the top-level statements of each AST.
      */
-    public function process(array $astSet): void
+    public function process(array &$astSet): void
     {
         /** @var array<string, ClassMethod> $methodTemplates keyed by "classFqn::methodName" */
         $methodTemplates = [];
@@ -68,8 +94,10 @@ final class GenericMethodCompiler
         $classByFqn = [];
         /** @var array<string, Function_> $functionTemplates keyed by namespace\\functionName */
         $functionTemplates = [];
-        /** @var array<string, Namespace_> $functionNamespaceByFqn  enclosing Namespace_ per fqn */
+        /** @var array<string, ?Namespace_> $functionNamespaceByFqn  enclosing Namespace_ per fqn, or null for bare top-level functions */
         $functionNamespaceByFqn = [];
+        /** @var array<string, string> $functionAstKeyByFqn  ast-key (filepath) per fqn for top-level (null-namespace) templates, so the strip+append step knows which AST to mutate */
+        $functionAstKeyByFqn = [];
         /** @var array<string, string> $functionSourceByFqn  ast-key (filepath or "<specialized:…>") per fqn — used to point duplicate-declaration errors at both source locations */
         $functionSourceByFqn = [];
 
@@ -104,19 +132,32 @@ final class GenericMethodCompiler
             foreach ($perFileFns as $k => $v) {
                 $functionTemplates[$k] = $v;
                 $functionSourceByFqn[$k] = (string) $astKey;
+                $functionAstKeyByFqn[$k] = (string) $astKey;
             }
             foreach ($perFileFnNs as $k => $v) {
                 $functionNamespaceByFqn[$k] = $v;
             }
         }
 
-        if ($methodTemplates === [] && $functionTemplates === []) {
+        // Closure-template tracking happens lazily inside rewriteCallSites
+        // (every Assign with a Closure-with-genericParams RHS is tracked), so
+        // the early return must NOT fire just because the file has no named
+        // templates -- it might still have anonymous generic closures.
+        if ($methodTemplates === [] && $functionTemplates === []
+            && !self::hasAnonymousGenericCallSite($astSet)
+        ) {
             return;
         }
 
         /** @var array<string, true> $alreadyGenerated */
         $alreadyGenerated = [];
-        foreach ($astSet as $ast) {
+        foreach ($astSet as $astKey => &$ast) {
+            // For top-level (null-namespace) functions: the visitor's pendingAppends
+            // mechanism mutates a container's ->stmts; the top-level AST is a plain
+            // array with no container. We catch top-level appends in a separate bag
+            // and flush them by direct array mutation after the traversal completes.
+            /** @var list<Function_> $topLevelAppends */
+            $topLevelAppends = [];
             $this->rewriteCallSites(
                 $ast,
                 $methodTemplates,
@@ -124,8 +165,13 @@ final class GenericMethodCompiler
                 $functionTemplates,
                 $functionNamespaceByFqn,
                 $alreadyGenerated,
+                $topLevelAppends,
             );
+            foreach ($topLevelAppends as $specialized) {
+                $ast[] = $specialized;
+            }
         }
+        unset($ast);
 
         // Strip the original method templates from their owning classes.
         foreach ($methodTemplates as $key => $template) {
@@ -138,11 +184,21 @@ final class GenericMethodCompiler
             }
         }
 
-        // Strip the original function templates from their owning namespaces.
+        // Strip the original function templates: namespaced ones get stripped from
+        // their owning Namespace_; top-level (null-namespace) ones get stripped from
+        // the top-level AST array directly via the saved astKey.
         foreach ($functionTemplates as $fqn => $template) {
             $namespace = $functionNamespaceByFqn[$fqn] ?? null;
             if ($namespace !== null) {
                 $this->stripFunction($namespace, $template->name->toString());
+                continue;
+            }
+            $astKey = $functionAstKeyByFqn[$fqn] ?? null;
+            if ($astKey !== null && isset($astSet[$astKey])) {
+                $astSet[$astKey] = self::stripTopLevelFunction(
+                    $astSet[$astKey],
+                    $template->name->toString(),
+                );
             }
         }
     }
@@ -152,7 +208,7 @@ final class GenericMethodCompiler
      * @param array<string, ClassMethod> $methodTemplates  out-param
      * @param array<string, ClassLike> $classByFqn         out-param
      * @param array<string, Function_> $functionTemplates  out-param
-     * @param array<string, Namespace_> $functionNamespaceByFqn  out-param
+     * @param array<string, ?Namespace_> $functionNamespaceByFqn  out-param (null = bare top-level)
      */
     private function indexTemplates(
         array $ast,
@@ -175,7 +231,7 @@ final class GenericMethodCompiler
             public array $classByFqn = [];
             /** @var array<string, Function_> */
             public array $functionTemplates = [];
-            /** @var array<string, Namespace_> */
+            /** @var array<string, ?Namespace_> */
             public array $functionNamespaceByFqn = [];
             private ?string $currentClassFqn = null;
 
@@ -200,11 +256,13 @@ final class GenericMethodCompiler
                 }
                 if ($node instanceof Function_) {
                     $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                    if (is_array($params) && $params !== [] && $this->currentNamespaceNode !== null) {
+                    if (is_array($params) && $params !== []) {
                         $fqn = $this->currentNamespace !== ''
                             ? $this->currentNamespace . '\\' . $node->name->toString()
                             : $node->name->toString();
                         $this->functionTemplates[$fqn] = $node;
+                        // null = bare top-level (no enclosing `namespace { }` block);
+                        // the outer process() handles strip + append for that case.
                         $this->functionNamespaceByFqn[$fqn] = $this->currentNamespaceNode;
                     }
                 }
@@ -243,8 +301,10 @@ final class GenericMethodCompiler
      * @param array<string, ClassMethod> $methodTemplates
      * @param array<string, ClassLike> $classByFqn
      * @param array<string, Function_> $functionTemplates
-     * @param array<string, Namespace_> $functionNamespaceByFqn
+     * @param array<string, ?Namespace_> $functionNamespaceByFqn  null = bare top-level
      * @param array<string, true> $alreadyGenerated
+     * @param list<Function_> $topLevelAppends  out-param: specializations for null-namespace
+     *   templates; the caller flushes these to the top-level AST after the traversal completes
      */
     private function rewriteCallSites(
         array $ast,
@@ -253,26 +313,143 @@ final class GenericMethodCompiler
         array $functionTemplates,
         array $functionNamespaceByFqn,
         array &$alreadyGenerated,
+        array &$topLevelAppends,
     ): void {
         $hashLength = $this->hashLength;
         $hierarchy = $this->hierarchy;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
+            private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
 
             /** @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_}> */
             public array $pendingAppends = [];
 
+            /** Receiver-type analysis state. Pushed on entering ClassLike, popped on leave. */
+            private ?string $currentClassFqn = null;
+            /**
+             * Local scope: parameter-name => resolved-class-FQN. Populated on entering a
+             * Function_ / ClassMethod by walking its `params` list and resolving each typed
+             * parameter. Used for receiver-type analysis on `$paramName->method::<T>(...)`.
+             *
+             * @var array<string, string>
+             */
+            private array $currentScopeParamTypes = [];
+            /**
+             * Stage B local flow typing: variable-name => resolved-class-FQN. Populated by
+             * `enterNode` when it sees an `Assign($var, New_($className))` -- the lexical
+             * last-write determines the receiver type at later call sites in the same scope.
+             *
+             * Each Function_ / ClassMethod / Closure / ArrowFunction pushes a fresh scope
+             * onto `$scopeSnapshots`; the parent scope is restored on leave. Without the
+             * closure/arrow push, an inner `$x = new Bar()` overwrites the outer scope's
+             * `$x` slot, and the receiver type at a later outer call site picks the wrong
+             * class (the original review of b88539c caught this exact bug).
+             *
+             * @var array<string, string>
+             */
+            private array $currentScopeLocalTypes = [];
+            /**
+             * Variable name -> the Closure or ArrowFunction AST node that was
+             * assigned to it (only when the closure carries
+             * ATTR_METHOD_GENERIC_PARAMS, i.e. is a generic anonymous template).
+             * Lets the FuncCall-on-Variable rewriter find the template for
+             * `$var::<T>(...)` call sites assigned earlier in the same scope.
+             *
+             * @var array<string, Closure|ArrowFunction>
+             */
+            private array $currentScopeClosureTemplates = [];
+            /**
+             * Parallel to `currentScopeClosureTemplates`: the Assign node and
+             * lexical-scope info that introduced each generic anonymous template.
+             * Populated alongside the template; consumed by the dispatcher
+             * finalize phase to know where to patch the original Assign's RHS
+             * and where to append specialized declarations.
+             *
+             * @var array<string, array{assign: Assign, namespace: string, namespaceNode: ?Namespace_}>
+             */
+            private array $currentScopeClosureContexts = [];
+            /**
+             * Per-template dispatch plan keyed by `varName . '@' . startFilePos`
+             * so two same-named templates in different scopes don't collide.
+             * Each entry collects the arg-tuples seen at call sites and the
+             * FuncCall nodes themselves, then the post-traversal finalize
+             * phase materializes one dispatcher closure per entry.
+             *
+             * @var array<string, array{
+             *   template: Closure|ArrowFunction,
+             *   varName: string,
+             *   assignNode: Assign,
+             *   namespace: string,
+             *   namespaceNode: ?Namespace_,
+             *   typeParams: list<TypeParam>,
+             *   callSites: list<FuncCall>,
+             *   argSets: list<list<TypeRef>>,
+             *   seenTagSet: array<string, true>
+             * }>
+             */
+            public array $closureDispatchPlan = [];
+            /**
+             * Snapshot stack for scope isolation across nested
+             * Function_/ClassMethod/Closure/ArrowFunction boundaries. On enter we push the
+             * outgoing `(params, locals, branches)` triple; on leave we pop and restore.
+             * Branch snapshots are nested per-scope so that branches inside a closure
+             * don't leak to branches in the enclosing function.
+             *
+             * @var list<array{params: array<string,string>, locals: array<string,string>, branches: list<array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>}>
+             */
+            private array $scopeSnapshots = [];
+            /**
+             * Branch frame stack for conservative reasoning across mutually-exclusive
+             * control-flow constructs (if/elseif/else, switch/case, match arms,
+             * while/for/foreach/do-while loops, try/catch/finally). Each frame holds:
+             *   - `snapshot`: the value of `$currentScopeLocalTypes` at the moment the
+             *     branching construct was entered;
+             *   - `assigned`: the set of variable names that received an Assign anywhere
+             *     inside the branch body.
+             *
+             * On enter of a branching parent we push a frame. On entering a sibling
+             * branch (else / elseif / case / catch / finally / match arm), we reset
+             * `currentScopeLocalTypes` from the top frame's snapshot -- each sibling
+             * starts from the pre-branch state, NOT from the previous sibling's
+             * mutations. On leave of the branching parent, we pop the frame, restore
+             * the snapshot, and INVALIDATE every variable in `assigned` (we can't
+             * tell at runtime whether the branch ran or not -- conservative says
+             * "we don't know the type"). The popped frame's `assigned` set
+             * propagates into the parent frame so nested branches stay reflected
+             * through the outer invalidation pass.
+             *
+             * Without this, `if ($cond) { $x = new Bar(); } $x->m::<T>()` silently
+             * picks Bar (the last lexical write) regardless of whether the branch
+             * fired -- the original bug review of the post-b88539c work flagged.
+             *
+             * `perBranchTypes` records the end-of-arm `currentScopeLocalTypes[$x]`
+             * value (or `null` if untracked at arm end) for every variable in
+             * `assigned`, one slot per arm visited so far. `armIndex` is the
+             * 0-based index of the currently-active arm, starting at 0 for
+             * `If_` (whose body is the first arm) and `-1` for `Switch_` /
+             * `Match_` (whose parent body is the switch/match expression --
+             * not an arm; the first `Case_` / `MatchArm` enter is the first
+             * arm). On leave, if every captured slot agrees on the same FQN
+             * AND the slot count matches the structural arm count, the merge
+             * keeps `$x` instead of invalidating. See `P5.1-same-class-merge.md`
+             * and the `computeMergedTypes` / `canMergeOnLeave` helpers below.
+             *
+             * @var list<array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>
+             */
+            private array $branchSnapshots = [];
+
             /**
              * @param array<string, ClassMethod> $methodTemplates
              * @param array<string, ClassLike> $classByFqn
              * @param array<string, Function_> $functionTemplates
-             * @param array<string, Namespace_> $functionNamespaceByFqn
+             * @param array<string, ?Namespace_> $functionNamespaceByFqn
              * @param array<string, true> $alreadyGenerated
+             * @param list<Function_> $topLevelAppends
              */
             public function __construct(
                 private array $methodTemplates,
@@ -282,6 +459,7 @@ final class GenericMethodCompiler
                 private array &$alreadyGenerated,
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
+                public array &$topLevelAppends,
             ) {
             }
 
@@ -289,16 +467,166 @@ final class GenericMethodCompiler
             {
                 if ($node instanceof Namespace_) {
                     $this->currentNamespace = $node->name?->toString() ?? '';
+                    $this->currentNamespaceNode = $node;
                     $this->useMap = [];
                 }
                 if ($node instanceof Use_) {
                     foreach ($node->uses as $u) {
+                        // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed Use_::$uses (pre-5.x emitted UseUse, current emits UseItem).
                         if (!$u instanceof UseItem) {
                             continue;
                         }
                         $fqn = $u->name->toString();
                         $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
                         $this->useMap[$alias] = $fqn;
+                    }
+                }
+                if ($node instanceof ClassLike && $node->name !== null) {
+                    $this->currentClassFqn = $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $node->name->toString()
+                        : $node->name->toString();
+                }
+                if ($node instanceof Function_
+                    || $node instanceof ClassMethod
+                    || $node instanceof Closure
+                    || $node instanceof ArrowFunction
+                ) {
+                    // Push outgoing scope (params + locals + branch stack) before
+                    // computing the new one. The branch stack is per-scope: branches
+                    // inside the closure are independent of branches in the parent.
+                    $parentParams = $this->currentScopeParamTypes;
+                    $parentLocals = $this->currentScopeLocalTypes;
+                    $this->scopeSnapshots[] = [
+                        'params' => $parentParams,
+                        'locals' => $parentLocals,
+                        'branches' => $this->branchSnapshots,
+                    ];
+                    $this->currentScopeParamTypes = [];
+                    $this->currentScopeLocalTypes = [];
+                    $this->branchSnapshots = [];
+
+                    // For closures: `use ($x)` explicitly imports outer variables.
+                    // Copy each imported name's type from the parent scope so the
+                    // closure body can specialize `$x->m::<T>(...)` correctly.
+                    if ($node instanceof Closure) {
+                        foreach ($node->uses as $use) {
+                            // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed ClosureUse::$var.
+                            if (!$use->var instanceof Variable || !is_string($use->var->name)) {
+                                continue;
+                            }
+                            $importedName = $use->var->name;
+                            $importedType = $parentParams[$importedName]
+                                ?? $parentLocals[$importedName]
+                                ?? null;
+                            if ($importedType !== null) {
+                                $this->currentScopeParamTypes[$importedName] = $importedType;
+                            }
+                        }
+                    }
+
+                    // Arrow functions implicitly capture every outer variable by
+                    // value. Copy all of parent's tracked types so the single-
+                    // expression body can specialize the same way the parent could.
+                    if ($node instanceof ArrowFunction) {
+                        foreach ($parentParams as $importedName => $importedType) {
+                            $this->currentScopeParamTypes[$importedName] = $importedType;
+                        }
+                        foreach ($parentLocals as $importedName => $importedType) {
+                            $this->currentScopeParamTypes[$importedName] = $importedType;
+                        }
+                    }
+
+                    // Declared parameter types overwrite any imported same-named
+                    // outer variable -- the param shadows the outer in PHP semantics.
+                    foreach ($node->params as $param) {
+                        if (!$param->var instanceof Variable || !is_string($param->var->name)) {
+                            continue;
+                        }
+                        $type = $param->type;
+                        // Strip nullable wrapper: `?Container` is still "the receiver is Container"
+                        // for method-resolution purposes (the runtime null-check is the caller's
+                        // problem, not the type-resolution step).
+                        if ($type instanceof NullableType) {
+                            $type = $type->type;
+                        }
+                        if ($type instanceof Name) {
+                            $this->currentScopeParamTypes[$param->var->name] = $this->resolveClassName($type);
+                        }
+                    }
+                }
+                // Branching parents: push a frame so any Assign inside the branch
+                // body (or its sub-branches) gets recorded for post-leave
+                // invalidation. The visitor enters each parent ONCE; siblings
+                // (Else_/ElseIf_/Case_/Catch_/Finally_/MatchArm) reset
+                // currentScopeLocalTypes from the top frame's snapshot.
+                if (self::isBranchingParent($node)) {
+                    $this->branchSnapshots[] = [
+                        'snapshot' => $this->currentScopeLocalTypes,
+                        'assigned' => [],
+                        'perBranchTypes' => [],
+                        // If_'s body is the first arm (armIndex=0).
+                        // Switch_ / Match_ have no parent body arm; the first
+                        // sibling enter promotes armIndex from -1 to 0.
+                        // For loops + TryCatch the value doesn't matter
+                        // (canMergeOnLeave returns false).
+                        'armIndex' => ($node instanceof Switch_ || $node instanceof Match_) ? -1 : 0,
+                    ];
+                }
+                if (self::isSiblingBranch($node) && $this->branchSnapshots !== []) {
+                    $top = count($this->branchSnapshots) - 1;
+                    // If a prior arm was active (armIndex >= 0), capture its
+                    // end-state before resetting for the new arm. The
+                    // armIndex == -1 case is the first Case_/MatchArm enter
+                    // on Switch_/Match_, where no prior arm existed.
+                    if ($this->branchSnapshots[$top]['armIndex'] >= 0) {
+                        $this->branchSnapshots[$top]['perBranchTypes'][] =
+                            self::captureArmTypes(
+                                $this->branchSnapshots[$top]['assigned'],
+                                $this->currentScopeLocalTypes,
+                            );
+                    }
+                    $this->branchSnapshots[$top]['armIndex']++;
+                    $this->currentScopeLocalTypes = $this->branchSnapshots[$top]['snapshot'];
+                }
+                // Stage B flow typing: `$x = new ClassName(...)` records `$x`'s receiver
+                // type for later MethodCall sites in the same scope. Lexical last-write
+                // wins within a straight-line code path; branching constructs invalidate
+                // their assigned vars on leave (see branchSnapshots above).
+                if ($node instanceof Assign
+                    && $node->var instanceof Variable
+                    && is_string($node->var->name)
+                ) {
+                    $assignedName = $node->var->name;
+                    // Record the assignment in the innermost active branch frame
+                    // regardless of RHS shape -- even a non-`new` assign poisons
+                    // our tracked type for the post-leave invalidation.
+                    if ($this->branchSnapshots !== []) {
+                        $top = count($this->branchSnapshots) - 1;
+                        $this->branchSnapshots[$top]['assigned'][$assignedName] = true;
+                    }
+                    // Update the live tracked type only when the RHS is `new ClassName(...)`
+                    // -- that's the one shape we can prove statically. Other RHS
+                    // shapes are conservatively ignored (they could be anything).
+                    if ($node->expr instanceof New_
+                        && $node->expr->class instanceof Name
+                    ) {
+                        $this->currentScopeLocalTypes[$assignedName] = $this->resolveClassName($node->expr->class);
+                    }
+                    // Track anonymous generic templates: `$id = fn<T>(T $x) => $x`
+                    // or `$id = function<T>(T $x): T { ... }`. The FuncCall-on-
+                    // Variable rewriter looks the variable up to find the
+                    // template body for `$id::<int>(...)` call-site
+                    // specialization.
+                    if (($node->expr instanceof Closure
+                            || $node->expr instanceof ArrowFunction)
+                        && is_array($node->expr->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
+                    ) {
+                        $this->currentScopeClosureTemplates[$assignedName] = $node->expr;
+                        $this->currentScopeClosureContexts[$assignedName] = [
+                            'assign'        => $node,
+                            'namespace'     => $this->currentNamespace,
+                            'namespaceNode' => $this->currentNamespaceNode,
+                        ];
                     }
                 }
                 return null;
@@ -312,15 +640,231 @@ final class GenericMethodCompiler
                 if ($node instanceof FuncCall) {
                     return $this->rewriteFuncCall($node);
                 }
+                if ($node instanceof MethodCall || $node instanceof NullsafeMethodCall) {
+                    return $this->rewriteInstanceMethodCall($node);
+                }
+                if ($node instanceof ClassLike) {
+                    $this->currentClassFqn = null;
+                }
+                if ($node instanceof Function_
+                    || $node instanceof ClassMethod
+                    || $node instanceof Closure
+                    || $node instanceof ArrowFunction
+                ) {
+                    $snapshot = array_pop($this->scopeSnapshots);
+                    if ($snapshot !== null) {
+                        $this->currentScopeParamTypes = $snapshot['params'];
+                        $this->currentScopeLocalTypes = $snapshot['locals'];
+                        $this->branchSnapshots = $snapshot['branches'];
+                    } else {
+                        // Defensive: matched enter/leave count is invariant of the
+                        // NodeTraverser; the else-branch is only reachable if the AST
+                        // is malformed. Fall back to empty scope to avoid an undefined
+                        // pop on the next leave.
+                        $this->currentScopeParamTypes = [];
+                        $this->currentScopeLocalTypes = [];
+                        $this->branchSnapshots = [];
+                    }
+                }
+                // Branching parents: pop the frame, restore the pre-branch local
+                // types, then invalidate every variable that received an Assign
+                // anywhere inside the branch body. Propagate the popped frame's
+                // assigned set into the parent frame so nested branches contribute
+                // to the outer invalidation pass.
+                if (self::isBranchingParent($node)) {
+                    $popped = array_pop($this->branchSnapshots);
+                    if ($popped !== null) {
+                        // Capture the final arm's end-state (symmetric with
+                        // the per-sibling-enter capture above). Only when
+                        // armIndex >= 0 -- a Switch_/Match_ with zero
+                        // cases/arms would leave armIndex at -1.
+                        if ($popped['armIndex'] >= 0) {
+                            $popped['perBranchTypes'][] = self::captureArmTypes(
+                                $popped['assigned'],
+                                $this->currentScopeLocalTypes,
+                            );
+                        }
+
+                        // Restore to pre-branch state.
+                        $this->currentScopeLocalTypes = $popped['snapshot'];
+
+                        // P5.1 same-class merge: try to keep variables whose
+                        // every reachable arm assigned the same FQN, instead
+                        // of unconditionally invalidating below.
+                        $merged = self::computeMergedTypes($node, $popped);
+
+                        foreach ($popped['assigned'] as $assignedName => $_true) {
+                            if (isset($merged[$assignedName])) {
+                                $this->currentScopeLocalTypes[$assignedName] = $merged[$assignedName];
+                            } else {
+                                unset($this->currentScopeLocalTypes[$assignedName]);
+                            }
+                            if ($this->branchSnapshots !== []) {
+                                $parentTop = count($this->branchSnapshots) - 1;
+                                $this->branchSnapshots[$parentTop]['assigned'][$assignedName] = true;
+                            }
+                        }
+                    }
+                }
                 return null;
+            }
+
+            /**
+             * Branching parents push a fresh frame on enter and pop on leave. These
+             * are the control-flow constructs whose body MAY OR MAY NOT execute (or
+             * may execute MULTIPLE TIMES, in the case of loops). Either way, the
+             * receiver-type tracker can't rely on the body's assignments to hold
+             * post-leave.
+             */
+            private static function isBranchingParent(Node $node): bool
+            {
+                return $node instanceof If_
+                    || $node instanceof Switch_
+                    || $node instanceof Match_
+                    || $node instanceof While_
+                    || $node instanceof Do_
+                    || $node instanceof For_
+                    || $node instanceof Foreach_
+                    || $node instanceof TryCatch;
+            }
+
+            /**
+             * Sibling-branch nodes (Else_, ElseIf_, the cases of Switch_, the arms
+             * of Match_, Catch_/Finally_ on TryCatch). Each sibling starts from the
+             * pre-branch state -- without the reset, the else body would see the
+             * if body's mutations and pick the wrong receiver class.
+             */
+            private static function isSiblingBranch(Node $node): bool
+            {
+                return $node instanceof Else_
+                    || $node instanceof ElseIf_
+                    || $node instanceof Case_
+                    || $node instanceof MatchArm
+                    || $node instanceof Catch_
+                    || $node instanceof Finally_;
+            }
+
+            /**
+             * Snapshot the end-of-arm state of every name in the frame's
+             * `assigned` set. Returns a map name -> ?FQN where `null` means
+             * "this arm did not finish with a tracked FQN for that name".
+             *
+             * @param array<string, bool> $assigned
+             * @param array<string, string> $currentTypes
+             * @return array<string, ?string>
+             */
+            private static function captureArmTypes(array $assigned, array $currentTypes): array
+            {
+                $out = [];
+                foreach ($assigned as $name => $_true) {
+                    $out[$name] = $currentTypes[$name] ?? null;
+                }
+                return $out;
+            }
+
+            /**
+             * Same-class merge eligibility: only the all-arms-reachable
+             * branching parents can participate. Loops always have an
+             * implicit zero-iteration path; `if` without `else` has an
+             * implicit empty path; switch without `default` and match
+             * without `default` likewise. TryCatch is conservatively never
+             * merged (the exception-not-thrown case is implicit).
+             */
+            private static function canMergeOnLeave(Node $node): bool
+            {
+                if ($node instanceof If_) {
+                    return $node->else !== null;
+                }
+                if ($node instanceof Switch_) {
+                    foreach ($node->cases as $case) {
+                        if ($case->cond === null) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                if ($node instanceof Match_) {
+                    foreach ($node->arms as $arm) {
+                        if ($arm->conds === null) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                return false;
+            }
+
+            /**
+             * Structural arm count for the merge guard. Only called when
+             * `canMergeOnLeave($node)` is true, so `If_` is guaranteed to
+             * have an `else`.
+             *
+             *   If_:     2 + count(elseifs)            (if-body + else + each elseif)
+             *   Switch_: count(cases)                  (default already guaranteed)
+             *   Match_:  count(arms)                   (default already guaranteed)
+             */
+            private static function expectedArmCount(Node $node): int
+            {
+                if ($node instanceof If_) {
+                    return 2 + count($node->elseifs);
+                }
+                if ($node instanceof Switch_) {
+                    return count($node->cases);
+                }
+                if ($node instanceof Match_) {
+                    return count($node->arms);
+                }
+                return 0;
+            }
+
+            /**
+             * Walk the captured per-arm types and return name -> FQN for
+             * every name whose every arm ended with the same FQN. Returns
+             * an empty map when the merge isn't allowed (canMergeOnLeave
+             * false) or when the visited arm count doesn't match the
+             * structural arm count (implicit empty arm).
+             *
+             * @param array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>} $popped
+             * @return array<string, string>
+             */
+            private static function computeMergedTypes(Node $node, array $popped): array
+            {
+                if (!self::canMergeOnLeave($node)) {
+                    return [];
+                }
+                $expected = self::expectedArmCount($node);
+                if (count($popped['perBranchTypes']) !== $expected) {
+                    return [];
+                }
+                $merged = [];
+                foreach ($popped['assigned'] as $name => $_true) {
+                    $firstType = null;
+                    $allAgree = true;
+                    foreach ($popped['perBranchTypes'] as $i => $armTypes) {
+                        $type = $armTypes[$name] ?? null;
+                        if ($type === null) {
+                            $allAgree = false;
+                            break;
+                        }
+                        if ($i === 0) {
+                            $firstType = $type;
+                            continue;
+                        }
+                        if ($type !== $firstType) {
+                            $allAgree = false;
+                            break;
+                        }
+                    }
+                    if ($allAgree && $firstType !== null) {
+                        $merged[$name] = $firstType;
+                    }
+                }
+                return $merged;
             }
 
             private function rewriteStaticCall(StaticCall $node): ?Node
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
-                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
-                    return null;
-                }
                 if (!$node->name instanceof Identifier) {
                     return null;
                 }
@@ -336,9 +880,26 @@ final class GenericMethodCompiler
                     return null;
                 }
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                if (!is_array($params) || count($params) !== count($args)) {
+                if (!is_array($params)) {
                     return null;
                 }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
+                // Bare call (no `::<...>`) on a generic method with all
+                // defaults: pad to []. Already-tagged turbofish calls go
+                // through padArgsWithDefaults too so partial-arg shapes are
+                // filled in the same way class-level instantiations are.
+                if (!is_array($args)) {
+                    if (!self::hasAllDefaults($params)) {
+                        return null;
+                    }
+                    $args = [];
+                }
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
+                $padded = Registry::padArgsWithDefaults($params, $args, $key);
+                if (!self::allConcrete($padded) || count($params) !== count($padded)) {
+                    return null;
+                }
+                $args = $padded;
 
                 if ($this->hierarchy !== null) {
                     Registry::checkBounds(
@@ -375,11 +936,166 @@ final class GenericMethodCompiler
                 return $node;
             }
 
+            /**
+             * Instance-method turbofish rewrite. Same mangling / append shape as the
+             * StaticCall path; the only new piece is `resolveReceiverFqn` -- the
+             * receiver-type analysis that says "this $obj is statically of type X" so
+             * we can pick the right method template from $methodTemplates.
+             *
+             * Stage A coverage (this commit):
+             *   - `$this->method::<T>(...)` -- receiver is the enclosing class.
+             *   - `$param->method::<T>(...)` -- receiver is the function/method
+             *     parameter's declared type (snapshot in $currentScopeParamTypes).
+             *
+             * Receivers we currently can't resolve (returns null -> no
+             * specialization, marker drops silently; user's call site becomes a
+             * normal MethodCall to a method that doesn't exist post-strip, surfacing
+             * a runtime "undefined method" error). Stage B will widen the receiver
+             * sources to local-variable assignments.
+             */
+            private function rewriteInstanceMethodCall(MethodCall|NullsafeMethodCall $node): ?Node
+            {
+                $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+                if (!$node->name instanceof Identifier) {
+                    return null;
+                }
+
+                $classFqn = $this->resolveReceiverFqn($node->var);
+                if ($classFqn === null) {
+                    return null;
+                }
+                $methodName = $node->name->toString();
+                $key = $classFqn . '::' . $methodName;
+                $template = $this->methodTemplates[$key] ?? null;
+                if ($template === null) {
+                    return null;
+                }
+                $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (!is_array($params)) {
+                    return null;
+                }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
+                if (!is_array($args)) {
+                    if (!self::hasAllDefaults($params)) {
+                        return null;
+                    }
+                    $args = [];
+                }
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
+                $padded = Registry::padArgsWithDefaults($params, $args, $key);
+                if (!self::allConcrete($padded) || count($params) !== count($padded)) {
+                    return null;
+                }
+                $args = $padded;
+
+                if ($this->hierarchy !== null) {
+                    Registry::checkBounds(
+                        $params,
+                        $args,
+                        $this->hierarchy,
+                        $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
+                    );
+                }
+
+                $mangled = self::mangleName($methodName, $args, $this->hashLength);
+                $generatedKey = $classFqn . '::' . $mangled;
+                if (!isset($this->alreadyGenerated[$generatedKey])) {
+                    $substitution = [];
+                    foreach ($params as $i => $param) {
+                        $substitution[$param->name] = $args[$i];
+                    }
+                    $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
+                    $owner = $this->classByFqn[$classFqn] ?? null;
+                    if ($owner !== null) {
+                        $this->pendingAppends[] = [$owner, $specialized];
+                        $this->alreadyGenerated[$generatedKey] = true;
+                    }
+                }
+
+                $node->name = new Identifier($mangled, $node->name->getAttributes());
+                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+
+                return $node;
+            }
+
+            /**
+             * Resolve the static type (FQN) of a method-call receiver expression.
+             * Returns null when the receiver type can't be determined -- the caller
+             * uses null to mean "no specialization, leave the call site alone".
+             *
+             * Stage A handles two shapes:
+             *   - `$this`     -> enclosing class FQN (tracked on ClassLike enter).
+             *   - `$paramName` where paramName has a typed declaration in the
+             *                  current function/method's signature.
+             */
+            private function resolveReceiverFqn(Node $receiver): ?string
+            {
+                if ($receiver instanceof Variable && is_string($receiver->name)) {
+                    if ($receiver->name === 'this') {
+                        return $this->currentClassFqn;
+                    }
+                    return $this->currentScopeParamTypes[$receiver->name]
+                        ?? $this->currentScopeLocalTypes[$receiver->name]
+                        ?? null;
+                }
+                if ($receiver instanceof PropertyFetch
+                    && $receiver->var instanceof Variable
+                    && $receiver->var->name === 'this'
+                    && $receiver->name instanceof Identifier
+                    && $this->currentClassFqn !== null
+                ) {
+                    // `$this->prop->method::<T>(...)` -- look up `prop`'s declared
+                    // type on the current class.
+                    $owner = $this->classByFqn[$this->currentClassFqn] ?? null;
+                    if ($owner !== null) {
+                        $propName = $receiver->name->toString();
+                        foreach ($owner->stmts as $stmt) {
+                            if (!$stmt instanceof Property) {
+                                continue;
+                            }
+                            foreach ($stmt->props as $prop) {
+                                if ($prop->name->toString() !== $propName) {
+                                    continue;
+                                }
+                                $type = $stmt->type;
+                                if ($type instanceof NullableType) {
+                                    $type = $type->type;
+                                }
+                                if ($type instanceof Name) {
+                                    return $this->resolveClassName($type);
+                                }
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+
             private function rewriteFuncCall(FuncCall $node): ?Node
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
-                if (!is_array($args) || $args === [] || !self::allConcrete($args)) {
+                if (!is_array($args)) {
                     return null;
+                }
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
+                $isVarTurbofish = $node->name instanceof Variable && is_string($node->name->name);
+                // Empty turbofish (`$f::<>(...)`) is the all-defaults shape for
+                // variable-turbofish call sites (P5.7); the dispatcher path
+                // pads via `Registry::padArgsWithDefaults`. For named-call
+                // turbofish, empty-args is still invalid -- the original
+                // call-site rewriter expects concrete args.
+                if (!$isVarTurbofish && ($args === [] || !self::allConcrete($args))) {
+                    return null;
+                }
+                if ($isVarTurbofish && $args !== [] && !self::allConcrete($args)) {
+                    return null;
+                }
+                // Variable turbofish `$var::<T>(...)` / `$var::<>(...)`:
+                // dispatched to a separate path that looks up the variable's
+                // tracked closure template and routes through the P5.4
+                // dispatcher. Defaults pad missing trailing args (P5.7).
+                if ($isVarTurbofish) {
+                    return $this->rewriteVariableTurbofishCall($node, $args);
                 }
                 if (!$node->name instanceof Name) {
                     return null;
@@ -397,6 +1113,7 @@ final class GenericMethodCompiler
                 if (!is_array($params) || count($params) !== count($args)) {
                     return null;
                 }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
 
                 if ($this->hierarchy !== null) {
                     Registry::checkBounds(
@@ -426,8 +1143,14 @@ final class GenericMethodCompiler
                         // doesn't reliably propagate through nikic's NodeTraverser. The
                         // outer process() loop flushes pendingAppends after the walk.
                         $this->pendingAppends[] = [$namespaceNode, $specialized];
-                        $this->alreadyGenerated[$generatedKey] = true;
+                    } else {
+                        // Bare top-level template (no enclosing `namespace { }` block):
+                        // there's no container to append to, so route the specialized
+                        // function through the topLevelAppends out-param; process() flushes
+                        // it directly into the top-level AST array after this visitor returns.
+                        $this->topLevelAppends[] = $specialized;
                     }
+                    $this->alreadyGenerated[$generatedKey] = true;
                 }
 
                 $node->name = new FullyQualified($mangledFqn, $node->name->getAttributes());
@@ -437,12 +1160,156 @@ final class GenericMethodCompiler
                 return $node;
             }
 
+            /**
+             * Record a `$var::<T>(...)` call site against the in-flight closure
+             * dispatch plan. Rejections for arrow / `use` / static closures
+             * fire EAGERLY (same throws as pre-P5.4), before any bag mutation.
+             *
+             * Two-pass model (P5.4):
+             *
+             *   Pass 1 (this method): per call site, validate eagerly and
+             *   record the arg-tuple + FuncCall node into a per-template bag
+             *   keyed by `(varName, $template->getStartFilePos())`. NO
+             *   immediate rewrite or emit.
+             *
+             *   Pass 2 (`finalizeClosureDispatchers`): after the traverser
+             *   returns, materialize ONE dispatcher closure per bag entry
+             *   via `ClosureDispatcher::dispatch(...)`, replace the original
+             *   Assign's RHS in place, append specialized declarations, and
+             *   rewrite every recorded FuncCall to inject the tag arg.
+             *
+             * @param list<TypeRef> $args
+             */
+            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): null
+            {
+                assert($node->name instanceof Variable && is_string($node->name->name));
+                $varName = $node->name->name;
+                $template = $this->currentScopeClosureTemplates[$varName] ?? null;
+                if ($template === null) {
+                    return null;
+                }
+
+                // Eager rejections -- preserved from pre-P5.4 behavior so the
+                // throw fires at the first offending call site, before the
+                // bag mutates. P5.5 lifted the arrow rejection by routing
+                // implicit captures through the dispatcher's `use (...)`
+                // clause; static closures and explicit `use (...)` closures
+                // are still pending (P5.6).
+                if (ClosureDispatcher::usesThis($template)) {
+                    // P5.5 / P5.6 reject `$this`-capturing generic
+                    // anonymous templates. The dispatcher closure can't
+                    // carry `$this` through its `use` clause (PHP rejects
+                    // `use ($this)`); the specialized top-level function
+                    // also can't see the enclosing class's `$this`.
+                    // A future commit can rewrite `$this->v` to a lifted
+                    // param.
+                    $flavor = $template instanceof ArrowFunction ? 'arrow' : 'closure';
+                    throw new RuntimeException(sprintf(
+                        'Generic %s `$%s::<...>(...)` captures `$this`, '
+                        . 'which is not yet supported. Rewrite as a method '
+                        . 'on the enclosing class, or extract the value of '
+                        . '$this->property into a local variable before '
+                        . 'the %s.',
+                        $flavor,
+                        $varName,
+                        $flavor,
+                    ));
+                }
+                if ($template instanceof Closure && $template->static) {
+                    throw new RuntimeException(sprintf(
+                        'Generic static closures cannot yet be specialized at '
+                        . 'call sites. Rewrite the call site for `$%s::<...>(...)` '
+                        . 'to use a named generic function at file scope.',
+                        $varName,
+                    ));
+                }
+
+                $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (!is_array($params)) {
+                    return null;
+                }
+                /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
+                // P5.7: pad missing trailing args with defaults BEFORE
+                // the arity check so `$f::<>()` works on an all-defaulted
+                // generic closure / arrow. Padding throws when leading
+                // required params are missing -- the throw surfaces with
+                // a clear `Registry::padArgsWithDefaults` message.
+                $args = Registry::padArgsWithDefaults($params, $args, 'closure<' . $varName . '>');
+                if (count($params) !== count($args)) {
+                    return null;
+                }
+                if ($this->hierarchy !== null) {
+                    Registry::checkBounds(
+                        $params,
+                        $args,
+                        $this->hierarchy,
+                        'closure<' . self::formatArgList($args) . '>',
+                    );
+                }
+                $context = $this->currentScopeClosureContexts[$varName] ?? null;
+                if ($context === null) {
+                    return null;
+                }
+
+                $planKey = $varName . '@' . $template->getStartFilePos();
+                if (!isset($this->closureDispatchPlan[$planKey])) {
+                    // Compute the dispatcher's `use (...)` clause once per
+                    // template -- captures don't change between call sites.
+                    // Arrows get implicit-capture analysis; closures use
+                    // their explicit `use` list (empty for the capture-free
+                    // case P5.4 shipped).
+                    $useClauses = $template instanceof ArrowFunction
+                        ? ClosureDispatcher::implicitCapturesOf($template)
+                        : $template->uses;
+                    $this->closureDispatchPlan[$planKey] = [
+                        'template'      => $template,
+                        'varName'       => $varName,
+                        'assignNode'    => $context['assign'],
+                        'namespace'     => $context['namespace'],
+                        'namespaceNode' => $context['namespaceNode'],
+                        'typeParams'    => $params,
+                        'callSites'     => [],
+                        'argSets'       => [],
+                        'seenTagSet'    => [],
+                        'useClauses'    => $useClauses,
+                    ];
+                }
+                $entry = &$this->closureDispatchPlan[$planKey];
+                $tag = ClosureDispatcher::tagFor($args, $this->hashLength);
+                if (!isset($entry['seenTagSet'][$tag])) {
+                    $entry['seenTagSet'][$tag] = true;
+                    $entry['argSets'][] = $args;
+                }
+                // Pair each call site with its PADDED tag so finalize doesn't
+                // recompute from the original `ATTR_METHOD_GENERIC_ARGS` (which
+                // may be empty for the `$f::<>()` default-padding shape).
+                $entry['callSites'][] = ['node' => $node, 'tag' => $tag];
+                unset($entry);
+                // Do NOT mutate the call site yet -- pass 2 prepends the tag arg
+                // once the dispatcher's specializations are known.
+                return null;
+            }
+
             private function resolveClassName(Name $name): string
             {
+                $raw = $name->toString();
+                // Pseudo-types short-circuit to the enclosing class FQN. Without this,
+                // a parameter typed `self` would resolve to `App\…\self` (a phantom
+                // class), and any `$param->m::<T>()` call on it would miss the
+                // template lookup. Same gap as the scanner's pseudo-type filter --
+                // they need to stay in sync. `currentClassFqn` is null only at top
+                // level (no enclosing ClassLike), where pseudo-types aren't legal
+                // anyway; fall through to the namespace path so the user sees PHP's
+                // own "cannot use self outside class context" error.
+                $lower = strtolower($raw);
+                if ($this->currentClassFqn !== null
+                    && ($lower === 'self' || $lower === 'static' || $lower === 'parent')
+                ) {
+                    return $this->currentClassFqn;
+                }
                 if ($name instanceof FullyQualified) {
                     return $name->toString();
                 }
-                $raw = $name->toString();
                 if (str_starts_with($raw, '\\')) {
                     return ltrim($raw, '\\');
                 }
@@ -463,6 +1330,26 @@ final class GenericMethodCompiler
             {
                 foreach ($args as $a) {
                     if (!$a->isConcrete()) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            /**
+             * True iff every TypeParam in the template carries a default.
+             * Bare calls (no `::<...>`) can specialize only against all-defaults
+             * templates -- otherwise there's no way to derive the type-args.
+             *
+             * @param list<TypeParam> $params
+             */
+            private static function hasAllDefaults(array $params): bool
+            {
+                if ($params === []) {
+                    return false;
+                }
+                foreach ($params as $param) {
+                    if ($param->default === null) {
                         return false;
                     }
                 }
@@ -504,10 +1391,73 @@ final class GenericMethodCompiler
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
 
+        // Pass 2 of the closure-dispatcher pipeline: materialize a dispatcher
+        // closure per recorded template, replace the original Assign's RHS,
+        // append specialized declarations, and rewrite each collected call
+        // site to inject the tag arg.
+        $this->finalizeClosureDispatchers($visitor, $hashLength);
+
         // Apply buffered appends now that the traversal has finished, so we don't fight
         // nikic's NodeTraverser's child-array iteration semantics mid-walk.
         foreach ($visitor->pendingAppends as [$container, $stmt]) {
             $container->stmts[] = $stmt;
+        }
+    }
+
+    /**
+     * Pass 2: turn each collected dispatch-plan entry into a dispatcher
+     * closure plus specialized top-level functions. Skips entries whose
+     * argSets are empty -- a generic closure template that was declared
+     * but never called via turbofish keeps its original Assign untouched,
+     * so reflection on unused templates stays faithful.
+     *
+     */
+    private function finalizeClosureDispatchers(object $visitor, int $hashLength): void
+    {
+        $dispatcher = new ClosureDispatcher();
+        // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+        foreach ($visitor->closureDispatchPlan as $entry) {
+            if ($entry['argSets'] === []) {
+                continue;
+            }
+            $template = $entry['template'];
+            $useClauses = $entry['useClauses'];
+            $result = $dispatcher->dispatch(
+                $template,
+                $entry['argSets'],
+                $entry['typeParams'],
+                $entry['varName'],
+                $entry['namespace'],
+                $hashLength,
+                $useClauses,
+            );
+            // Replace the original Assign's RHS in place; the AST node's
+            // source-position attributes survive so stack traces still
+            // point at the user's `$pair = ...` line.
+            $entry['assignNode']->expr = $result['assignment']->expr;
+            foreach ($result['declarations'] as $specialized) {
+                if ($entry['namespaceNode'] !== null) {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                    $visitor->pendingAppends[] = [$entry['namespaceNode'], $specialized];
+                } else {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                    $visitor->topLevelAppends[] = $specialized;
+                }
+            }
+            // Rewrite every recorded call site: prepend the tag arg, clear
+            // the turbofish marker. The Variable receiver stays so the
+            // dispatcher closure (now in `$varName`) is the call target.
+            // Each call site carries its post-padding tag (computed at
+            // record time) so empty-turbofish defaults still route to
+            // the right specialization arm.
+            foreach ($entry['callSites'] as $callSiteEntry) {
+                $callSite = $callSiteEntry['node'];
+                $tag = $callSiteEntry['tag'];
+                $tagArg = new Arg(new String_($tag));
+                array_unshift($callSite->args, $tagArg);
+                $callSite->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+                $callSite->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
+            }
         }
     }
 
@@ -541,5 +1491,74 @@ final class GenericMethodCompiler
             $newStmts[] = $stmt;
         }
         $namespace->stmts = $newStmts;
+    }
+
+    /**
+     * Same shape as `stripFunction` but for the top-level AST when there's no
+     * enclosing `namespace { }` block. Returns the filtered statement list so the
+     * caller can replace the slot in `$astSet` directly.
+     *
+     * Does the AST set contain any `FuncCall(name: Variable, ...)` with
+     * `ATTR_METHOD_GENERIC_ARGS` attached? Used to keep `process()` from
+     * early-returning when the only generic call sites are
+     * `$var::<T>(...)` on anonymous closure/arrow templates.
+     *
+     * @param array<string, list<Node\Stmt>> $astSet
+     */
+    private static function hasAnonymousGenericCallSite(array $astSet): bool
+    {
+        $found = false;
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($found) extends NodeVisitorAbstract {
+            public function __construct(private bool &$found)
+            {
+            }
+            /**
+             * @infection-ignore-all -- pure perf optimization. Mutating the
+             * early-return or the instanceof guard just disables the fast-path
+             * exit; the subsequent rewriteCallSites pass is idempotent for
+             * files with no matching call sites, so observable behavior is
+             * identical with or without this pre-scan firing.
+             */
+            public function enterNode(Node $node): null
+            {
+                if ($this->found) {
+                    return null;
+                }
+                if ($node instanceof FuncCall
+                    && $node->name instanceof Variable
+                    && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS))
+                ) {
+                    $this->found = true;
+                }
+                return null;
+            }
+        });
+        foreach ($astSet as $ast) {
+            $traverser->traverse($ast);
+            if ($found) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param list<Node\Stmt> $ast
+     * @return list<Node\Stmt>
+     */
+    private static function stripTopLevelFunction(array $ast, string $functionName): array
+    {
+        $newStmts = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Function_
+                && $stmt->name->toString() === $functionName
+                && $stmt->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS) !== null
+            ) {
+                continue;
+            }
+            $newStmts[] = $stmt;
+        }
+        return $newStmts;
     }
 }

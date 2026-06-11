@@ -150,6 +150,7 @@ final readonly class TypeHierarchy
                 }
                 if ($node instanceof Use_) {
                     foreach ($node->uses as $u) {
+                        // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed Use_::$uses (pre-5.x emitted UseUse, current emits UseItem).
                         if (!$u instanceof UseItem) {
                             continue;
                         }

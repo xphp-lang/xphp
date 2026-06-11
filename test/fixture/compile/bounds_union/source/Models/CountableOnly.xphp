@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsUnion\Models;
+
+final class CountableOnly implements \Countable
+{
+    /**
+     * @param list<int> $items
+     */
+    public function __construct(public readonly array $items)
+    {
+    }
+
+    public function count(): int
+    {
+        return count($this->items);
+    }
+}

@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowCaptureShadowing;
+
+// The arrow's param `$x` shadows the outer `$x = 99` -- the implicit-
+// capture analyzer excludes param names, so the body's $x is the
+// arrow's param, not the outer var.
+$x = 99;
+$f = fn<T>(T $x): T => $x;
+$result = $f::<int>(7);

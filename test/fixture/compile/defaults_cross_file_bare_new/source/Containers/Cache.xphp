@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DefaultsCrossFileBareNew\Containers;
+
+// Lives in a different source file than the bare `new Cache;` call site.
+// Tests that the registry collector's defs-only first pass populates Cache
+// regardless of file-walk order, so synthesis in the second pass succeeds.
+class Cache<K = string, V = mixed>
+{
+    public function __construct() {}
+}

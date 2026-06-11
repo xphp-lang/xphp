@@ -28,7 +28,7 @@ namespace XPHP\Transpiler\Monomorphize;
 final class ByteOffsetMap
 {
     /**
-     * @var list<array{int, int, int, int}>
+     * @param list<array{int, int, int, int}> $segments
      *   Each segment: [strippedStart, strippedEnd, originalStart, deltaAfter].
      *   `strippedEnd` is exclusive.  `deltaAfter` is the cumulative
      *   `(originalLen - strippedLen)` after this segment -- positions >=

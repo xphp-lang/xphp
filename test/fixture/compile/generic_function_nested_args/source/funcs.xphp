@@ -8,5 +8,5 @@ use App\GenericFunctionNestedArgs\Containers\Box;
 
 function wrap<T>(T $x): Box<T>
 {
-    return new Box<T>($x);
+    return new Box::<T>($x);
 }

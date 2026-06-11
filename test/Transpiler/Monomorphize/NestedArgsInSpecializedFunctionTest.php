@@ -11,6 +11,7 @@ use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\SnapshotHash;
 
 /**
  * Regression for F1 in the second-agent review: the method/function specializers
@@ -46,20 +47,19 @@ final class NestedArgsInSpecializedFunctionTest extends TestCase
     {
         $this->compile();
 
-        // The specialized `wrap_T_<hash>` must have return type pointing at
-        // `\XPHP\Generated\App\GenericFunctionNestedArgs\Containers\Box\T_<hash>`, not the unsubstituted `Box<T>`.
         $funcsPath = $this->targetDir . '/funcs.php';
         self::assertFileExists($funcsPath);
         $content = file_get_contents($funcsPath);
 
-        self::assertMatchesRegularExpression(
-            '#function wrap_T_[0-9a-f]+\(int \$x\): \\\\XPHP\\\\Generated\\\\App\\\\GenericFunctionNestedArgs\\\\Containers\\\\Box\\\\T_[0-9a-f]+#',
+        // Negative invariants kept: the unsubstituted generic clauses
+        // (`Box<T>` and the original-source `Box<int>`) must not survive
+        // the specializer's substitution pass.
+        self::assertStringNotContainsString('Box<T>', $content);
+        self::assertStringNotContainsString('Box<int>', $content);
+        SnapshotHash::assertMatches(
+            __DIR__ . '/../../fixture/compile/generic_function_nested_args/verify/testWrappedReturnTypeBoxOfTSpecializesToBoxOfInt/funcs.expected.php',
             $content,
-            'specialized wrap must have its Box<T> return type substituted to the matching Box<int> specialization FQN',
         );
-
-        self::assertStringNotContainsString('Box<T>', $content, 'unsubstituted Box<T> must not survive');
-        self::assertStringNotContainsString('Box<int>', $content, 'the in-source Box<int> must be rewritten to the specialized FQN, not left as a generic clause');
     }
 
     public function testRuntimeBoxOfIntIsConstructedByTheSpecializedWrap(): void

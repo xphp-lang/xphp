@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsUnion;
+
+use App\BoundsUnion\Containers\Box;
+use App\BoundsUnion\Models\CountableOnly;
+use App\BoundsUnion\Models\StringableOnly;
+
+// Either side of the union is acceptable.
+$stringableBox = new Box::<StringableOnly>(new StringableOnly('hi'));
+$countableBox = new Box::<CountableOnly>(new CountableOnly([1, 2, 3]));

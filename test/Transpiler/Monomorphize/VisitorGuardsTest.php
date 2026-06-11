@@ -57,8 +57,13 @@ final class VisitorGuardsTest extends TestCase
         self::assertSame([], $registry->instantiations(), 'Name without xphp:genericArgs must not be rewritten');
     }
 
-    public function testCallSiteRewriterIgnoresNameWithEmptyGenericArgs(): void
+    public function testCallSiteRewriterRecordsEmptyArgsInstantiation(): void
     {
+        // Empty `xphp:genericArgs` is the `Cache::<>` shape (and the bare
+        // `new Cache;` shape after RegistryCollector synthesizes the marker):
+        // an instantiation that asks the registry to pad entirely from defaults.
+        // The rewriter no longer gates on `args !== []` -- the registry's
+        // recordInstantiation does the padding, validation, and hashing.
         $registry = new Registry();
         $name = new Name('Box');
         $name->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, []);
@@ -67,7 +72,7 @@ final class VisitorGuardsTest extends TestCase
         $ast = self::wrapNameInStmt($name);
         (new CallSiteRewriter($registry))->rewrite($ast);
 
-        self::assertSame([], $registry->instantiations(), 'empty genericArgs must not produce a Registry entry');
+        self::assertCount(1, $registry->instantiations(), 'empty genericArgs routes through recordInstantiation for defaults padding');
     }
 
     public function testCallSiteRewriterIgnoresNameWithoutTemplateFqn(): void
@@ -176,6 +181,105 @@ final class VisitorGuardsTest extends TestCase
         (new RegistryCollector($registry))->collect(self::wrapNameInStmt($name), '/x.xphp');
 
         self::assertSame([], $registry->instantiations());
+    }
+
+    public function testCollectorBareNewSynthesisSkipsTemplatesWithRequiredParams(): void
+    {
+        // `class Box<T>` (no default) -- a bare `new Box;` must NOT synthesize
+        // a zero-arg instantiation. Only all-defaults templates are eligible.
+        $registry = new Registry();
+        $class = new Class_(new Identifier('Box'));
+        $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, [new TypeParam('T')]);
+        $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Box');
+        $bareNew = new \PhpParser\Node\Expr\New_(new Name('Box'));
+        $ast = [
+            $class,
+            new \PhpParser\Node\Stmt\Expression($bareNew),
+        ];
+
+        (new RegistryCollector($registry))->collect($ast, '/x.xphp');
+
+        self::assertSame([], $registry->instantiations(), 'bare new on a non-defaulted template must not synthesize an instantiation');
+    }
+
+    public function testCollectorBareNewSynthesisRecordsAllDefaultsTemplate(): void
+    {
+        // `class Cache<K = string>` and bare `new Cache;` -- synthesizer fires.
+        $registry = new Registry();
+        $class = new Class_(new Identifier('Cache'));
+        $class->setAttribute(
+            XphpSourceParser::ATTR_GENERIC_PARAMS,
+            [new TypeParam('K', default: new TypeRef('string', isScalar: true))],
+        );
+        $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Cache');
+        $bareNew = new \PhpParser\Node\Expr\New_(new Name('Cache'));
+        $ast = [
+            $class,
+            new \PhpParser\Node\Stmt\Expression($bareNew),
+        ];
+
+        (new RegistryCollector($registry))->collect($ast, '/x.xphp');
+
+        self::assertCount(1, $registry->instantiations());
+        // The Name node now carries the synthesized attributes.
+        self::assertSame([], $bareNew->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS));
+        self::assertSame('Cache', $bareNew->class->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+    }
+
+    public function testCollectorBareNewSynthesisSkipsNameWithExistingGenericArgs(): void
+    {
+        // `new Cache::<int>;` -- the Name already carries ATTR_GENERIC_ARGS. The
+        // synthesis arm must NOT fire (a second recordInstantiation on a different
+        // arg shape would still be idempotent under hash, but the gate keeps
+        // synthesis strictly for the bare-`new` shape).
+        $registry = new Registry();
+        $class = new Class_(new Identifier('Cache'));
+        $class->setAttribute(
+            XphpSourceParser::ATTR_GENERIC_PARAMS,
+            [new TypeParam('K', default: new TypeRef('string', isScalar: true))],
+        );
+        $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Cache');
+        $explicitCall = new Name('Cache');
+        $explicitCall->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, [new TypeRef('int', isScalar: true)]);
+        $explicitCall->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Cache');
+        $newExpr = new \PhpParser\Node\Expr\New_($explicitCall);
+        $ast = [
+            $class,
+            new \PhpParser\Node\Stmt\Expression($newExpr),
+        ];
+
+        (new RegistryCollector($registry))->collect($ast, '/x.xphp');
+
+        // Exactly ONE instantiation -- the explicit-args one -- not two
+        // (which would mean the synthesis pass also recorded).
+        self::assertCount(1, $registry->instantiations());
+        $only = array_values($registry->instantiations())[0];
+        self::assertCount(1, $only->concreteTypes);
+        self::assertSame('int', $only->concreteTypes[0]->name);
+        self::assertTrue($only->concreteTypes[0]->isScalar);
+    }
+
+    public function testCollectorBareNewSynthesisSkipsFullyQualifiedName(): void
+    {
+        // FullyQualified Name nodes already point at an explicit class -- no
+        // namespace + use-map resolution needed, and they're not a synthesis
+        // target. Pin that the collector ignores them.
+        $registry = new Registry();
+        $class = new Class_(new Identifier('Cache'));
+        $class->setAttribute(
+            XphpSourceParser::ATTR_GENERIC_PARAMS,
+            [new TypeParam('K', default: new TypeRef('string', isScalar: true))],
+        );
+        $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Cache');
+        $bareNew = new \PhpParser\Node\Expr\New_(new FullyQualified('Cache'));
+        $ast = [
+            $class,
+            new \PhpParser\Node\Stmt\Expression($bareNew),
+        ];
+
+        (new RegistryCollector($registry))->collect($ast, '/x.xphp');
+
+        self::assertSame([], $registry->instantiations(), 'FullyQualified bare new must not be synthesized');
     }
 
     // =====================================================================

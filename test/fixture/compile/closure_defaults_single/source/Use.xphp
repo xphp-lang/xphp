@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDefaultsSingle;
+
+// Single defaulted type param on a closure. Empty turbofish `$f::<>(...)`
+// pads to the default, yielding a specialization on T=int that returns
+// its argument unchanged.
+$f = function<T = int>(T $x): T { return $x; };
+$r = $f::<>(42);

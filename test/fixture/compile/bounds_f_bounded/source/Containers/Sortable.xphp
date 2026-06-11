@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsFBounded\Containers;
+
+use App\BoundsFBounded\Contracts\Comparable;
+
+// F-bounded generic: T must be Comparable to itself. The inner `<T>` on the
+// bound nests a generic-arg, so the bound's leaf carries args -- a shape only
+// reachable once BoundLeaf wraps a full TypeRef.
+class Sortable<T: Comparable<T>>
+{
+    public function __construct(public T $item)
+    {
+    }
+}

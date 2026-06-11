@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodSelfReturnTypeArgs;
+
+class Container<T>
+{
+    public function __construct(public T $item) {}
+
+    public function withItem(T $n): self<T>
+    {
+        $this->item = $n;
+        return $this;
+    }
+}

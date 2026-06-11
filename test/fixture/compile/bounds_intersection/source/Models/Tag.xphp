@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsIntersection\Models;
+
+final class Tag implements \Stringable, \Countable
+{
+    public function __construct(public readonly string $name)
+    {
+    }
+
+    public function __toString(): string
+    {
+        return $this->name;
+    }
+
+    public function count(): int
+    {
+        return strlen($this->name);
+    }
+}

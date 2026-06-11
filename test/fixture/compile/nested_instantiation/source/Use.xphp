@@ -8,9 +8,9 @@ use App\NestedInstantiation\Containers\Box;
 use App\NestedInstantiation\Containers\Lst;
 use App\NestedInstantiation\Models\Plastic;
 
-$boxOfList = new Box<Lst<Plastic>>();
+$boxOfList = new Box::<Lst<Plastic>>();
 
-$inner = new Lst<Plastic>();
+$inner = new Lst::<Plastic>();
 $inner->push(new Plastic('red'));
 
 $boxOfList->set($inner);

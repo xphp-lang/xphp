@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\VarianceWithDefaultsAndBounds\Models;
+
+final class Tag implements \Stringable, \Countable
+{
+    public function __construct(public readonly string $value)
+    {
+    }
+
+    public function __toString(): string
+    {
+        return $this->value;
+    }
+
+    public function count(): int
+    {
+        return strlen($this->value);
+    }
+}

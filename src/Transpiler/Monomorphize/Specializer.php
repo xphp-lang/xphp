@@ -49,6 +49,7 @@ final class Specializer
         $originalTemplateFqn = $template->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
 
         $cloned = self::deepClone($template);
+        assert($cloned instanceof ClassLike);
         $cloned->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, null);
         $cloned->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
 

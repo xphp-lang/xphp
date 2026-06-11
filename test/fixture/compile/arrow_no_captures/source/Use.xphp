@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowNoCaptures;
+
+// No free vars in the body -- the analyzer harvests an empty capture set.
+$f = fn<T>(T $x): T => $x;
+$result = $f::<int>(42);

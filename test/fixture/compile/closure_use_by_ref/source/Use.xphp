@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureUseByRef;
+
+// `use (&$y)`: mutations inside the body propagate to the outer scope.
+// The dispatcher's `use (&$y)` plus the lifted `mixed &$y` param plus
+// named-arg forwarding preserves the reference all the way to the
+// specialized function's body.
+$y = 1;
+$f = function<T>(T $x) use (&$y): T {
+    $y = $x;
+    return $y;
+};
+$a = $f::<int>(99);

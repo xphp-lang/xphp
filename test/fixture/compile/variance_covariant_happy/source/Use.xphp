@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\VarianceCovariantHappy;
+
+use App\VarianceCovariantHappy\Containers\Producer;
+use App\VarianceCovariantHappy\Models\Banana;
+use App\VarianceCovariantHappy\Models\Fruit;
+
+// Two specializations of Producer. The variance edge emits at compile time:
+// Producer_Banana extends Producer_Fruit (plus the existing marker
+// `implements Producer`).
+$producerBanana = new Producer::<Banana>;
+$producerFruit = new Producer::<Fruit>;

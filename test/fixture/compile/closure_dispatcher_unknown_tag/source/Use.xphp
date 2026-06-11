@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDispatcherUnknownTag;
+
+// One real call site emits one dispatcher arm; the verify file then
+// invokes the dispatcher with a bogus tag to confirm the synthesized
+// `default => throw new RuntimeException(...)` arm fires.
+$id = function<T>(T $x): T { return $x; };
+$id::<int>(1);

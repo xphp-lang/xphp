@@ -6,4 +6,4 @@ namespace App\DepthCap;
 
 use App\DepthCap\Containers\Recursive;
 
-$x = new Recursive<int>();
+$x = new Recursive::<int>();

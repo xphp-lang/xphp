@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureUseCaptureNamedXphpArgs;
+
+// Regression guard: a user variable captured via `use ($__xphp_args)`
+// collides with the dispatcher's variadic param name. The auto-rename
+// machinery from P5.5 applies to closures too, so the body sees the
+// user's value (200) and adds 3 -> 203.
+$__xphp_args = 200;
+$f = function<T>(T $x) use ($__xphp_args) { return $x + $__xphp_args; };
+$r = $f::<int>(3);

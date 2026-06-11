@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DefaultsForwardRef;
+
+use App\DefaultsForwardRef\Containers\Pair;
+
+// Supply only A; B pads from the default A reference -> Pair<int, int>.
+$padded = new Pair::<int>(1, 2);
+
+// And the fully-explicit form -- different specialization Pair<int, string>.
+$explicit = new Pair::<int, string>(7, 'hello');

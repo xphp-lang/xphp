@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDefaultsWithUse;
+
+// Default type param composes with an explicit `use ($base)` clause.
+// Empty turbofish padding selects T=int; the body adds the captured
+// $base to the typed argument.
+$base = 100;
+$f = function<T = int>(T $x) use ($base) { return $x + $base; };
+$r = $f::<>(5);

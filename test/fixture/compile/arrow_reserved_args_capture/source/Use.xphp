@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowReservedArgsCapture;
+
+// Capture name `__xphp_args` collides with the dispatcher's variadic
+// param. The dispatcher's args param auto-renames to a collision-free
+// alternative; the user's `$__xphp_args` keeps its name. Body adds 200
+// to the typed argument, yielding 203.
+$__xphp_args = 200;
+$f = fn<T>(T $x): T => $x + $__xphp_args;
+$result = $f::<int>(3);

@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDispatcherArrow;
+
+// Generic arrow with implicit capture. The arrow body references `$y`
+// from the outer scope; xphp synthesizes the corresponding `use (...)`
+// clause on the rewritten dispatcher closure so the capture happens
+// by-value at the original assign site -- matching PHP's normal arrow
+// semantics. The post-call mutation of $y proves the capture was a
+// snapshot, not an alias.
+$y = 1;
+$id = fn<T>(T $x): T => $x + $y;
+$y = 2;
+$resultArrow = $id::<int>(42);   // expect 43 (uses captured $y = 1).

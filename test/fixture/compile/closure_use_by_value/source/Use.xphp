@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureUseByValue;
+
+// Capture-at-declaration semantics: `use ($y)` snapshots $y=1 even
+// though the outer $y reassigns to 2 before the call. The
+// specialized fn observes the snapshotted 1, so result = 42 + 1 = 43.
+$y = 1;
+$f = function<T>(T $x) use ($y) { return $x + $y; };
+$y = 2;
+$result = $f::<int>(42);

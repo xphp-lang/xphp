@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArrowCaptureAtDeclaration;
+
+// Capture-at-declaration: the arrow's implicit-capture of $y happens
+// when the arrow is constructed (value 1), not at call time. The outer
+// $y reassignment to 2 does not affect the call's result.
+$y = 1;
+$id = fn<T>(T $x): T => $x + $y;
+$y = 2;
+$result = $id::<int>(42);

@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace App\GenericMethod;
 
-$asInt = Util::identity<int>(42);
-$asString = Util::identity<string>('hello');
-$asIntAgain = Util::identity<int>(7);
+$asInt = Util::identity::<int>(42);
+$asString = Util::identity::<string>('hello');
+$asIntAgain = Util::identity::<int>(7);

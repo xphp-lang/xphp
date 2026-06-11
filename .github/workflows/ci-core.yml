@@ -34,6 +34,26 @@ jobs:
       - name: Run PHPUnit
         run: make test/unit
 
+  phpstan:
+    name: PHPStan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run PHPStan
+        run: make lint/phpstan
+
   infection:
     name: Mutation testing
     runs-on: ubuntu-latest

@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDispatcherUseClause;
+
+// Generic closure with an explicit `use (...)` clause. By-ref captures
+// (`&$counter`) survive the rewrite: mutations to `$counter` inside the
+// body still write through to the outer scope. By-value captures
+// (`$base`) behave as a snapshot. Two distinct type-args produce two
+// distinct specialized functions, both sharing the same captured state.
+$base = 10;
+$counter = 0;
+$f = function<T>(T $x) use ($base, &$counter): array {
+    $counter++;
+    return [$x, $base, $counter];
+};
+
+$callA = $f::<int>(1);   // [1, 10, 1] -- $counter mutated to 1 in outer scope.
+$callB = $f::<int>(2);   // [2, 10, 2] -- $counter mutated to 2 in outer scope.
+$callC = $f::<string>('hi');     // ['hi', 10, 3] -- new specialization, same captures.

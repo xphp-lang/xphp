@@ -8,5 +8,5 @@ use App\GenericInterface\Containers\Box;
 use App\GenericInterface\Models\Plastic;
 use App\GenericInterface\Models\Polymer;
 
-$plasticBox = new Box<Plastic>(new Plastic('red'));
-$polymerBox = new Box<Polymer>(new Polymer('PET'));
+$plasticBox = new Box::<Plastic>(new Plastic('red'));
+$polymerBox = new Box::<Polymer>(new Polymer('PET'));

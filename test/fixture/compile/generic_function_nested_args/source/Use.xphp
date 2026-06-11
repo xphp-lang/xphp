@@ -4,4 +4,4 @@ declare(strict_types=1);
 
 namespace App\GenericFunctionNestedArgs;
 
-$boxed = wrap<int>(42);
+$boxed = wrap::<int>(42);

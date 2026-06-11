@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureGeneric;
+
+// Capture-free generic closure. Each unique type-arg tuple produces
+// one specialized top-level function (`closure_pair_T_<hash>`); the
+// original closure variable is rewritten to a dispatcher that routes
+// runtime calls to the right specialization. Duplicate arg tuples
+// across call sites share a single specialization.
+$pair = function<K, V>(K $key, V $value): array {
+    return [$key, $value];
+};
+
+$pair::<string, int>('age', 42);
+$pair::<string, int>('count', 7); // same specialization -- de-duped via the tag set.

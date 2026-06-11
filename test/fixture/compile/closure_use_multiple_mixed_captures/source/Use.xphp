@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureUseMultipleMixedCaptures;
+
+// Mixed `use ($a, &$b)`: by-value $a snapshotted, by-ref $b mutated.
+// r = $x + $a + ($b + 5) = 1 + 10 + 25 = 36; $a stays 10; $b mutated to 25.
+$a = 10;
+$b = 20;
+$f = function<T>(T $x) use ($a, &$b) {
+    $b = $b + 5;
+    return $x + $a + $b;
+};
+$r = $f::<int>(1);

@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsFBounded;
+
+use App\BoundsFBounded\Containers\Sortable;
+use App\BoundsFBounded\Models\Tag;
+
+$sortable = new Sortable::<Tag>(new Tag('alpha'));

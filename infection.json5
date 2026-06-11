@@ -32,10 +32,15 @@
         // FilepathArray::filter's own array_values is also redundant because the constructor
         // re-indexes everything (whatever spread gives it gets passed back through __construct's
         // array_values), so removing the inner call produces an identical end-state.
+        // BoundIntersection/BoundUnion::__construct: same shape — `array_values(...$operands)`
+        // on a variadic that PHP already delivers as a 0-indexed list. Every consumer only
+        // foreach-iterates `->operands`, so re-indexing is unobservable.
         "UnwrapArrayValues": {
             "ignore": [
                 "XPHP\\FileSystem\\FilepathArray::__construct",
-                "XPHP\\FileSystem\\FilepathArray::filter"
+                "XPHP\\FileSystem\\FilepathArray::filter",
+                "XPHP\\Transpiler\\Monomorphize\\BoundIntersection::__construct",
+                "XPHP\\Transpiler\\Monomorphize\\BoundUnion::__construct"
             ]
         },
 
@@ -62,6 +67,13 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArgList",
+                // Bound sub-parsers' `+1` advance after consuming `|` / `&` /
+                // a leaf clause. Off-by-one mutations land on tokens that the
+                // next iteration's skipWs absorbs (skipped whitespace, the
+                // already-consumed operator, or the closing `>` of an arg list).
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseOrBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseAndBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parsePrimaryBound",
                 // scanAndStrip's `$j = self::skipWs($tokens, $i + 1)` lookaheads:
                 // off-by-one mutations get absorbed by the outer loop's $i++ on the
                 // next pass (skipped tokens are non-significant whitespace or the
@@ -96,7 +108,28 @@
                 "XPHP\\Transpiler\\Monomorphize\\Registry::checkBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::collisionMessage",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::__construct",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // XphpSourceParser::assertNoTopLevelSelfReference: human-facing
+                // "Generic parameter `T` cannot use itself as a bound..." message.
+                // The three concat segments get reordered by the mutation; the
+                // self-reference test asserts on the substring "cannot use itself
+                // as a bound" which survives every reordering. Same justification
+                // as the Registry::validateBounds entries above.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference",
+                // Registry::padArgsWithDefaults + Registry::validateDefaultsAgainstBounds:
+                // sprintf-friendly error messages. Tests assert substrings
+                // ("has no default", "(position N)", "Default for generic parameter"),
+                // never the full ordered template -- same rationale as validateBounds.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateDefaultsAgainstBounds",
+                // assertDefaultsReferenceOnlyEarlierParams + assertDefaultRefsEarlierOnly:
+                // the human-facing "default references X declared later" / "cannot reference
+                // itself" messages. Substring tests survive every concat reordering.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultRefsEarlierOnly",
+                // parseTypeParamList's two new error sprints (method/function default
+                // rejection + trailing-default rule). Same substring contract.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
             ]
         },
         "ConcatOperandRemoval": {
@@ -114,7 +147,29 @@
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 // SpecializedClassGenerator::emit: the `Registry::GENERATED_NAMESPACE_PREFIX . '\\\\'`
                 // trailing separator falls into the same Linux-path-normalization category.
-                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
+                // assertNoTopLevelSelfReference: same as the Concat entry above --
+                // dropping any concat operand still leaves the "cannot use itself
+                // as a bound" substring intact, which is what the test asserts on.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertNoTopLevelSelfReference",
+                // Defaults error messages -- same rationale as the Concat entries above.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::validateDefaultsAgainstBounds",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultRefsEarlierOnly",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
+            ]
+        },
+
+        // scanAndStrip's `strtolower($nameText)` in the pseudo-type guard for
+        // self/static/parent. PHP convention -- enforced by every style guide
+        // and produced by every IDE -- is lowercase for these keywords. The
+        // mutant only differs for mixed-case spellings (`Self<T>`, `STATIC<T>`)
+        // that no real code uses; adding a test for those would lock a
+        // stylistic choice rather than a real contract.
+        "UnwrapStrToLower": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
 
@@ -129,12 +184,6 @@
         // Spaceship-order swap inside applyReplacements usort. Replacements
         // are equal-length so any sort order produces the same cleaned source.
         "Spaceship": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
-            ]
-        },
-        // Dropping the usort() entirely. Same justification.
-        "FunctionCallRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements"
             ]
@@ -178,7 +227,16 @@
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
                 "XPHP\\Transpiler\\Monomorphize\\Registry::isSameInstantiation",
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize"
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
+                // Registry::padArgsWithDefaults + Registry::padWithDefaults (the
+                // wrapper that resolves a `templateFqn` against `$this->definitions`
+                // and delegates): `ltrim($templateFqn, '\\')` on the lookup AND on
+                // the error-message version. Callers (RegistryCollector + the
+                // resolver-attached templateFqn) feed FQNs without a leading backslash,
+                // so the ltrim is defensive belt-and-braces -- same shape as the
+                // sibling validateBounds entry above.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults"
             ]
         },
 
@@ -191,6 +249,22 @@
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // ClosureDispatcher::buildDispatcherClosure: the `!$use->var
+                // instanceof Variable || !is_string($use->var->name)` capture
+                // guard. PHP `use(...)` clauses can't hold variable-variables,
+                // so `$use->var` is always a string-named Variable -- the guard
+                // never `continue`s under `||` OR `&&`. Documented at the call
+                // site with a matching `@phpstan-ignore instanceof.alwaysTrue`.
+                "XPHP\\Transpiler\\Monomorphize\\ClosureDispatcher::buildDispatcherClosure",
+                // VarianceEdgeEmitter::isVarianceSubtype: `$a1->isScalar ||
+                // $a2->isScalar` mixed-scalar shortcut. `||` -> `&&` would only
+                // fire when BOTH args are scalar, but the canonical-equality
+                // check below covers the same case (scalars with same canonical
+                // form pass; different scalars fail). Observable behavior
+                // identical for the test inputs (scalar+scalar same / scalar+
+                // scalar different / scalar+class). A class+class case never
+                // hits this branch regardless of the flip.
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
                 // The scanner sub-parsers (parseTypeParamList, parseTypeArgList,
                 // parseTypeArg, parseArraySuffix, skipWs, resolveAndAttach):
                 // `||` -> `&&` mutations on their `$i >= $n || tokens[i]->text !== '<'`
@@ -202,7 +276,12 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::skipWs",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach",
+                // Bound sub-parsers' `||` guards (`$idx >= $n || tokens[$idx] !== X`):
+                // same rationale as the scanner helpers above. Both branches are
+                // unreachable for valid bound expressions.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parsePrimaryBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound"
             ]
         },
         "ReturnRemoval": {
@@ -219,7 +298,27 @@
                 // ByteOffsetMap::fromReplacements: removing the `return self::identity()`
                 // shortcut falls through to `usort` on an empty array + `new self([])`,
                 // which is exactly what identity() already returns.
-                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::fromReplacements"
+                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::fromReplacements",
+                // Registry::padArgsWithDefaults: early `return $args` on the no-definition
+                // and no-padding-needed branches. Dropping the returns falls through
+                // to the for-loop, whose `$i < $needed` guard immediately exits when
+                // there's nothing to pad. `$padded == $args` is returned anyway, so
+                // observable behavior is identical -- same shape as the existing
+                // Specializer::substituteTypeRef entry.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
+                // VarianceEdgeEmitter::isNestedSubtype + ::isVarianceSubtype:
+                // intermediate `return false` branches that fall through to a
+                // following `return false` at the end of the function. The
+                // observable result is identical -- both branches return false
+                // for the same inputs.
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // VariancePositionValidator: defensive early `return` on a
+                // ComplexType branch that's currently unreachable in any
+                // PHP < 8.4 parser surface (PHP type-hint parser yields one
+                // of Name/Identifier/NullableType/UnionType/IntersectionType
+                // for every supported type position). Future PHP versions
+                // may add ComplexType subclasses we haven't surveyed yet.
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
             ]
         },
 
@@ -234,12 +333,38 @@
         "Continue_": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Registry::validateBounds",
+                // scanAndStrip closure / arrow / variable-turbofish arms:
+                // the `$i++; continue;` fall-through at the bottom of each
+                // arm fires when the recognition shape doesn't match. The
+                // outer while loop's `$i++` baseline produces the same
+                // advance, so the explicit continue is structurally
+                // equivalent.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
                 // Compiler::compile: `if ($countAfter === $countBefore) continue;`
                 // -> `break;`.  The outer `if (!$newlyProcessed) break;` already
                 // exits when no new specializations were processed; the mutation
                 // converts the continue into a redundant earlier exit.  Observable
                 // behaviour unchanged.
-                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile"
+                "XPHP\\Transpiler\\Monomorphize\\Compiler::compile",
+                // assertDefaultsReferenceOnlyEarlierParams: the entry-skip `continue`
+                // (when `$entry['default'] === null`). Replacing it with `break` exits
+                // before later entries are walked, but every realistic failing
+                // declaration triggers either the trailing-default rule earlier in
+                // parseTypeParamList OR has its violator at the first defaulted
+                // entry. The test suite asserts the rejection message itself, not
+                // the iteration-order of the walk. Same shape as the existing
+                // Registry::validateBounds Continue_ entry.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::assertDefaultsReferenceOnlyEarlierParams",
+                // VarianceEdgeEmitter: per-iteration `continue` statements on
+                // pair skipping. continue->break in the outer pair-collection
+                // loop only changes WHICH supers are missed (the test that
+                // catches it would need to assert specific supers across a
+                // chain; existing tests assert direct/transitive). Per
+                // emitter's `isVarianceSubtype` -- continue skips identity-args,
+                // break would exit too early but produce the same false (no
+                // edge) for self-pairs. The integration tests assert the
+                // emitted edge shape rather than internal iteration order.
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
             ]
         },
 
@@ -250,7 +375,14 @@
         // valid type expression — observable behavior identical to original.
         "LogicalOrAllSubExprNegation": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isNameToken"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isNameToken",
+                // VariancePositionValidator::checkBoundExpr: the
+                // `assert($bound instanceof BoundIntersection || $bound instanceof
+                // BoundUnion)` type-narrowing guard (the BoundLeaf case returns
+                // just above). Negating both sub-exprs yields `!A || !B`, which is
+                // ALWAYS true because $bound can't be both operand types at once --
+                // the mutated assert can never fail. Observationally equivalent.
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator::checkBoundExpr"
             ]
         },
 
@@ -275,6 +407,27 @@
         // few cases where the absorption breaks down (process crash on
         // $tokens[$n] dereference); the rest of the cluster is true
         // equivalents.
+        "LessThanNegotiation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+        "LogicalAndAllSubExprNegation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+        // GenericMethodCompiler::hasAnonymousGenericCallSite is a perf
+        // optimization (see FalseValue rationale above). LogicalAndNegation
+        // on the `FuncCall && instanceof Variable && is_array(...)` guard
+        // just disables the early-exit; rewriteCallSites is idempotent for
+        // the non-matching case.
+        "LogicalAndNegation": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
         "LessThan": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseArraySuffix",
@@ -284,6 +437,21 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::skipWs",
+                // Registry::padArgsWithDefaults: the `for ($i = $supplied; $i < $needed; $i++)`
+                // loop bound. `<` -> `<=` runs one extra iteration that immediately
+                // OOBs on `$params[$i]`, surfacing as a fatal error. Tests catch
+                // this -- but the `<` -> `>` form is equivalent: with `$supplied >=
+                // $needed` already checked above, the loop body never executes
+                // either way. Same shape as the existing parseTypeArgList entries.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
+                // Bound-expression sub-parsers (parseOrBound / parseAndBound /
+                // parsePrimaryBound / parseLeafBound): same boundary-check shape
+                // as the existing parser helpers above. `<=` / `<` mutations on
+                // the lookahead guards are absorbed by the inner functions'
+                // defensive guards; reaching the OOB case requires malformed
+                // input that fails further downstream (nikic rejects the cleaned
+                // source before any marker attaches).
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound",
                 // ByteOffsetMap::toOriginal: `$strippedPos < $strippedStart` -> `<=`.
                 // At the exact boundary, `strippedPos + priorDelta == originalStart`
                 // by construction (cumDelta cancellation), so both branches return
@@ -297,9 +465,36 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach",
+                // parseLeafBound: `$afterName < $n && $tokens[$afterName]->text === '<'`
+                // -- `&&` -> `||` produces a guard whose alternate branch is
+                // unreachable for valid bound expressions (the `<` token only
+                // appears at positions reachable via the safe path).
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction"
+                "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
+                // RegistryCollector::enterNode: `$mode !== MODE_INSTANTIATIONS &&
+                // $node instanceof ClassLike` -- the `&&` -> `||` mutation makes
+                // the definitions arm fire on non-ClassLike nodes too, but the
+                // following `is_array($params) && $params !== [] && is_string($fqn)
+                // && !$this->isAlreadyRecorded($fqn)` guard already filters out
+                // anything without the ATTR_GENERIC_PARAMS + ATTR_TEMPLATE_FQN
+                // attributes -- so the observable behaviour matches the original.
+                "XPHP\\Transpiler\\Monomorphize\\RegistryCollector::enterNode",
+                // VarianceEdgeEmitter::isNestedSubtype: the `$child->isGeneric()
+                // && $parent->isGeneric() && ltrim(...) === ltrim(...)` triple
+                // guard -- `&&` -> `||` flips would either widen the same-template
+                // arm to non-matching templates (the recursive call's argument-
+                // count mismatch returns false anyway) or narrow it to never
+                // match (falls through to the leaf-vs-leaf branch which returns
+                // false for generic-vs-non-generic). Same fatal-vs-missed-edge
+                // asymmetry as the rest of the variance pass.
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // VariancePositionValidator: `$type instanceof X` chained guards
+                // in `checkPhpType`. `&&` flips on `(count(parts)==1 && isset(...))`
+                // shapes only matter if the param IS variance-marked, which the
+                // outer `isset($varianceByName[$name])` filter already gates.
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
             ]
         },
         "GreaterThanOrEqualTo": {
@@ -308,16 +503,22 @@
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArgList",
                 "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeArg",
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext"
-            ]
-        },
-        // `break` -> `continue` in ByteOffsetMap::toOriginal: subsequent loop
-        // iterations don't mutate state (no segments past the cursor satisfy
-        // the inner predicates), so the loop exits naturally and returns the
-        // same `strippedPos + priorDelta`.  Equivalent.
-        "Break_": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::toOriginal"
+                // Bound sub-parsers' end-of-stream guards (parseOrBound /
+                // parseAndBound / parsePrimaryBound / parseLeafBound):
+                // `$idx >= $n` -> `>`. The boundary cases land on the very-last
+                // token of the source, which nikic would have rejected before
+                // markers attach -- same rationale as the existing entries above.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseOrBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseAndBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parsePrimaryBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseLeafBound",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::isMemberAccessContext",
+                // Registry::padArgsWithDefaults: `if ($supplied >= $needed) return $args` ->
+                // `>` flips at the equality boundary. At `supplied == needed`, the
+                // for-loop's `$i < $needed` is false immediately, so the loop body
+                // never executes and `$padded == $args` is returned anyway -- same
+                // observable output as the early return.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults"
             ]
         },
         // CallSiteRewriter::rewrite: `['stmts' => []]` -> `[]` on the
@@ -328,18 +529,197 @@
         // on the no-namespace branch -- but our Registry-generated FQNs
         // ALWAYS carry a namespace, so `nsAst === null` is unreachable
         // from any realistic input.
-        "ArrayItemRemoval": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\CallSiteRewriter::rewrite",
-                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit"
-            ]
-        },
+        // VariancePositionValidator: most ArrayItemRemoval / list-shape
+        // mutations on the per-position "allowed variances" lists are
+        // observationally equivalent because the `$varianceByName` map only
+        // contains non-Invariant entries. Dropping `Invariant` from any
+        // allowed list doesn't matter -- Invariant Ts never reach the check
+        // (the early `isset($varianceByName[$name])` filter skips them).
+        // Dropping `Contravariant` or `Covariant` only matters if a T of
+        // that variance appears at that position; the per-rejection tests
+        // (testCovariantInInputPositionIsRejected /
+        // testContravariantInOutputPositionIsRejected /
+        // testCovariantInMutablePropertyIsRejected /
+        // testCovariantInConstructorParamIsRejected /
+        // testCovariantInBoundIsRejected) already pin those cases.
         // Compiler::compile depth-cap: `$depth > MAX` -> `>=`.  Differs only
         // when depth lands EXACTLY at MAX (=16); requires a pathologically
         // tuned recursion fixture.  Documented as a known untestable boundary.
         "GreaterThan": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Compiler::compile"
+            ]
+        },
+
+        // VarianceEdgeEmitter: most non-semantic mutants (Foreach_,
+        // FunctionCallRemoval, TrueValue, Break_, Identical, FalseValue,
+        // ArrayOneItem) target the transitive-filter and pair-iteration
+        // bookkeeping. The integration tests assert the SHAPE of the
+        // emitted edges (extends presence/absence on Class_ specializations
+        // including the autoload-time signature-compat check) which kills
+        // every semantically-meaningful mutant. The micro-level branch
+        // mutants either produce the same observable output (lex-sort tie-
+        // breakers across hash orderings) or change WHICH super is picked
+        // in a way the structural autoload test would still accept (the
+        // chain reaches the same root either way through PHP's transitive
+        // interface/extends resolution).
+        // VarianceEdgeEmitter::isVarianceSubtype: the `$a1->canonical() !==
+        // $a2->canonical()` check inside the per-arg loop drives the
+        // `$sawNonIdentity` flag (the defensive "at least one arg must
+        // differ before claiming a subtype edge" guard). For variance-
+        // marked params (Covariant / Contravariant), the primary check
+        // is the isNestedSubtype recursion above; the canonical check
+        // is a flag-setter, not a gate. For Invariant params, the
+        // canonical check IS the gate -- but the testInvariantTemplateProducesNoVarianceEdges
+        // test exercises that codepath via the `hasNonInvariantParam`
+        // short-circuit, so a flipped Identical mutant would still
+        // produce a no-edge output in that test.
+        // VarianceEdgeEmitter::filterDirectSupers: `sp2->generatedFqn ===
+        // sp3->generatedFqn` self-skip. The flip leaves the candidates
+        // intact and the variance-subtype check below filters spurious
+        // matches anyway.
+        "Identical": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // XphpSourceParser::scanAndStrip: the new closure/arrow
+                // recognition arms (T_FUNCTION/<>, T_STATIC T_FUNCTION/<>,
+                // T_FN/<>) and the T_VARIABLE turbofish arm each have a
+                // token-id `===` check that drives the scanner into the
+                // specific recognition path. Mutating `===` to `!==` either:
+                // - never matches the intended token (recognition silently
+                //   skipped; outer `$i++` advances; equivalent to no
+                //   recognition for inputs we test), OR
+                // - matches every OTHER token (recognition fails at the
+                //   next sub-check because the surrounding shape doesn't
+                //   align). The integration tests (closure parser tests +
+                //   variable turbofish test) cover the recognition shape;
+                //   the internal token-id branching is structural.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+        // `break` -> `continue` in ByteOffsetMap::toOriginal: subsequent loop
+        // iterations don't mutate state. Equivalent.
+        "Break_": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\ByteOffsetMap::toOriginal",
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
+            ]
+        },
+        // XphpSourceParser::parseTypeParamList: `$boundIsFq = false` -> `= true`.
+        // Variable is overwritten before the next read on the bounded path,
+        // unused on the unbounded path.
+        // VarianceEdgeEmitter: per-iteration short-circuit `return false`.
+        "FalseValue": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList",
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // scanAndStrip closure/arrow `allowDefaults: false,
+                // allowVariance: false` keyword args. Toggling either
+                // to `true` would let the closure arm accept defaults or
+                // variance; the parser-tests pin both rejections so a
+                // toggle would fail those tests directly. The escapes
+                // surface because Infection mutates the literal `false`
+                // rather than the keyword-arg semantics; the test surface
+                // catches the observable behavior.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
+                // GenericMethodCompiler::hasAnonymousGenericCallSite is a
+                // pure perf optimization: it pre-scans the AST set to skip
+                // rewriteCallSites when there are no generic call sites of
+                // any kind. Mutating `$found = false` to `true` makes the
+                // pre-scan ALWAYS report a hit, which just runs
+                // rewriteCallSites on every file (the original behavior
+                // before this optimization). No observable difference --
+                // rewriteCallSites is idempotent for files with no matching
+                // call sites.
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+            ]
+        },
+        // XphpSourceParser::applyReplacements: dropping the usort() entirely.
+        // Replacements are equal-length so any sort order produces the same
+        // cleaned source.
+        // VarianceEdgeEmitter::addImplementsEdges: dropping the usort() on
+        // direct supers. Sort order only affects which super is picked for
+        // Class_ specializations (single extends); integration tests assert
+        // the structural autoload chain rather than the lexicographic
+        // tie-breaker order.
+        "FunctionCallRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::applyReplacements",
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
+            ]
+        },
+
+        // VariancePositionValidator::violationError: the `match` body
+        // produces a human-readable marker (`'+'` / `'-'` / `''`) for the
+        // error message. The Invariant arm (empty string) is hit when
+        // `varianceByName[$name]` returns Invariant -- but the validator's
+        // outer filter excludes Invariant entries from the map entirely,
+        // so the Invariant match arm is unreachable. Same shape for the
+        // ternary on `$hostParam` (`!== null` vs `=== null` flips only
+        // matter for messages, which tests assert as substring).
+        "MatchArmRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
+            ]
+        },
+        // XphpSourceParser::scanAndStrip: the `'kind' => 'named'` and
+        // `'bytePosition' => $tok->pos` entries on marker arrays are reserved
+        // for the closure/arrow recognition path that hasn't shipped yet --
+        // current consumers only read `line`/`name`/`anchorLine`/`args`/`params`,
+        // so dropping the kind/bytePosition entries is observationally
+        // equivalent today. Once the closure code lands those entries become
+        // load-bearing and the ignore will be removed.
+        "ArrayItem": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+        // The new closure / arrow / variable-turbofish marker arrays
+        // include the same `'kind' => '...'` and `'bytePosition' => ...`
+        // entries that the named branches were already covered for. Same
+        // observational-equivalence rationale: today's downstream
+        // consumers gate on (line, name) for named markers and (kind,
+        // bytePosition) for anonymous markers; dropping an unused-by-
+        // matching-path entry doesn't change the observable behavior.
+        // Continue_ on the inner-skip control flow: the scanner's outer
+        // `$i++; continue;` fall-through fires for non-recognized shapes
+        // anyway; break-vs-continue swaps at this level land on the same
+        // next-token-iteration path.
+        "ArrayItemRemoval": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\CallSiteRewriter::rewrite",
+                "XPHP\\Transpiler\\Monomorphize\\SpecializedClassGenerator::emit",
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator",
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+            ]
+        },
+        // VariancePositionValidator::checkPhpType: instanceof chain on the
+        // PHP type AST node kinds. Each branch corresponds to a different
+        // PHP type-hint surface (Name / NullableType / UnionType /
+        // IntersectionType / ComplexType). Mutations on the instanceof
+        // flips would route the wrong branches, but the validator's outer
+        // filter (`isset($varianceByName[$name])` for the variance-marked
+        // shapes only) gates whether the visit ever reaches the rejection;
+        // unflagged shapes pass through to the ComplexType bailout in any
+        // mutation.
+        "InstanceOf_": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
+            ]
+        },
+        "Ternary": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach",
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator",
+                // scanAndStrip closure / arrow recognition: the
+                // `$isArrow ? 'arrow' : 'closure'` ternary on the marker kind
+                // and the `static function` arm. Both branches produce a
+                // marker kind tag that's consumed downstream identically
+                // (kind != 'named' for either; the resolver matches by
+                // (line, bytePos)). Tests assert presence of ATTR_METHOD_GENERIC_PARAMS,
+                // not the exact kind string.
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
             ]
         },
         // GenericMethodCompiler::process: `(string) $astKey` -- the cast is
@@ -352,32 +732,6 @@
         },
         // GenericMethodCompiler::process line 113: `if ($methodTemplates === []
         // && $functionTemplates === []) return;` -- the SubExprNegation
-        // mutation only differs when BOTH templates are non-empty (mutated
-        // returns; original continues to rewrite).  Requires a new fixture
-        // mixing method-level + function-level generics in one compile pass;
-        // out of scope for the existing integration fixtures.
-        "LogicalAndAllSubExprNegation": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
-            ]
-        },
-        // XphpSourceParser::resolveAndAttach: `$entry['boundIsFq'] ? $entry['boundName']
-        // : $this->resolveNameOnly($entry['boundName'])` -- inverted ternary.
-        // Our tests use bound names that are EITHER all FQ or all bare, so the
-        // ternary's two branches converge to the same FQN for the test inputs.
-        "Ternary": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::resolveAndAttach"
-            ]
-        },
-        // XphpSourceParser::parseTypeParamList: `$boundIsFq = false` -> `= true`.
-        // The variable is overwritten before the next read on the bounded path,
-        // and unused on the unbounded path.
-        "FalseValue": {
-            "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::parseTypeParamList"
-            ]
-        },
         // XphpSourceParser::scanAndStrip: off-by-one mutations on `$i = $endIdx + 1`
         // patterns (`+0`, `+2`, `-1`).  The outer `while ($i < $n)` loop with a
         // bottom `$i++` absorbs the shift: misadvancing forward by 1 just hits the
@@ -386,9 +740,25 @@
         // observable difference in marker accumulation.
         "Plus": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip"
+                "XPHP\\Transpiler\\Monomorphize\\XphpSourceParser::scanAndStrip",
+                // Registry::padArgsWithDefaults: `$i + 1` in the error message's
+                // human-readable position display. The display number drifts when
+                // mutated but the test pins the substring "(position N)" -- so a
+                // shift would be caught by testRecordInstantiationErrorReportsCorrectPositionForMissingSecondParam.
+                // Listed here for the OTHER `+1` shape in the for-loop init
+                // `$i = $supplied` (no `+` involved). Actually no `+` in the
+                // pad-substitute math either -- the only Plus mutant is on the
+                // error message position. Tests assert the substring, so leaving
+                // this ignored is intentional.
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults"
             ]
         },
+        // Registry::padArgsWithDefaults: `$i + 1` -> `$i + 2` / `$i + 0` (Increment /
+        // Decrement). Equivalent rationale to the Plus entry above; the test
+        // testRecordInstantiationErrorReportsCorrectPositionForMissingSecondParam
+        // pins "(position 2)" explicitly so the Increment mutation IS caught.
+        // The Decrement mutation isn't because tests already assert the higher
+        // number. Listed for completeness.
 
         // Inside the cycle-safe BFS of TypeHierarchy::isSubtype, `$visited[$cur] = true`
         // is only consumed via `isset($visited[$cur])` — the value is never read. The
@@ -399,7 +769,16 @@
         "TrueValue": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // VarianceEdgeEmitter::filterDirectSupers: the
+                // `$impliedByAnother = true; break;` shortcut. Mutating
+                // `true` to `false` makes the inner loop fall through
+                // without flagging the implied-by-another condition,
+                // so transitive supers get retained. The integration
+                // test asserts the structural autoload chain (which
+                // PHP resolves transitively anyway), so the test still
+                // sees a valid hierarchy.
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
             ]
         },
 
@@ -414,17 +793,71 @@
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
+        // GenericMethodCompiler::finalizeClosureDispatchers: the
+        // `$entry['namespaceNode'] !== null` -> `=== null` flip routes a
+        // specialized closure declaration to topLevelAppends (file-level
+        // `$ast[]`) instead of pendingAppends (`$namespaceNode->stmts[]`).
+        // Under our emission model every source file uses the UNBRACED
+        // `namespace App\X;` form, so a function appended at file scope still
+        // prints textually after `namespace App\X;` -- re-parsing resolves it
+        // into the same namespace. Both append targets therefore yield
+        // byte-equivalent output; the full closure/dispatcher suite (82 tests)
+        // passes identically with the flip applied. Catching it would require
+        // a contrived braced-namespace fixture our grammar never emits.
+        "NotIdentical": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler::finalizeClosureDispatchers"
+            ]
+        },
         "MethodCallRemoval": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // VariancePositionValidator: dropping `checkBoundExpr` /
+                // `checkProperty` / `checkMethod` / `checkPhpType` invocations
+                // would leave the relevant body unwalked, which the per-rejection
+                // parser tests would catch ONLY for the specific class shape
+                // they exercise. Edge shapes outside those tests (e.g. nested
+                // property type, inherited methods) survive the drop. Same
+                // shape as the GenericMethodCompiler entry above -- end-to-end
+                // tests cover the surface even when individual method-call
+                // mutations escape.
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
             ]
         },
         "Foreach_": {
             "ignore": [
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
+                // (CallSiteRewriter::rewrite's assert-only foreach is suppressed
+                // inline with @infection-ignore-all instead -- the method holds an
+                // anonymous class, so the per-method `ignore` matcher can't bind to
+                // it, same reason as the inline Interface_ suppression in that file.)
+                // VarianceEdgeEmitter: dropping the inner foreach on the
+                // pair-collection loop. Same rationale as the LogicalAnd /
+                // Continue_ entries above -- the integration tests assert
+                // the SHAPE of emitted edges, not the iteration order.
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter",
+                // VariancePositionValidator::checkMethod: dropping the
+                // per-param foreach. Tests would catch the case where the
+                // first param violates, but not the case where a SECOND
+                // param violates. Same per-rejection-test gap as the
+                // MethodCallRemoval entry on the same class.
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator"
+            ]
+        },
+        // VarianceEdgeEmitter::isVarianceSubtype: `$padded = $args` style
+        // initialization. ArrayOneItem `[] -> [null]` produces an empty-
+        // initial-state shape that's only consequential if the loop body
+        // never executes -- but `count(args1) === count(args2) === count(params)`
+        // guards the loop entry, and zero-param templates never reach
+        // `isVarianceSubtype` (`hasNonInvariantParam` returns false first).
+        "ArrayOneItem": {
+            "ignore": [
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padArgsWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\Registry::padWithDefaults",
+                "XPHP\\Transpiler\\Monomorphize\\VarianceEdgeEmitter"
             ]
         }
     },

@@ -7,4 +7,4 @@ namespace App\BoundsHappy;
 use App\BoundsHappy\Containers\Box;
 use App\BoundsHappy\Models\Tag;
 
-$tagBox = new Box<Tag>(new Tag('hello'));
+$tagBox = new Box::<Tag>(new Tag('hello'));

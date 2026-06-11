@@ -72,10 +72,27 @@ final readonly class Compiler
         $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
         $methodCompiler->process($astPerFile);
 
-        // Phase 1b: collect class definitions + instantiations (now including any concrete
-        // references introduced by Phase 1a).
+        // Phase 1b.i: collect class definitions across every source file. Splitting
+        // definitions ahead of instantiations gives bare-`new Foo;` synthesis (added
+        // in 1b.ii) a complete template registry so it can recognize Foo as an
+        // all-defaulted template regardless of the file-walk order.
         foreach ($astPerFile as $filepath => $ast) {
-            $collector->collect($ast, $filepath);
+            $collector->collectDefinitions($ast, $filepath);
+        }
+
+        // Phase 1b.ii: validate defaults-against-bounds at the source level (so a
+        // bad declaration like `class Box<T : Stringable = int>` fails BEFORE any
+        // padded instantiation is recorded), then collect instantiations -- including
+        // bare `new Foo;` shapes for templates whose every param has a default.
+        $registry->validateDefaultsAgainstBounds();
+        // Inner-template variance composition: every template's variance
+        // markers are known by now, so cases the parse-time validator
+        // couldn't catch (e.g. `class P<+T> { f(): Container<T> }` where
+        // Container's slot is invariant) fail here BEFORE instantiations
+        // amplify the error.
+        $registry->validateInnerVariance();
+        foreach ($astPerFile as $filepath => $ast) {
+            $collector->collectInstantiations($ast, $filepath);
         }
 
         // Phase 2: fixed-point specialization loop.
@@ -130,11 +147,23 @@ final readonly class Compiler
             }
         }
 
+        // Phase 2.5: emit subtype edges between specializations whose template
+        // declares variance markers. Runs once after the fixed-point loop
+        // (Phase 2) finishes -- pairwise variance comparisons can't run until
+        // every specialization is recorded. Edges are added to the cloned
+        // ClassLike's `implements` / `extends` list and survive CallSiteRewriter
+        // (Phase 3) untouched -- CallSiteRewriter only rewrites template
+        // Class_/Interface_ nodes, not specialized ones.
+        $varianceEmitter = new VarianceEdgeEmitter($hierarchy);
+        $varianceEmitter->emitEdges($specializedAsts, $registry);
+
         // Phase 3: rewrite + emit specialized classes.
         $rewriter = new CallSiteRewriter($registry);
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             $rewritten = $rewriter->rewrite([$classAst]);
-            $specializedAsts[$generatedFqn] = $rewritten[0];
+            $first = $rewritten[0];
+            assert($first instanceof \PhpParser\Node\Stmt\ClassLike);
+            $specializedAsts[$generatedFqn] = $first;
         }
 
         // Note for future-proofing (review F9): method-level specialization runs in Phase 1a

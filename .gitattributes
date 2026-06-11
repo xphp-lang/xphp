@@ -1,0 +1,5 @@
+# Pin line endings on checked-in snapshot artifacts so byte-equality
+# assertions hold across Linux/macOS/Windows contributors regardless
+# of git autocrlf settings.
+test/snapshot/**/*.expected.php text eol=lf
+test/fixture/compile/**/*.xphp text eol=lf

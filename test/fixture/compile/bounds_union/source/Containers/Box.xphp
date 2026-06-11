@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundsUnion\Containers;
+
+class Box<T: \Stringable | \Countable>
+{
+    public function __construct(public T $item)
+    {
+    }
+}

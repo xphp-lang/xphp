@@ -1,0 +1,6 @@
+<?php
+
+declare(strict_types=1);
+
+$asInt = identity::<int>(42);
+$doubled = nonGenericDouble(21);
