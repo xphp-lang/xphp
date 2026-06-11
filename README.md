@@ -146,3 +146,4 @@ in CI.
 - [Caveats](docs/caveats.md)
 - [Type-system comparison](docs/guides/comparison.md)
 - [Roadmap](docs/roadmap.md)
+- [Changelog](CHANGELOG.md)
