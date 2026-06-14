@@ -1,0 +1,69 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericExceptionCatch;
+
+use App\GenericExceptionCatch\Errors\HttpError;
+use App\GenericExceptionCatch\Models\Forbidden;
+use App\GenericExceptionCatch\Models\NotFound;
+
+class Client
+{
+    public function raise(string $which): void
+    {
+        if ($which === 'forbidden') {
+            throw new HttpError::<Forbidden>('api key revoked');
+        }
+
+        throw new HttpError::<NotFound>('missing');
+    }
+
+    /**
+     * The generic type discriminates: a thrown `HttpError<Forbidden>` must
+     * fall through the textually-first `HttpError<NotFound>` arm and land on
+     * the `HttpError<Forbidden>` arm. Catching by generic specialization is
+     * the whole point of the fixture.
+     */
+    public function classify(string $which): string
+    {
+        try {
+            $this->raise($which);
+        } catch (HttpError<NotFound> $e) {
+            return 'not-found:' . $e->detail;
+        } catch (HttpError<Forbidden> $e) {
+            return 'forbidden:' . $e->detail;
+        }
+
+        return 'none';
+    }
+
+    /**
+     * Bare `catch (HttpError $e)` (no type args) catches any `HttpError<*>`
+     * specialization via the marker interface every specialization implements.
+     */
+    public function catchAny(string $which): string
+    {
+        try {
+            $this->raise($which);
+        } catch (HttpError $e) {
+            return $e::class;
+        }
+
+        return 'none';
+    }
+
+    /**
+     * A union of two specializations matches when the thrown error is either.
+     */
+    public function catchUnion(string $which): string
+    {
+        try {
+            $this->raise($which);
+        } catch (HttpError<NotFound> | HttpError<Forbidden> $e) {
+            return 'union:' . $e->detail;
+        }
+
+        return 'none';
+    }
+}
