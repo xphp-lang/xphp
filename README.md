@@ -117,14 +117,18 @@ Write a generic class and use it:
 namespace App;
 
 class Collection<T> {
-    public function __construct(public T ...$items) {}
+    private array $items = [];
+
+    public function add(T $item): void { $this->items[] = $item; }
     public function first(): ?T { return $this->items[0] ?? null; }
 }
 
 // src/Use.xphp
 namespace App;
 
-$users = new Collection::<User>(new User('Alice'), new User('Bob'));
+$users = new Collection::<User>();
+$users->add(new User('Alice'));
+$users->add(new User('Bob'));
 echo $users->first()->name;
 ```
 

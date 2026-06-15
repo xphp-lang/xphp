@@ -22,8 +22,9 @@ defaults to `dist` and `[cache-dir]` defaults to `.xphp-cache`. The data flows t
 turn into AST, the AST populates a Registry and a TypeHierarchy, a
 fixed-point loop expands every concrete instantiation into a specialized
 class file, and finally the rewritten user code lands in the target
-directory while specialized classes land in a cache directory under
-`XPHP\Generated\<template>\T_<hash>.php`.
+directory while specialized classes land in a cache directory at
+`<cache-dir>/Generated/<template>/T_<hash>.php` (autoloaded under the
+`XPHP\Generated\` namespace).
 
 > The code's internal labels (`Phase 0`, `Phase 1a`, `Phase 1b.i`,
 > `Phase 1b.ii`, `Phase 2`, `Phase 2.5`, `Phase 3`, `Phase 4`,
@@ -45,7 +46,7 @@ flowchart TD
     Spec --> Collector
     Loop -- no --> Rewriter["CallSiteRewriter<br/>rewrite Names + emit markers"]
     Rewriter --> Emitter["SpecializedClassGenerator<br/>+ FileWriter"]
-    Emitter --> Files["target/*.php<br/>cache/XPHP/Generated/.../T_&lt;hash&gt;.php"]
+    Emitter --> Files["target/*.php<br/>cache/Generated/.../T_&lt;hash&gt;.php"]
 ```
 
 The same lifecycle as a sequence diagram, showing call order between
