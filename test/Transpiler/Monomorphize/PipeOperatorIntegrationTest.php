@@ -9,12 +9,15 @@ use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\RequiresPhp;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\SnapshotHash;
 
 /**
- * Locks in pass-through support for the PHP 8.5 pipe operator (`|>`).
+ * Locks in pass-through support for the PHP 8.5 pipe operator (`|>`) via the
+ * tracked `pipe_operator` fixture.
  *
  * xphp only owns generic syntax; everything else is plain PHP that must
  * survive the parse -> rewrite -> pretty-print round-trip untouched. The
@@ -24,102 +27,75 @@ use XPHP\FileSystem\FileWriter\NativeFileWriter;
  * This case therefore requires an 8.5 runtime: it is tagged `@group php85`
  * so the default 8.4 CI job excludes it, and `#[RequiresPhp]` makes it skip
  * rather than error if ever run on an older PHP. The dedicated 8.5 CI
- * container runs exactly this group.
+ * container runs exactly this group. Locally:
+ *   docker compose run --rm php85 make test/unit/php85
  */
 #[Group('php85')]
 #[RequiresPhp('>= 8.5.0')]
 final class PipeOperatorIntegrationTest extends TestCase
 {
     private string $sourceDir;
+    private string $workDir;
     private string $targetDir;
     private string $cacheDir;
 
     protected function setUp(): void
     {
-        $workDir = sys_get_temp_dir() . '/xphp-pipe-' . uniqid('', true);
-        $this->sourceDir = $workDir . '/src';
-        $this->targetDir = $workDir . '/dist';
-        $this->cacheDir = $workDir . '/.xphp-cache';
-        mkdir($this->sourceDir, 0o755, true);
+        $this->sourceDir = realpath(__DIR__ . '/../../fixture/compile/pipe_operator/source')
+            ?: throw new RuntimeException('Fixture not found');
+        $this->workDir = sys_get_temp_dir() . '/xphp-pipe-' . uniqid('', true);
+        $this->targetDir = $this->workDir . '/dist';
+        $this->cacheDir = $this->workDir . '/.xphp-cache';
+        mkdir($this->workDir, 0o755, true);
     }
 
     protected function tearDown(): void
     {
-        $workDir = \dirname($this->sourceDir);
-        if (is_dir($workDir)) {
-            self::rrmdir($workDir);
+        if (is_dir($this->workDir)) {
+            self::rrmdir($this->workDir);
         }
     }
 
-    public function testPipeOperatorRoundTripsThroughTranspiler(): void
+    public function testPipeOperatorFixtureCompiles(): void
     {
-        $this->writeSource('pipe.xphp', <<<'PHP'
-        <?php
-        namespace App;
-        $slug = $title |> trim(...) |> strtolower(...);
-        PHP);
+        $compiler = $this->buildCompiler();
 
-        $this->compile();
+        $sources = (new NativeFileFinder())
+            ->find($this->sourceDir)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
 
-        $out = $this->readOutput('pipe.php');
-        self::assertStringContainsString('|>', $out);
-        self::assertStringContainsString('$slug = $title |> trim(...) |> strtolower(...);', $out);
-        $this->assertValidPhp($out);
-    }
+        $result = $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
 
-    public function testPipeOperatorCoexistsWithGenericSpecialization(): void
-    {
-        // The pipe lives right beside a turbofish call site, so this also proves
-        // xphp's generic byte-offset rewriting does not disturb the `|>` tokens.
-        $this->writeSource('box.xphp', <<<'PHP'
-        <?php
-        namespace App;
+        self::assertSame(2, $result->sourceCount, 'expected Box.xphp + Use.xphp');
+        self::assertSame(1, $result->generatedCount, 'expected one specialization: Box<string>');
 
-        final class Box<T>
-        {
-            public function __construct(public T $value) {}
-        }
+        $useFile = $this->targetDir . '/Use.php';
+        self::assertFileExists($useFile);
+        $useContent = file_get_contents($useFile);
 
-        $box = new Box::<string>('  HELLO  ');
-        $slug = $box->value |> trim(...) |> strtolower(...);
-        PHP);
+        // Pipe survives verbatim -- both the standalone chain and the one
+        // sitting right next to the rewritten turbofish call site.
+        self::assertStringContainsString('$slug = $title |> trim(...) |> strtolower(...);', $useContent);
+        self::assertStringContainsString('$shout = $box->value |> trim(...) |> strtoupper(...);', $useContent);
 
-        $this->compile();
+        // Generic was actually specialized: turbofish rewritten to the
+        // monomorphized FQN, template syntax gone.
+        self::assertStringContainsString('XPHP\Generated\App\PipeOperator\Box\T_', $useContent);
+        self::assertStringNotContainsString('Box::<', $useContent);
 
-        $out = $this->readOutput('box.php');
-        // Pipe survives untouched.
-        self::assertStringContainsString('$slug = $box->value |> trim(...) |> strtolower(...);', $out);
-        // Generic was actually specialized: the turbofish call site is rewritten
-        // to a generated, monomorphized FQN and the template syntax is gone.
-        self::assertStringContainsString('XPHP\Generated\App\Box\T_', $out);
-        self::assertStringNotContainsString('Box::<', $out);
-        $this->assertValidPhp($out);
-    }
-
-    private function writeSource(string $name, string $code): void
-    {
-        file_put_contents($this->sourceDir . '/' . $name, $code);
-    }
-
-    private function readOutput(string $name): string
-    {
-        $path = $this->targetDir . '/' . $name;
-        self::assertFileExists($path);
-
-        return file_get_contents($path) ?: '';
-    }
-
-    private function assertValidPhp(string $code): void
-    {
         // The emitted PHP must itself re-parse on this (8.5) runtime.
-        $parser = (new ParserFactory())->createForHostVersion();
         self::assertNotNull(
-            $parser->parse($code),
+            (new ParserFactory())->createForHostVersion()->parse($useContent),
             'Transpiled output is not valid PHP',
         );
+
+        // Whole-file snapshot (hash segments normalized) locks the exact
+        // emitted bytes, including pipe-operator formatting.
+        $snapshotDir = __DIR__ . '/../../fixture/compile/pipe_operator/verify/testPipeOperatorFixtureCompiles';
+        SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useContent);
     }
 
-    private function compile(): void
+    private function buildCompiler(): Compiler
     {
         // Mirror production wiring (ApplicationConsole): host-version parser.
         // On the 8.5 runtime this group runs under, that tokenizes `|>`.
@@ -127,7 +103,7 @@ final class PipeOperatorIntegrationTest extends TestCase
         $printer = new StandardPrinter();
         $writer = new NativeFileWriter();
 
-        $compiler = new Compiler(
+        return new Compiler(
             new NativeFileReader(),
             $writer,
             new XphpSourceParser($phpParser),
@@ -135,11 +111,6 @@ final class PipeOperatorIntegrationTest extends TestCase
             new SpecializedClassGenerator($printer, $writer),
             $printer,
         );
-
-        $sources = (new NativeFileFinder())->find($this->sourceDir)
-            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
-
-        $compiler->compile($sources, $this->sourceDir, $this->targetDir, $this->cacheDir);
     }
 
     private static function rrmdir(string $dir): void
