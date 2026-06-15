@@ -13,6 +13,12 @@ The supported runtime is PHP `^8.4`. Tests that exercise newer-PHP syntax
 excludes them and they self-skip via `#[RequiresPhp]` off an 8.5 host. CI
 runs them in a dedicated PHP 8.5 job.
 
+No PHP 8.5 locally? Run them in the bundled 8.5 container:
+
+```bash
+docker compose run --rm php85 make test/unit/php85
+```
+
 CI gates every PR on these targets. `infection.json5` carries a curated set
 of per-mutator `ignore` rules for genuinely-equivalent / defensive
 mutations so the report only surfaces real test gaps.
