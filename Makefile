@@ -7,8 +7,18 @@
 # targets here.
 
 .PHONY: test/unit
+# Default runtime is PHP 8.4 (composer requires ^8.4). Tests exercising
+# newer-PHP syntax are tagged `@group php85` and excluded here; they run
+# on an 8.5 runtime via `make test/unit/php85`.
 test/unit:
-	php vendor/bin/phpunit
+	php vendor/bin/phpunit --exclude-group php85
+
+.PHONY: test/unit/php85
+# Runs only the PHP 8.5-specific syntax tests (e.g. the pipe operator).
+# Requires a PHP 8.5 runtime -- CI uses a dedicated 8.5 container; on 8.4
+# these self-skip via #[RequiresPhp].
+test/unit/php85:
+	php vendor/bin/phpunit --group php85
 
 .PHONY: lint/phpstan
 # Static analysis at level 7. Memory limit lifted because deep generic

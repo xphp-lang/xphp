@@ -27,6 +27,11 @@ final class ApplicationConsole extends Application
     ) {
         parent::__construct('xphp');
 
+        // Parse against the host PHP version: xphp's supported runtime is
+        // ^8.4 (see composer.json), so on 8.4 the transpiler accepts 8.4
+        // syntax and on an 8.5 host it transparently accepts 8.5 syntax such
+        // as the pipe operator `|>`. Newer-syntax behaviour is locked by
+        // tests tagged `@group php85`, which run only under an 8.5 runtime.
         $phpParser = (new ParserFactory())->createForHostVersion();
         $printer = new StandardPrinter();
 
