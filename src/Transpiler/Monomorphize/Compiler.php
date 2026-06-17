@@ -237,23 +237,27 @@ final readonly class Compiler
         $diagnostics = new DiagnosticCollector();
         $astPerFile = [];
         foreach ($sources->filepaths as $filepath) {
+            // Read OUTSIDE the try so an I/O failure surfaces as itself, not a mislabeled
+            // "parse error" — only parsing is treated as a per-file, recoverable diagnostic.
+            $content = $this->fileReader->read($filepath);
             try {
-                $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath));
+                $astPerFile[$filepath] = $this->sourceParser->parse($content);
             } catch (PhpParserError $e) {
                 $line = $e->getStartLine();
                 $diagnostics->add(new Diagnostic(
                     Severity::Error,
                     self::CODE_PARSE_ERROR,
                     $e->getMessage(),
-                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- a real
-                    // PHP syntax error always reports a line >= 1, so the `> 0` boundary (and its
-                    // `?: 1` fallback) is defensive and unobservable; the happy-path line is pinned
-                    // by CheckCommandTest (Broken.xphp -> line 11).
+                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- nikic
+                    // emits either a real line (>= 1) or the sentinel -1 for position-less errors;
+                    // every `> 0` boundary variant routes -1 to the same `?: 1` fallback, so the
+                    // mutants are equivalent. The real-line path is pinned by CheckCommandTest
+                    // (Broken.xphp -> line 11).
                     new SourceLocation($filepath, $line > 0 ? $line : 1),
                 ));
             } catch (RuntimeException $e) {
-                // xphp-specific parse-time rejections (e.g. variance markers on methods) — these
-                // carry no line, so the diagnostic points at the file (line 1).
+                // xphp-specific parse-time rejections from the parser (e.g. variance markers on
+                // methods) — these carry no line, so the diagnostic points at the file (line 1).
                 $diagnostics->add(new Diagnostic(
                     Severity::Error,
                     self::CODE_PARSE_ERROR,
