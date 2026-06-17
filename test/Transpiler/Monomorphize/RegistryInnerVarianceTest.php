@@ -18,6 +18,7 @@ use PhpParser\Node\UnionType;
 use PhpParser\Node\VarLikeIdentifier;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use XPHP\Diagnostics\DiagnosticCollector;
 
 /**
  * Tests `Registry::validateInnerVariance` -- the pass that composes outer
@@ -31,6 +32,125 @@ use RuntimeException;
  */
 final class RegistryInnerVarianceTest extends TestCase
 {
+    public function testPositionFlaggedDefinitionIsSkippedButLaterDefinitionsStillRun(): void
+    {
+        // P (direct +T-in-param) is flagged by the position check and recorded FIRST;
+        // Q (composition violation) is recorded AFTER. Inner-variance must skip P (already
+        // reported) yet still report Q — i.e. it must `continue` past P, not `break`.
+        $collector = new DiagnosticCollector();
+        $registry = $this->registryWith([
+            $this->makeDefinition(
+                'App\\P',
+                'P',
+                [new TypeParam('T', variance: Variance::Covariant)],
+                $this->classWithMethod('P', 'set', [new Param(new \PhpParser\Node\Expr\Variable('x'), type: new Name(['T']))], new Identifier('void')),
+            ),
+            $this->makeDefinition('App\\Container', 'Container', [new TypeParam('X')], new Class_(new Identifier('Container'))),
+            $this->makeDefinition(
+                'App\\Q',
+                'Q',
+                [new TypeParam('T', variance: Variance::Covariant)],
+                $this->classWithMethod('Q', 'f', [], $this->genericName('App\\Container', [new TypeRef('T', isTypeParam: true)])),
+            ),
+        ], $collector);
+
+        $flagged = $registry->validateVariancePositions();
+        $registry->validateInnerVariance($flagged);
+
+        self::assertSame(['App\\P'], $flagged);
+        self::assertCount(2, $collector->all());
+        $codes = array_map(static fn ($d): string => $d->code, $collector->all());
+        self::assertContains(VariancePositionValidator::CODE_VARIANCE_POSITION, $codes);
+        self::assertContains(InnerVarianceValidator::CODE_INNER_VARIANCE, $codes);
+    }
+
+    public function testAllPositionFlaggedDefinitionsAreSkippedByInnerVariance(): void
+    {
+        // Two direct +T-in-param violations: both flagged by the position check, so the
+        // inner-variance pass must skip BOTH (the full flagged list, not a truncation).
+        $collector = new DiagnosticCollector();
+        $registry = $this->registryWith([
+            $this->makeDefinition(
+                'App\\P',
+                'P',
+                [new TypeParam('T', variance: Variance::Covariant)],
+                $this->classWithMethod('P', 'set', [new Param(new \PhpParser\Node\Expr\Variable('x'), type: new Name(['T']))], new Identifier('void')),
+            ),
+            $this->makeDefinition(
+                'App\\R',
+                'R',
+                [new TypeParam('T', variance: Variance::Covariant)],
+                $this->classWithMethod('R', 'set', [new Param(new \PhpParser\Node\Expr\Variable('x'), type: new Name(['T']))], new Identifier('void')),
+            ),
+        ], $collector);
+
+        $flagged = $registry->validateVariancePositions();
+        $registry->validateInnerVariance($flagged);
+
+        self::assertSame(['App\\P', 'App\\R'], $flagged);
+        self::assertCount(2, $collector->all());
+        foreach ($collector->all() as $d) {
+            self::assertSame(VariancePositionValidator::CODE_VARIANCE_POSITION, $d->code);
+        }
+    }
+
+    public function testNullFileProducesNullLocationWithoutError(): void
+    {
+        // Defensive: with no file, the diagnostic still emits (null location) and must not
+        // attempt to build a SourceLocation from a null file.
+        $registry = $this->registryWith([
+            $this->makeDefinition('App\\Container', 'Container', [new TypeParam('X')], new Class_(new Identifier('Container'))),
+            $this->makeDefinition(
+                'App\\P',
+                'P',
+                [new TypeParam('T', variance: Variance::Covariant)],
+                $this->classWithMethod(
+                    'P',
+                    'f',
+                    [],
+                    $this->genericName('App\\Container', [new TypeRef('T', isTypeParam: true)]),
+                ),
+            ),
+        ]);
+        $container = $registry->definition('App\\Container');
+        $p = $registry->definition('App\\P');
+        self::assertNotNull($container);
+        self::assertNotNull($p);
+
+        $collector = new DiagnosticCollector();
+        InnerVarianceValidator::assertComposition($p, ['App\\Container' => $container, 'App\\P' => $p], $collector, null);
+
+        self::assertCount(1, $collector->all());
+        self::assertNull($collector->all()[0]->location);
+    }
+
+    public function testCollectModeGathersInnerVarianceDiagnosticInsteadOfThrowing(): void
+    {
+        // Same composition violation as the throw-mode test, but with a collector:
+        // it must be reported as a Diagnostic (not thrown), so `xphp check` continues.
+        $collector = new DiagnosticCollector();
+        $registry = $this->registryWith([
+            $this->makeDefinition('App\\Container', 'Container', [new TypeParam('X')], new Class_(new Identifier('Container'))),
+            $this->makeDefinition(
+                'App\\P',
+                'P',
+                [new TypeParam('T', variance: Variance::Covariant)],
+                $this->classWithMethod(
+                    'P',
+                    'f',
+                    [],
+                    $this->genericName('App\\Container', [new TypeRef('T', isTypeParam: true)]),
+                ),
+            ),
+        ], $collector);
+
+        $registry->validateInnerVariance();
+
+        self::assertCount(1, $collector->all());
+        self::assertSame(InnerVarianceValidator::CODE_INNER_VARIANCE, $collector->all()[0]->code);
+        self::assertStringContainsString('Variance violation in template P', $collector->all()[0]->message);
+    }
+
     public function testCovariantOuterInInvariantInnerSlotIsRejected(): void
     {
         // class Container<X> {}                    // X is Invariant
@@ -904,9 +1024,9 @@ final class RegistryInnerVarianceTest extends TestCase
     /**
      * @param list<GenericDefinitionFixture> $defs
      */
-    private function registryWith(array $defs): Registry
+    private function registryWith(array $defs, ?DiagnosticCollector $collector = null): Registry
     {
-        $registry = new Registry();
+        $registry = new Registry(diagnostics: $collector);
         foreach ($defs as $def) {
             $registry->recordDefinition(
                 $def->fqn,

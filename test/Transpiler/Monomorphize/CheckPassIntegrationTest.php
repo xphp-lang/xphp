@@ -74,6 +74,21 @@ final class CheckPassIntegrationTest extends TestCase
         }
     }
 
+    public function testInnerVarianceViolationIsCollectedByCheck(): void
+    {
+        // Composition case the position check misses → only inner-variance reports it,
+        // and the position check does NOT also flag it (no double report).
+        $diagnostics = $this->check('inner_variance');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(InnerVarianceValidator::CODE_INNER_VARIANCE, $d->code);
+        // Located at the `Container<T>` return type in P.xphp (line 12).
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('P.xphp', $d->location->file);
+        self::assertSame(12, $d->location->line);
+    }
+
     public function testMissingTypeArgumentIsCollectedByCheck(): void
     {
         $diagnostics = $this->check('missing_arg');

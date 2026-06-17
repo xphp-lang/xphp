@@ -80,27 +80,34 @@ final class VariancePositionValidator
 
     /**
      * @param list<TypeParam> $params
+     * @return bool True iff at least one violation was found (in check-mode; compile-mode
+     *   throws before returning). Lets the caller skip the inner-variance pass for a
+     *   definition already flagged here, avoiding a double report of the same issue.
      */
     public static function assertPositions(
         ClassLike $node,
         array $params,
         ?DiagnosticCollector $diagnostics = null,
         ?string $file = null,
-    ): void {
+    ): bool {
         $varianceByName = [];
         foreach ($params as $param) {
             if ($param->variance !== Variance::Invariant) {
                 $varianceByName[$param->name] = $param->variance;
             }
         }
+        // @infection-ignore-all FalseValue -- returning true here (no variance markers) would
+        // only add this definition to the caller's "flagged" set, which merely skips the
+        // inner-variance pass for it; but a no-variance definition is already a no-op in
+        // inner-variance (empty variance map), so flagging it changes nothing observable.
         if ($varianceByName === []) {
-            return;
+            return false;
         }
 
         $validator = new self($varianceByName);
         $validator->collect($node, $params);
         if ($validator->violations === []) {
-            return;
+            return false;
         }
 
         if ($diagnostics === null) {
@@ -119,6 +126,8 @@ final class VariancePositionValidator
                 $location,
             ));
         }
+
+        return true;
     }
 
     /**
