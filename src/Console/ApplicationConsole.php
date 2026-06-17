@@ -7,6 +7,7 @@ namespace XPHP\Console;
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use Symfony\Component\Console\Application;
+use XPHP\Console\Command\CheckCommand;
 use XPHP\Console\Command\CompileCommand;
 use XPHP\FileSystem\FileFinder;
 use XPHP\FileSystem\FileReader;
@@ -35,17 +36,17 @@ final class ApplicationConsole extends Application
         $phpParser = (new ParserFactory())->createForHostVersion();
         $printer = new StandardPrinter();
 
-        $this->addCommand(new CompileCommand(
-            $fileFinder,
-            new Compiler(
-                $fileReader,
-                $fileWriter,
-                new XphpSourceParser($phpParser),
-                new Specializer(),
-                new SpecializedClassGenerator($printer, $fileWriter),
-                $printer,
-                $hashLength,
-            ),
-        ));
+        $compiler = new Compiler(
+            $fileReader,
+            $fileWriter,
+            new XphpSourceParser($phpParser),
+            new Specializer(),
+            new SpecializedClassGenerator($printer, $fileWriter),
+            $printer,
+            $hashLength,
+        );
+
+        $this->addCommand(new CompileCommand($fileFinder, $compiler));
+        $this->addCommand(new CheckCommand($fileFinder, $compiler));
     }
 }

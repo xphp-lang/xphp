@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Error as PhpParserError;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
 use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\Diagnostics\SourceLocation;
 use XPHP\FileSystem\FileReader;
 use XPHP\FileSystem\FileWriter;
 use XPHP\FileSystem\FilepathArray;
@@ -31,6 +35,9 @@ use XPHP\FileSystem\FilepathArray;
 final readonly class Compiler
 {
     public const MAX_SPECIALIZATION_DEPTH = 16;
+
+    /** Diagnostic code for a file that failed to parse during `xphp check`. */
+    public const CODE_PARSE_ERROR = 'xphp.parse_error';
 
     public function __construct(
         private FileReader $fileReader,
@@ -220,13 +227,43 @@ final readonly class Compiler
      *
      * Scope note: method/function/closure-level generic checks (GenericMethodCompiler, Phase 1a
      * of compile()) are intentionally NOT run here — they remain fail-fast and are not yet part
-     * of the check gate. Variance checks are wired in a later step.
+     * of the check gate.
+     *
+     * Per-file resilience: a file that fails to parse is reported as a diagnostic and skipped,
+     * so the remaining files are still checked (unlike compile(), which fails fast).
      */
     public function check(FilepathArray $sources): DiagnosticCollector
     {
-        $astPerFile = $this->parseAll($sources);
-        $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
         $diagnostics = new DiagnosticCollector();
+        $astPerFile = [];
+        foreach ($sources->filepaths as $filepath) {
+            try {
+                $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath));
+            } catch (PhpParserError $e) {
+                $line = $e->getStartLine();
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_PARSE_ERROR,
+                    $e->getMessage(),
+                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- a real
+                    // PHP syntax error always reports a line >= 1, so the `> 0` boundary (and its
+                    // `?: 1` fallback) is defensive and unobservable; the happy-path line is pinned
+                    // by CheckCommandTest (Broken.xphp -> line 11).
+                    new SourceLocation($filepath, $line > 0 ? $line : 1),
+                ));
+            } catch (RuntimeException $e) {
+                // xphp-specific parse-time rejections (e.g. variance markers on methods) — these
+                // carry no line, so the diagnostic points at the file (line 1).
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_PARSE_ERROR,
+                    $e->getMessage(),
+                    new SourceLocation($filepath, 1),
+                ));
+            }
+        }
+
+        $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
         $registry = new Registry($this->hashLength, $hierarchy, $diagnostics);
         $collector = new RegistryCollector($registry);
 

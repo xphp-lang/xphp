@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\ParseError;
+
+// Bound violation in a VALID file — must still be checked even though Broken.xphp fails to parse.
+$b = new Bag::<int>(1);

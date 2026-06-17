@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\ParseError;
+
+class Bag<T : \Stringable>
+{
+    public function __construct(public T $value)
+    {
+    }
+}
