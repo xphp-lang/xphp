@@ -379,8 +379,7 @@ final class Registry
      * `xphp check` can collect all violations across files in one run). Delegates to
      * {@see VariancePositionValidator}: with this Registry's collector it gathers diagnostics
      * at each offending member; without one (compile) it throws the first violation.
-     */
-    /**
+     *
      * @return list<string> Template FQNs that had at least one position violation, so the
      *   inner-variance pass can skip them (the issue is already reported) — mirroring
      *   compile-mode, where the position check fails fast before inner-variance runs.
@@ -407,8 +406,7 @@ final class Registry
      * Inner-template variance composition check over every collected definition (delegates to
      * {@see InnerVarianceValidator}). With this Registry's collector it gathers every violation
      * (each located at the offending member); without one (compile) it throws the first.
-     */
-    /**
+     *
      * @param list<string> $skipTemplateFqns Definitions already flagged by the position check;
      *   skipped here so the same `+T`/`-T` misuse isn't reported by both passes.
      */

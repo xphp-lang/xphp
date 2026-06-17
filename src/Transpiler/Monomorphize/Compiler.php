@@ -81,12 +81,14 @@ final readonly class Compiler
         // bad declaration like `class Box<T : Stringable = int>` fails BEFORE any
         // padded instantiation is recorded), then collect instantiations -- including
         // bare `new Foo;` shapes for templates whose every param has a default.
-        $registry->validateDefaultsAgainstBounds();
         // Variance-position rules (covariant T in input, contravariant T in output,
         // bound/default/property/constructor invariance, F-bounded variance). Moved
         // here from the parser so all definitions are present and `xphp check` can
         // collect across files; compile-mode still throws on the first violation.
+        // Runs BEFORE the defaults-vs-bounds check so that, when a class has both,
+        // the variance error surfaces first (the order it surfaced at parse time).
         $variancePositionFlagged = $registry->validateVariancePositions();
+        $registry->validateDefaultsAgainstBounds();
         // Inner-template variance composition: every template's variance
         // markers are known by now, so cases the parse-time validator
         // couldn't catch (e.g. `class P<+T> { f(): Container<T> }` where
@@ -231,8 +233,8 @@ final readonly class Compiler
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectDefinitions($ast, $filepath);
         }
-        $registry->validateDefaultsAgainstBounds();
         $variancePositionFlagged = $registry->validateVariancePositions();
+        $registry->validateDefaultsAgainstBounds();
         $registry->validateInnerVariance($variancePositionFlagged);
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
