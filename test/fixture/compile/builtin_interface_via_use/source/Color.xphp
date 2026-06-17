@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BuiltinViaUse;
+
+enum Color
+{
+    case Red;
+    case Blue;
+}

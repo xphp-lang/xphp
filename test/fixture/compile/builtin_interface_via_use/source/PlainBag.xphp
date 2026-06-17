@@ -1,0 +1,35 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BuiltinViaUse;
+
+use ArrayIterator;
+use Countable;
+use Traversable;
+use App\BuiltinViaUse\Errors\EmptyBagError;
+
+/**
+ * A NON-generic class that uses the same `use`-imported built-ins. It is never
+ * specialized/relocated, so its emitted output must stay byte-identical to the
+ * source (bare names + `use` lines) — this guards the Hybrid-scope promise that
+ * the fix only touches relocated clones, never the user's own files.
+ */
+final class PlainBag implements Countable
+{
+    private array $items = [];
+
+    public function count(): int
+    {
+        return \count($this->items);
+    }
+
+    public function iterate(): Traversable
+    {
+        try {
+            return new ArrayIterator($this->items);
+        } catch (EmptyBagError $e) {
+            throw new \RuntimeException($e->getMessage(), 0, $e);
+        }
+    }
+}

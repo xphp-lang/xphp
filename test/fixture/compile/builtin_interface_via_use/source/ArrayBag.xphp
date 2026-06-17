@@ -1,0 +1,75 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BuiltinViaUse;
+
+use ArrayIterator;
+use Countable;
+use Traversable;
+use App\BuiltinViaUse\Errors\EmptyBagError;
+
+class ArrayBag<T> extends AbstractBag implements Bag<T>, Countable
+{
+    // Typed (enum) class constant: the type `Color` is a same-namespace bare name
+    // that must be qualified in the relocated class — the `ClassConst` position.
+    public const Color DEFAULT_COLOR = Color::Red;
+
+    private array $items = [];
+
+    // Nullable + union type-hints referencing `use`-imported built-ins: exercise
+    // the NullableType and UnionType arms of the resolver in a relocated class.
+    private ?Traversable $snapshot = null;
+    private Countable|Traversable|null $meta = null;
+
+    public function add(T $item): void
+    {
+        $this->items[] = $item;
+    }
+
+    public function count(): int
+    {
+        // Bare function call: must stay bare (PHP global fallback) even after relocation.
+        return \count($this->items);
+    }
+
+    public function getIterator(): Traversable
+    {
+        // Return-type hint + `new` of a `use`-imported built-in class.
+        return new ArrayIterator($this->items);
+    }
+
+    // Param typed with an imported class; `instanceof` + class-constant fetch on
+    // imported classes inside a relocated body.
+    public function accepts(EmptyBagError $probe): bool
+    {
+        $iter = new ArrayIterator($this->items);
+        $flags = ArrayIterator::STD_PROP_LIST;
+
+        return $flags >= 0
+            && $iter instanceof Traversable
+            && $probe instanceof EmptyBagError;
+    }
+
+    // Closure with an imported return-type hint, nested in a relocated method.
+    public function makeFactory(): callable
+    {
+        return function (): Traversable {
+            return new ArrayIterator($this->items);
+        };
+    }
+
+    public function first(): T
+    {
+        try {
+            if ($this->items === []) {
+                // `new` of a `use`-imported exception class.
+                throw new EmptyBagError('bag is empty');
+            }
+            return $this->items[0];
+        } catch (EmptyBagError $e) {
+            // `catch` of a `use`-imported exception class.
+            throw new \RuntimeException($e->getMessage(), 0, $e);
+        }
+    }
+}
