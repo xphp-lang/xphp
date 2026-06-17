@@ -126,4 +126,12 @@ final class RendererTest extends TestCase
     {
         self::assertSame('', (new GithubRenderer())->render([]));
     }
+
+    public function testGithubEscapesPercentAndCarriageReturnInMessage(): void
+    {
+        $d = [new Diagnostic(Severity::Error, 'c', "50%\rdone")];
+
+        // `%` must be escaped first (to %25), then `\r` to %0D — no double-escaping.
+        self::assertSame('::error::50%25%0Ddone' . PHP_EOL, (new GithubRenderer())->render($d));
+    }
 }
