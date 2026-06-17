@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\DefaultViolation;
+
+// The concrete default `int` does not satisfy the `\Stringable` bound — a
+// declaration-time error caught by validateDefaultsAgainstBounds.
+class Box<T : \Stringable = int>
+{
+    public function __construct(public T $value)
+    {
+    }
+}

@@ -6,6 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use RuntimeException;
+use XPHP\Diagnostics\DiagnosticCollector;
 use XPHP\FileSystem\FileReader;
 use XPHP\FileSystem\FileWriter;
 use XPHP\FileSystem\FilepathArray;
@@ -51,11 +52,7 @@ final readonly class Compiler
         // Phase 0: parse every source up front. The TypeHierarchy (used to validate generic
         // bounds at recordInstantiation time) needs to see every class/interface/trait
         // declaration *before* any instantiation is recorded, so parsing has to finish first.
-        $astPerFile = [];
-        foreach ($sources->filepaths as $filepath) {
-            $content = $this->fileReader->read($filepath);
-            $astPerFile[$filepath] = $this->sourceParser->parse($content);
-        }
+        $astPerFile = $this->parseAll($sources);
 
         $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
         $registry = new Registry($this->hashLength, $hierarchy);
@@ -111,11 +108,9 @@ final readonly class Compiler
 
                 $definition = $registry->definition($instantiation->templateFqn);
                 if ($definition === null) {
-                    throw new RuntimeException(sprintf(
-                        'Generic template "%s" was instantiated but never defined (generated as: %s).',
-                        $instantiation->templateFqn,
-                        $generatedFqn,
-                    ));
+                    throw new RuntimeException(
+                        Registry::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
+                    );
                 }
 
                 $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
@@ -207,6 +202,52 @@ final readonly class Compiler
             generatedCount: count($specializedAsts),
             registry: $registry,
         );
+    }
+
+    /**
+     * Validate-only pass for `xphp check`: parse, build the hierarchy, collect definitions,
+     * then validate (defaults-vs-bounds) and collect instantiations (bounds, missing args)
+     * with a DiagnosticCollector so every generic error is gathered instead of throwing on
+     * the first. Stops after validation — it never specializes or emits, so a partially-invalid
+     * registry never reaches the fixed-point loop. Returns the collected diagnostics.
+     *
+     * Scope note: method/function/closure-level generic checks (GenericMethodCompiler, Phase 1a
+     * of compile()) are intentionally NOT run here — they remain fail-fast and are not yet part
+     * of the check gate. Variance checks are wired in a later step.
+     */
+    public function check(FilepathArray $sources): DiagnosticCollector
+    {
+        $astPerFile = $this->parseAll($sources);
+        $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
+        $diagnostics = new DiagnosticCollector();
+        $registry = new Registry($this->hashLength, $hierarchy, $diagnostics);
+        $collector = new RegistryCollector($registry);
+
+        foreach ($astPerFile as $filepath => $ast) {
+            $collector->collectDefinitions($ast, $filepath);
+        }
+        $registry->validateDefaultsAgainstBounds();
+        foreach ($astPerFile as $filepath => $ast) {
+            $collector->collectInstantiations($ast, $filepath);
+        }
+        $registry->collectUndefinedTemplates($diagnostics);
+
+        return $diagnostics;
+    }
+
+    /**
+     * Parse every source file into an AST keyed by filepath.
+     *
+     * @return array<string, list<\PhpParser\Node\Stmt>>
+     */
+    private function parseAll(FilepathArray $sources): array
+    {
+        $astPerFile = [];
+        foreach ($sources->filepaths as $filepath) {
+            $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath));
+        }
+
+        return $astPerFile;
     }
 
     private static function relativePath(string $base, string $filepath): string

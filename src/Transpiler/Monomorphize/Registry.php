@@ -21,8 +21,11 @@ use XPHP\Diagnostics\SourceLocation;
 
 final class Registry
 {
-    /** Stable diagnostic code for a generic bound violation at an instantiation site. */
+    /** Stable diagnostic codes (machine identifiers tooling can match on). */
     public const CODE_BOUND_VIOLATION = 'xphp.bound_violation';
+    public const CODE_MISSING_TYPE_ARGUMENT = 'xphp.missing_type_argument';
+    public const CODE_DEFAULT_BOUND_VIOLATION = 'xphp.default_bound_violation';
+    public const CODE_UNDEFINED_TEMPLATE = 'xphp.undefined_template';
 
     /**
      * All specialized classes live under this namespace prefix; the full target FQCN
@@ -71,6 +74,11 @@ final class Registry
         string $sourceFile,
     ): void {
         if (isset($this->definitions[$templateFqn])) {
+            // NB: cross-file duplicate class templates are filtered out earlier by
+            // RegistryCollector's `!isAlreadyRecorded()` guard, so this throw is only
+            // reachable via the generic-function path. Surfacing duplicate definitions in
+            // `xphp check` would require reworking that guard (and would change compile-mode
+            // semantics), so it is intentionally NOT part of the collector seam — deferred.
             throw new RuntimeException(sprintf(
                 'Generic template "%s" already declared (in %s); duplicate declaration in %s.',
                 $templateFqn,
@@ -110,7 +118,7 @@ final class Registry
         array $args,
         ?SourceLocation $callSite = null,
     ): GenericInstantiation {
-        $args = $this->padWithDefaults($templateFqn, $args);
+        $args = $this->padWithDefaults($templateFqn, $args, $callSite);
 
         foreach ($args as $arg) {
             if ($arg->isGeneric()) {
@@ -157,7 +165,7 @@ final class Registry
      * @param list<TypeRef> $args
      * @return list<TypeRef>
      */
-    private function padWithDefaults(string $templateFqn, array $args): array
+    private function padWithDefaults(string $templateFqn, array $args, ?SourceLocation $callSite = null): array
     {
         $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
         if ($definition === null) {
@@ -167,6 +175,8 @@ final class Registry
             $definition->typeParams,
             $args,
             ltrim($templateFqn, '\\'),
+            $this->diagnostics,
+            $callSite,
         );
     }
 
@@ -178,9 +188,10 @@ final class Registry
      * templates) so the padding semantics stay identical regardless of
      * the call-site shape.
      *
-     * Throws when a non-defaulted param is missing and there are fewer
-     * supplied args than required. Returns `$args` unchanged when the
-     * supplied count already matches or exceeds the param count.
+     * When `$diagnostics` is null (compile, and every `GenericMethodCompiler` call) a missing
+     * non-defaulted param throws as before. With a collector (check) it appends a Diagnostic and
+     * returns the partial padding gathered so far, so the run continues to surface other errors.
+     * Returns `$args` unchanged when the supplied count already matches or exceeds the param count.
      *
      * @param list<TypeParam> $params
      * @param list<TypeRef> $args
@@ -190,6 +201,8 @@ final class Registry
         array $params,
         array $args,
         string $templateLabel,
+        ?DiagnosticCollector $diagnostics = null,
+        ?SourceLocation $callSite = null,
     ): array {
         $supplied = count($args);
         $needed = count($params);
@@ -200,15 +213,18 @@ final class Registry
         $padded = $args;
         for ($i = $supplied; $i < $needed; $i++) {
             if ($params[$i]->default === null) {
-                throw new RuntimeException(sprintf(
-                    'Generic template "%s" was instantiated with %d type argument(s) '
-                    . 'but parameter `%s` (position %d) has no default; supply it '
-                    . 'explicitly or add defaults to every preceding required parameter.',
-                    $templateLabel,
-                    $supplied,
-                    $params[$i]->name,
-                    $i + 1,
-                ));
+                $message = self::missingTypeArgumentMessage($templateLabel, $supplied, $params[$i]->name, $i + 1);
+                if ($diagnostics !== null) {
+                    $diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        self::CODE_MISSING_TYPE_ARGUMENT,
+                        $message,
+                        $callSite,
+                    ));
+
+                    return $padded;
+                }
+                throw new RuntimeException($message);
             }
             $subst = [];
             foreach ($padded as $j => $concrete) {
@@ -217,6 +233,26 @@ final class Registry
             $padded[] = Specializer::substituteTypeRef($params[$i]->default, $subst);
         }
         return $padded;
+    }
+
+    /**
+     * Single source of truth for the missing-required-type-argument message.
+     */
+    private static function missingTypeArgumentMessage(
+        string $templateLabel,
+        int $supplied,
+        string $paramName,
+        int $position,
+    ): string {
+        return sprintf(
+            'Generic template "%s" was instantiated with %d type argument(s) '
+            . 'but parameter `%s` (position %d) has no default; supply it '
+            . 'explicitly or add defaults to every preceding required parameter.',
+            $templateLabel,
+            $supplied,
+            $paramName,
+            $position,
+        );
     }
 
     /**
@@ -261,19 +297,81 @@ final class Registry
                         . 'it satisfies "%s".',
                         $boundDisplay,
                     );
-                throw new RuntimeException(sprintf(
-                    "Default for generic parameter `%s` of \"%s\" violates the parameter's bound.\n"
-                    . "  bound:   %s\n"
-                    . "  default: %s\n"
-                    . "  reason:  %s",
+                $message = self::defaultBoundViolationMessage(
                     $param->name,
                     $definition->templateFqn,
                     $boundDisplay,
                     $defaultDisplay,
                     $reason,
+                );
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        self::CODE_DEFAULT_BOUND_VIOLATION,
+                        $message,
+                        new SourceLocation($definition->sourceFile, $definition->templateAst->getStartLine()),
+                    ));
+                    continue;
+                }
+                throw new RuntimeException($message);
+            }
+        }
+    }
+
+    /**
+     * Report every recorded instantiation whose template was never defined. In `xphp compile`
+     * this surfaces as a thrown error inside the specialization loop; `xphp check` doesn't run
+     * that loop, so it detects the same condition here by comparing recorded instantiations
+     * against the definition set. No source location is attached — the instantiation does not
+     * retain its call site — but the message names the template and its generated FQCN.
+     */
+    public function collectUndefinedTemplates(DiagnosticCollector $diagnostics): void
+    {
+        foreach ($this->instantiations as $generatedFqn => $instantiation) {
+            if (!isset($this->definitions[$instantiation->templateFqn])) {
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_UNDEFINED_TEMPLATE,
+                    self::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
                 ));
             }
         }
+    }
+
+    /**
+     * Single source of truth for the "instantiated but never defined" message, shared by the
+     * compile-time throw (Compiler) and the check-time diagnostic.
+     */
+    public static function undefinedTemplateMessage(string $templateFqn, string $generatedFqn): string
+    {
+        return sprintf(
+            'Generic template "%s" was instantiated but never defined (generated as: %s).',
+            $templateFqn,
+            $generatedFqn,
+        );
+    }
+
+    /**
+     * Single source of truth for the default-violates-bound message.
+     */
+    private static function defaultBoundViolationMessage(
+        string $paramName,
+        string $templateFqn,
+        string $boundDisplay,
+        string $defaultDisplay,
+        string $reason,
+    ): string {
+        return sprintf(
+            "Default for generic parameter `%s` of \"%s\" violates the parameter's bound.\n"
+            . "  bound:   %s\n"
+            . "  default: %s\n"
+            . "  reason:  %s",
+            $paramName,
+            $templateFqn,
+            $boundDisplay,
+            $defaultDisplay,
+            $reason,
+        );
     }
 
     /**

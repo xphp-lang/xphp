@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\MissingArg;
+
+class Pair<A, B>
+{
+    public function __construct(public A $a, public B $b)
+    {
+    }
+}
