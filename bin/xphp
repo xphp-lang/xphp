@@ -3,7 +3,31 @@
 
 declare(strict_types=1);
 
-require dirname(__DIR__) . '/vendor/autoload.php';
+(static function (): void {
+    $candidates = [
+        // Set by Composer's generated bin proxy (vendor/bin/xphp).
+        $GLOBALS['_composer_autoload_path'] ?? null,
+        // Installed as a dependency: vendor/xphp-lang/xphp/bin -> <project>/vendor/autoload.php
+        dirname(__DIR__, 3) . '/autoload.php',
+        // Standalone checkout AND the PHAR (phar://alias.phar/vendor/autoload.php) rely on
+        // this one -- keep it present and last.
+        dirname(__DIR__) . '/vendor/autoload.php',
+    ];
+
+    foreach ($candidates as $file) {
+        if (is_string($file) && is_file($file)) {
+            require $file;
+
+            return;
+        }
+    }
+
+    fwrite(
+        STDERR,
+        'xphp: could not locate Composer\'s autoloader. Run `composer install`.' . PHP_EOL,
+    );
+    exit(1);
+})();
 
 use Symfony\Component\Console\Input\ArgvInput;
 use Symfony\Component\Console\Output\ConsoleOutput;
