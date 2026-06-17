@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\VarianceViolation;
+
+// Covariant `+T` appears in an input (method parameter) position — not allowed.
+class Producer<+T>
+{
+    public function set(T $value): void
+    {
+    }
+}

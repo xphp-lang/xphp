@@ -430,6 +430,24 @@ final class Registry
      *      builder -- Invariant declared never reaches the throw (Invariant
      *      passes every allowed-list), so the arm is observably unreachable.
      */
+    /**
+     * Variance-position check over every collected definition (moved out of the parser so
+     * `xphp check` can collect all violations across files in one run). Delegates to
+     * {@see VariancePositionValidator}: with this Registry's collector it gathers diagnostics
+     * at each offending member; without one (compile) it throws the first violation.
+     */
+    public function validateVariancePositions(): void
+    {
+        foreach ($this->definitions as $definition) {
+            VariancePositionValidator::assertPositions(
+                $definition->templateAst,
+                $definition->typeParams,
+                $this->diagnostics,
+                $definition->sourceFile,
+            );
+        }
+    }
+
     public function validateInnerVariance(): void
     {
         foreach ($this->definitions as $definition) {

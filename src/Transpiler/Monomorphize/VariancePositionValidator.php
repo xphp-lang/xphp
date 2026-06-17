@@ -18,6 +18,10 @@ use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Property;
 use PhpParser\Node\UnionType;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Declaration-time check that every appearance of a variance-marked type
@@ -49,14 +53,40 @@ use RuntimeException;
  *
  * Errors include the param name, variance marker, and the position class
  * so the user sees what's wrong without reading the implementation.
+ *
+ * Runs over collected definitions (`Registry::validateVariancePositions`), not
+ * in the parser. With a `DiagnosticCollector` it gathers every violation in the
+ * class (each located at the offending member) and continues; without one it
+ * throws the first violation — byte-identical to the previous parse-time check.
  */
 final class VariancePositionValidator
 {
+    /** Stable diagnostic code for a variance-position violation. */
+    public const CODE_VARIANCE_POSITION = 'xphp.variance_position';
+
+    /** @var array<string, Variance> */
+    private array $varianceByName;
+
+    /** @var list<array{message: string, line: ?int}> */
+    private array $violations = [];
+
+    /**
+     * @param array<string, Variance> $varianceByName
+     */
+    private function __construct(array $varianceByName)
+    {
+        $this->varianceByName = $varianceByName;
+    }
+
     /**
      * @param list<TypeParam> $params
      */
-    public static function assertPositions(ClassLike $node, array $params): void
-    {
+    public static function assertPositions(
+        ClassLike $node,
+        array $params,
+        ?DiagnosticCollector $diagnostics = null,
+        ?string $file = null,
+    ): void {
         $varianceByName = [];
         foreach ($params as $param) {
             if ($param->variance !== Variance::Invariant) {
@@ -67,73 +97,82 @@ final class VariancePositionValidator
             return;
         }
 
-        // 1. Bound and default positions are invariant by RFC. Walk each
-        // param's bound expression + default TypeRef tree; reject if any
-        // referenced leaf carries a name whose variance isn't Invariant.
+        $validator = new self($varianceByName);
+        $validator->collect($node, $params);
+        if ($validator->violations === []) {
+            return;
+        }
+
+        if ($diagnostics === null) {
+            // Compile-mode: fail fast on the first violation (byte-identical message).
+            throw new RuntimeException($validator->violations[0]['message']);
+        }
+
+        foreach ($validator->violations as $violation) {
+            $location = ($violation['line'] !== null && $file !== null)
+                ? new SourceLocation($file, $violation['line'])
+                : null;
+            $diagnostics->add(new Diagnostic(
+                Severity::Error,
+                self::CODE_VARIANCE_POSITION,
+                $violation['message'],
+                $location,
+            ));
+        }
+    }
+
+    /**
+     * @param list<TypeParam> $params
+     */
+    private function collect(ClassLike $node, array $params): void
+    {
+        $declarationLine = $node->getStartLine();
+
+        // 1. Bound and default positions are invariant by RFC.
         foreach ($params as $param) {
             if ($param->bound !== null) {
-                self::checkBoundExpr($param->bound, $varianceByName, $param->name, 'bound');
+                $this->checkBoundExpr($param->bound, $param->name, 'bound', $declarationLine);
             }
             if ($param->default !== null) {
-                self::checkTypeRef($param->default, $varianceByName, $param->name, 'default');
+                $this->checkTypeRef($param->default, $param->name, 'default', $declarationLine);
             }
         }
 
         // 2. Class-body positions: properties and methods.
         foreach ($node->getProperties() as $property) {
-            self::checkProperty($property, $varianceByName);
+            $this->checkProperty($property);
         }
         foreach ($node->getMethods() as $method) {
-            self::checkMethod($method, $varianceByName);
+            $this->checkMethod($method);
         }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkBoundExpr(
-        BoundExpr $bound,
-        array $varianceByName,
-        string $hostParam,
-        string $hostPosition,
-    ): void {
+    private function checkBoundExpr(BoundExpr $bound, string $hostParam, string $hostPosition, int $line): void
+    {
         if ($bound instanceof BoundLeaf) {
-            self::checkTypeRef($bound->type, $varianceByName, $hostParam, $hostPosition);
+            $this->checkTypeRef($bound->type, $hostParam, $hostPosition, $line);
             return;
         }
         assert($bound instanceof BoundIntersection || $bound instanceof BoundUnion);
         foreach ($bound->operands as $operand) {
-            self::checkBoundExpr($operand, $varianceByName, $hostParam, $hostPosition);
+            $this->checkBoundExpr($operand, $hostParam, $hostPosition, $line);
         }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkTypeRef(
-        TypeRef $ref,
-        array $varianceByName,
-        string $hostParam,
-        string $hostPosition,
-    ): void {
-        if ($ref->isTypeParam && isset($varianceByName[$ref->name])) {
-            $variance = $varianceByName[$ref->name];
-            throw self::violationError(
-                paramName: $ref->name,
-                variance: $variance,
-                position: $hostPosition,
-                hostParam: $hostParam,
+    private function checkTypeRef(TypeRef $ref, string $hostParam, string $hostPosition, int $line): void
+    {
+        if ($ref->isTypeParam && isset($this->varianceByName[$ref->name])) {
+            $this->record(
+                self::violationMessage($ref->name, $this->varianceByName[$ref->name], $hostPosition, $hostParam),
+                $line,
             );
         }
         foreach ($ref->args as $inner) {
-            self::checkTypeRef($inner, $varianceByName, $hostParam, $hostPosition);
+            $this->checkTypeRef($inner, $hostParam, $hostPosition, $line);
         }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkProperty(Property $property, array $varianceByName): void
+    private function checkProperty(Property $property): void
     {
         $type = $property->type;
         if ($type === null) {
@@ -143,13 +182,10 @@ final class VariancePositionValidator
         // regardless of `readonly`. Even +T on a readonly property would
         // PHP-fatal at autoload when the variance edge lands.
         $position = $property->isReadonly() ? 'readonly property' : 'mutable property';
-        self::checkPhpType($type, $varianceByName, [Variance::Invariant], $position);
+        $this->checkPhpType($type, [Variance::Invariant], $position);
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkMethod(ClassMethod $method, array $varianceByName): void
+    private function checkMethod(ClassMethod $method): void
     {
         $name = $method->name->toLowerString();
         $isConstructor = $name === '__construct';
@@ -166,16 +202,15 @@ final class VariancePositionValidator
                 continue;
             }
             if ($param->type !== null) {
-                self::checkPhpType($param->type, $varianceByName, $paramAllowed, $paramPosition);
+                $this->checkPhpType($param->type, $paramAllowed, $paramPosition);
             }
         }
 
         // Return type. Constructors don't have one; for the rest, invariant
         // or covariant.
         if (!$isConstructor && $method->returnType !== null) {
-            self::checkPhpType(
+            $this->checkPhpType(
                 $method->returnType,
-                $varianceByName,
                 [Variance::Invariant, Variance::Covariant],
                 'method return',
             );
@@ -190,7 +225,7 @@ final class VariancePositionValidator
         // then nested closures have no type-params and every name in their
         // signature is an outer reference.
         if ($method->stmts !== null) {
-            self::walkBodyForNestedClosures($method->stmts, $varianceByName);
+            $this->walkBodyForNestedClosures($method->stmts);
         }
     }
 
@@ -201,27 +236,23 @@ final class VariancePositionValidator
      *
      * Cheap hand-rolled recursive walk -- avoids spinning up a NodeTraverser
      * inside the per-class validator hot path.
-     *
-     * @param array<string, Variance> $varianceByName
      */
-    private static function walkBodyForNestedClosures(mixed $node, array $varianceByName): void
+    private function walkBodyForNestedClosures(mixed $node): void
     {
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
             foreach ($node->params as $param) {
                 // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
                 if ($param instanceof Param && $param->type !== null) {
-                    self::checkPhpType(
+                    $this->checkPhpType(
                         $param->type,
-                        $varianceByName,
                         [Variance::Invariant, Variance::Contravariant],
                         'nested closure/arrow parameter',
                     );
                 }
             }
             if ($node->returnType !== null) {
-                self::checkPhpType(
+                $this->checkPhpType(
                     $node->returnType,
-                    $varianceByName,
                     [Variance::Invariant, Variance::Covariant],
                     'nested closure/arrow return',
                 );
@@ -231,13 +262,13 @@ final class VariancePositionValidator
 
         if (is_array($node)) {
             foreach ($node as $child) {
-                self::walkBodyForNestedClosures($child, $varianceByName);
+                $this->walkBodyForNestedClosures($child);
             }
             return;
         }
         if ($node instanceof Node) {
             foreach ($node->getSubNodeNames() as $subName) {
-                self::walkBodyForNestedClosures($node->$subName, $varianceByName);
+                $this->walkBodyForNestedClosures($node->$subName);
             }
         }
     }
@@ -247,15 +278,10 @@ final class VariancePositionValidator
      * UnionType / IntersectionType), checking every Name's parts against
      * the variance map.
      *
-     * @param array<string, Variance> $varianceByName
      * @param list<Variance> $allowed
      */
-    private static function checkPhpType(
-        Node $type,
-        array $varianceByName,
-        array $allowed,
-        string $position,
-    ): void {
+    private function checkPhpType(Node $type, array $allowed, string $position): void
+    {
         if ($type instanceof Identifier) {
             return; // scalar / pseudo type; never a type-param ref.
         }
@@ -263,14 +289,12 @@ final class VariancePositionValidator
             $parts = $type->getParts();
             if (count($parts) === 1) {
                 $name = $parts[0];
-                if (isset($varianceByName[$name])) {
-                    $variance = $varianceByName[$name];
+                if (isset($this->varianceByName[$name])) {
+                    $variance = $this->varianceByName[$name];
                     if (!in_array($variance, $allowed, true)) {
-                        throw self::violationError(
-                            paramName: $name,
-                            variance: $variance,
-                            position: $position,
-                            hostParam: null,
+                        $this->record(
+                            self::violationMessage($name, $variance, $position, null),
+                            $type->getStartLine(),
                         );
                     }
                 }
@@ -282,19 +306,19 @@ final class VariancePositionValidator
             if (is_array($args)) {
                 foreach ($args as $arg) {
                     if ($arg instanceof TypeRef) {
-                        self::checkInnerTypeRef($arg, $varianceByName, $allowed, $position);
+                        $this->checkInnerTypeRef($arg, $allowed, $position, $type->getStartLine());
                     }
                 }
             }
             return;
         }
         if ($type instanceof NullableType) {
-            self::checkPhpType($type->type, $varianceByName, $allowed, $position);
+            $this->checkPhpType($type->type, $allowed, $position);
             return;
         }
         if ($type instanceof UnionType || $type instanceof IntersectionType) {
             foreach ($type->types as $inner) {
-                self::checkPhpType($inner, $varianceByName, $allowed, $position);
+                $this->checkPhpType($inner, $allowed, $position);
             }
             return;
         }
@@ -304,37 +328,32 @@ final class VariancePositionValidator
     }
 
     /**
-     * @param array<string, Variance> $varianceByName
      * @param list<Variance> $allowed
      */
-    private static function checkInnerTypeRef(
-        TypeRef $ref,
-        array $varianceByName,
-        array $allowed,
-        string $position,
-    ): void {
-        if ($ref->isTypeParam && isset($varianceByName[$ref->name])) {
-            $variance = $varianceByName[$ref->name];
+    private function checkInnerTypeRef(TypeRef $ref, array $allowed, string $position, int $line): void
+    {
+        if ($ref->isTypeParam && isset($this->varianceByName[$ref->name])) {
+            $variance = $this->varianceByName[$ref->name];
             if (!in_array($variance, $allowed, true)) {
-                throw self::violationError(
-                    paramName: $ref->name,
-                    variance: $variance,
-                    position: $position,
-                    hostParam: null,
-                );
+                $this->record(self::violationMessage($ref->name, $variance, $position, null), $line);
             }
         }
         foreach ($ref->args as $inner) {
-            self::checkInnerTypeRef($inner, $varianceByName, $allowed, $position);
+            $this->checkInnerTypeRef($inner, $allowed, $position, $line);
         }
     }
 
-    private static function violationError(
+    private function record(string $message, ?int $line): void
+    {
+        $this->violations[] = ['message' => $message, 'line' => $line];
+    }
+
+    private static function violationMessage(
         string $paramName,
         Variance $variance,
         string $position,
         ?string $hostParam,
-    ): RuntimeException {
+    ): string {
         $marker = match ($variance) {
             Variance::Covariant => '+',
             Variance::Contravariant => '-',
@@ -343,12 +362,12 @@ final class VariancePositionValidator
         $context = $hostParam !== null
             ? sprintf(' inside the %s of generic parameter `%s`', $position, $hostParam)
             : sprintf(' in %s position', $position);
-        return new RuntimeException(sprintf(
+        return sprintf(
             'Generic parameter `%s%s` appears%s, which is not allowed for %s variance.',
             $marker,
             $paramName,
             $context,
             $variance->value,
-        ));
+        );
     }
 }

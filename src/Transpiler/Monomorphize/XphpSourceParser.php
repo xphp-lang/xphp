@@ -1770,22 +1770,10 @@ final class XphpSourceParser
 
             public function leaveNode(Node $node): null
             {
-                // Variance position check fires once per class definition,
-                // AFTER the body has been fully resolved -- so any Name nodes
-                // inside the body that carry nested ATTR_GENERIC_ARGS are
-                // visible to the validator. Rejects covariant T in input
-                // position, contravariant T in output, either in
-                // bound/default/property/constructor positions, and
-                // F-bounded variance (`+T : Box<T>`).
-                if ($node instanceof ClassLike && $node->name !== null) {
-                    $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-                    if (is_array($params)) {
-                        /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
-                        if ($params !== []) {
-                            VariancePositionValidator::assertPositions($node, $params);
-                        }
-                    }
-                }
+                // NB: variance-position validation no longer runs here. It moved to a
+                // Registry validation phase (`validateVariancePositions`) that runs over
+                // collected definitions, so `xphp check` can collect every variance error
+                // across all files in one run instead of aborting at the first parse.
                 // @infection-ignore-all -- the instanceof chain mirrors enterNode's push;
                 // restructuring `||` as `&&` produces a leaveNode that no longer pops the
                 // stack for any node, but the test suite's AST shapes never re-use the

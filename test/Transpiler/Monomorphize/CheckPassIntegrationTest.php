@@ -51,6 +51,29 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(Registry::CODE_DEFAULT_BOUND_VIOLATION, $diagnostics->all()[0]->code);
     }
 
+    public function testVariancePositionViolationIsCollectedByCheck(): void
+    {
+        // Exercises the validateVariancePositions() step of check().
+        $diagnostics = $this->check('variance_violation');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(VariancePositionValidator::CODE_VARIANCE_POSITION, $diagnostics->all()[0]->code);
+    }
+
+    public function testCompileStillThrowsOnVariancePositionViolation(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('not allowed for covariant variance');
+
+        $work = sys_get_temp_dir() . '/xphp-check-compile-' . uniqid('', true);
+        mkdir($work, 0o755, true);
+        try {
+            $this->buildCompiler()->compile($this->sources('variance_violation'), $this->sourceDir('variance_violation'), $work . '/dist', $work . '/cache');
+        } finally {
+            self::rrmdir($work);
+        }
+    }
+
     public function testMissingTypeArgumentIsCollectedByCheck(): void
     {
         $diagnostics = $this->check('missing_arg');

@@ -82,6 +82,11 @@ final readonly class Compiler
         // padded instantiation is recorded), then collect instantiations -- including
         // bare `new Foo;` shapes for templates whose every param has a default.
         $registry->validateDefaultsAgainstBounds();
+        // Variance-position rules (covariant T in input, contravariant T in output,
+        // bound/default/property/constructor invariance, F-bounded variance). Moved
+        // here from the parser so all definitions are present and `xphp check` can
+        // collect across files; compile-mode still throws on the first violation.
+        $registry->validateVariancePositions();
         // Inner-template variance composition: every template's variance
         // markers are known by now, so cases the parse-time validator
         // couldn't catch (e.g. `class P<+T> { f(): Container<T> }` where
@@ -227,6 +232,10 @@ final readonly class Compiler
             $collector->collectDefinitions($ast, $filepath);
         }
         $registry->validateDefaultsAgainstBounds();
+        $registry->validateVariancePositions();
+        // NB: validateInnerVariance() is not wired in here yet — it still throws
+        // (not collectable until the inner-variance step), so calling it in check-mode
+        // would abort on the first violation. Added once it accepts the collector.
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }
