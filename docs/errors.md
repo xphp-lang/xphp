@@ -4,6 +4,55 @@ Every compile-time rejection from xphp lists the error message
 verbatim below, paired with the docs section that explains the
 constraint. Search this page for the text your compile output shows.
 
+## `xphp check` — validate without emitting
+
+`vendor/bin/xphp check <source-dir>` validates your generic `.xphp`
+code and reports **every** problem below as a structured diagnostic —
+each with a `file:line` location — instead of aborting on the first.
+It writes no output (no `dist/`, no cache); it's a pure gate, ideal
+for CI.
+
+```bash
+vendor/bin/xphp check src
+```
+
+Output formats via `--format`:
+
+| Format | Use |
+|--------|-----|
+| `text` (default) | human-readable, one block per problem |
+| `json` | machine-readable; stable `{ "diagnostics": [ … ] }` shape for tooling |
+| `github` | GitHub Actions annotations (`::error file=…,line=…::…`) so problems show inline on a PR |
+
+Exit codes: **0** (clean), **1** (at least one error), **2** (bad
+source directory or unknown `--format`). A file that fails to parse is
+reported and skipped, so the rest of the tree is still checked in the
+same run.
+
+### Diagnostic codes
+
+The `json` and `github` formats tag each diagnostic with a stable code:
+
+| Code | Meaning |
+|------|---------|
+| `xphp.bound_violation` | a concrete type argument doesn't satisfy its parameter's bound |
+| `xphp.default_bound_violation` | a parameter's default doesn't satisfy its own bound |
+| `xphp.missing_type_argument` | a required type argument was omitted and has no default |
+| `xphp.variance_position` | a `+T`/`-T` parameter appears in a position its variance forbids |
+| `xphp.inner_variance` | variance is violated through another generic's slot (composition) |
+| `xphp.undefined_template` | a generic was instantiated but never declared |
+| `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
+
+> Scope: `xphp check` covers the class/interface/trait-level generic
+> checks on this page. Method-, function-, and closure-level generic
+> errors remain `xphp compile` failures for now.
+
+In CI (GitHub Actions), one step gates the build and annotates the diff:
+
+```yaml
+- run: vendor/bin/xphp check src --format=github
+```
+
 ## Quick index
 
 | If the message contains... | Read |

@@ -143,6 +143,15 @@ compile. `dist/` holds your rewritten code; `.xphp-cache/Generated/`
 holds the specialized classes. Both can be gitignored and rebuilt
 in CI.
 
+To validate generics without emitting anything — a CI gate that reports
+every bound/variance/etc. problem with a `file:line`:
+
+```bash
+vendor/bin/xphp check src            # exit 1 if any error; --format=text|json|github
+```
+
+See [Errors and diagnostics](docs/errors.md#xphp-check--validate-without-emitting).
+
 ## See also
 
 - [Getting started](docs/getting-started.md) -- full walkthrough including PSR-4 details, runtime semantics, and what the generated PHP looks like
