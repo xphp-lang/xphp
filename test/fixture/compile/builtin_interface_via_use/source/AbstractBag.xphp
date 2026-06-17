@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BuiltinViaUse;
+
+/**
+ * A same-namespace base class referenced by a BARE name in `extends`. Even
+ * without a `use` import these break under relocation: the bare `AbstractBag`
+ * resolves against the current namespace, so once the specialized subclass is
+ * lifted into `XPHP\Generated\...` it would point at a non-existent
+ * `XPHP\Generated\...\AbstractBag`. The fix qualifies it to the real FQN.
+ */
+abstract class AbstractBag
+{
+    public function isEmpty(array $items): bool
+    {
+        return $items === [];
+    }
+}

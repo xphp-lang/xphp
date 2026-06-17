@@ -15,15 +15,27 @@ concurrency:
 
 jobs:
   phpunit:
-    name: PHPUnit
+    # 8.4 is the supported/default runtime and runs the full suite minus the
+    # `php85` group; a dedicated 8.5 container runs only that group, which
+    # covers syntax (e.g. the pipe operator `|>`) that the host-version
+    # parser can only tokenize on PHP 8.5.
+    name: PHPUnit (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '8.4'
+            target: test/unit
+          - php: '8.5'
+            target: test/unit/php85
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup PHP 8.4
+      - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: ${{ matrix.php }}
           extensions: dom, json, mbstring, tokenizer
           coverage: none
           tools: composer:v2
@@ -32,7 +44,7 @@ jobs:
         uses: ramsey/composer-install@v3
 
       - name: Run PHPUnit
-        run: make test/unit
+        run: make ${{ matrix.target }}
 
   phpstan:
     name: PHPStan

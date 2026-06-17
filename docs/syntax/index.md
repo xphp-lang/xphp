@@ -21,6 +21,7 @@ first.
 | [Pseudo-types](pseudo-types.md) | `self<T>` / `static<T>` / `parent<T>` and the `new self::<T>(...)` form |
 | [Turbofish](turbofish.md) | All four call-site shapes plus variable and empty turbofish |
 | [Array sugar](array-sugar.md) | `T[]` shorthand |
+| [Exceptions](exceptions.md) | Generic exceptions, `catch (HttpError<NotFound> $e)`, bare and union catch |
 
 ## Quick reference card
 
@@ -72,6 +73,13 @@ class Container<T> {
     public function with(T $n): self<T> { return new self::<T>($n); }
 }
 return new self::<T>($x);                 // constructor turbofish
+
+// Generic exceptions + catch by specialization
+class HttpError<T> extends \RuntimeException {}
+throw new HttpError::<NotFound>('missing');
+try { /* ... */ }
+catch (HttpError<NotFound> $e) {}         // one specialization
+catch (HttpError $e) {}                    // any specialization (marker)
 ```
 
 For the runtime side -- how marker interfaces work, how specialized

@@ -97,7 +97,8 @@ pseudo-type, and the receiver short-circuits.
 
 ## See also
 
-- Test fixture: `test/fixture/compile/box_generic/` (uses `self` in
-  return positions)
+- Test fixtures: `test/fixture/compile/generic_method_new_self_turbofish/`,
+  `generic_method_self_with_type_args/`, and
+  `generic_method_new_static_turbofish/` (exercise `self` / `static`)
 - Related: [classes and interfaces](classes-and-interfaces.md),
   [turbofish](turbofish.md)

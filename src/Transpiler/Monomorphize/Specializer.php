@@ -160,6 +160,19 @@ final class Specializer
                             $args,
                         );
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $substituted);
+
+                        return null;
+                    }
+
+                    // Bare, non-generic class/interface name carried over from the
+                    // template (extends Countable, new ArrayIterator, ...). The parser
+                    // tagged it with the FQN resolved against the source file's
+                    // namespace + use map; fully-qualify it now so it survives
+                    // relocation into the XPHP\Generated\... namespace. Only runs on
+                    // the cloned specialized AST -- user files never reach here.
+                    $resolvedFqn = $node->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN);
+                    if (is_string($resolvedFqn)) {
+                        return new FullyQualified($resolvedFqn, $node->getAttributes());
                     }
                 }
 

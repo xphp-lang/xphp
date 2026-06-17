@@ -493,3 +493,35 @@ class TempContainer<T> {
 }
 $x = new TempContainer::<User>();
 ```
+
+## Newer PHP syntax needs a matching host runtime
+
+### ❌ What doesn't work
+
+Running the transpiler on PHP 8.4 over a source file that uses PHP 8.5
+syntax — for example the pipe operator:
+
+```php
+$slug = $title |> trim(...) |> strtolower(...);
+```
+
+```
+Syntax error, unexpected '>'
+```
+
+### Why
+
+xphp owns only the generic syntax; everything else is plain PHP. It
+parses your source with `nikic/php-parser` configured for the **host**
+PHP version (the one running the transpiler). On PHP 8.4 the lexer
+can't tokenize 8.5-only syntax like `|>`, so the parse fails before
+specialization even begins. There's nothing generic about the line —
+it just never reaches the host parser's grammar.
+
+### ✅ Workaround
+
+Run the transpiler on a PHP version that can parse your syntax — e.g.
+PHP 8.5 for the pipe operator. Plain (non-generic) code, including
+newer-PHP syntax, passes straight through untouched. Note the emitted
+PHP still requires a runtime that supports those features to *execute*;
+the supported floor for xphp itself is PHP 8.4 (`composer.json`).

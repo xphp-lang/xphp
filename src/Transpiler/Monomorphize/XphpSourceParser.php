@@ -64,6 +64,14 @@ final class XphpSourceParser
     public const ATTR_GENERIC_ARGS = 'xphp:genericArgs';
     public const ATTR_TEMPLATE_FQN = 'xphp:templateFqn';
 
+    // Resolved FQN for a bare, non-generic class/interface Name in a class-name
+    // position (extends/implements/new/catch/instanceof/static-access/type-hint).
+    // Recorded at parse time WITHOUT mutating the node, so user-file output stays
+    // byte-identical; the Specializer reads it to fully-qualify the name only on
+    // a relocated specialized clone (where the source's `use` imports no longer
+    // apply and a bare name would otherwise resolve into XPHP\Generated\...).
+    public const ATTR_RESOLVED_FQN = 'xphp:resolvedFqn';
+
     // Method-scoped generics (one type-param set per method, distinct from any class-level set).
     public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
     public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
@@ -1572,7 +1580,119 @@ final class XphpSourceParser
                     }
                 }
 
+                // Tag bare class/interface Name references in class-name positions
+                // with their resolved FQN. Reached from the *parent* node's slots
+                // (never via a blanket Name visit) so function-call and constant
+                // Names are left bare -- PHP's global fallback covers them, and
+                // fully-qualifying them would break it. Runs after the Namespace_/
+                // Use_ branches (so $ctx is populated) and after the ClassLike/
+                // method type-param push (so isEnclosingTypeParam sees this scope).
+                if ($node instanceof Node\Stmt\Class_) {
+                    $this->markType($node->extends);
+                    foreach ($node->implements as $impl) {
+                        $this->markName($impl);
+                    }
+                } elseif ($node instanceof Node\Stmt\Interface_) {
+                    foreach ($node->extends as $ext) {
+                        $this->markName($ext);
+                    }
+                // Enums are intentionally absent: they can't be generic, so they
+                // are never cloned into the XPHP\Generated\... namespace, and a
+                // resolved-FQN attribute on an enum's `implements` would never be
+                // consumed by the Specializer swap.
+                } elseif ($node instanceof Node\Expr\New_
+                    || $node instanceof Node\Expr\Instanceof_
+                    || $node instanceof Node\Expr\StaticCall
+                    || $node instanceof Node\Expr\ClassConstFetch
+                    || $node instanceof Node\Expr\StaticPropertyFetch
+                ) {
+                    if ($node->class instanceof Name) {
+                        $this->markName($node->class);
+                    }
+                } elseif ($node instanceof Node\Stmt\Catch_) {
+                    foreach ($node->types as $type) {
+                        $this->markName($type);
+                    }
+                } elseif ($node instanceof Node\Param) {
+                    $this->markType($node->type);
+                } elseif ($node instanceof Node\Stmt\Property) {
+                    $this->markType($node->type);
+                } elseif ($node instanceof Node\Stmt\ClassConst) {
+                    $this->markType($node->type);
+                } elseif ($node instanceof Node\Stmt\ClassMethod
+                    || $node instanceof Node\Stmt\Function_
+                    || $node instanceof Node\Expr\Closure
+                    || $node instanceof Node\Expr\ArrowFunction
+                ) {
+                    $this->markType($node->returnType);
+                }
+
                 return null;
+            }
+
+            /**
+             * Tag every class-name Name leaf inside a type-hint slot (recursing
+             * through nullable/union/intersection wrappers). Scalar `Identifier`
+             * leaves and non-Name expressions are left untouched.
+             */
+            private function markType(?Node $type): void
+            {
+                if ($type instanceof Name) {
+                    $this->markName($type);
+                } elseif ($type instanceof Node\NullableType) {
+                    $this->markType($type->type);
+                } elseif ($type instanceof Node\UnionType || $type instanceof Node\IntersectionType) {
+                    foreach ($type->types as $inner) {
+                        $this->markType($inner);
+                    }
+                }
+            }
+
+            private function markName(Name $node): void
+            {
+                if (!$this->shouldQualify($node)) {
+                    return;
+                }
+                $node->setAttribute(
+                    XphpSourceParser::ATTR_RESOLVED_FQN,
+                    $this->ctx->resolveAgainstContext($node->toString()),
+                );
+            }
+
+            /**
+             * A bare class/interface Name is fully-qualifiable only when it is not
+             * already absolute, carries no generic args (those are rewritten by the
+             * generic machinery, which keys on `!isFullyQualified()`), is not an
+             * enclosing type-param, and is not a scalar / self / parent / static
+             * keyword (all of which live in SCALAR_TYPES).
+             */
+            private function shouldQualify(Name $node): bool
+            {
+                // @infection-ignore-all — defensive only: a FullyQualified name that slipped
+                // through would still be skipped by the Specializer swap (which guards on
+                // `!isFullyQualified()`), so tagging or not tagging it is unobservable. The
+                // check just avoids stamping a useless attribute.
+                if ($node instanceof Node\Name\FullyQualified) {
+                    return false;
+                }
+                if ($node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) !== null) {
+                    return false;
+                }
+                $name = $node->toString();
+                // @infection-ignore-all — defensive only: an enclosing type-param is a single
+                // segment that the Specializer substitutes (returning early via typeRefToNode)
+                // before the resolved-FQN swap can ever read the attribute, so tagging it is
+                // likewise unobservable.
+                if ($this->isEnclosingTypeParam($name)) {
+                    return false;
+                }
+                $parts = $node->getParts();
+                // @infection-ignore-all — scalar keywords are single-segment; the count guard only
+                // skips a needless strtolower on namespaced names and never changes the outcome.
+                if (count($parts) === 1 && in_array(strtolower($parts[0]), XphpSourceParser::SCALAR_TYPES, true)) {
+                    return false;
+                }
+                return true;
             }
 
             private function resolveNameOnly(string $name): string

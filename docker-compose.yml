@@ -8,6 +8,15 @@ services:
     environment:
       XDEBUG_MODE: coverage,develop
 
+  # PHP 8.5 runtime for the `@group php85` tests. Run them with:
+  #   docker compose run --rm php85 make test/unit/php85
+  php85:
+    build:
+      dockerfile: .docker/php85.Dockerfile
+    working_dir: /opt/app
+    volumes:
+      - ./:/opt/app
+
   xphp:
     extends:
       service: php

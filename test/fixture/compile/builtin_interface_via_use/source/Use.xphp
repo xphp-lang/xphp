@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BuiltinViaUse;
+
+use App\BuiltinViaUse\Models\User;
+
+$bag = new ArrayBag::<User>();
+$bag->add(new User('alice'));

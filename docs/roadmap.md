@@ -45,24 +45,18 @@ timeline
                 : runtime instanceof T
                 : marker interface per template
         Developer experience
-                : PSR-4 fixtures
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
     section Next
         Editor and tooling
-                : PhpStorm syntax highlighting
-                : Language Server Protocol
-                : Composer plugin for autoload
                 : Live transpilation via stream wrapper
         Compiler ergonomics
-                : Migration hint for bare call sites
-                : PHPDoc substitution in generated bodies
                 : Source maps back to xphp lines
+    section Discovery
         Generic surface
                 : Generic type aliases
                 : Variance edges on trait-owned templates
                 : Branching narrowing precision
-    section Discovery
         Module surface
                 : internal visibility modifier
                 : composer-package boundary
@@ -182,7 +176,6 @@ upcoming one.
 
 ### Developer experience
 
-- PSR-4 fixtures.
 - RFC-aligned call-site syntax (`Name::<...>` turbofish).
 - Empty turbofish (`Name::<>`) for all-defaults templates.
 
@@ -192,26 +185,11 @@ upcoming one.
 
 ### Editor and tooling
 
-- PhpStorm syntax highlighting.
-- Language Server Protocol implementation (diagnostics, hover types,
-  goto-definition).
-- Composer plugin for autoload registration.
 - Live transpilation via stream wrapper (no build step in dev).
 
 ### Compiler ergonomics
 
-- Compile-time migration hint for bare `Name<...>(...)` call sites
-  that point users at the `::<...>` turbofish.
-- PHPDoc substitution in generated bodies so generated `.php` reads
-  naturally.
 - Source maps (stack traces back to `.xphp` lines).
-
-### Generic surface
-
-- Generic type aliases (e.g. `type Pair<A, B> = ...`).
-- Variance edges on trait-owned templates.
-- Branching narrowing precision: today conservatively de-specializes
-  when arms disagree; will track unions with runtime dispatch instead.
 
 ---
 
@@ -222,6 +200,13 @@ Each has a sketched answer to "would xphp support this?" but the
 implementation knobs are still being settled. Treat each Discovery
 entry as a starting point for community discussion, not a guarantee
 to ship.
+
+### Generic surface
+
+- Generic type aliases (e.g. `type Pair<A, B> = ...`).
+- Variance edges on trait-owned templates.
+- Branching narrowing precision: today conservatively de-specializes
+  when arms disagree; will track unions with runtime dispatch instead.
 
 ### Module surface
 
