@@ -13,6 +13,7 @@ use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Walks an AST and feeds generic definitions and instantiations into a Registry.
@@ -133,7 +134,11 @@ final class RegistryCollector extends NodeVisitorAbstract
             if (is_array($args)) {
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
                 if (is_string($fqn) && self::allConcrete($args)) {
-                    $this->registry->recordInstantiation($fqn, $args);
+                    $this->registry->recordInstantiation(
+                        $fqn,
+                        $args,
+                        new SourceLocation($this->currentFile, $node->getStartLine()),
+                    );
                 }
             }
         }
@@ -178,6 +183,9 @@ final class RegistryCollector extends NodeVisitorAbstract
         // instantiation downstream -- only the path differs. The split exists to
         // record the synthesis at the same time as the attribute attach so that the
         // fixed-point loop's nested-instantiation walk picks it up in the same pass.
+        // Call-site location is threaded for the explicit-turbofish path (the bound-violation
+        // case); the all-defaults bare-`new` path can only fail bounds via a default, which is
+        // reported at the definition site, so it records without a call-site here.
         $this->registry->recordInstantiation($resolved, []);
     }
 

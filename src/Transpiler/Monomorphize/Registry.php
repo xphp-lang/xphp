@@ -14,9 +14,16 @@ use PhpParser\Node\NullableType;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\UnionType;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\Diagnostics\SourceLocation;
 
 final class Registry
 {
+    /** Stable diagnostic code for a generic bound violation at an instantiation site. */
+    public const CODE_BOUND_VIOLATION = 'xphp.bound_violation';
+
     /**
      * All specialized classes live under this namespace prefix; the full target FQCN
      * mirrors the original template's namespace and ends with a hash-based class name.
@@ -39,9 +46,16 @@ final class Registry
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
+    /**
+     * @param ?DiagnosticCollector $diagnostics When null (the default, used by `xphp compile`),
+     *   validation failures throw as before — byte-identical behavior. When provided (by
+     *   `xphp check`), bound violations are appended to the collector and recording continues,
+     *   so every error of the validation phase is reported in one run.
+     */
     public function __construct(
         private readonly int $hashLength = self::DEFAULT_HASH_HEX_LENGTH,
         private readonly ?TypeHierarchy $hierarchy = null,
+        private readonly ?DiagnosticCollector $diagnostics = null,
     ) {
         self::validateHashLength($this->hashLength);
     }
@@ -87,18 +101,24 @@ final class Registry
      * generated FQCN, throws with a self-contained error message explaining how to raise XPHP_HASH_LENGTH.
      *
      * @param list<TypeRef> $args
+     * @param ?SourceLocation $callSite The `.xphp` position of the instantiation site, used to
+     *   locate a bound-violation diagnostic in check-mode. Nested sub-instantiations inherit the
+     *   enclosing site (they have no distinct source token). Ignored in throw-mode.
      */
-    public function recordInstantiation(string $templateFqn, array $args): GenericInstantiation
-    {
+    public function recordInstantiation(
+        string $templateFqn,
+        array $args,
+        ?SourceLocation $callSite = null,
+    ): GenericInstantiation {
         $args = $this->padWithDefaults($templateFqn, $args);
 
         foreach ($args as $arg) {
             if ($arg->isGeneric()) {
-                $this->recordInstantiation($arg->name, $arg->args);
+                $this->recordInstantiation($arg->name, $arg->args, $callSite);
             }
         }
 
-        $this->validateBounds($templateFqn, $args);
+        $this->validateBounds($templateFqn, $args, $callSite);
 
         $generatedFqn = self::generatedFqn($templateFqn, $args, $this->hashLength);
         $template = ltrim($templateFqn, '\\');
@@ -609,7 +629,7 @@ final class Registry
      *
      * @param list<TypeRef> $args
      */
-    private function validateBounds(string $templateFqn, array $args): void
+    private function validateBounds(string $templateFqn, array $args, ?SourceLocation $callSite = null): void
     {
         if ($this->hierarchy === null) {
             return;
@@ -623,6 +643,8 @@ final class Registry
             $args,
             $this->hierarchy,
             self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+            $this->diagnostics,
+            $callSite,
         );
     }
 
@@ -637,6 +659,11 @@ final class Registry
      * `$instantiationLabel` is the human-readable context string that opens the error
      * (e.g. `"App\Box<int>"` or `"App\Util::identity<int>"`).
      *
+     * When `$diagnostics` is null (the default — `xphp compile`, and every `GenericMethodCompiler`
+     * call site) a violation throws as before (byte-identical message). When a collector is
+     * supplied (`xphp check`), each violation is appended as a `Diagnostic` and the loop continues,
+     * so all violating parameters of one instantiation are reported in a single run.
+     *
      * @param list<TypeParam> $typeParams
      * @param list<TypeRef> $args
      */
@@ -645,6 +672,8 @@ final class Registry
         array $args,
         TypeHierarchy $hierarchy,
         string $instantiationLabel,
+        ?DiagnosticCollector $diagnostics = null,
+        ?SourceLocation $callSite = null,
     ): void {
         // Arity mismatch is a different error class (caught upstream); skip silently here
         // so that the existing pipeline can produce the more specific message.
@@ -675,18 +704,44 @@ final class Registry
                     $concrete->toDisplayString(),
                     $boundDisplay,
                 );
-            throw new RuntimeException(sprintf(
-                "Generic bound violated while instantiating %s.\n"
-                . "  type parameter %s is bounded by %s\n"
-                . "  but the supplied concrete type is %s\n\n"
-                . "  %s",
+            $message = self::boundViolationMessage(
                 $instantiationLabel,
                 $param->name,
                 $boundDisplay,
                 $concrete->toDisplayString(),
                 $detail,
-            ));
+            );
+            if ($diagnostics !== null) {
+                $diagnostics->add(new Diagnostic(Severity::Error, self::CODE_BOUND_VIOLATION, $message, $callSite));
+                continue;
+            }
+            throw new RuntimeException($message);
         }
+    }
+
+    /**
+     * Build the user-facing bound-violation message. Single source of truth shared by the
+     * throw path (`xphp compile`) and the diagnostic path (`xphp check`) so the two can never
+     * drift — the exact text is pinned by `expectExceptionMessage` assertions.
+     */
+    private static function boundViolationMessage(
+        string $instantiationLabel,
+        string $paramName,
+        string $boundDisplay,
+        string $concreteDisplay,
+        string $detail,
+    ): string {
+        return sprintf(
+            "Generic bound violated while instantiating %s.\n"
+            . "  type parameter %s is bounded by %s\n"
+            . "  but the supplied concrete type is %s\n\n"
+            . "  %s",
+            $instantiationLabel,
+            $paramName,
+            $boundDisplay,
+            $concreteDisplay,
+            $detail,
+        );
     }
 
     /**
