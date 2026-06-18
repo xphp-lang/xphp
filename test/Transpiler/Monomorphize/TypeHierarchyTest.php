@@ -217,4 +217,51 @@ PHP;
         self::assertFalse($hierarchy->isDeclared('App\\T'));
         self::assertFalse($hierarchy->isDeclared('App\\Nonexistent'));
     }
+
+    public function testAncestorChainReturnsNearestFirst(): void
+    {
+        $hierarchy = new TypeHierarchy([
+            'App\\Leaf' => ['App\\Mid'],
+            'App\\Mid' => ['App\\Base'],
+            'App\\Base' => [],
+        ]);
+
+        self::assertSame(['App\\Mid', 'App\\Base'], $hierarchy->ancestorChain('App\\Leaf'));
+        self::assertSame(['App\\Base'], $hierarchy->ancestorChain('App\\Mid'));
+        self::assertSame([], $hierarchy->ancestorChain('App\\Base'));
+    }
+
+    public function testAncestorChainDedupesDiamondNearestFirst(): void
+    {
+        // Diamond: D -> {B, C}; B -> A; C -> {A, E}. A is reachable via two
+        // paths but appears exactly once. E sits in the queue *after* the
+        // duplicate A, so a `break`-instead-of-`continue` on the dedup hit
+        // would wrongly drop E -- the assertion on E's presence pins that.
+        $hierarchy = new TypeHierarchy([
+            'D' => ['B', 'C'],
+            'B' => ['A'],
+            'C' => ['A', 'E'],
+            'A' => [],
+            'E' => [],
+        ]);
+
+        self::assertSame(['B', 'C', 'A', 'E'], $hierarchy->ancestorChain('D'));
+    }
+
+    public function testAncestorChainUnknownFqnIsEmpty(): void
+    {
+        $hierarchy = new TypeHierarchy([]);
+
+        self::assertSame([], $hierarchy->ancestorChain('App\\Nope'));
+    }
+
+    public function testAncestorChainNormalizesLeadingBackslash(): void
+    {
+        $hierarchy = new TypeHierarchy([
+            'App\\Sub' => ['App\\Sup'],
+            'App\\Sup' => [],
+        ]);
+
+        self::assertSame(['App\\Sup'], $hierarchy->ancestorChain('\\App\\Sub'));
+    }
 }

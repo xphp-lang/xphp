@@ -139,6 +139,40 @@ final readonly class TypeHierarchy
     }
 
     /**
+     * Transitive ancestors of $fqn, nearest-first and de-duplicated, excluding
+     * $fqn itself. Breadth-first over the direct-ancestor map, so the closest
+     * declaring class is visited before its grandparents.
+     *
+     * Powers inherited generic-method resolution: when `$sub->m::<X>()` can't
+     * bind `m` on the receiver's own class, the caller walks this chain and
+     * binds to the nearest ancestor that declares the generic method. An
+     * unknown $fqn yields an empty list.
+     *
+     * @return list<string>
+     */
+    public function ancestorChain(string $fqn): array
+    {
+        $fqn = ltrim($fqn, '\\');
+
+        $seen = [];
+        $chain = [];
+        $queue = $this->ancestors[$fqn] ?? [];
+        while ($queue !== []) {
+            $next = array_shift($queue);
+            if (isset($seen[$next])) {
+                continue;
+            }
+            $seen[$next] = true;
+            $chain[] = $next;
+            foreach ($this->ancestors[$next] ?? [] as $grandAncestor) {
+                $queue[] = $grandAncestor;
+            }
+        }
+
+        return $chain;
+    }
+
+    /**
      * @param list<Node\Stmt> $ast
      * @param array<string, list<string>> $ancestors out-param accumulator
      */

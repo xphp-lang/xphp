@@ -1257,6 +1257,240 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testGenericMethodResolvesThroughInheritance(): void
+    {
+        // Ticket 0003: a generic method declared on a base class resolves and
+        // runs when called via turbofish on a subclass receiver. The
+        // specialization is emitted onto the DECLARING base so every subclass
+        // inherits the single copy through the class-level `extends` edge --
+        // it is NOT duplicated onto the receiver's own specialization.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_through_inheritance/source',
+            'genmethod-inherit',
+        );
+        try {
+            $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
+
+            $baseSpec = '';
+            $derivedSpec = '';
+            foreach ($generated as $f) {
+                $content = file_get_contents($f);
+                self::assertIsString($content);
+                if (str_contains($f, '/Base/T_')) {
+                    $baseSpec .= $content;
+                }
+                if (str_contains($f, '/Derived/T_')) {
+                    $derivedSpec .= $content;
+                }
+            }
+
+            // Both `identity` specializations (<string> and <int>) land on Base.
+            self::assertSame(
+                2,
+                preg_match_all('/function identity_T_[0-9a-f]+\(/', $baseSpec),
+                'both identity specializations emitted onto the declaring Base',
+            );
+            // Derived inherits them; nothing is duplicated onto the subclass.
+            self::assertStringNotContainsString(
+                'identity_T_',
+                $derivedSpec,
+                'subclass inherits the base specialization; no duplicate on Derived',
+            );
+
+            $fixture->registerAutoload('App\\GenericMethodThroughInheritance');
+            require __DIR__ . '/../../fixture/compile/generic_method_through_inheritance/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testSubclassGenericMethodOverrideBindsToSubclass(): void
+    {
+        // The direct hit on the receiver's own class wins over the ancestor
+        // walk: a subclass that redeclares the generic method binds its own
+        // body, so the specialization lands on the subclass, not the base.
+        $dir = sys_get_temp_dir() . '/xphp-inh-override-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhOverride;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Derived.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhOverride;
+        class Derived extends Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhOverride;
+        $d = new Derived();
+        $r = $d->id::<int>(5);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $derived = file_get_contents($dir . '/dist/Derived.php');
+            self::assertIsString($base);
+            self::assertIsString($derived);
+            // Override wins: the specialization is on Derived (the direct hit).
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $derived));
+            self::assertStringNotContainsString('id_T_', $base);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testGenericMethodResolvesThroughMultiLevelInheritance(): void
+    {
+        // Base <- Mid <- Leaf: the method on Base resolves on a Leaf receiver,
+        // and the specialization lands on the nearest *declaring* ancestor
+        // (Base), reached via the breadth-first ancestor walk.
+        $dir = sys_get_temp_dir() . '/xphp-inh-chain-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Mid.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        class Mid extends Base {}
+        PHP);
+        file_put_contents($dir . '/Leaf.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        class Leaf extends Mid {}
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        $leaf = new Leaf();
+        $r = $leaf->id::<int>(9);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $mid = file_get_contents($dir . '/dist/Mid.php');
+            $leaf = file_get_contents($dir . '/dist/Leaf.php');
+            self::assertIsString($base);
+            self::assertIsString($mid);
+            self::assertIsString($leaf);
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $base));
+            self::assertStringNotContainsString('id_T_', $mid);
+            self::assertStringNotContainsString('id_T_', $leaf);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testIntermediateOverrideBindsToNearestDeclaringAncestor(): void
+    {
+        // Base declares id<U>; Mid overrides it; Leaf inherits. A call on a Leaf
+        // receiver binds the NEAREST declaring ancestor (Mid) -- the breadth-first
+        // walk returns Mid's template first, so the specialization lands on Mid,
+        // not on Base.
+        $dir = sys_get_temp_dir() . '/xphp-inh-midoverride-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Mid.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        class Mid extends Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Leaf.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        class Leaf extends Mid {}
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        $leaf = new Leaf();
+        $r = $leaf->id::<int>(3);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $mid = file_get_contents($dir . '/dist/Mid.php');
+            $leaf = file_get_contents($dir . '/dist/Leaf.php');
+            self::assertIsString($base);
+            self::assertIsString($mid);
+            self::assertIsString($leaf);
+            // Nearest declaring ancestor wins: the specialization lands on Mid only.
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $mid));
+            self::assertStringNotContainsString('id_T_', $base);
+            self::assertStringNotContainsString('id_T_', $leaf);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testInheritedGenericMethodDedupesOnSharedBase(): void
+    {
+        // Two subclasses calling the same inherited method with the same type
+        // argument emit exactly ONE specialization, on the shared base (dedup
+        // keyed by the declaring FQN, not the receiver).
+        $dir = sys_get_temp_dir() . '/xphp-inh-dedup-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        abstract class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/A.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        class A extends Base {}
+        PHP);
+        file_put_contents($dir . '/B.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        class B extends Base {}
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        $a = new A();
+        $b = new B();
+        $ra = $a->id::<int>(1);
+        $rb = $b->id::<int>(2);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            self::assertIsString($base);
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $base));
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     private function compileFrom(string $dir): void
     {
         $compiler = $this->buildCompiler();

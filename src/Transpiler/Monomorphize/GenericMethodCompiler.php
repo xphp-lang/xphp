@@ -63,16 +63,23 @@ use XPHP\Diagnostics\SourceLocation;
  *   3. Strip the original generic-method ClassMethod from each class.
  *   4. Rewrite each StaticCall's Identifier name to the mangled form.
  *
- * MVP limitations (called out so they're not silently surprising):
- *  - Static call sites only — `ClassFqn::method<int>(...)`. Instance calls `$obj->method<int>(...)`
- *    are not yet supported because the compiler has no way to know the runtime class of `$obj`
- *    without proper type inference.
- *  - Methods declared on non-generic classes only. Calling a generic method on a generic class
- *    (where the method has its own distinct type-param) requires merging two type-param scopes;
- *    that's a follow-up.
+ * Supported call shapes: static (`ClassFqn::method::<int>(...)`), instance and nullsafe
+ * (`$obj->method::<int>(...)`, `$obj?->method::<int>(...)`) via receiver-type analysis, and
+ * free functions / generic closures / arrows. A generic method declared on a generic OR a
+ * non-generic class works; the method's own type-params are a scope disjoint from the class's,
+ * so `class Box<T> { public function map<U>(...) }` specializes `U` independently of `T`.
+ *
+ * Inheritance: an instance/nullsafe turbofish call resolves the method through the receiver's
+ * ancestor chain (`resolveMethodTemplate`), and the specialization is emitted onto the
+ * *declaring* class so every subclass inherits the single copy. A subclass override (same
+ * method redeclared) shadows the inherited one.
+ *
+ * Limitations:
  *  - Bound validation on method-level type-params fires when a TypeHierarchy is wired in
  *    (compiler always passes one); if none is given (bare unit tests), bounds become
  *    advisory — matching the class-level Registry's behavior.
+ *  - Inheritance resolution walks `extends`/`implements` ancestors only; a generic method
+ *    reached solely through a `use`d trait is not resolved (the trait isn't in the hierarchy).
  */
 final class GenericMethodCompiler
 {
@@ -1015,10 +1022,15 @@ final class GenericMethodCompiler
                 }
                 $methodName = $node->name->toString();
                 $key = $classFqn . '::' . $methodName;
-                $template = $this->methodTemplates[$key] ?? null;
-                if ($template === null) {
+                // Resolve through the inheritance chain: a generic method declared on
+                // a base class is callable on a subclass receiver. $declaringFqn is
+                // where the template actually lives, so the specialization is emitted
+                // there and inherited (see resolveMethodTemplate).
+                $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
+                if ($resolved === null) {
                     return null;
                 }
+                [$template, $declaringFqn] = $resolved;
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                 if (!is_array($params)) {
                     return null;
@@ -1050,14 +1062,17 @@ final class GenericMethodCompiler
                 }
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
-                $generatedKey = $classFqn . '::' . $mangled;
+                // Key emission + dedup by the DECLARING class, not the receiver: the
+                // specialization lands on the base and every subclass inherits the one
+                // copy. Keying by receiver would append a duplicate per subclass.
+                $generatedKey = $declaringFqn . '::' . $mangled;
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
                     $substitution = [];
                     foreach ($params as $i => $param) {
                         $substitution[$param->name] = $args[$i];
                     }
                     $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
-                    $owner = $this->classByFqn[$classFqn] ?? null;
+                    $owner = $this->classByFqn[$declaringFqn] ?? null;
                     if ($owner !== null) {
                         $this->pendingAppends[] = [$owner, $specialized];
                         $this->alreadyGenerated[$generatedKey] = true;
@@ -1068,6 +1083,37 @@ final class GenericMethodCompiler
                 $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
 
                 return $node;
+            }
+
+            /**
+             * Resolve a generic-method template by receiver FQN, walking up the
+             * inheritance chain when the method is declared on an ancestor.
+             *
+             * Returns the template paired with the FQN of the class that actually
+             * declares it -- the specialization is emitted onto that declaring class
+             * so every subclass inherits it through the existing class-level extends
+             * edge. A direct hit on the receiver's own class wins over the ancestor
+             * walk (a subclass override shadows an inherited method). Returns null
+             * when neither the receiver nor any ancestor declares the method.
+             *
+             * @return array{0: ClassMethod, 1: string}|null  [template, declaringFqn]
+             */
+            private function resolveMethodTemplate(string $receiverFqn, string $methodName): ?array
+            {
+                $direct = $this->methodTemplates[$receiverFqn . '::' . $methodName] ?? null;
+                if ($direct !== null) {
+                    return [$direct, $receiverFqn];
+                }
+                if ($this->hierarchy === null) {
+                    return null;
+                }
+                foreach ($this->hierarchy->ancestorChain($receiverFqn) as $ancestorFqn) {
+                    $inherited = $this->methodTemplates[$ancestorFqn . '::' . $methodName] ?? null;
+                    if ($inherited !== null) {
+                        return [$inherited, $ancestorFqn];
+                    }
+                }
+                return null;
             }
 
             /**
