@@ -36,6 +36,13 @@ jobs:
         # release fails BEFORE the asset is uploaded.
         run: php dist/xphp.phar list
 
+      - name: Smoke-test `check` on the PHAR
+        # Exercise the released artifact as a real gate: same 0/1/2
+        # exit-contract assertions as CI, but against dist/xphp.phar
+        # instead of bin/xphp. Fails the release before upload if the
+        # packaged binary can't validate sources.
+        run: make test/check XPHP_BIN="php dist/xphp.phar"
+
       - name: Compute SHA256 sum
         # `sha256sum` outputs `<hex>  <filename>`; running it from
         # the dist/ directory keeps the filename relative so users

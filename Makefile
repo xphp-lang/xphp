@@ -35,6 +35,15 @@ lint/phpstan:
 test/mutation:
 	php -d memory_limit=-1 vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
 
+.PHONY: test/check
+# End-to-end self-test of the `check` gate: runs the real bin/xphp binary
+# against the check fixtures and asserts the 0/1/2 exit contract plus that the
+# text/json/github renderers all emit. Reused by release.yml against the built
+# PHAR (override XPHP_BIN="php dist/xphp.phar"). Complements the in-process
+# CheckCommandTest, which can't observe the shipped binary's process exit code.
+test/check:
+	sh test/smoke/check.sh
+
 # Humbug Box is the standard tool for compiling a Composer-managed
 # PHP project into a single self-contained PHAR.  Pinned to a known-
 # good release (Box 4.6.6 supports PHP 8.4) so a new Box version

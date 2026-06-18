@@ -66,6 +66,30 @@ jobs:
       - name: Run PHPStan
         run: make lint/phpstan
 
+  check:
+    # End-to-end self-test of the `xphp check` gate: runs the real bin/xphp
+    # binary against the check fixtures and asserts the 0/1/2 exit contract.
+    # The in-process CheckCommandTest can't observe the shipped binary's
+    # process exit code or its rendered stdout, so this covers that gap.
+    name: xphp check (self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run xphp check self-test
+        run: make test/check
+
   infection:
     name: Mutation testing
     runs-on: ubuntu-latest
