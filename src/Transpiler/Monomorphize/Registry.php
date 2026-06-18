@@ -24,6 +24,7 @@ final class Registry
     /** Stable diagnostic codes (machine identifiers tooling can match on). */
     public const CODE_BOUND_VIOLATION = 'xphp.bound_violation';
     public const CODE_MISSING_TYPE_ARGUMENT = 'xphp.missing_type_argument';
+    public const CODE_TOO_MANY_TYPE_ARGUMENTS = 'xphp.too_many_type_arguments';
     public const CODE_DEFAULT_BOUND_VIOLATION = 'xphp.default_bound_violation';
     public const CODE_UNDEFINED_TEMPLATE = 'xphp.undefined_template';
 
@@ -206,7 +207,24 @@ final class Registry
     ): array {
         $supplied = count($args);
         $needed = count($params);
-        if ($supplied >= $needed) {
+        if ($supplied > $needed) {
+            // Over-arity: more type arguments than the template declares. Reported
+            // instead of silently truncating the extras. Returning $args unchanged
+            // lets the downstream arity guards skip specialization for this instantiation.
+            $message = self::tooManyTypeArgumentsMessage($templateLabel, $supplied, $needed);
+            if ($diagnostics !== null) {
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_TOO_MANY_TYPE_ARGUMENTS,
+                    $message,
+                    $callSite,
+                ));
+
+                return $args;
+            }
+            throw new RuntimeException($message);
+        }
+        if ($supplied === $needed) {
             return $args;
         }
 
@@ -233,6 +251,22 @@ final class Registry
             $padded[] = Specializer::substituteTypeRef($params[$i]->default, $subst);
         }
         return $padded;
+    }
+
+    /**
+     * Single source of truth for the too-many-type-arguments message.
+     */
+    private static function tooManyTypeArgumentsMessage(
+        string $templateLabel,
+        int $supplied,
+        int $needed,
+    ): string {
+        return sprintf(
+            'Generic template "%s" declares %d type parameter(s) but was instantiated with %d type argument(s); remove the extra argument(s).',
+            $templateLabel,
+            $needed,
+            $supplied,
+        );
     }
 
     /**
@@ -516,8 +550,9 @@ final class Registry
         ?DiagnosticCollector $diagnostics = null,
         ?SourceLocation $callSite = null,
     ): void {
-        // Arity mismatch is a different error class (caught upstream); skip silently here
-        // so that the existing pipeline can produce the more specific message.
+        // Arity mismatch is a different error class, reported upstream by
+        // padArgsWithDefaults (under-arity → missing-type-argument, over-arity →
+        // too-many-type-arguments); skip the bound check here for the partial tuple.
         if (count($typeParams) !== count($args)) {
             return;
         }

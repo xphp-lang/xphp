@@ -327,6 +327,31 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('undeclared_bound');
     }
 
+    public function testTooManyTypeArgumentsAreCollected(): void
+    {
+        // Box declares one parameter; two instantiations pass two args each → two
+        // findings (not silent truncation), at their call-site lines.
+        $diagnostics = $this->check('too_many_type_args');
+
+        self::assertCount(2, $diagnostics->all());
+        $lines = [];
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(Registry::CODE_TOO_MANY_TYPE_ARGUMENTS, $d->code);
+            self::assertNotNull($d->location);
+            self::assertStringEndsWith('Use.xphp', $d->location->file);
+            $lines[] = $d->location->line;
+        }
+        sort($lines);
+        self::assertSame([8, 9], $lines);
+    }
+
+    public function testCompileStillThrowsOnTooManyTypeArguments(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('declares 1 type parameter(s) but was instantiated with 2');
+        $this->compileFixture('too_many_type_args');
+    }
+
     public function testImportedAndFullyQualifiedTypesAreNotFlaggedAsUndeclared(): void
     {
         $diagnostics = $this->check('undeclared_type_param_escape');

@@ -38,6 +38,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.bound_violation` | a concrete type argument doesn't satisfy its parameter's bound |
 | `xphp.default_bound_violation` | a parameter's default doesn't satisfy its own bound |
 | `xphp.missing_type_argument` | a required type argument was omitted and has no default |
+| `xphp.too_many_type_arguments` | more type arguments were supplied than the template declares (e.g. `Box::<int, string>` for a one-parameter `Box`) |
 | `xphp.variance_position` | a `+T`/`-T` parameter appears in a position its variance forbids |
 | `xphp.inner_variance` | variance is violated through another generic's slot (composition) |
 | `xphp.undefined_template` | a generic was instantiated but never declared |
