@@ -1,5 +1,10 @@
 {
     "$schema": "vendor/infection/infection/resources/schema.json",
+    // Per-mutant timeout. Raised from the 10s default because the StaticAnalysis
+    // (PHPStan) tests shell out to a real `phpstan` subprocess, so a mutant whose
+    // covering set includes them needs well over 10s to run — otherwise it false-
+    // times-out instead of being killed by the fast pure tests in the same set.
+    "timeout": 120,
     "source": {
         "directories": [
             "src"

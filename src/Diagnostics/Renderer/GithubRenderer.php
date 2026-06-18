@@ -38,7 +38,13 @@ final class GithubRenderer implements DiagnosticRenderer
             }
 
             $prefix = $props === [] ? '::' . $command : '::' . $command . ' ' . implode(',', $props);
-            $lines[] = $prefix . '::' . self::escapeData($d->message);
+            // GitHub annotations carry no separate "triggered by" field, so fold the
+            // instantiation that surfaced a (PHPStan) finding into the message — it's
+            // the key context for a body error reported at a template declaration.
+            $message = $d->triggeredBy !== null
+                ? $d->message . ' (triggered by ' . $d->triggeredBy . ')'
+                : $d->message;
+            $lines[] = $prefix . '::' . self::escapeData($message);
         }
 
         return $lines === [] ? '' : implode(PHP_EOL, $lines) . PHP_EOL;

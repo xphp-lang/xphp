@@ -12,6 +12,7 @@ use Symfony\Component\Console\Tester\CommandTester;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\Specializer;
 use XPHP\Transpiler\Monomorphize\SpecializedClassGenerator;
@@ -21,8 +22,10 @@ final class CheckCommandTest extends TestCase
 {
     public function testCleanSourcesExitZero(): void
     {
+        // --no-phpstan isolates the generic-check (Phase 1) contract from the
+        // PHPStan pass, which is exercised separately in CheckCommandPhpStanTest.
         $tester = $this->tester();
-        $exit = $tester->execute(['source' => $this->fixtureDir('clean')]);
+        $exit = $tester->execute(['source' => $this->fixtureDir('clean'), '--no-phpstan' => true]);
 
         self::assertSame(0, $exit);
         self::assertStringContainsString('No problems found', $tester->getDisplay());
@@ -101,7 +104,9 @@ final class CheckCommandTest extends TestCase
             $printer,
         );
 
-        return new CommandTester(new CheckCommand(new NativeFileFinder(), $compiler));
+        return new CommandTester(
+            new CheckCommand(new NativeFileFinder(), $compiler, new StaticAnalysisGate($compiler)),
+        );
     }
 
     private function fixtureDir(string $fixture): string

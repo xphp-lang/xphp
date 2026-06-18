@@ -101,7 +101,8 @@ final class RendererTest extends TestCase
     {
         $expected = implode(PHP_EOL, [
             '::error file=/src/Box.xphp,line=7,col=3::bad bound',
-            '::warning::maybe',
+            // The second diagnostic carries triggeredBy, folded into the message.
+            '::warning::maybe (triggered by App\\Box<int>)',
         ]) . PHP_EOL;
 
         self::assertSame($expected, (new GithubRenderer())->render($this->sample()));

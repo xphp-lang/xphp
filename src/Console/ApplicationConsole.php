@@ -12,6 +12,7 @@ use XPHP\Console\Command\CompileCommand;
 use XPHP\FileSystem\FileFinder;
 use XPHP\FileSystem\FileReader;
 use XPHP\FileSystem\FileWriter;
+use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\SpecializedClassGenerator;
@@ -47,6 +48,6 @@ final class ApplicationConsole extends Application
         );
 
         $this->addCommand(new CompileCommand($fileFinder, $compiler));
-        $this->addCommand(new CheckCommand($fileFinder, $compiler));
+        $this->addCommand(new CheckCommand($fileFinder, $compiler, new StaticAnalysisGate($compiler)));
     }
 }
