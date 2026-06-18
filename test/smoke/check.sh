@@ -19,7 +19,10 @@ FIX="test/fixture/check"
 # Captures stdout+stderr into the global OUT; fails loudly on a code mismatch.
 check_exit() {
     set +e
-    OUT=$($XPHP check "$2" --format="$3" 2>&1)
+    # --no-phpstan keeps this a deterministic check of the binary's exit/render
+    # contract: it must not depend on a phpstan install (the PHAR bundles none) or
+    # on a consumer config. The PHPStan pass is covered by `make test/phpstan`.
+    OUT=$($XPHP check "$2" --format="$3" --no-phpstan 2>&1)
     code=$?
     set -e
     if [ "$code" != "$1" ]; then

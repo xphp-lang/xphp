@@ -151,7 +151,9 @@ vendor/bin/xphp check src            # exit 1 if any error; --format=text|json|g
 ```
 
 `check` runs all of xphp's generic validation (the specialization-loop guards
-aside); you still run `compile` to emit the PHP. See
+aside) and then, when those pass, runs **your** PHPStan over the compiled output
+and maps the findings back to the `.xphp` template — one config, one gate (pass
+`--no-phpstan` to skip it). You still run `compile` to emit the PHP. See
 [Errors and diagnostics](docs/errors.md#xphp-check--validate-without-emitting).
 
 ## See also

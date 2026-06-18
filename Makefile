@@ -10,15 +10,15 @@
 # Default runtime is PHP 8.4 (composer requires ^8.4). Two groups are excluded
 # here: `php85` (newer-PHP syntax; runs on 8.5 via `make test/unit/php85`) and
 # `phpstan` (the `xphp check` PHPStan pass, which shells out to a real phpstan
-# subprocess and is slow; runs via `make test/phpstan`).
+# subprocess and is slow; runs via `make test/phpstan-pass`).
 test/unit:
 	php vendor/bin/phpunit --exclude-group php85 --exclude-group phpstan
 
-.PHONY: test/phpstan
+.PHONY: test/phpstan-pass
 # The `xphp check` PHPStan-integration tests (tagged `@group phpstan`). They
 # shell out to the consumer's phpstan binary and self-skip when vendor/bin/phpstan
 # is absent. NOTE: distinct from `lint/phpstan`, which runs PHPStan over src/.
-test/phpstan:
+test/phpstan-pass:
 	php vendor/bin/phpunit --group phpstan
 
 .PHONY: test/unit/php85

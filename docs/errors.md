@@ -45,6 +45,9 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.closure_this_capture` | a generic closure/arrow used via turbofish captures `$this` (unsupported) |
 | `xphp.static_closure` | a generic `static` closure used via turbofish (unsupported) |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
+| `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`) — present only when the PHPStan pass runs |
+| `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
+| `phpstan.run_failed` | (Warning) phpstan was found but couldn't complete (e.g. a config error) |
 
 > **Scope.** `xphp check` runs every generic *validation* check `xphp compile`
 > does — class/interface/trait-level **and** method/function/closure-level
@@ -54,6 +57,39 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 > **hash-collision** check — surface only at `xphp compile` (they aren't type
 > errors). You still run `xphp compile` to produce the PHP; `check` is the fast
 > validation gate in front of it.
+
+### PHPStan over the compiled output
+
+PHPStan never sees `.xphp` generic sugar, so it can't analyse a generic body. When
+the generic checks above pass, `xphp check` closes that gap: it compiles your
+sources to a throwaway directory, runs **your** PHPStan over the concrete
+(monomorphized) output, and maps any finding back to the originating `.xphp`
+template declaration — the diagnostic names the concrete instantiation that
+surfaced it (e.g. *triggered by `App\Box<int>`*). The findings merge into the same
+report and exit code as the generic checks: **one PHPStan, one config, one gate.**
+
+- **One config.** Your own config drives the level, rules, and extensions —
+  auto-detected at the project root (`phpstan.neon`, then `phpstan.neon.dist`,
+  then `phpstan.dist.neon`), or pass `--phpstan-config=PATH`. xphp adds only what's
+  needed to resolve the generated code's symbols; it picks no level of its own.
+- **Opt-out + graceful.** `phpstan/phpstan` is an optional, `require-dev`-style
+  dependency and is never bundled in the PHAR. The binary is resolved as
+  `--phpstan-bin=PATH` → `vendor/bin/phpstan` → `$PATH`; if none is found (or an
+  explicit `--phpstan-bin` doesn't exist), or phpstan can't complete, `check`
+  emits a **Warning** and carries on — a missing optional tool never fails the
+  gate. Pass `--no-phpstan` to skip the pass entirely.
+- **One representative per template.** A body type error is identical across every
+  specialization of a template, so xphp analyses a single representative
+  specialization per template — surfacing the bug once, not once per instantiation.
+  (Trade-off: a body error that only manifests for *specific* concrete arguments may
+  be missed; that's the value-flow class PHPStan can't attribute to a template line
+  anyway.)
+
+```bash
+vendor/bin/xphp check src                      # generic checks + PHPStan, one gate
+vendor/bin/xphp check src --no-phpstan          # generic checks only
+vendor/bin/xphp check src --phpstan-config=phpstan.neon.dist
+```
 
 In CI (GitHub Actions), one step gates the build and annotates the diff:
 

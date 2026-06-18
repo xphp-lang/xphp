@@ -5,6 +5,25 @@ All notable changes to `xphp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`xphp check`** — a validate-without-emitting CI gate. It runs every generic
+  validation `xphp compile` does (bounds, variance, defaults, missing/duplicate
+  generics, unsupported closures), but collects **all** problems in one run —
+  each as a structured diagnostic with a `file:line` — instead of aborting on the
+  first. Exit codes: `0` clean, `1` ≥1 error, `2` operational failure.
+  `--format=text|json|github` (the `github` format emits PR annotations).
+- **PHPStan over the compiled output.** When the generic checks pass, `xphp check`
+  compiles to a throwaway directory, runs **your** PHPStan over the concrete
+  (monomorphized) output, and maps each finding back to the originating `.xphp`
+  template declaration — naming the concrete instantiation that surfaced it. One
+  config (your `phpstan.neon` drives level/rules), one gate, one exit code.
+  `phpstan/phpstan` stays optional and is never bundled in the PHAR; a missing
+  binary or a failed run is a non-failing Warning. Opt out with `--no-phpstan`;
+  override discovery with `--phpstan-bin` / `--phpstan-config`.
+
 ## [0.2.0]
 
 The first feature release on top of the core monomorphization pipeline.
