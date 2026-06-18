@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary or a failed run is a non-failing Warning. Opt out with `--no-phpstan`;
   override discovery with `--phpstan-bin` / `--phpstan-config`.
 
+### Fixed
+
+- **Undeclared type parameters are now rejected** instead of silently compiling to
+  a reference to a non-existent class. A bare, single-segment, non-imported type
+  name used in a generic member, bound, or default that is neither a declared type
+  parameter nor a known type — e.g. `interface Foo<Z> { add(T $x); }` or
+  `class Box<T: Nonexistent>` — fails `xphp compile` and is reported by `xphp check`
+  as `xphp.undeclared_type`. Covers class/interface/trait members and method,
+  function, closure, and arrow generics. Imported (`use`) and fully-qualified names
+  are unaffected.
+- **Too many type arguments are now rejected** instead of silently truncated:
+  `Box::<int, string>` for a one-parameter `Box` reports `xphp.too_many_type_arguments`.
+
 ## [0.2.0]
 
 The first feature release on top of the core monomorphization pipeline.
