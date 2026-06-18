@@ -43,9 +43,14 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.undefined_template` | a generic was instantiated but never declared |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
 
-> Scope: `xphp check` covers the class/interface/trait-level generic
-> checks on this page. Method-, function-, and closure-level generic
-> errors remain `xphp compile` failures for now.
+> **Scope — `xphp check` is not yet a substitute for `xphp compile`.**
+> `check` covers the class/interface/trait-level generic checks on this
+> page. It does **not** yet run the method-, function-, and
+> closure-level generic checks (those still surface only as `xphp
+> compile` failures), and by design it never runs the specialization
+> loop, so the depth-cap and hash-collision guards are out of scope too.
+> A clean `check` therefore does **not** guarantee a clean `compile` —
+> keep `xphp compile` in your build pipeline.
 
 In CI (GitHub Actions), one step gates the build and annotates the diff:
 
