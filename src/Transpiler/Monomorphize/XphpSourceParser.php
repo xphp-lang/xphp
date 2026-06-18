@@ -1852,7 +1852,10 @@ final class XphpSourceParser
              */
             private function isSuspectUndeclared(string $name): bool
             {
+                // @infection-ignore-all UnwrapStrToLower -- scalar-type tokens already arrive
+                // lowercased from the grammar (same rationale as resolveTypeRef's scalar guard).
                 return strpos($name, '\\') === false
+                    && !in_array(strtolower($name), XphpSourceParser::SCALAR_TYPES, true)
                     && $this->hasEnclosingTypeParams()
                     && !$this->ctx->isImported($name);
             }
