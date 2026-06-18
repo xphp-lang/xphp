@@ -34,9 +34,14 @@ final class CompileCommand extends Command
         InputInterface $input,
         OutputInterface $output,
     ): int {
-        $sourceDir = (string) $input->getArgument('source');
-        $targetDir = (string) $input->getArgument('target');
-        $cacheDir  = (string) $input->getArgument('cache');
+        // getArgument() is typed `mixed`; these are scalar args (a required one and two with
+        // string defaults), so they are always strings — narrow rather than blind-cast.
+        $sourceArg = $input->getArgument('source');
+        $targetArg = $input->getArgument('target');
+        $cacheArg = $input->getArgument('cache');
+        $sourceDir = is_string($sourceArg) ? $sourceArg : '';
+        $targetDir = is_string($targetArg) ? $targetArg : 'dist';
+        $cacheDir = is_string($cacheArg) ? $cacheArg : '.xphp-cache';
 
         if (!is_dir($sourceDir)) {
             $output->writeln("<error>Source directory not found: {$sourceDir}</error>");

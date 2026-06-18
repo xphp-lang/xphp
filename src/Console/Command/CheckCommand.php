@@ -45,15 +45,18 @@ final class CheckCommand extends Command
         InputInterface $input,
         OutputInterface $output,
     ): int {
-        // @infection-ignore-all CastString -- a REQUIRED argument is always a string;
-        // the cast is defensive for getArgument()'s mixed return, so removing it is equivalent.
-        $sourceDir = (string) $input->getArgument('source');
+        // getArgument()/getOption() are typed `mixed`; these are scalar inputs (a required
+        // argument and an option with a string default), so they are always strings — narrow
+        // rather than blind-cast (PHPStan level 9 rejects casting mixed).
+        $sourceArg = $input->getArgument('source');
+        $sourceDir = is_string($sourceArg) ? $sourceArg : '';
         if (!is_dir($sourceDir)) {
             $output->writeln("<error>Source directory not found: {$sourceDir}</error>");
             return self::INVALID;
         }
 
-        $renderer = $this->rendererFor((string) $input->getOption('format'));
+        $formatOption = $input->getOption('format');
+        $renderer = $this->rendererFor(is_string($formatOption) ? $formatOption : '');
         if ($renderer === null) {
             $output->writeln('<error>Unknown format (expected: text, json, github)</error>');
             return self::INVALID;

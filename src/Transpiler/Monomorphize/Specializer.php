@@ -155,6 +155,7 @@ final class Specializer
 
                     $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
                     if (is_array($args) && $args !== []) {
+                        /** @var list<TypeRef> $args — ATTR_GENERIC_ARGS is a TypeRef list (set by XphpSourceParser); the type-hint lets array_map infer the callback's parameter as TypeRef. */
                         $substituted = array_map(
                             fn (TypeRef $a): TypeRef => Specializer::substituteTypeRef($a, $this->substitution),
                             $args,
