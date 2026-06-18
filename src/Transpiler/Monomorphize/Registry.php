@@ -403,6 +403,32 @@ final class Registry
     }
 
     /**
+     * Undeclared-type check over every collected definition (delegates to
+     * {@see UndeclaredTypeParameterValidator}): a generic member naming a type
+     * that is neither a declared type parameter nor a known type — e.g. the `T`
+     * in `interface Foo<Z> { add(T $x): void; }`. With this Registry's collector
+     * it gathers every finding (each at the offending member); without one
+     * (compile) it throws the first. Skipped when no hierarchy was attached
+     * (bare-Registry tests have nothing to resolve names against).
+     */
+    public function validateUndeclaredTypeParameters(): void
+    {
+        if ($this->hierarchy === null) {
+            return;
+        }
+
+        foreach ($this->definitions as $templateFqn => $definition) {
+            UndeclaredTypeParameterValidator::assert(
+                $definition->templateAst,
+                $templateFqn,
+                $this->hierarchy,
+                $this->diagnostics,
+                $definition->sourceFile,
+            );
+        }
+    }
+
+    /**
      * Inner-template variance composition check over every collected definition (delegates to
      * {@see InnerVarianceValidator}). With this Registry's collector it gathers every violation
      * (each located at the offending member); without one (compile) it throws the first.

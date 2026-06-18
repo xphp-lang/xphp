@@ -95,6 +95,10 @@ final readonly class Compiler
         // Runs BEFORE the defaults-vs-bounds check so that, when a class has both,
         // the variance error surfaces first (the order it surfaced at parse time).
         $variancePositionFlagged = $registry->validateVariancePositions();
+        // Undeclared type names in member signatures (a stray/typo'd type param)
+        // fail before defaults/instantiation so a non-existent reference never
+        // reaches emission as broken PHP.
+        $registry->validateUndeclaredTypeParameters();
         $registry->validateDefaultsAgainstBounds();
         // Inner-template variance composition: every template's variance
         // markers are known by now, so cases the parse-time validator
@@ -275,6 +279,7 @@ final readonly class Compiler
             $collector->collectDefinitions($ast, $filepath);
         }
         $variancePositionFlagged = $registry->validateVariancePositions();
+        $registry->validateUndeclaredTypeParameters();
         $registry->validateDefaultsAgainstBounds();
         $registry->validateInnerVariance($variancePositionFlagged);
         foreach ($astPerFile as $filepath => $ast) {

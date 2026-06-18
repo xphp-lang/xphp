@@ -191,6 +191,62 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('generic_function_bound');
     }
 
+    public function testUndeclaredTypeParametersAreCollected(): void
+    {
+        // Two stray type names (`T`, `U`) in one template → both reported in one run;
+        // the declared `Z`, the scalar `int`, and the in-source class `Box` are clean.
+        $diagnostics = $this->check('undeclared_type_param');
+
+        self::assertCount(2, $diagnostics->all());
+        $byName = [];
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $d->code);
+            self::assertNotNull($d->location);
+            self::assertStringEndsWith('CollectionInterface.xphp', $d->location->file);
+            preg_match('/Type `(\w+)`/', $d->message, $m);
+            $byName[$m[1]] = $d->location->line;
+        }
+        self::assertSame(['T', 'U'], array_keys($byName));
+        self::assertSame(11, $byName['T']); // `add(T $element)` line
+        self::assertSame(13, $byName['U']); // `wrap(U $value)` line
+    }
+
+    public function testUndeclaredTypesAreCaughtInEveryMemberPosition(): void
+    {
+        // property, constructor-promoted param, return, nullable param, union return,
+        // intersection param, and a nested closure signature — each stray name is flagged.
+        $diagnostics = $this->check('undeclared_type_param_positions');
+
+        $names = [];
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $d->code);
+            preg_match('/Type `(\w+)`/', $d->message, $m);
+            $names[$m[1]] = true;
+        }
+        ksort($names);
+        self::assertSame(
+            ['Clo', 'CloRet', 'InA', 'InB', 'Nul', 'Promo', 'Prop', 'Ret', 'UnA', 'UnB'],
+            array_keys($names),
+        );
+    }
+
+    public function testImportedAndFullyQualifiedTypesAreNotFlaggedAsUndeclared(): void
+    {
+        $diagnostics = $this->check('undeclared_type_param_escape');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testCompileStillThrowsOnUndeclaredTypeParameter(): void
+    {
+        // Throws the FIRST finding (the `T` in add(), before `U` in wrap()), not a
+        // silent broken emit.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Type `T` used in `App\\Undeclared\\CollectionInterface`');
+        $this->compileFixture('undeclared_type_param');
+    }
+
     public function testCompileStillThrowsOnGenericMethodMissingArgument(): void
     {
         $this->expectException(RuntimeException::class);

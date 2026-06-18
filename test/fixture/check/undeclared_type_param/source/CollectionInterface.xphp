@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Undeclared;
+
+interface CollectionInterface<Z>
+{
+    // `T` and `U` are not declared type parameters (only `Z` is) and name no real
+    // type — each is a stray/typo'd parameter. Both are reported in one run.
+    public function add(T $element): void;
+
+    public function wrap(U $value): void;
+
+    // Clean: `Z` is the declared parameter, `int` is a scalar, and `Box` is a
+    // class declared in this source set — none are flagged.
+    public function get(int $index): Z;
+
+    public function store(Box $box): void;
+}
