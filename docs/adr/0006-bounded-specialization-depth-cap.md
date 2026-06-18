@@ -26,17 +26,20 @@ The compiler needs a guaranteed-terminating story.
 
 ## Decision Outcome
 
-Chosen: a **hard depth cap that aborts**. The specialization loop tracks nesting
-depth and aborts the entire compile/check run with a clear message once it
-exceeds a fixed limit chosen to be far beyond any realistic generic nesting. This
-is treated as a runaway-input guard — a distinct error class from user-facing
-generic errors like a bound violation.
+Chosen: a **hard depth cap that aborts**. The fixed-point specialization loop
+tracks nesting depth and aborts the `compile` run with a clear message once it
+exceeds a fixed limit (16 levels of nested specialization,
+`Compiler::MAX_SPECIALIZATION_DEPTH`) set well above realistic generic nesting.
+This is treated as a runaway-input guard — a distinct error class from
+user-facing generic errors like a bound violation. The cap applies to `compile`
+only: `check` validates without ever specializing, so it never enters the loop.
 
 ### Consequences
 
 - Good: termination is guaranteed; a spiraling template fails fast with an
   actionable message instead of hanging.
-- Good: the limit is generous enough that ordinary deep generics never hit it.
+- Good: the limit sits well above realistic nesting, so ordinary deep generics
+  don't hit it.
 - Trade-off: a genuinely legitimate but extremely deep instantiation would be
   refused; the workaround is to break it into intermediate templates.
 - Notable: unlike most checks, the depth cap is **not** routed through the
@@ -47,9 +50,9 @@ generic errors like a bound violation.
 
 ### Confirmation
 
-The cap lives in the fixed-point loop in
-[`Compiler::compile()`](../../src/Transpiler/Monomorphize/Compiler.php); a fixture
-exercises a self-referential template that trips it.
+The cap is `Compiler::MAX_SPECIALIZATION_DEPTH` (16), enforced in the fixed-point
+loop in [`Compiler::compile()`](../../src/Transpiler/Monomorphize/Compiler.php); a
+fixture exercises a self-referential template that trips it.
 
 ## Pros and Cons of the Options
 

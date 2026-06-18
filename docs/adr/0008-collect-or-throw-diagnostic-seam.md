@@ -31,11 +31,11 @@ validators serve both modes?
 Chosen: an **optional `?DiagnosticCollector` parameter**. Validation methods take
 a nullable collector as their last argument. When it's absent (the `compile`
 path), they throw exactly as before. When it's present (the `check` path), each
-violation is appended as a structured diagnostic and validation continues, so all
-problems in a phase surface together. The user-facing text comes from a single
-shared message builder used by both the `throw` and the diagnostic, so the two
-can never diverge. The collector is mutable by design — it's the one sink threaded
-through the validation phase.
+violation is appended as a structured diagnostic and validation continues — across
+every validation phase — so all problems surface in one run. The user-facing text
+comes from a single shared message builder used by both the `throw` and the
+diagnostic, so the two can never diverge. The collector is mutable by design —
+it's the one sink threaded through the validation phases.
 
 ### Consequences
 
@@ -43,9 +43,12 @@ through the validation phase.
   provably byte-identical and `check` collects — verified by tests that assert both
   from the same input.
 - Good: tiny surface area — a nullable parameter, no interface hierarchy or DI.
-- Trade-off: "collect-all" means *all errors of the earliest failing phase* —
-  validation still halts between phases (e.g. a duplicate-definition stops the run
-  before instantiation-site checks), so it isn't a single flat list of everything.
+- Good: in `check` mode every validation phase runs unconditionally — there is no
+  early return between phases — so a single run yields effectively a flat list of
+  all diagnostics across phases, each with its location. Two deliberate exceptions:
+  the inner-variance pass skips templates the variance-position pass already flagged
+  (to avoid double-reporting the same issue), and a generated-name hash collision is
+  still thrown rather than collected (it's intentionally outside the seam).
 - Trade-off: the no-collector default must be preserved at every call site, or that
   site silently reverts to fail-fast; this is covered by tests.
 
@@ -60,8 +63,10 @@ both the byte-identical throw path and the collect path for the same fixtures.
 
 ### Optional `?DiagnosticCollector` parameter
 
-- Good: one code path; shared message; minimal ceremony; byte-identical compile.
-- Bad: a per-call-site convention to uphold; collection is per-phase, not global.
+- Good: one code path; shared message; minimal ceremony; byte-identical compile;
+  in `check` mode all phases run and collect into one flat report.
+- Bad: a per-call-site convention to uphold — every call site must preserve the
+  no-collector default or it silently reverts to fail-fast.
 
 ### `DiagnosticSink` interface
 

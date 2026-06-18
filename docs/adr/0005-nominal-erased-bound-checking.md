@@ -74,9 +74,16 @@ be explained accurately instead of being conflated with a real violation.
 
 ### Confirmation
 
-[`TypeHierarchy`](../../src/Transpiler/Monomorphize/TypeHierarchy.php) and the bound
-combinators ([`BoundIntersection`](../../src/Transpiler/Monomorphize/BoundIntersection.php),
-[`BoundUnion`](../../src/Transpiler/Monomorphize/BoundUnion.php)); see
+The three-valued subtype test is
+[`TypeHierarchy::isSubtype`](../../src/Transpiler/Monomorphize/TypeHierarchy.php);
+the three-valued folding over a compound bound is `Registry::evaluateBound`, and
+the reject-unless-`true` policy (with the distinct messages) is in
+`Registry::checkBounds`
+([`Registry`](../../src/Transpiler/Monomorphize/Registry.php)). The bound AST node
+types it folds over are
+[`BoundLeaf`](../../src/Transpiler/Monomorphize/BoundLeaf.php),
+[`BoundIntersection`](../../src/Transpiler/Monomorphize/BoundIntersection.php), and
+[`BoundUnion`](../../src/Transpiler/Monomorphize/BoundUnion.php). See
 [Type bounds](../syntax/type-bounds.md).
 
 ## Pros and Cons of the Options
