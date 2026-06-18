@@ -75,6 +75,40 @@ swap_T_e5f3...(1, 'one');
 - Receiver-type analysis picks the right specialization when the
   receiver is `$this`, a typed param, a typed property, or a local
   `$x = new Foo()` assignment.
+- A generic method declared on a base class is callable through
+  inheritance — see below.
+
+## Inheritance
+
+A generic method declared on a base (or abstract) class is callable via
+turbofish on a **subclass** receiver, for instance, static, and nullsafe
+calls. Resolution walks the receiver's ancestor chain (nearest first), and
+the specialization is emitted **once** on the declaring class, so every
+subclass inherits the single body. A subclass that redeclares the method
+shadows the inherited one.
+
+```php
+abstract class AbstractCollection<T> {
+    // A generic helper shared by every concrete collection.
+    public function wrap<U>(U $value): U {
+        return $value;
+    }
+}
+class Collection<T> extends AbstractCollection<T> {}
+
+$c = new Collection::<int>();
+// `wrap` isn't declared on Collection — it resolves to
+// AbstractCollection::wrap, specialized once on the base and inherited:
+$s = $c->wrap::<string>('hi');
+```
+
+A turbofish call to a generic method that exists on neither the receiver
+nor any of its ancestors is a **compile-time error**
+([`xphp.unresolved_generic_call`](../errors.md#diagnostic-codes)), caught at
+build time instead of fataling at runtime with "Call to undefined method".
+
+> Resolution follows `extends`/`implements` ancestors. A generic method
+> reached only through a `use`d trait is not resolved through inheritance.
 
 ## Caveats
 
@@ -92,5 +126,7 @@ swap_T_e5f3...(1, 'one');
 
 - Test fixture: `test/fixture/compile/generic_method/`
 - Test fixture: `test/fixture/compile/generic_function/`
+- Test fixture: `test/fixture/compile/generic_method_through_inheritance/`
+- Test fixture: `test/fixture/compile/generic_static_method_through_inheritance/`
 - Related: [closures and arrows](closures-and-arrows.md),
   [turbofish](turbofish.md)

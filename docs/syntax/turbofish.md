@@ -88,6 +88,18 @@ If the analysis can't prove a single class (e.g., `$x` reassigned
 inside a branch where the arms disagree), the call drops to a
 non-specialized path rather than picking a possibly-wrong class.
 
+Once the receiver class is known, the method is resolved through its
+**inheritance chain** (nearest ancestor first), so a generic method
+declared on a base class is callable on a subclass receiver. The same
+holds for the static (`Sub::m::<T>()`) and nullsafe (`$x?->m::<T>()`)
+shapes. See
+[methods and functions → inheritance](methods-and-functions.md#inheritance).
+
+A turbofish call whose generic method can't be resolved on the receiver
+or any of its ancestors is a **compile-time error**
+([`xphp.unresolved_generic_call`](../errors.md#diagnostic-codes)) rather
+than a silent pass-through that fatals at runtime.
+
 ## Caveats
 
 - > ⚠️ **Branching narrowing precision** — receiver-type analysis

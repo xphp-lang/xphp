@@ -21,6 +21,7 @@ timeline
         Generic templates
                 : classes and interfaces and traits
                 : methods on static and instance receivers
+                : methods inherited from base classes
                 : free functions at any scope
                 : closures and arrow functions
         Bounds
@@ -51,6 +52,7 @@ timeline
                 : xphp check validate-only gate
                 : collect-all diagnostics with text json github renderers
                 : undeclared-type and arity validation
+                : unresolved-generic-call detection
                 : PHPStan over the compiled output
     section Next
         Editor and tooling
@@ -112,6 +114,10 @@ upcoming one.
 ### Function-level generics
 
 - Generic methods on static and instance receivers.
+- Generic methods resolved through inheritance: a method declared on a
+  base (or abstract) class is callable via turbofish on a subclass
+  receiver (instance, static, nullsafe), emitted once on the declaring
+  class and inherited.
 - Generic free functions at namespace scope and bare top-level.
 - Nullsafe instance turbofish (`$obj?->m::<T>()`).
 - Receiver-type analysis for `$this`, typed parameters, typed
@@ -195,6 +201,9 @@ upcoming one.
 - Undeclared-type-parameter and over-arity validation (a member,
   bound, or default that names a stray/typo'd type; more type
   arguments than the template declares).
+- Unresolved-generic-call detection: a turbofish method call whose
+  generic method exists on neither the receiver nor any ancestor is a
+  compile-time error instead of a silent runtime fatal.
 - PHPStan over the compiled output: `check` compiles to a throwaway
   directory, runs *your* PHPStan over the monomorphized code (one
   representative per template), and maps findings back to the `.xphp`
