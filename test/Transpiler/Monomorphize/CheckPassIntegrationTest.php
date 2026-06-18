@@ -155,6 +155,24 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(17, $d->location->line);
     }
 
+    public function testStaticGenericClosureIsCollectedByCheck(): void
+    {
+        $diagnostics = $this->check('closure_static');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(GenericMethodCompiler::CODE_UNSUPPORTED_STATIC_CLOSURE, $d->code);
+        self::assertNotNull($d->location);
+        self::assertSame(12, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnStaticGenericClosure(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('static closures cannot yet be specialized');
+        $this->compileFixture('closure_static');
+    }
+
     public function testClassAndMethodLevelErrorsAreBothCollectedInOneRun(): void
     {
         // Proves the validation-superset guarantee: a class-level check (variance) AND a

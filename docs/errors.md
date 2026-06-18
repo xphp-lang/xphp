@@ -41,6 +41,9 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.variance_position` | a `+T`/`-T` parameter appears in a position its variance forbids |
 | `xphp.inner_variance` | variance is violated through another generic's slot (composition) |
 | `xphp.undefined_template` | a generic was instantiated but never declared |
+| `xphp.duplicate_generic_function` | the same generic function is declared in two files |
+| `xphp.closure_this_capture` | a generic closure/arrow used via turbofish captures `$this` (unsupported) |
+| `xphp.static_closure` | a generic `static` closure used via turbofish (unsupported) |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
 
 > **Scope.** `xphp check` runs every generic *validation* check `xphp compile`

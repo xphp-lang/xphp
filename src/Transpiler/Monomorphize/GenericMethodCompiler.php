@@ -103,7 +103,8 @@ final class GenericMethodCompiler
      *     or "<specialized:fqcn>"). The values are the top-level statements of each AST.
      * @param bool $emit When true (default, compile) the pass specializes, appends, and strips
      *   templates as before. When false (`xphp check`) it walks for VALIDATION only — no append-flush,
-     *   no strip, no closure-dispatcher finalize — so the (discarded) AST is left untouched and only
+     *   no strip, no closure-dispatcher finalize. The traversal still rewrites call-site nodes on the
+     *   (discarded) per-file AST, but templates are deep-cloned so nothing shared is mutated; only
      *   diagnostics are produced.
      */
     public function process(array &$astSet, bool $emit = true): void
@@ -207,7 +208,8 @@ final class GenericMethodCompiler
         }
         unset($ast);
 
-        // Validate-only (check) stops here: no template stripping, so the AST is left intact.
+        // Validate-only (check) stops here: no template stripping or append-flush. The discarded
+        // per-file AST may carry the traversal's in-place call-site rewrites, but nothing shared is.
         if (!$emit) {
             return;
         }
