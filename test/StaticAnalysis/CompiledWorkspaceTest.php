@@ -31,8 +31,9 @@ final class CompiledWorkspaceTest extends TestCase
 
         try {
             self::assertSame($root, $workspace->root);
-            self::assertSame($root . '/dist', $workspace->distDir);
-            self::assertSame($root . '/cache/Generated', $workspace->generatedDir);
+            // distDir/generatedDir are canonicalized (realpath) for PHPStan path matching.
+            self::assertSame(realpath($root . '/dist'), $workspace->distDir);
+            self::assertSame(realpath($root . '/cache/Generated'), $workspace->generatedDir);
 
             // Rewritten user code landed in dist/.
             self::assertFileExists($workspace->distDir . '/Containers/Box.php');
@@ -87,6 +88,27 @@ final class CompiledWorkspaceTest extends TestCase
             $a->cleanup();
             $b->cleanup();
             $this->rrmdir($base);
+        }
+    }
+
+    public function testGeneratedDirFallsBackToConstructedPathWhenNotCreated(): void
+    {
+        // Empty sources emit no specialized classes, so cache/Generated is never
+        // created and realpath() returns false — canonical() must fall back to the
+        // constructed path (harmless: there are no representatives to match anyway).
+        $root = $this->scratchRoot();
+        $workspace = CompiledWorkspace::compile(
+            $this->compiler(),
+            new FilepathArray(),
+            $this->boxGenericSourceDir(),
+            $root,
+        );
+
+        try {
+            self::assertDirectoryDoesNotExist($root . '/cache/Generated');
+            self::assertSame($root . '/cache/Generated', $workspace->generatedDir);
+        } finally {
+            $workspace->cleanup();
         }
     }
 

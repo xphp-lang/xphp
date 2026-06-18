@@ -62,12 +62,24 @@ final readonly class CompiledWorkspace
         // $root needs no pre-creation; an empty source set simply writes nothing.
         $result = $compiler->compile($sources, $sourceDir, $distDir, $cacheDir);
 
+        // Canonicalize the analysable dirs: PHPStan reports findings under
+        // realpath()'d paths (symlinks resolved, e.g. macOS /var -> /private/var),
+        // so the representative file paths built from these must be canonical too
+        // or the finding->representative join silently misses (a false clean pass).
         return new self(
             $root,
-            $distDir,
-            $cacheDir . '/' . self::GENERATED_SUBDIR,
+            self::canonical($distDir),
+            self::canonical($cacheDir . '/' . self::GENERATED_SUBDIR),
             $result->registry,
         );
+    }
+
+    /** realpath() the dir if it exists; otherwise keep the constructed path (no files to match). */
+    private static function canonical(string $dir): string
+    {
+        $real = realpath($dir);
+
+        return $real !== false ? $real : $dir;
     }
 
     /** Recursively delete the workspace. Safe to call when $root was never created. */
