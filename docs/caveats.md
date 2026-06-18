@@ -100,10 +100,15 @@ to a named function.
 
 ### Why
 
-The dispatcher closure that xphp emits to route specialized calls
-needs a `$this`-binding target for one of the planned future
-extensions. `static` closures explicitly block `$this` binding,
-which removes that hook.
+Specializing an anonymous template at its call site landed in stages.
+Plain generic closures and arrows are rewritten through the dispatcher
+today; `static` closures (alongside explicit `use (...)` closures) are
+a still-unimplemented branch of that rewrite. It's a capability gap,
+not a binding one — a `static` closure has no `$this` to begin with, so
+this is unrelated to the [`$this`-capture
+rejection](#this-capturing-arrows-and-closures-rejected) above. The
+named-function path is already complete, so lifting the body to a
+file-scope generic function side-steps it.
 
 ### ✅ Workaround
 
