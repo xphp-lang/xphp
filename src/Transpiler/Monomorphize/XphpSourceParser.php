@@ -76,6 +76,14 @@ final class XphpSourceParser
     public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
     public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
 
+    // A bare, single-segment, non-imported class-name used inside a generic context
+    // (a template or generic method/function/closure) that is NOT a declared type
+    // parameter. Carries the resolved FQN. The undeclared-type-parameter validator
+    // flags it when the FQN resolves to no declared type — catching `Foo<Z>` whose
+    // member uses an undeclared `T`. Imported / fully-qualified names are never
+    // tagged (the escape hatch). Advisory metadata only — not emitted.
+    public const ATTR_SUSPECT_UNDECLARED_TYPE = 'xphp:suspectUndeclaredType';
+
     public const SCALAR_TYPES = [
         'int', 'integer', 'string', 'bool', 'boolean', 'float', 'double',
         'void', 'mixed', 'never', 'null', 'false', 'true',
@@ -1653,10 +1661,22 @@ final class XphpSourceParser
                 if (!$this->shouldQualify($node)) {
                     return;
                 }
-                $node->setAttribute(
-                    XphpSourceParser::ATTR_RESOLVED_FQN,
-                    $this->ctx->resolveAgainstContext($node->toString()),
-                );
+                $name = $node->toString();
+                $resolved = $this->ctx->resolveAgainstContext($name);
+                $node->setAttribute(XphpSourceParser::ATTR_RESOLVED_FQN, $resolved);
+
+                // Flag a bare, single-segment, non-imported class reference used inside a
+                // generic context. shouldQualify() already excluded declared type-params,
+                // scalars, FQ names, and generic-arg-bearing names, so what's left is either
+                // a real (in-project / built-in) type or a stray/undeclared type parameter
+                // like the `T` in `interface Foo<Z> { add(T $x): void; }`. The validator
+                // resolves which using the declared-set; here we only record the suspicion.
+                if (count($node->getParts()) === 1
+                    && $this->hasEnclosingTypeParams()
+                    && !$this->ctx->isImported($name)
+                ) {
+                    $node->setAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE, $resolved);
+                }
             }
 
             /**
@@ -1821,6 +1841,22 @@ final class XphpSourceParser
             {
                 foreach ($this->typeParamStack as $scope) {
                     if (in_array($name, $scope, true)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            /**
+             * True when some enclosing scope declares type parameters — i.e. we're
+             * inside a generic template or a generic method/function/closure. Every
+             * class/method pushes a frame (empty for non-generic ones), so this asks
+             * whether any frame is non-empty rather than whether the stack is non-empty.
+             */
+            private function hasEnclosingTypeParams(): bool
+            {
+                foreach ($this->typeParamStack as $scope) {
+                    if ($scope !== []) {
                         return true;
                     }
                 }

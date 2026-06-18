@@ -192,4 +192,29 @@ PHP;
 
         self::assertTrue($hierarchy->isSubtype('App\\Tag', 'Stringable'));
     }
+
+    public function testIsDeclaredForClassLikeInTheSourceSet(): void
+    {
+        $hierarchy = new TypeHierarchy(['App\\Foo' => [], 'App\\Bar' => ['App\\Foo']]);
+
+        self::assertTrue($hierarchy->isDeclared('App\\Foo'));
+        self::assertTrue($hierarchy->isDeclared('App\\Bar'));
+        self::assertTrue($hierarchy->isDeclared('\\App\\Foo')); // leading backslash normalised
+    }
+
+    public function testIsDeclaredForBuiltinType(): void
+    {
+        $hierarchy = new TypeHierarchy([]);
+
+        self::assertTrue($hierarchy->isDeclared('Stringable'));
+        self::assertTrue($hierarchy->isDeclared('Countable'));
+    }
+
+    public function testIsNotDeclaredForUnknownName(): void
+    {
+        $hierarchy = new TypeHierarchy(['App\\Foo' => []]);
+
+        self::assertFalse($hierarchy->isDeclared('App\\T'));
+        self::assertFalse($hierarchy->isDeclared('App\\Nonexistent'));
+    }
 }

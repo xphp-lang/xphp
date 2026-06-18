@@ -125,6 +125,20 @@ final readonly class TypeHierarchy
     }
 
     /**
+     * Whether $fqn names a type the source set knows about: a class/interface/trait
+     * declared in a scanned `.xphp` file (every such ClassLike is a key in the
+     * ancestor map) or a built-in PHP interface/class. Used by the
+     * undeclared-type-parameter check to tell a real (in-project or built-in) type
+     * from a name that resolves to nothing.
+     */
+    public function isDeclared(string $fqn): bool
+    {
+        $fqn = ltrim($fqn, '\\');
+
+        return isset($this->ancestors[$fqn]) || in_array($fqn, self::BUILTIN_TYPES, true);
+    }
+
+    /**
      * @param list<Node\Stmt> $ast
      * @param array<string, list<string>> $ancestors out-param accumulator
      */

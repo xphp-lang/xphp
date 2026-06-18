@@ -84,6 +84,17 @@ final class NamespaceContext
         return $this->currentNamespace;
     }
 
+    /**
+     * Whether a bare name's first segment is brought into scope by a `use`
+     * import. Used to spare imported (and therefore deliberate) class references
+     * from the undeclared-type-parameter check: an imported name is the author's
+     * explicit statement that the type lives elsewhere, so it's never "suspect".
+     */
+    public function isImported(string $name): bool
+    {
+        return isset($this->useMap[self::firstSegment($name)]);
+    }
+
     private static function firstSegment(string $name): string
     {
         $pos = strpos($name, '\\');

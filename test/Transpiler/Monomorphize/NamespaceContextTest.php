@@ -97,6 +97,37 @@ final class NamespaceContextTest extends TestCase
         self::assertSame('App\\Second\\Hello', $ctx->resolveAgainstContext('Hello'));
     }
 
+    public function testIsImportedTrueForAliasedFirstSegment(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Other\\Vendor\\Box'));
+
+        self::assertTrue($ctx->isImported('Box'));
+        self::assertTrue($ctx->isImported('Box\\Sub')); // first segment is what matters
+    }
+
+    public function testIsImportedFalseForNonImportedName(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Other\\Vendor\\Box'));
+
+        self::assertFalse($ctx->isImported('T'));
+        self::assertFalse($ctx->isImported('Unrelated'));
+    }
+
+    public function testIsImportedResetsWithNamespace(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App\\First');
+        $ctx->indexUse(self::makeUse('First\\Box'));
+        self::assertTrue($ctx->isImported('Box'));
+
+        $ctx->enterNamespace('App\\Second');
+        self::assertFalse($ctx->isImported('Box'));
+    }
+
     private static function makeUse(string $fqn, ?string $alias = null): Use_
     {
         $useItem = new UseItem(
