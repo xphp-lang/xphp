@@ -1775,7 +1775,10 @@ final class XphpSourceParser
                         ? $node['name']
                         : $this->resolveNameOnly($node['name']);
                     $resolvedArgs = $this->resolveTypeRefList($node['args']);
-                    return new BoundLeaf(new TypeRef($fqn, $resolvedArgs));
+                    $suspect = !$node['isFq']
+                        && !$this->isEnclosingTypeParam($node['name'])
+                        && $this->isSuspectUndeclared($node['name']);
+                    return new BoundLeaf(new TypeRef($fqn, $resolvedArgs, suspectUndeclared: $suspect));
                 }
                 $operands = [];
                 foreach ($node['operands'] as $op) {
@@ -1834,7 +1837,24 @@ final class XphpSourceParser
                     return new TypeRef($lower, $resolvedArgs, isScalar: true);
                 }
 
-                return new TypeRef($this->ctx->resolveAgainstContext($name), $resolvedArgs);
+                return new TypeRef(
+                    $this->ctx->resolveAgainstContext($name),
+                    $resolvedArgs,
+                    suspectUndeclared: $this->isSuspectUndeclared($name),
+                );
+            }
+
+            /**
+             * A bare, single-segment, non-imported class name used inside a generic
+             * context — the suspect condition shared by the bound/default TypeRef path
+             * and {@see markName}'s ATTR_SUSPECT_UNDECLARED_TYPE tag. Callers have
+             * already excluded scalars and enclosing type-params.
+             */
+            private function isSuspectUndeclared(string $name): bool
+            {
+                return strpos($name, '\\') === false
+                    && $this->hasEnclosingTypeParams()
+                    && !$this->ctx->isImported($name);
             }
 
             private function isEnclosingTypeParam(string $name): bool

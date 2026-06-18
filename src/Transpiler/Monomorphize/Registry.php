@@ -420,6 +420,7 @@ final class Registry
         foreach ($this->definitions as $templateFqn => $definition) {
             UndeclaredTypeParameterValidator::assert(
                 $definition->templateAst,
+                $definition->typeParams,
                 $templateFqn,
                 $this->hierarchy,
                 $this->diagnostics,

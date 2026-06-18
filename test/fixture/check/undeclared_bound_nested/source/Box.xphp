@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NestedBound;
+
+class Holder<X>
+{
+}
+
+// Intersection bound with a stray leaf (`Bad1`) and a declared generic whose
+// type ARGUMENT is stray (`Bad2`). Both are reported.
+class Box<T: Bad1 & Holder<Bad2>>
+{
+}

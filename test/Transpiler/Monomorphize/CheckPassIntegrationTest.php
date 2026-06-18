@@ -270,6 +270,63 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('undeclared_type_param_method');
     }
 
+    public function testUndeclaredNameInABoundIsCollected(): void
+    {
+        $diagnostics = $this->check('undeclared_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
+        self::assertStringContainsString('Type `Nonexistent`', $diagnostics->all()[0]->message);
+    }
+
+    public function testUndeclaredNameInADefaultIsCollected(): void
+    {
+        $diagnostics = $this->check('undeclared_default');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
+        self::assertStringContainsString('Type `Nonexistent`', $diagnostics->all()[0]->message);
+    }
+
+    public function testUndeclaredNamesInIntersectionBoundAndGenericArgAreCollected(): void
+    {
+        // `Bad1` is a leaf of an intersection bound; `Bad2` is a type argument of a
+        // declared generic bound (`Holder<Bad2>`). Both stray names are reported.
+        $diagnostics = $this->check('undeclared_bound_nested');
+
+        $names = [];
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $d->code);
+            preg_match('/Type `(\w+)`/', $d->message, $m);
+            $names[$m[1]] = true;
+        }
+        ksort($names);
+        self::assertSame(['Bad1', 'Bad2'], array_keys($names));
+    }
+
+    public function testBuiltinImportedAndParamRefBoundsAndDefaultsAreClean(): void
+    {
+        $diagnostics = $this->check('undeclared_bound_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testSameUndeclaredNameInBoundAndDefaultIsReportedOnce(): void
+    {
+        $diagnostics = $this->check('undeclared_bound_dedup');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertStringContainsString('Type `Bad`', $diagnostics->all()[0]->message);
+    }
+
+    public function testCompileStillThrowsOnUndeclaredBound(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Type `Nonexistent` used in template `App\\BadBound\\Box`');
+        $this->compileFixture('undeclared_bound');
+    }
+
     public function testImportedAndFullyQualifiedTypesAreNotFlaggedAsUndeclared(): void
     {
         $diagnostics = $this->check('undeclared_type_param_escape');

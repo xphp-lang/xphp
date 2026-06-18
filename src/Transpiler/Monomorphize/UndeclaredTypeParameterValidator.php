@@ -60,10 +60,14 @@ final class UndeclaredTypeParameterValidator
     }
 
     /**
-     * Validate a generic class/interface/trait template's member signatures.
+     * Validate a generic class/interface/trait template's member signatures and the
+     * type names used in its type-parameter bounds and defaults.
+     *
+     * @param list<TypeParam> $params the template's declared type parameters
      */
     public static function assert(
         ClassLike $node,
+        array $params,
         string $templateFqn,
         TypeHierarchy $hierarchy,
         ?DiagnosticCollector $diagnostics = null,
@@ -71,6 +75,7 @@ final class UndeclaredTypeParameterValidator
     ): void {
         $validator = new self($hierarchy, 'template `' . $templateFqn . '`');
         $validator->collect($node);
+        $validator->collectBoundsAndDefaults($params, $node->getStartLine());
         self::report($validator->violations, $diagnostics, $file);
     }
 
@@ -274,6 +279,68 @@ final class UndeclaredTypeParameterValidator
                 $this->walkBodyForNestedClosures($node->$subName);
             }
         }
+    }
+
+    /**
+     * Check the type names used in the declared parameters' bounds and defaults
+     * (which are TypeRef trees, not AST type nodes — they carry the suspect flag on
+     * the TypeRef itself). All locate at the declaration line; duplicates of the
+     * same undeclared name (e.g. `<T: Bad = Bad>` or two params bounded by `Bad`)
+     * collapse to one finding.
+     *
+     * @param list<TypeParam> $params
+     */
+    private function collectBoundsAndDefaults(array $params, int $declarationLine): void
+    {
+        $seen = [];
+        foreach ($params as $param) {
+            if ($param->bound !== null) {
+                $this->collectSuspectInBound($param->bound, $declarationLine, $seen);
+            }
+            if ($param->default !== null) {
+                $this->collectSuspectInTypeRef($param->default, $declarationLine, $seen);
+            }
+        }
+    }
+
+    /** @param array<string, true> $seen */
+    private function collectSuspectInBound(BoundExpr $bound, int $line, array &$seen): void
+    {
+        if ($bound instanceof BoundLeaf) {
+            $this->collectSuspectInTypeRef($bound->type, $line, $seen);
+            return;
+        }
+        // @infection-ignore-all LogicalOrAllSubExprNegation -- a non-leaf BoundExpr is
+        // always an Intersection or a Union, so this assert is a phpstan type-narrowing
+        // tautology; negating its operands still holds. Purely a type guard, not behavior.
+        assert($bound instanceof BoundIntersection || $bound instanceof BoundUnion);
+        foreach ($bound->operands as $operand) {
+            $this->collectSuspectInBound($operand, $line, $seen);
+        }
+    }
+
+    /** @param array<string, true> $seen */
+    private function collectSuspectInTypeRef(TypeRef $ref, int $line, array &$seen): void
+    {
+        if ($ref->suspectUndeclared && !$this->hierarchy->isDeclared($ref->name) && !isset($seen[$ref->name])) {
+            // @infection-ignore-all TrueValue -- only the KEY's presence matters (isset above);
+            // the stored value is never read, so true vs false is observably identical.
+            $seen[$ref->name] = true;
+            $this->violations[] = [
+                'message' => self::undeclaredTypeMessage(self::shortName($ref->name), $this->context),
+                'line' => $line,
+            ];
+        }
+        foreach ($ref->args as $inner) {
+            $this->collectSuspectInTypeRef($inner, $line, $seen);
+        }
+    }
+
+    private static function shortName(string $fqn): string
+    {
+        $pos = strrpos($fqn, '\\');
+
+        return $pos === false ? $fqn : substr($fqn, $pos + 1);
     }
 
     private function checkType(Node $type): void

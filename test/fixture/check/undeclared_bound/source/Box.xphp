@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BadBound;
+
+// `Nonexistent` is used as a bound but names no real type.
+class Box<T: Nonexistent>
+{
+}

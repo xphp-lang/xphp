@@ -23,6 +23,12 @@ final readonly class TypeRef
         public array $args = [],
         public bool $isScalar = false,
         public bool $isTypeParam = false,
+        // Set by the parser for a bare, single-segment, non-imported bound/default
+        // name used inside a generic context that is NOT a declared type parameter —
+        // the bound/default analogue of XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE
+        // (TypeRefs carry no AST attributes). The undeclared-type validator flags it
+        // when `name` resolves to no declared/built-in type.
+        public bool $suspectUndeclared = false,
     ) {
     }
 

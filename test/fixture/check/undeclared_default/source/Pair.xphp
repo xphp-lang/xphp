@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BadDefault;
+
+// `Nonexistent` is used as a default but names no real type.
+class Pair<A, B = Nonexistent>
+{
+}
