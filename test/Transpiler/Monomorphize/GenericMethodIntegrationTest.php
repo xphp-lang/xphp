@@ -1305,6 +1305,115 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testStaticGenericMethodResolvesThroughInheritance(): void
+    {
+        // Ticket 0003 (static path): a static generic method declared on Base
+        // resolves and runs when called as `Derived::make::<...>()`. The
+        // specialization is emitted onto the declaring Base and reached via
+        // PHP's static-method inheritance.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_static_method_through_inheritance/source',
+            'genmethod-static-inherit',
+        );
+        try {
+            $base = file_get_contents($fixture->targetDir . '/Base.php');
+            $derived = file_get_contents($fixture->targetDir . '/Derived.php');
+            self::assertIsString($base);
+            self::assertIsString($derived);
+            // Both make specializations land on Base; Derived inherits them.
+            self::assertSame(2, preg_match_all('/function make_T_[0-9a-f]+\(/', $base));
+            self::assertStringNotContainsString('make_T_', $derived);
+
+            require __DIR__ . '/../../fixture/compile/generic_static_method_through_inheritance/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testNullsafeInheritedGenericMethodResolves(): void
+    {
+        // Nullsafe instance turbofish resolves through inheritance too (it shares
+        // the instance path). The specialization lands on the declaring base and
+        // the call is rewritten while preserving the `?->` short-circuit operator.
+        $dir = sys_get_temp_dir() . '/xphp-inh-nullsafe-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhNullsafe;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Derived.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhNullsafe;
+        class Derived extends Base {}
+        PHP);
+        file_put_contents($dir . '/Caller.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhNullsafe;
+        class Caller {
+            public function go(?Derived $d): ?int {
+                return $d?->id::<int>(5);
+            }
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $caller = file_get_contents($dir . '/dist/Caller.php');
+            self::assertIsString($base);
+            self::assertIsString($caller);
+            // Specialization on the declaring base; nullsafe operator preserved.
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $base));
+            self::assertMatchesRegularExpression('/\$d\?->id_T_[0-9a-f]+\(/', $caller);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testParentTurbofishResolvesInheritedStaticGenericMethod(): void
+    {
+        // A static generic method inherited from the parent now resolves via the
+        // ancestor walk (before the static path walked ancestors this was an
+        // "unresolved generic method" compile error).
+        $dir = sys_get_temp_dir() . '/xphp-inh-parent-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhParent;
+        class Base { public static function make<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Child.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhParent;
+        class Child extends Base {
+            public function run(): int { return parent::make::<int>(1); }
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir); // must NOT throw
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $child = file_get_contents($dir . '/dist/Child.php');
+            self::assertIsString($base);
+            self::assertIsString($child);
+            self::assertSame(1, preg_match_all('/function make_T_[0-9a-f]+\(/', $base));
+            // The inherited static call resolved to a mangled specialization (the
+            // `parent::` receiver resolves to the current class, which inherits the
+            // base method); no leftover turbofish marker survives.
+            self::assertMatchesRegularExpression('/::make_T_[0-9a-f]+\(/', $child);
+            self::assertStringNotContainsString('make::<', $child);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     public function testSubclassGenericMethodOverrideBindsToSubclass(): void
     {
         // The direct hit on the receiver's own class wins over the ancestor

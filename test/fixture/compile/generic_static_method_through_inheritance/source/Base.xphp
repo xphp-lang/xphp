@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericStaticMethodThroughInheritance;
+
+class Base
+{
+    public static function make<U>(U $x): U
+    {
+        return $x;
+    }
+}

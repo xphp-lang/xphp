@@ -929,10 +929,14 @@ final class GenericMethodCompiler
                 $classFqn = $this->resolveClassName($node->class);
                 $methodName = $node->name->toString();
                 $key = $classFqn . '::' . $methodName;
-                $template = $this->methodTemplates[$key] ?? null;
-                if ($template === null) {
+                // Resolve through the inheritance chain (same as the instance path):
+                // a static generic method declared on a base is callable as
+                // `Sub::m::<...>()` and resolves via static-method inheritance.
+                $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
+                if ($resolved === null) {
                     return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
+                [$template, $declaringFqn] = $resolved;
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                 if (!is_array($params)) {
                     return null;
@@ -968,14 +972,16 @@ final class GenericMethodCompiler
                 }
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
-                $generatedKey = $classFqn . '::' . $mangled;
+                // Emit onto the declaring class (see the instance path) so subclasses
+                // inherit the single specialization; dedup by the declaring FQN.
+                $generatedKey = $declaringFqn . '::' . $mangled;
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
                     $substitution = [];
                     foreach ($params as $i => $param) {
                         $substitution[$param->name] = $args[$i];
                     }
                     $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
-                    $owner = $this->classByFqn[$classFqn] ?? null;
+                    $owner = $this->classByFqn[$declaringFqn] ?? null;
                     if ($owner !== null) {
                         // Buffer the append (see rewriteFuncCall for the rationale).
                         $this->pendingAppends[] = [$owner, $specialized];
