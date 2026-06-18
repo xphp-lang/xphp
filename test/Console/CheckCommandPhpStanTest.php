@@ -6,6 +6,7 @@ namespace XPHP\Console\Command;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Symfony\Component\Console\Tester\CommandTester;
@@ -22,6 +23,7 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  * End-to-end coverage of the PHPStan pass wired into `xphp check`. Skips when no
  * phpstan binary is installed (mirrors the @group php85 self-skip convention).
  */
+#[Group('phpstan')]
 final class CheckCommandPhpStanTest extends TestCase
 {
     private string $bin;

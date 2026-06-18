@@ -6,6 +6,7 @@ namespace XPHP\StaticAnalysis;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
@@ -16,6 +17,7 @@ use XPHP\Transpiler\Monomorphize\SpecializedClassGenerator;
 use XPHP\Transpiler\Monomorphize\Specializer;
 use XPHP\Transpiler\Monomorphize\XphpSourceParser;
 
+#[Group('phpstan')]
 final class PhpStanRunnerTest extends TestCase
 {
     private string $phpstanBin;

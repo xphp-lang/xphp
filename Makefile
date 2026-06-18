@@ -7,11 +7,19 @@
 # targets here.
 
 .PHONY: test/unit
-# Default runtime is PHP 8.4 (composer requires ^8.4). Tests exercising
-# newer-PHP syntax are tagged `@group php85` and excluded here; they run
-# on an 8.5 runtime via `make test/unit/php85`.
+# Default runtime is PHP 8.4 (composer requires ^8.4). Two groups are excluded
+# here: `php85` (newer-PHP syntax; runs on 8.5 via `make test/unit/php85`) and
+# `phpstan` (the `xphp check` PHPStan pass, which shells out to a real phpstan
+# subprocess and is slow; runs via `make test/phpstan`).
 test/unit:
-	php vendor/bin/phpunit --exclude-group php85
+	php vendor/bin/phpunit --exclude-group php85 --exclude-group phpstan
+
+.PHONY: test/phpstan
+# The `xphp check` PHPStan-integration tests (tagged `@group phpstan`). They
+# shell out to the consumer's phpstan binary and self-skip when vendor/bin/phpstan
+# is absent. NOTE: distinct from `lint/phpstan`, which runs PHPStan over src/.
+test/phpstan:
+	php vendor/bin/phpunit --group phpstan
 
 .PHONY: test/unit/php85
 # Runs only the PHP 8.5-specific syntax tests (e.g. the pipe operator).
