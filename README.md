@@ -150,9 +150,8 @@ every bound/variance/etc. problem with a `file:line`:
 vendor/bin/xphp check src            # exit 1 if any error; --format=text|json|github
 ```
 
-`check` is a fast pre-flight gate, not yet a full substitute for `compile`
-(method/function/closure-level generic errors surface only at compile) — keep
-`compile` in your build. See
+`check` runs all of xphp's generic validation (the specialization-loop guards
+aside); you still run `compile` to emit the PHP. See
 [Errors and diagnostics](docs/errors.md#xphp-check--validate-without-emitting).
 
 ## See also

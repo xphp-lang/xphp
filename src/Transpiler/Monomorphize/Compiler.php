@@ -225,9 +225,9 @@ final readonly class Compiler
      * the first. Stops after validation — it never specializes or emits, so a partially-invalid
      * registry never reaches the fixed-point loop. Returns the collected diagnostics.
      *
-     * Scope note: method/function/closure-level generic checks (GenericMethodCompiler, Phase 1a
-     * of compile()) are intentionally NOT run here — they remain fail-fast and are not yet part
-     * of the check gate.
+     * Includes method/function/closure-level generic checks: GenericMethodCompiler runs in
+     * validate-only mode (`emit: false`) so it collects bound / missing-arg / duplicate-function /
+     * closure-rejection diagnostics without specializing or emitting.
      *
      * Per-file resilience: a file that fails to parse is reported as a diagnostic and skipped,
      * so the remaining files are still checked (unlike compile(), which fails fast).
@@ -281,6 +281,16 @@ final readonly class Compiler
             $collector->collectInstantiations($ast, $filepath);
         }
         $registry->collectUndefinedTemplates($diagnostics);
+
+        // Method/function/closure-level generic checks: run GenericMethodCompiler in validate-only
+        // mode (emit: false) so it collects bound / missing-arg / duplicate-function / closure-rejection
+        // diagnostics without specializing or mutating the (discarded) AST.
+        // @infection-ignore-all FalseValue -- `emit: true` is observably equivalent here: the
+        // validation calls (which produce the diagnostics) run in BOTH modes; `emit` only governs
+        // append/strip/finalize side-effects on `$astPerFile`, which is local and discarded. So
+        // flipping it changes only wasted work, not the collected diagnostics. `emit: false` is the
+        // correct (no-wasted-work, no-mutation) choice.
+        (new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics))->process($astPerFile, emit: false);
 
         return $diagnostics;
     }

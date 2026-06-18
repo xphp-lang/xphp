@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\DupFunc;
+
+function dup<T>(T $x): T
+{
+    return $x;
+}
+
+function dup2<T>(T $x): T
+{
+    return $x;
+}

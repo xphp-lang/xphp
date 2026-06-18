@@ -45,6 +45,10 @@ use PhpParser\Node\UseItem;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Specializes method-scoped generics: `function NAME<T>(...)` inside a class body, called via
@@ -72,9 +76,21 @@ use RuntimeException;
  */
 final class GenericMethodCompiler
 {
+    /** Stable diagnostic codes for method/function/closure-level generic errors collected by `check`. */
+    public const CODE_DUPLICATE_GENERIC_FUNCTION = 'xphp.duplicate_generic_function';
+    public const CODE_UNSUPPORTED_THIS_CAPTURE = 'xphp.closure_this_capture';
+    public const CODE_UNSUPPORTED_STATIC_CLOSURE = 'xphp.static_closure';
+
+    /**
+     * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
+     *   method/function/closure-level generic error throws as before, byte-identical. When provided
+     *   (by `xphp check` with `process(..., emit: false)`), each is appended as a Diagnostic and the
+     *   pass continues, so all are reported in one run.
+     */
     public function __construct(
         private readonly int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH,
         private readonly ?TypeHierarchy $hierarchy = null,
+        private readonly ?DiagnosticCollector $diagnostics = null,
     ) {
     }
 
@@ -85,8 +101,12 @@ final class GenericMethodCompiler
      *
      * @param array<string, list<Node\Stmt>> $astSet keyed by an arbitrary string id (filepath
      *     or "<specialized:fqcn>"). The values are the top-level statements of each AST.
+     * @param bool $emit When true (default, compile) the pass specializes, appends, and strips
+     *   templates as before. When false (`xphp check`) it walks for VALIDATION only — no append-flush,
+     *   no strip, no closure-dispatcher finalize — so the (discarded) AST is left untouched and only
+     *   diagnostics are produced.
      */
-    public function process(array &$astSet): void
+    public function process(array &$astSet, bool $emit = true): void
     {
         /** @var array<string, ClassMethod> $methodTemplates keyed by "classFqn::methodName" */
         $methodTemplates = [];
@@ -112,14 +132,24 @@ final class GenericMethodCompiler
             // files) with both paths, matching the shape `Registry::recordDefinition`
             // uses for generic classes. Silently overwriting the first body — which is
             // the prior behavior here — costs a real refactoring footgun.
-            foreach ($perFileFns as $fqn => $_template) {
+            foreach ($perFileFns as $fqn => $duplicate) {
                 if (isset($functionTemplates[$fqn])) {
-                    throw new RuntimeException(sprintf(
+                    $message = sprintf(
                         'Generic function template "%s" already declared (in %s); duplicate declaration in %s.',
                         $fqn,
                         $functionSourceByFqn[$fqn],
                         (string) $astKey,
-                    ));
+                    );
+                    if ($this->diagnostics !== null) {
+                        $this->diagnostics->add(new Diagnostic(
+                            Severity::Error,
+                            self::CODE_DUPLICATE_GENERIC_FUNCTION,
+                            $message,
+                            new SourceLocation((string) $astKey, $duplicate->getStartLine()),
+                        ));
+                        continue;
+                    }
+                    throw new RuntimeException($message);
                 }
             }
 
@@ -166,12 +196,21 @@ final class GenericMethodCompiler
                 $functionNamespaceByFqn,
                 $alreadyGenerated,
                 $topLevelAppends,
+                (string) $astKey,
+                $emit,
             );
-            foreach ($topLevelAppends as $specialized) {
-                $ast[] = $specialized;
+            if ($emit) {
+                foreach ($topLevelAppends as $specialized) {
+                    $ast[] = $specialized;
+                }
             }
         }
         unset($ast);
+
+        // Validate-only (check) stops here: no template stripping, so the AST is left intact.
+        if (!$emit) {
+            return;
+        }
 
         // Strip the original method templates from their owning classes.
         foreach ($methodTemplates as $key => $template) {
@@ -314,13 +353,16 @@ final class GenericMethodCompiler
         array $functionNamespaceByFqn,
         array &$alreadyGenerated,
         array &$topLevelAppends,
+        string $currentFile,
+        bool $emit,
     ): void {
         $hashLength = $this->hashLength;
         $hierarchy = $this->hierarchy;
+        $diagnostics = $this->diagnostics;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
@@ -460,6 +502,8 @@ final class GenericMethodCompiler
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
                 public array &$topLevelAppends,
+                private readonly ?DiagnosticCollector $diagnostics,
+                private readonly string $currentFile,
             ) {
             }
 
@@ -895,7 +939,8 @@ final class GenericMethodCompiler
                     $args = [];
                 }
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
-                $padded = Registry::padArgsWithDefaults($params, $args, $key);
+                $location = new SourceLocation($this->currentFile, $node->getStartLine());
+                $padded = Registry::padArgsWithDefaults($params, $args, $key, $this->diagnostics, $location);
                 if (!self::allConcrete($padded) || count($params) !== count($padded)) {
                     return null;
                 }
@@ -907,6 +952,8 @@ final class GenericMethodCompiler
                         $args,
                         $this->hierarchy,
                         $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
+                        $this->diagnostics,
+                        $location,
                     );
                 }
 
@@ -982,7 +1029,8 @@ final class GenericMethodCompiler
                     $args = [];
                 }
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
-                $padded = Registry::padArgsWithDefaults($params, $args, $key);
+                $location = new SourceLocation($this->currentFile, $node->getStartLine());
+                $padded = Registry::padArgsWithDefaults($params, $args, $key, $this->diagnostics, $location);
                 if (!self::allConcrete($padded) || count($params) !== count($padded)) {
                     return null;
                 }
@@ -994,6 +1042,8 @@ final class GenericMethodCompiler
                         $args,
                         $this->hierarchy,
                         $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
+                        $this->diagnostics,
+                        $location,
                     );
                 }
 
@@ -1121,6 +1171,8 @@ final class GenericMethodCompiler
                         $args,
                         $this->hierarchy,
                         $fqn . '<' . self::formatArgList($args) . '>',
+                        $this->diagnostics,
+                        new SourceLocation($this->currentFile, $node->getStartLine()),
                     );
                 }
 
@@ -1204,7 +1256,7 @@ final class GenericMethodCompiler
                     // A future commit can rewrite `$this->v` to a lifted
                     // param.
                     $flavor = $template instanceof ArrowFunction ? 'arrow' : 'closure';
-                    throw new RuntimeException(sprintf(
+                    $message = sprintf(
                         'Generic %s `$%s::<...>(...)` captures `$this`, '
                         . 'which is not yet supported. Rewrite as a method '
                         . 'on the enclosing class, or extract the value of '
@@ -1213,15 +1265,35 @@ final class GenericMethodCompiler
                         $flavor,
                         $varName,
                         $flavor,
-                    ));
+                    );
+                    if ($this->diagnostics !== null) {
+                        $this->diagnostics->add(new Diagnostic(
+                            Severity::Error,
+                            GenericMethodCompiler::CODE_UNSUPPORTED_THIS_CAPTURE,
+                            $message,
+                            new SourceLocation($this->currentFile, $node->getStartLine()),
+                        ));
+                        return null;
+                    }
+                    throw new RuntimeException($message);
                 }
                 if ($template instanceof Closure && $template->static) {
-                    throw new RuntimeException(sprintf(
+                    $message = sprintf(
                         'Generic static closures cannot yet be specialized at '
                         . 'call sites. Rewrite the call site for `$%s::<...>(...)` '
                         . 'to use a named generic function at file scope.',
                         $varName,
-                    ));
+                    );
+                    if ($this->diagnostics !== null) {
+                        $this->diagnostics->add(new Diagnostic(
+                            Severity::Error,
+                            GenericMethodCompiler::CODE_UNSUPPORTED_STATIC_CLOSURE,
+                            $message,
+                            new SourceLocation($this->currentFile, $node->getStartLine()),
+                        ));
+                        return null;
+                    }
+                    throw new RuntimeException($message);
                 }
 
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
@@ -1234,7 +1306,8 @@ final class GenericMethodCompiler
                 // generic closure / arrow. Padding throws when leading
                 // required params are missing -- the throw surfaces with
                 // a clear `Registry::padArgsWithDefaults` message.
-                $args = Registry::padArgsWithDefaults($params, $args, 'closure<' . $varName . '>');
+                $location = new SourceLocation($this->currentFile, $node->getStartLine());
+                $args = Registry::padArgsWithDefaults($params, $args, 'closure<' . $varName . '>', $this->diagnostics, $location);
                 if (count($params) !== count($args)) {
                     return null;
                 }
@@ -1244,6 +1317,8 @@ final class GenericMethodCompiler
                         $args,
                         $this->hierarchy,
                         'closure<' . self::formatArgList($args) . '>',
+                        $this->diagnostics,
+                        $location,
                     );
                 }
                 $context = $this->currentScopeClosureContexts[$varName] ?? null;
@@ -1390,6 +1465,12 @@ final class GenericMethodCompiler
         $traverser = new NodeTraverser();
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
+
+        // Validate-only (check) skips all emission: no dispatcher materialization, no buffered
+        // appends. The traversal above already produced the diagnostics via the call-site checks.
+        if (!$emit) {
+            return;
+        }
 
         // Pass 2 of the closure-dispatcher pipeline: materialize a dispatcher
         // closure per recorded template, replace the original Assign's RHS,

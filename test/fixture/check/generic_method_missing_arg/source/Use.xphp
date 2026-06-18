@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\GenericMethodMissingArg;
+
+// Only one type argument supplied; parameter `B` has no default.
+$u = new Util();
+$u->pair::<int>(1, 'x');
