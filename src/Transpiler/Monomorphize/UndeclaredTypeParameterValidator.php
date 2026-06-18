@@ -7,13 +7,16 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
+use PhpParser\Node\FunctionLike;
 use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
-use PhpParser\Node\Param;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\UnionType;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitorAbstract;
 use RuntimeException;
 use XPHP\Diagnostics\Diagnostic;
 use XPHP\Diagnostics\DiagnosticCollector;
@@ -52,10 +55,13 @@ final class UndeclaredTypeParameterValidator
 
     private function __construct(
         private readonly TypeHierarchy $hierarchy,
-        private readonly string $templateFqn,
+        private readonly string $context,
     ) {
     }
 
+    /**
+     * Validate a generic class/interface/trait template's member signatures.
+     */
     public static function assert(
         ClassLike $node,
         string $templateFqn,
@@ -63,18 +69,66 @@ final class UndeclaredTypeParameterValidator
         ?DiagnosticCollector $diagnostics = null,
         ?string $file = null,
     ): void {
-        $validator = new self($hierarchy, $templateFqn);
+        $validator = new self($hierarchy, 'template `' . $templateFqn . '`');
         $validator->collect($node);
-        if ($validator->violations === []) {
+        self::report($validator->violations, $diagnostics, $file);
+    }
+
+    /**
+     * Validate generic method/function/closure signatures declared OUTSIDE a generic
+     * template (a generic method on a plain class, a free generic function, a generic
+     * closure/arrow). Those nested inside a generic template are owned by {@see assert}
+     * (via its member walk), so they're skipped here to avoid reporting the same node
+     * twice.
+     *
+     * @param array<string, list<Node>> $astPerFile keyed by filepath
+     */
+    public static function assertMethodLevel(
+        array $astPerFile,
+        TypeHierarchy $hierarchy,
+        ?DiagnosticCollector $diagnostics = null,
+    ): void {
+        /** @var list<array{message: string, line: int, file: string}> $findings */
+        $findings = [];
+        foreach ($astPerFile as $file => $ast) {
+            foreach (self::findMethodLevelGenerics($ast) as $generic) {
+                $validator = new self($hierarchy, $generic['context']);
+                $validator->checkCallable($generic['node']);
+                foreach ($validator->violations as $violation) {
+                    $findings[] = $violation + ['file' => $file];
+                }
+            }
+        }
+
+        if ($findings === []) {
             return;
         }
+        if ($diagnostics === null) {
+            throw new RuntimeException($findings[0]['message']);
+        }
+        foreach ($findings as $finding) {
+            $diagnostics->add(new Diagnostic(
+                Severity::Error,
+                self::CODE_UNDECLARED_TYPE,
+                $finding['message'],
+                new SourceLocation($finding['file'], $finding['line']),
+            ));
+        }
+    }
 
+    /**
+     * @param list<array{message: string, line: int}> $violations
+     */
+    private static function report(array $violations, ?DiagnosticCollector $diagnostics, ?string $file): void
+    {
+        if ($violations === []) {
+            return;
+        }
         if ($diagnostics === null) {
             // Compile-mode: fail fast on the first finding rather than emit broken PHP.
-            throw new RuntimeException($validator->violations[0]['message']);
+            throw new RuntimeException($violations[0]['message']);
         }
-
-        foreach ($validator->violations as $violation) {
+        foreach ($violations as $violation) {
             $location = $file !== null ? new SourceLocation($file, $violation['line']) : null;
             $diagnostics->add(new Diagnostic(
                 Severity::Error,
@@ -85,12 +139,70 @@ final class UndeclaredTypeParameterValidator
         }
     }
 
-    private static function undeclaredTypeMessage(string $name, string $templateFqn): string
+    /**
+     * Find every generic method/function/closure NOT enclosed by a generic template.
+     *
+     * @param list<Node> $ast
+     * @return list<array{node: FunctionLike, context: string}>
+     */
+    private static function findMethodLevelGenerics(array $ast): array
+    {
+        $visitor = new class extends NodeVisitorAbstract {
+            public int $genericClassDepth = 0;
+            /** @var list<array{node: FunctionLike, context: string}> */
+            public array $found = [];
+
+            public function enterNode(Node $node): null
+            {
+                // Skip generics nested in a generic template — its member walk owns them.
+                // Known limitation: a generic method on an ANONYMOUS class buried in a
+                // generic class's method body is owned by neither pass (the member walk
+                // doesn't recurse into anon classes, and depth>0 skips it here). That shape
+                // can't be specialized downstream anyway, so it's a latent edge, not a regression.
+                if ($node instanceof ClassLike && $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS) !== null) {
+                    $this->genericClassDepth++;
+                }
+                if ($this->genericClassDepth === 0
+                    && $node instanceof FunctionLike
+                    && $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS) !== null
+                ) {
+                    $this->found[] = ['node' => $node, 'context' => self::contextLabel($node)];
+                }
+                return null;
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof ClassLike && $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS) !== null) {
+                    $this->genericClassDepth--;
+                }
+                return null;
+            }
+
+            private static function contextLabel(FunctionLike $node): string
+            {
+                return match (true) {
+                    $node instanceof ClassMethod => 'method `' . $node->name->toString() . '`',
+                    $node instanceof Function_ => 'function `' . $node->name->toString() . '`',
+                    $node instanceof ArrowFunction => 'arrow function',
+                    default => 'closure',
+                };
+            }
+        };
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+
+        return $visitor->found;
+    }
+
+    private static function undeclaredTypeMessage(string $name, string $context): string
     {
         return sprintf(
-            'Type `%s` used in `%s` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            'Type `%s` used in %s is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
             $name,
-            $templateFqn,
+            $context,
         );
     }
 
@@ -107,23 +219,28 @@ final class UndeclaredTypeParameterValidator
             }
         }
         foreach ($node->getMethods() as $method) {
-            $this->checkMethod($method);
+            $this->checkCallable($method);
         }
     }
 
-    private function checkMethod(ClassMethod $method): void
+    /**
+     * Check a callable's signature (params + return) and any closures nested in its
+     * body. Shared by the class-member walk and the standalone method-level pass.
+     */
+    private function checkCallable(FunctionLike $callable): void
     {
-        foreach ($method->params as $param) {
-            // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
-            if ($param instanceof Param && $param->type !== null) {
+        foreach ($callable->getParams() as $param) {
+            if ($param->type !== null) {
                 $this->checkType($param->type);
             }
         }
-        if ($method->returnType !== null) {
-            $this->checkType($method->returnType);
+        $returnType = $callable->getReturnType();
+        if ($returnType !== null) {
+            $this->checkType($returnType);
         }
-        if ($method->stmts !== null) {
-            $this->walkBodyForNestedClosures($method->stmts);
+        $stmts = $callable->getStmts();
+        if ($stmts !== null) {
+            $this->walkBodyForNestedClosures($stmts);
         }
     }
 
@@ -136,14 +253,14 @@ final class UndeclaredTypeParameterValidator
     private function walkBodyForNestedClosures(mixed $node): void
     {
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
-            foreach ($node->params as $param) {
-                // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
-                if ($param instanceof Param && $param->type !== null) {
+            foreach ($node->getParams() as $param) {
+                if ($param->type !== null) {
                     $this->checkType($param->type);
                 }
             }
-            if ($node->returnType !== null) {
-                $this->checkType($node->returnType);
+            $returnType = $node->getReturnType();
+            if ($returnType !== null) {
+                $this->checkType($returnType);
             }
             // Don't stop — a closure body may contain further closures.
         }
@@ -165,7 +282,7 @@ final class UndeclaredTypeParameterValidator
             $fqn = $type->getAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE);
             if (is_string($fqn) && !$this->hierarchy->isDeclared($fqn)) {
                 $this->violations[] = [
-                    'message' => self::undeclaredTypeMessage($type->toString(), $this->templateFqn),
+                    'message' => self::undeclaredTypeMessage($type->toString(), $this->context),
                     'line' => $type->getStartLine(),
                 ];
             }

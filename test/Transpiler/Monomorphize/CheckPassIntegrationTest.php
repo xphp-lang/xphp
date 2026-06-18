@@ -230,6 +230,46 @@ final class CheckPassIntegrationTest extends TestCase
         );
     }
 
+    public function testUndeclaredTypesInMethodAndFunctionGenericsAreCollected(): void
+    {
+        // A generic method on a plain class and a free generic function — both
+        // outside any generic template — are validated by the method-level pass.
+        $diagnostics = $this->check('undeclared_type_param_method');
+
+        $contexts = [];
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $d->code);
+            self::assertNotNull($d->location);
+            preg_match('/Type `(\w+)` used in (.+?) is not/', $d->message, $m);
+            $contexts[$m[1]] = $m[2];
+        }
+        ksort($contexts);
+        self::assertSame(['B', 'C', 'D', 'E'], array_keys($contexts));
+        self::assertSame('method `pick`', $contexts['B']);
+        self::assertSame('function `wrap`', $contexts['C']);
+        self::assertSame('closure', $contexts['D']);
+        self::assertSame('arrow function', $contexts['E']);
+    }
+
+    public function testGenericMethodInsideGenericTemplateIsReportedExactlyOnce(): void
+    {
+        // The class-member walk owns it; the method-level pass skips generics nested
+        // in a generic template — so no double report.
+        $diagnostics = $this->check('undeclared_type_param_nested_method');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
+        self::assertStringContainsString('Type `Stray`', $diagnostics->all()[0]->message);
+    }
+
+    public function testCompileStillThrowsOnUndeclaredTypeInGenericFunction(): void
+    {
+        // The first finding in source order is `B` in method `pick`.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Type `B` used in method `pick`');
+        $this->compileFixture('undeclared_type_param_method');
+    }
+
     public function testImportedAndFullyQualifiedTypesAreNotFlaggedAsUndeclared(): void
     {
         $diagnostics = $this->check('undeclared_type_param_escape');
@@ -243,7 +283,7 @@ final class CheckPassIntegrationTest extends TestCase
         // Throws the FIRST finding (the `T` in add(), before `U` in wrap()), not a
         // silent broken emit.
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Type `T` used in `App\\Undeclared\\CollectionInterface`');
+        $this->expectExceptionMessage('Type `T` used in template `App\\Undeclared\\CollectionInterface`');
         $this->compileFixture('undeclared_type_param');
     }
 

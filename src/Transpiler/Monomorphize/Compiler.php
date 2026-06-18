@@ -73,6 +73,11 @@ final readonly class Compiler
         // concrete `Box<int>` reference gets collected and specialized through the usual
         // class-level path. The hierarchy is passed through so method/function-level
         // `T: Bound` is validated at compile time too (same shape as the class-level path).
+        // Reject a stray/undeclared type parameter in a generic method/function/closure
+        // signature BEFORE specialization runs (process() strips the templates from the
+        // AST in compile-mode, so this must precede it).
+        UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy);
+
         $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
         $methodCompiler->process($astPerFile);
 
@@ -280,6 +285,7 @@ final readonly class Compiler
         }
         $variancePositionFlagged = $registry->validateVariancePositions();
         $registry->validateUndeclaredTypeParameters();
+        UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);
         $registry->validateDefaultsAgainstBounds();
         $registry->validateInnerVariance($variancePositionFlagged);
         foreach ($astPerFile as $filepath => $ast) {
