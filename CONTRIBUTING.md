@@ -30,3 +30,10 @@ docker compose run --rm php85 make test/unit/php85
 CI gates every PR on these targets. `infection.json5` carries a curated set
 of per-mutator `ignore` rules for genuinely-equivalent / defensive
 mutations so the report only surfaces real test gaps.
+
+## Architecture decisions
+
+Architecturally significant decisions — the ones that are expensive to reverse —
+are recorded as [Architecture Decision Records](docs/adr/README.md). When you make
+such a decision, add a new ADR under `docs/adr/` (copy
+[`docs/adr/0000-adr-template.md`](docs/adr/0000-adr-template.md)).

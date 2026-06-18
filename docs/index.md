@@ -35,6 +35,7 @@ echo $intContainer->get(), $strContainer->get();   // 42hello
 | [Runtime semantics](guides/runtime-semantics.md) | What the generated code looks like and why reflection/serializers behave the way they do. |
 | [Comparison](guides/comparison.md) | TS / Kotlin / Rust experience — what carries over and what's different. |
 | [Roadmap](roadmap.md) | What's shipped, what's queued. Generics are the start. |
+| [Architecture decisions](adr/README.md) | Why xphp is shaped the way it is — the significant design choices and their trade-offs. |
 
 ## Heads up — divergence from the RFC
 
