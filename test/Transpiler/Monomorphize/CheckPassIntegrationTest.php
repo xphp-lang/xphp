@@ -173,6 +173,28 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('closure_static');
     }
 
+    public function testUnresolvedGenericMethodTurbofishIsCollectedByCheck(): void
+    {
+        // A turbofish call to a generic method that exists nowhere on the receiver
+        // or its ancestors is a collected error (not a silent pass-through that
+        // would fatal at runtime).
+        $diagnostics = $this->check('unresolved_generic_method');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(GenericMethodCompiler::CODE_UNRESOLVED_GENERIC_CALL, $d->code);
+        self::assertNotNull($d->location);
+        self::assertSame(16, $d->location->line);
+        self::assertStringContainsString('nope', $d->message);
+    }
+
+    public function testCompileStillThrowsOnUnresolvedGenericMethodTurbofish(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('could not be resolved');
+        $this->compileFixture('unresolved_generic_method');
+    }
+
     public function testClassAndMethodLevelErrorsAreBothCollectedInOneRun(): void
     {
         // Proves the validation-superset guarantee: a class-level check (variance) AND a

@@ -1491,6 +1491,69 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    public function testPlainNonGenericCallIsNotFlaggedAsUnresolvedGeneric(): void
+    {
+        // The unresolved-generic error fires only for turbofish calls. A plain
+        // (non-turbofish) call to a non-template method passes through untouched
+        // -- it is ordinary PHP, not a generic-resolution failure -- while a
+        // turbofish call to a method that DOES exist still specializes.
+        $dir = sys_get_temp_dir() . '/xphp-plaincall-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Box.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PlainCall;
+        class Box { public function get<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PlainCall;
+        $b = new Box();
+        $b->nope(1);
+        $r = $b->get::<int>(2);
+        PHP);
+
+        try {
+            $this->compileFrom($dir); // must NOT throw
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            // Plain call survives untouched; the turbofish call specializes.
+            self::assertStringContainsString('$b->nope(1)', $use);
+            self::assertSame(1, preg_match_all('/get_T_[0-9a-f]+\(/', $use));
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testUnresolvedStaticGenericMethodTurbofishFailsCompilation(): void
+    {
+        // The unresolved-generic error also covers the static turbofish path:
+        // `Box::nope::<int>()` where `nope` is not a generic method on Box.
+        $dir = sys_get_temp_dir() . '/xphp-unresolved-static-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Box.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\UnresolvedStatic;
+        class Box { public static function get<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\UnresolvedStatic;
+        $r = Box::nope::<int>(1);
+        PHP);
+
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('could not be resolved');
+            $this->compileFrom($dir);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     private function compileFrom(string $dir): void
     {
         $compiler = $this->buildCompiler();

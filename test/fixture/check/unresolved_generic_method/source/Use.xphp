@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\UnresolvedGenericMethod;
+
+class Box
+{
+    public function get<T>(T $x): T
+    {
+        return $x;
+    }
+}
+
+$b = new Box();
+$r = $b->nope::<int>(1);

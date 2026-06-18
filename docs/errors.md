@@ -46,6 +46,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.duplicate_generic_function` | the same generic function is declared in two files |
 | `xphp.closure_this_capture` | a generic closure/arrow used via turbofish captures `$this` (unsupported) |
 | `xphp.static_closure` | a generic `static` closure used via turbofish (unsupported) |
+| `xphp.unresolved_generic_call` | a turbofish method call (`$obj->m::<…>()` / `Foo::m::<…>()`) names a generic method that can't be resolved on the receiver's type — a typo or wrong receiver type, caught at compile time instead of fataling at runtime |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
 | `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`; a finding that carries no identifier falls back to the literal `phpstan.error`) — present only when the PHPStan pass runs |
 | `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
@@ -114,6 +115,7 @@ In CI (GitHub Actions), one step gates the build and annotates the diff:
 | `cannot use itself as a bound` | [Type bounds — F-bounded](syntax/type-bounds.md) |
 | `already declared` ... `duplicate declaration` | [Caveats — duplicate generic template declaration](caveats.md#duplicate-generic-template-declaration) |
 | `was instantiated but never defined` | The template was used but no source file declared it — typo or missing import |
+| `could not be resolved to a declared generic method` | A turbofish method call names a generic method that can't be resolved on the receiver's type — check the method name or the receiver's type. |
 | `was instantiated with N type argument(s) but parameter ... has no default` | [Defaults](syntax/defaults.md) — supply all required args or add defaults |
 | `Nested generic specialization exceeded depth` | A generic refers to itself transitively too deeply (compiler aborts at depth 16) — usually a recursive instantiation cycle. Refactor to break the cycle. |
 | `Parser returned null AST` | The source file isn't valid PHP after the generic strip pass. Run `php -l <file>.xphp` mentally on the cleaned source — most often a syntax error in the user code that's unrelated to generics. |

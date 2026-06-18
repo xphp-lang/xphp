@@ -87,6 +87,7 @@ final class GenericMethodCompiler
     public const CODE_DUPLICATE_GENERIC_FUNCTION = 'xphp.duplicate_generic_function';
     public const CODE_UNSUPPORTED_THIS_CAPTURE = 'xphp.closure_this_capture';
     public const CODE_UNSUPPORTED_STATIC_CLOSURE = 'xphp.static_closure';
+    public const CODE_UNRESOLVED_GENERIC_CALL = 'xphp.unresolved_generic_call';
 
     /**
      * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
@@ -930,7 +931,7 @@ final class GenericMethodCompiler
                 $key = $classFqn . '::' . $methodName;
                 $template = $this->methodTemplates[$key] ?? null;
                 if ($template === null) {
-                    return null;
+                    return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                 if (!is_array($params)) {
@@ -1028,7 +1029,7 @@ final class GenericMethodCompiler
                 // there and inherited (see resolveMethodTemplate).
                 $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
                 if ($resolved === null) {
-                    return null;
+                    return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 [$template, $declaringFqn] = $resolved;
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
@@ -1114,6 +1115,53 @@ final class GenericMethodCompiler
                     }
                 }
                 return null;
+            }
+
+            /**
+             * Handle a turbofish call whose generic method couldn't be resolved on
+             * the receiver or any ancestor. A *turbofish* call (carries
+             * ATTR_METHOD_GENERIC_ARGS) to a non-existent generic method is a real
+             * user error -- reported here instead of being silently left in place
+             * to fatal at runtime with "Call to undefined method". An ordinary
+             * (non-turbofish) call has no generic args and is none of our business,
+             * so it passes through untouched.
+             *
+             * Collect-or-throw, matching the seam: with a collector (`check`) append
+             * a diagnostic and continue; without one (`compile`) throw.
+             */
+            private function reportUnresolvedTurbofishOrSkip(string $receiverFqn, string $methodName, Node $node): null
+            {
+                $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+                if (!is_array($args)) {
+                    // Plain (non-turbofish) call -- not a generic-resolution failure.
+                    return null;
+                }
+                $message = self::unresolvedGenericCallMessage($receiverFqn, $methodName);
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        GenericMethodCompiler::CODE_UNRESOLVED_GENERIC_CALL,
+                        $message,
+                        new SourceLocation($this->currentFile, $node->getStartLine()),
+                    ));
+                    return null;
+                }
+                throw new RuntimeException($message);
+            }
+
+            private static function unresolvedGenericCallMessage(string $receiverFqn, string $methodName): string
+            {
+                // Phrased as "could not be resolved ... on <receiver>" rather than
+                // asserting the method is absent everywhere: the instance path walks
+                // ancestors, but the static path doesn't yet, so an absolute "not on
+                // any ancestor" claim would be wrong for an inherited static method.
+                return sprintf(
+                    'Generic method `%s::%s::<...>()` could not be resolved to a declared generic '
+                    . 'method on `%s`. Check the method name or the receiver\'s type.',
+                    $receiverFqn,
+                    $methodName,
+                    $receiverFqn,
+                );
             }
 
             /**
