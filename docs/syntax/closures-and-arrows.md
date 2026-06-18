@@ -86,8 +86,9 @@ ref-ness is preserved end-to-end.
   [caveats](../caveats.md#this-capturing-arrows-and-closures-rejected).
 
 - > ⚠️ **`static` closures rejected** — `static function<T>(...)` is
-  rejected because there's no `$this`-binding target on the
-  dispatcher. Use a named generic function instead. See
+  rejected because generic static closures can't yet be specialized at
+  the call site (a capability gap, not a binding one). Use a named
+  generic function at file scope instead. See
   [caveats](../caveats.md#static-closures-not-supported).
 
 - > ⚠️ **Variance markers not allowed** — `+T` / `-T` are rejected on

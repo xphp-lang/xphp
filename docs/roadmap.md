@@ -47,6 +47,11 @@ timeline
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
+        Validation and diagnostics
+                : xphp check validate-only gate
+                : collect-all diagnostics with text json github renderers
+                : undeclared-type and arity validation
+                : PHPStan over the compiled output
     section Next
         Editor and tooling
                 : Live transpilation via stream wrapper
@@ -71,7 +76,6 @@ timeline
                 : Variadic type parameters
                 : Per-arg specialization
         Ecosystem
-                : phpstan bridge
                 : REPL and playground
                 : Migration tooling from PHPDoc
         Explorations
@@ -179,6 +183,24 @@ upcoming one.
 - RFC-aligned call-site syntax (`Name::<...>` turbofish).
 - Empty turbofish (`Name::<>`) for all-defaults templates.
 
+### Validation and diagnostics
+
+- `xphp check` — a validate-only gate that emits no code: it runs
+  every generic validation and reports **all** problems in one pass
+  (collect-all), each with a `file:line` location and a stable code,
+  exiting 0 (clean) / 1 (errors) / 2 (bad input).
+- Structured diagnostics with `text`, `json`, and `github`
+  (Actions-annotation) renderers, so the same check drives both local
+  use and CI.
+- Undeclared-type-parameter and over-arity validation (a member,
+  bound, or default that names a stray/typo'd type; more type
+  arguments than the template declares).
+- PHPStan over the compiled output: `check` compiles to a throwaway
+  directory, runs *your* PHPStan over the monomorphized code (one
+  representative per template), and maps findings back to the `.xphp`
+  template. Opt-out via `--no-phpstan`; an absent binary degrades to a
+  non-failing Warning; never bundled in the PHAR.
+
 ---
 
 ## Next
@@ -238,7 +260,7 @@ to ship.
 
 ### Ecosystem
 
-- phpstan / psalm bridge.
+- Psalm bridge (the PHPStan bridge has shipped — see Shipped above).
 - REPL / playground.
 - Migration tooling: lift PHPDoc `@template` annotations to xphp
   generic params.

@@ -102,8 +102,9 @@ and reattach** trick implemented in
 2. **Scan** for generic clauses -- `Name<...>` patterns -- with
    depth tracking so arbitrarily nested `Box<List<Plastic>>` constructs
    are handled.
-3. **Strip** every `<...>` clause from the source text, producing
-   plain valid PHP, AND remember the original byte spans.
+3. **Blank** every `<...>` clause by overwriting it with spaces of
+   equal length, producing plain valid PHP while keeping every byte
+   offset and line number identical to the original source.
 4. **Parse** the stripped source with nikic.
 5. **Reattach** the generic metadata to the resulting AST as node
    attributes (`ATTR_GENERIC_PARAMS` on ClassLike declarations,
@@ -111,24 +112,31 @@ and reattach** trick implemented in
    `ATTR_METHOD_GENERIC_PARAMS` / `ATTR_METHOD_GENERIC_ARGS` on
    method-scope generics).
 
-The strip step would lose original-source positions, which matters
-for editor diagnostics ("the offending `<int>` is at line 12, column
-5"). That's what
+Because the `<...>` clauses are blanked with equal-length spaces,
+generic-clause stripping needs no position bookkeeping at all -- AST
+offsets round-trip to the original source for free. The one
+length-changing rewrite is the `T[]` array-suffix sugar: `T[]` (3
+bytes) becomes `array` (5 bytes), which shifts every offset to its
+right. That's what
 [`ByteOffsetMap`](../../src/Transpiler/Monomorphize/ByteOffsetMap.php)
-solves: it records each removal so any later byte offset in the
-stripped source can be translated back into the original. The pair
-of (AST, ByteOffsetMap) is returned together as
+solves: it records each length-changing segment so any later byte
+offset in the stripped source can be translated back into the
+original -- which matters for editor diagnostics ("the offending
+`<int>` is at line 12, column 5"). When no length-changing
+replacement happened the map is the identity and returns the offset
+unchanged. The pair of (AST, ByteOffsetMap) is returned together as
 [`ParseWithMapResult`](../../src/Transpiler/Monomorphize/ParseWithMapResult.php).
 
-Two parser entry points exist:
+The parser exposes strict and tolerant modes, each in a with-map and
+without-map variant:
 
-- `parse()` -- strict mode, throws on parse errors. Used by
-  `bin/xphp compile` because compilation must fail on broken
-  source.
-- `parseTolerantWithMap()` -- recovers from trailing parse errors
-  by feeding the stripped source through nikic's error-handler-
-  collecting mode. Used when callers need partial results from
-  incomplete source.
+- `parse()` / `parseWithMap()` -- strict mode, throws on parse
+  errors. `bin/xphp compile` uses the strict path because
+  compilation must fail on broken source.
+- `parseTolerant()` / `parseTolerantWithMap()` -- recover from
+  trailing parse errors by feeding the stripped source through
+  nikic's error-handler-collecting mode. Used when callers need
+  partial results from incomplete source.
 
 ---
 
@@ -266,6 +274,25 @@ the runaway.
 
 ---
 
+## Stage 4.5 -- Variance-edge emission
+
+Once the fixed-point loop has recorded *every* specialization (and not
+before -- the comparison is pairwise across the full set), a single
+pass over the specialized ASTs wires up the real subtype edges that
+declaration-site variance promises.
+[`VarianceEdgeEmitter::emitEdges()`](../../src/Transpiler/Monomorphize/VarianceEdgeEmitter.php)
+walks each pair of specializations of the same variant template and,
+where the type arguments are related the right way, adds the
+`extends` / `implements` link between them: `Producer<Banana>`
+actually `extends Producer<Fruit>` when `Banana extends Fruit` and
+`T` is covariant (`+T`), dually for contravariant (`-T`). The edges
+are appended to the cloned specialization's `implements` / `extends`
+list and survive the next stage untouched -- the rewriter only
+rewrites *template* `Class_` / `Interface_` nodes, not specialized
+ones.
+
+---
+
 ## Stage 5 -- Rewriting and emission
 
 Two transformations happen during rewrite, both implemented in
@@ -383,17 +410,19 @@ birthday collisions are impossible at any practical project size.
 
 ### Position fidelity
 
-`ByteOffsetMap` carries the bytes-stripped-and-where info so any
-diagnostic span computed after the strip can be translated back to
-the original `.xphp` source.
+Generic-clause blanking preserves positions on its own, so the only
+length-changing rewrite is the `T[]` → `array` sugar. `ByteOffsetMap`
+records those segments so any diagnostic span computed after the strip
+can be translated back to the original `.xphp` source; with no such
+rewrite it's the identity map.
 
 ---
 
 ## Class roster
 
-Every class under
+The core classes under
 [`src/Transpiler/Monomorphize/`](../../src/Transpiler/Monomorphize/),
-grouped by role.
+grouped by role (validators and bound-AST nodes omitted for clarity).
 
 ```mermaid
 mindmap
@@ -415,6 +444,7 @@ mindmap
     Specialize
       Specializer
       GenericMethodCompiler
+      VarianceEdgeEmitter
     Rewrite
       CallSiteRewriter
     Emit
@@ -438,7 +468,9 @@ and runs bound checks; `RegistryCollector` walks ASTs to populate it;
 
 **Specialize** -- `Specializer` substitutes type-params in a cloned
 template AST to produce a concrete specialization; `GenericMethodCompiler`
-does the analogous job for method-scope and free-function generics.
+does the analogous job for method-scope and free-function generics; and
+`VarianceEdgeEmitter` wires the subtype edges between specializations of
+a variant template once they all exist.
 
 **Rewrite** -- `CallSiteRewriter` swaps generic Name references for
 the specialization's generated FQN and replaces generic ClassLike

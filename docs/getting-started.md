@@ -18,7 +18,7 @@ composer require --dev xphp-lang/xphp
 ```
 
 This puts the compiler at `vendor/bin/xphp` and pulls in the runtime
-dependencies (`nikic/php-parser`, `symfony/console`).
+dependencies (`nikic/php-parser`, `symfony/console`, `symfony/process`).
 
 ## 2. Set up the PSR-4 autoload
 

@@ -59,8 +59,8 @@ class Sortable<T : Comparable<T>> {}     // F-bounded
 class Pair<K : Stringable & Countable, V> {}
 
 // Variance
-class Producer<+T> { public function get(): T; }     // covariant
-class Consumer<-T> { public function set(T $x): void; }   // contravariant
+abstract class Producer<+T> { abstract public function get(): T; }       // covariant
+abstract class Consumer<-T> { abstract public function set(T $x): void; } // contravariant
 
 // Default type params
 class Cache<K = string, V = mixed> {}

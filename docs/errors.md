@@ -47,7 +47,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.closure_this_capture` | a generic closure/arrow used via turbofish captures `$this` (unsupported) |
 | `xphp.static_closure` | a generic `static` closure used via turbofish (unsupported) |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
-| `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`) — present only when the PHPStan pass runs |
+| `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`; a finding that carries no identifier falls back to the literal `phpstan.error`) — present only when the PHPStan pass runs |
 | `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
 | `phpstan.run_failed` | (Warning) phpstan was found but couldn't complete (e.g. a config error) |
 
