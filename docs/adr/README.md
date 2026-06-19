@@ -30,3 +30,5 @@ should be added here as a new numbered file; copy
 | [0010](0010-undeclared-type-and-arity-validation.md) | Undeclared-type and arity validation | Accepted |
 | [0011](0011-phar-distribution.md) | PHAR distribution via Humbug Box | Accepted |
 | [0012](0012-engineering-quality-bar.md) | The engineering quality bar | Accepted |
+| [0013](0013-variance-erased-constructor-parameters.md) | Variance-erased constructor parameters | Accepted |
+| [0014](0014-variance-markers-are-class-level-only.md) | Variance markers are class-level only | Accepted |
