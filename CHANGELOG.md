@@ -109,8 +109,9 @@ for a hands-on look at every feature below.
 
 These are documented in full in the [caveats](docs/caveats.md):
 
-- Variance markers (`+T` / `-T`) are class-level only — not yet on
-  methods, free functions, closures, or arrows.
+- Variance markers (`+T` / `-T`) are class-level only **by design** — not
+  supported on methods, free functions, closures, or arrows (a function or
+  closure specialization has no stable class identity for a subtype edge).
 - Generic closures and arrows that capture `$this`, and `static`
   closures, are rejected at the call site.
 - Reflection and closure serializers see the dispatcher shape, not the

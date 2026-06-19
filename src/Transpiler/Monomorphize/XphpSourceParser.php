@@ -611,9 +611,12 @@ final class XphpSourceParser
             if ($i < $n && ($tokens[$i]->text === '+' || $tokens[$i]->text === '-')) {
                 if (!$allowVariance) {
                     throw new RuntimeException(
-                        'Variance markers `+T` / `-T` are not yet supported on '
-                        . 'methods, functions, closures, or arrow functions; '
-                        . 'move the generic to a class-level type parameter.',
+                        'Variance markers `+T` / `-T` are not supported on methods, '
+                        . 'functions, closures, or arrow functions — variance is a '
+                        . 'class-level-only feature by design: a function or closure '
+                        . 'specialization has no stable class identity to anchor a '
+                        . 'subtype `extends` edge to. Move the generic to a class-level '
+                        . 'type parameter.',
                     );
                 }
                 $variance = $tokens[$i]->text === '+'

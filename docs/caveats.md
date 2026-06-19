@@ -137,18 +137,23 @@ $arrow    = fn<+T>(T $x): T => $x;               // arrow
 ```
 
 ```
-Variance markers `+T` / `-T` are not yet supported on methods,
-functions, closures, or arrow functions; move the generic to a
-class-level type parameter.
+Variance markers `+T` / `-T` are not supported on methods, functions,
+closures, or arrow functions — variance is a class-level-only feature by
+design: a function or closure specialization has no stable class identity
+to anchor a subtype `extends` edge to. Move the generic to a class-level
+type parameter.
 ```
 
 ### Why
 
-Variance turns into real `extends` chains between specialized classes
-(see [variance](syntax/variance.md)). Methods, functions, closures,
-and arrows don't have a stable identity to anchor an `extends` chain
-to — their specializations are functions, not classes, so there's
-nothing for the subtype edge to attach to.
+This is a **permanent design boundary**, not a pending feature. Variance turns
+into real `extends` chains between specialized classes (see
+[variance](syntax/variance.md)). Methods, functions, closures, and arrows
+don't have a stable class identity to anchor an `extends` chain to — their
+specializations are functions, not classes, so there's nothing for the subtype
+edge to attach to. (This matches Kotlin, whose `fun <R> map(...)` is likewise
+invariant.) Keep variance at the class level and let method-level type
+parameters stay invariant.
 
 ### ✅ Workaround
 

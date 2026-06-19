@@ -2216,7 +2216,7 @@ class C
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Variance markers `+T` / `-T` are not yet supported on methods, functions, closures, or arrow functions');
+        $this->expectExceptionMessage('Variance markers `+T` / `-T` are not supported on methods, functions, closures, or arrow functions');
         $parser->parse($source);
     }
 
@@ -2534,6 +2534,20 @@ PHP;
 <?php
 namespace App;
 $f = function<+T>(T $x): T { return $x; };
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Variance markers');
+        $this->expectExceptionMessage('closures, or arrow functions');
+        $parser->parse($source);
+    }
+
+    public function testArrowFunctionVarianceIsRejected(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = fn<+T>(T $x): T => $x;
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
