@@ -7,7 +7,9 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
+use PhpParser\Modifiers;
 use PhpParser\Node\Name\FullyQualified;
+use PhpParser\Node\Param;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
@@ -40,13 +42,21 @@ final class Specializer
 {
     /**
      * @param array<string, TypeRef> $substitution Type-param name → concrete TypeRef.
+     * @param list<TypeParam> $typeParams The template's type-params, used to
+     *   variance-erase constructor parameters typed by a covariant/contravariant
+     *   `T`. Empty (the default) disables erasure — callers that don't have the
+     *   params, e.g. unit tests, get the plain substitution.
      *
      * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
      * is the single source of truth for the final shortname (derived from the generated FQCN).
      */
-    public function specialize(ClassLike $template, array $substitution): ClassLike
+    public function specialize(ClassLike $template, array $substitution, array $typeParams = []): ClassLike
     {
         $originalTemplateFqn = $template->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+
+        // Record which constructor parameters must be variance-erased BEFORE the
+        // substituting visitor rewrites their `T` type to the concrete type.
+        $ctorErasures = self::variantConstructorErasures($template, $typeParams);
 
         $cloned = self::deepClone($template);
         assert($cloned instanceof ClassLike);
@@ -66,9 +76,117 @@ final class Specializer
             }
         }
 
+        // A variant class's specializations participate in `extends` subtype
+        // edges (VarianceEdgeEmitter); a `final` parent in that chain would
+        // PHP-fatal at autoload. These generated classes are internal — user
+        // code references the marker interface or the turbofish call site, never
+        // these names — so dropping `final` here is invisible and safe.
+        if ($cloned instanceof Class_ && self::hasVariantParam($typeParams)) {
+            $cloned->flags &= ~Modifiers::FINAL;
+        }
+
         self::runSubstitutingVisitor($cloned, $substitution);
 
+        // Re-type the recorded constructor params to their erased (bound / `mixed`)
+        // form so every specialization's `__construct` signature is identical and
+        // stays LSP-compatible across the variance `extends` edge (a concrete
+        // `T`-typed ctor would PHP-fatal at autoload — see ticket 0005).
+        self::applyConstructorErasures($cloned, $ctorErasures);
+
         return $cloned;
+    }
+
+    /**
+     * For a variant template, find the NON-promoted `__construct` parameters typed
+     * by a covariant/contravariant type-param and compute the type to emit instead
+     * of the concrete one: the param's bound when it's a single non-generic leaf,
+     * else `mixed`. Promoted params are skipped — they are properties and stay
+     * strictly invariant (rejected upstream by the variance validator).
+     *
+     * @param list<TypeParam> $typeParams
+     * @return array<int, TypeRef> constructor-parameter index → erased TypeRef
+     */
+    private static function variantConstructorErasures(ClassLike $template, array $typeParams): array
+    {
+        $erasedByName = [];
+        foreach ($typeParams as $typeParam) {
+            if ($typeParam->variance === Variance::Invariant) {
+                continue;
+            }
+            $erasedByName[$typeParam->name] =
+                ($typeParam->bound instanceof BoundLeaf && !$typeParam->bound->type->isGeneric())
+                    ? $typeParam->bound->type
+                    : new TypeRef('mixed', [], true, false);
+        }
+        if ($erasedByName === []) {
+            return [];
+        }
+
+        $ctor = self::findConstructor($template);
+        if ($ctor === null) {
+            return [];
+        }
+
+        $erasures = [];
+        foreach ($ctor->params as $i => $param) {
+            if ($param->flags !== 0) {
+                continue; // promoted params are properties — left invariant/rejected.
+            }
+            $type = $param->type;
+            if ($type instanceof Name && count($type->getParts()) === 1) {
+                $name = $type->getParts()[0];
+                if (isset($erasedByName[$name])) {
+                    $erasures[$i] = $erasedByName[$name];
+                }
+            }
+        }
+        return $erasures;
+    }
+
+    /**
+     * @param array<int, TypeRef> $erasures constructor-parameter index → erased TypeRef
+     */
+    private static function applyConstructorErasures(ClassLike $cloned, array $erasures): void
+    {
+        if ($erasures === []) {
+            return;
+        }
+        $ctor = self::findConstructor($cloned);
+        if ($ctor === null) {
+            return;
+        }
+        foreach ($erasures as $i => $erasedRef) {
+            $param = $ctor->params[$i] ?? null;
+            if ($param instanceof Param) {
+                // The erased type is a fresh synthetic node (`mixed` or a bound), so
+                // no source-position attributes are carried over. typeRefToNode returns
+                // an Identifier or a (Fully)Qualified Name — both valid for Param::$type.
+                $erased = self::typeRefToNode($erasedRef, []);
+                assert($erased instanceof Identifier || $erased instanceof Name);
+                $param->type = $erased;
+            }
+        }
+    }
+
+    /** @param list<TypeParam> $typeParams */
+    private static function hasVariantParam(array $typeParams): bool
+    {
+        foreach ($typeParams as $typeParam) {
+            if ($typeParam->variance !== Variance::Invariant) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function findConstructor(ClassLike $node): ?ClassMethod
+    {
+        foreach ($node->getMethods() as $method) {
+            if ($method->name->toLowerString() === '__construct') {
+                return $method;
+            }
+        }
+        return null;
     }
 
     /**

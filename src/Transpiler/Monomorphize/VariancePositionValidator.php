@@ -205,14 +205,26 @@ final class VariancePositionValidator
             ? [Variance::Invariant]
             : [Variance::Invariant, Variance::Contravariant];
         $paramPosition = $isConstructor ? 'constructor parameter' : 'method parameter';
+        // A variant class (≥1 covariant/contravariant type-param) may carry its
+        // type-param in a NON-promoted constructor parameter: the specializer emits
+        // that parameter variance-erased (bound or `mixed`), so its signature is
+        // identical across the `extends` chain and LSP-safe. A *promoted* ctor
+        // param is also a property, which stays strictly invariant (a `T`-typed
+        // property would PHP-fatal across the chain regardless).
+        $classIsVariant = $this->varianceByName !== [];
         foreach ($method->params as $param) {
             // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
             if (!$param instanceof Param) {
                 continue;
             }
-            if ($param->type !== null) {
-                $this->checkPhpType($param->type, $paramAllowed, $paramPosition);
+            if ($param->type === null) {
+                continue;
             }
+            $isPromoted = $param->flags !== 0;
+            $allowed = ($isConstructor && !$isPromoted && $classIsVariant)
+                ? [Variance::Invariant, Variance::Covariant, Variance::Contravariant]
+                : $paramAllowed;
+            $this->checkPhpType($param->type, $allowed, $paramPosition);
         }
 
         // Return type. Constructors don't have one; for the rest, invariant

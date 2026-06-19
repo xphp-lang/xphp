@@ -44,8 +44,13 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\nclass Sortable<+T : Box<T>>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
             ['bound'],
         ];
-        yield 'covariant in constructor parameter' => [
-            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(T \$item) {}\n    public function get(): T { throw new \\LogicException; }\n}\n",
+        // NOTE: `+T` in a *non-promoted* constructor parameter of a variant class is
+        // now ALLOWED (ticket 0005) — it is emitted variance-erased, so it's no longer
+        // a variance-position violation. See VarianceEdgeIntegrationTest's covariant
+        // immutable-collection test. A *promoted* ctor param is a PROPERTY, which stays
+        // strictly invariant (a `T`-typed property would PHP-fatal across the chain):
+        yield 'covariant in promoted constructor property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(public T \$item) {}\n}\n",
             ['constructor parameter'],
         ];
         yield 'covariant in nested closure parameter' => [

@@ -10,6 +10,7 @@ use PhpParser\Node\Identifier;
 use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Param;
 use PhpParser\Node\UnionType;
 use RuntimeException;
 use XPHP\Diagnostics\Diagnostic;
@@ -109,6 +110,16 @@ final class InnerVarianceValidator
                 // ctor signatures regardless of param flavor. `getProperties()`
                 // below skips promoted ones (they're `Param`, not `Property`),
                 // so each promoted property is walked exactly once.
+                //
+                // Exception: a non-promoted ctor param typed by a bare
+                // covariant/contravariant type-param is emitted variance-erased
+                // (`mixed`/bound) by the Specializer, so its declared variance is
+                // irrelevant — skip it. Inner-generic ctor params (e.g.
+                // `Container<T>`) are NOT erased and stay checked, as do promoted
+                // params (they're properties).
+                if ($isCtor && $this->isErasedVariantCtorParam($param)) {
+                    continue;
+                }
                 $outerPos = $isCtor ? Variance::Invariant : Variance::Contravariant;
                 if ($param->type !== null) {
                     $this->walkPhpType($param->type, $outerPos, $label, null, null);
@@ -131,6 +142,29 @@ final class InnerVarianceValidator
                 $this->walkTypeRef($typeParam->default, Variance::Invariant, $label, null, null, $declarationLine);
             }
         }
+    }
+
+    /**
+     * A non-promoted constructor parameter whose type is a bare single-segment
+     * covariant/contravariant type-param — exactly the params the Specializer
+     * emits variance-erased. Their declared variance no longer reaches the
+     * emitted signature, so the inner-variance walk skips them.
+     */
+    private function isErasedVariantCtorParam(Param $param): bool
+    {
+        if ($param->flags !== 0) {
+            return false; // promoted param == property; stays strictly invariant.
+        }
+        $type = $param->type;
+        if (!$type instanceof Name) {
+            return false;
+        }
+        $parts = $type->getParts();
+        if (count($parts) !== 1) {
+            return false; // inner-generic / qualified type — not erased, keep checking.
+        }
+        $variance = $this->varianceMap[$parts[0]] ?? null;
+        return $variance !== null && $variance !== Variance::Invariant;
     }
 
     /**
