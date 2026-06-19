@@ -64,6 +64,10 @@ timeline
                 : Generic type aliases
                 : Variance edges on trait-owned templates
                 : Branching narrowing precision
+        Generic completeness
+                : this-capturing and static generic closures
+                : generic methods inherited via traits
+                : trait composition for variance and bounds
         Module surface
                 : internal visibility modifier
                 : composer-package boundary
@@ -238,6 +242,20 @@ to ship.
 - Variance edges on trait-owned templates.
 - Branching narrowing precision: today conservatively de-specializes
   when arms disagree; will track unions with runtime dispatch instead.
+
+### Generic completeness
+
+Gaps in already-shipped generics, deferred rather than designed out:
+
+- `$this`-capturing and `static` generic closures: both are rejected
+  today; lifting them (rewrite `$this->x` to a passed parameter; route
+  `static` closures through the dispatcher) is planned.
+- Generic methods inherited through traits: resolution follows
+  `extends` / `implements` ancestors, but a generic method reached only
+  via a `use`d trait is not yet resolved.
+- Trait composition for variance and bounds: the variance-position
+  validator doesn't walk trait-imported method signatures, and bound
+  satisfaction doesn't follow trait chains — both currently unmodeled.
 
 ### Module surface
 
