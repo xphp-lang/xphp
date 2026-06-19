@@ -54,6 +54,12 @@ final readonly class TypeHierarchy
         'Error',
         'BackedEnum',
         'UnitEnum',
+        // Not a PHP-native interface: `Hashable` is the recognized value-equality
+        // bound (ticket 0006) so `Set<T: Hashable>` / `Map<K: Hashable, V>` are
+        // expressible and compile-time-checked. xphp ships no runtime `Hashable`
+        // — the consumer (or their collection library) provides the interface
+        // contract (`hashCode(): int|string`, `equals(self): bool`).
+        'Hashable',
     ];
 
     /**

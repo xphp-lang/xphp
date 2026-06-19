@@ -264,4 +264,19 @@ PHP;
 
         self::assertSame(['App\\Sup'], $hierarchy->ancestorChain('\\App\\Sub'));
     }
+
+    public function testHashableIsAWhitelistedBoundName(): void
+    {
+        // `Hashable` is a recognized bound name even though it isn't a PHP built-in
+        // and isn't declared in the source set (ticket 0006) — a class implementing
+        // it satisfies the bound; a known class that doesn't is rejected.
+        $hierarchy = new TypeHierarchy([
+            'App\\User' => ['Hashable'],
+            'App\\Plain' => [],
+        ]);
+
+        self::assertTrue($hierarchy->isDeclared('Hashable'));
+        self::assertTrue($hierarchy->isSubtype('App\\User', 'Hashable'));
+        self::assertFalse($hierarchy->isSubtype('App\\Plain', 'Hashable'));
+    }
 }

@@ -57,6 +57,84 @@ final class BoundedGenericIntegrationTest extends TestCase
         self::assertGreaterThan(0, $result->generatedCount);
     }
 
+    public function testHashableBoundIsSatisfiedByImplementingClass(): void
+    {
+        // `Hashable` is a whitelisted bound name (ticket 0006). xphp recognizes it
+        // even though the interface is provided by the consumer/library and isn't
+        // in the scanned source set here — so `Set<T: Hashable>` resolves against a
+        // class that `implements Hashable`.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $setFile = $sourceDir . '/Set.xphp';
+        file_put_contents($setFile, <<<'PHP'
+        <?php
+        namespace App;
+        class Set<T: \Hashable>
+        {
+            private array $items = [];
+            public function add(T $x): void { $this->items[] = $x; }
+        }
+        PHP);
+        $userFile = $sourceDir . '/User.xphp';
+        file_put_contents($userFile, <<<'PHP'
+        <?php
+        namespace App;
+        class User implements \Hashable
+        {
+            public function hashCode(): int|string { return 1; }
+            public function equals(self $other): bool { return true; }
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $s = new Set::<User>();
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($setFile, $userFile, $useFile);
+        $result = $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+
+        // Set<User> specialized — the Hashable bound resolved (User implements it).
+        self::assertSame(1, $result->generatedCount);
+    }
+
+    public function testHashableBoundViolationOnNonImplementingClass(): void
+    {
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $setFile = $sourceDir . '/Set.xphp';
+        file_put_contents($setFile, <<<'PHP'
+        <?php
+        namespace App;
+        class Set<T: \Hashable>
+        {
+            public function add(T $x): void {}
+        }
+        PHP);
+        $plainFile = $sourceDir . '/Plain.xphp';
+        file_put_contents($plainFile, <<<'PHP'
+        <?php
+        namespace App;
+        class Plain {}
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $s = new Set::<Plain>();
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($setFile, $plainFile, $useFile);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated');
+        $this->expectExceptionMessage('Hashable');
+        $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
     public function testBoundViolationOnScalarConcreteFailsCompilationWithClearMessage(): void
     {
         $sourceDir = $this->workDir . '/src';

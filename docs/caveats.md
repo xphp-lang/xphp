@@ -397,16 +397,37 @@ class Map<K, V> {
 }
 ```
 
-If you need a typed key/value container, build it from a generic
-class:
+PHP array keys are `int|string` only, so `$this->items[$k] = $v` works
+only when `K` is a string/int — it **fatals for object keys**. For a
+container keyed on (or deduplicating) arbitrary objects, bound the type
+parameter on `\Hashable`, the recognized value-equality bound, and key on
+`hashCode()` internally:
 
 ```php
-class Map<K, V> {
-    private array $items = [];
-    public function set(K $k, V $v): void { $this->items[$k] = $v; }
-    public function get(K $k): V { return $this->items[$k]; }
+class Map<K: \Hashable, V> {
+    /** @var array<int|string, array{K, V}> */
+    private array $buckets = [];
+    public function set(K $k, V $v): void { $this->buckets[$k->hashCode()] = [$k, $v]; }
+    public function get(K $k): V { return $this->buckets[$k->hashCode()][1]; }
 }
 ```
+
+xphp **recognizes** the `\Hashable` bound (so `Map<K: \Hashable, V>` and
+`Set<T: \Hashable>` compile and are bound-checked) but ships **no** runtime
+`Hashable` interface — it's a pure transpiler. You (or your collection
+library) provide the contract, e.g.:
+
+```php
+interface Hashable {
+    public function hashCode(): int|string;
+    public function equals(self $other): bool;
+}
+```
+
+Reference it fully-qualified (`\Hashable`) or via `use`, the same as the
+built-in `\Stringable` bound. The deduping/keying logic itself is ordinary
+runtime code in your container — the bound just gives it a type-checked
+contract.
 
 ---
 
