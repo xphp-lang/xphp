@@ -405,7 +405,6 @@ parameter on `\Hashable`, the recognized value-equality bound, and key on
 
 ```php
 class Map<K: \Hashable, V> {
-    /** @var array<int|string, array{K, V}> */
     private array $buckets = [];
     public function set(K $k, V $v): void { $this->buckets[$k->hashCode()] = [$k, $v]; }
     public function get(K $k): V { return $this->buckets[$k->hashCode()][1]; }

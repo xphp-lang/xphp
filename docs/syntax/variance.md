@@ -69,23 +69,61 @@ For contravariant `-T`, the edge flips: `Consumer<Fruit> extends Consumer<Banana
 
 Position rules enforced at parse time:
 
-| Position                                | `+T` allowed? | `-T` allowed? |
-|-----------------------------------------|---------------|---------------|
-| Method return type                      | ✅            | ❌            |
-| Method parameter                        | ❌            | ✅            |
-| Mutable property                        | ❌            | ❌            |
-| Readonly property                       | ❌            | ❌            |
-| Constructor parameter                   | ❌            | ❌            |
-| Bound expression                        | ❌            | ❌            |
-| Default expression                      | ❌            | ❌            |
+| Position                              | `+T` allowed? | `-T` allowed? |
+|---------------------------------------|---------------|---------------|
+| Method return type                    | ✅            | ❌            |
+| Method parameter                      | ❌            | ✅            |
+| Constructor parameter (plain)         | ✅ (erased)   | ✅ (erased)   |
+| Mutable property                      | ❌            | ❌            |
+| Readonly property                     | ❌            | ❌            |
+| Promoted constructor property         | ❌            | ❌            |
+| Bound expression                      | ❌            | ❌            |
+| Default expression                    | ❌            | ❌            |
 
-The strict-invariance rule on properties and constructors is forced
-by the runtime model. Under bound-erasure (the RFC's path) variance
-doesn't materialise as `extends` edges, so the issue doesn't arise.
-xphp emits real `extends` chains between specialised classes, and
-PHP enforces invariant property types and constructor signatures
-across those chains regardless of `readonly` — a covariant property
-would PHP-fatal at autoload when the variance edge lands.
+The strict-invariance rule on **properties** (mutable, readonly, and
+promoted-constructor) is forced by the runtime model: xphp emits real
+`extends` chains between specialised classes, and PHP enforces invariant
+property types across those chains regardless of `readonly` — a covariant
+property would PHP-fatal at autoload when the variance edge lands.
+
+A **plain (non-promoted) constructor parameter** is the exception: it may
+carry `+T` / `-T`, because xphp emits it **variance-erased** — the type
+parameter's bound if it's a single non-generic type, else `mixed` — so every
+specialisation's `__construct` signature is identical and stays LSP-compatible
+across the edge. That's what lets a covariant immutable collection take typed
+construction input (see below). A *promoted* constructor parameter is a
+property, so it stays strictly invariant.
+
+### Covariant immutable collections (typed construction)
+
+A covariant container can take its element type in its constructor — the
+backbone of a read-only `List<out T>`-style collection:
+
+```php
+final class ImmutableList<+T> {
+    private array $items;
+    public function __construct(T ...$items) { $this->items = $items; }
+    public function get(int $i): T { return $this->items[$i]; }
+}
+
+function firstProduct(ImmutableList<Product> $items): Product { return $items->get(0); }
+
+// Covariance: an ImmutableList<Book> is accepted where ImmutableList<Product>
+// is expected, because Book extends Product.
+$books = new ImmutableList::<Book>(new Book(), new Book());
+$p = firstProduct($books);
+```
+
+The constructor parameter is emitted as `mixed ...$items` (or the bound) on
+every specialisation, so `ImmutableList<Book>` can `extends ImmutableList<Product>`
+without a PHP fatal. (`final` is preserved in your source; xphp drops it only on
+the internal generated specialisations so the edge can land.)
+
+> ⚠️ **Construction is not runtime-type-checked.** Because the emitted
+> constructor parameter is erased to `mixed`/the bound, PHP performs no runtime
+> element-type check at construction, and the compiler does not yet statically
+> check the supplied arguments at the call site. Covariance and the typed
+> *source* surface hold; a stricter construction-time check is future work.
 
 ### Inner-template variance composition
 

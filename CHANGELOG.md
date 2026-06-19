@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `phpstan/phpstan` stays optional and is never bundled in the PHAR; a missing
   binary or a failed run is a non-failing Warning. Opt out with `--no-phpstan`;
   override discovery with `--phpstan-bin` / `--phpstan-config`.
+- **Type-parameter-typed constructors on variant classes.** A covariant /
+  contravariant class may now take its type parameter in a (non-promoted)
+  constructor parameter — e.g. a covariant immutable `ImmutableList<+T>` built
+  from `T ...$items`. The parameter is emitted variance-erased (the bound, else
+  `mixed`) so every specialisation's `__construct` is LSP-compatible across the
+  variance `extends` edge. Construction is accepted but not yet runtime- or
+  call-site-type-checked; promoted constructor params remain properties (strictly
+  invariant). See [variance](docs/syntax/variance.md).
+- **`Hashable` value-equality bound.** `Set<T: \Hashable>` and
+  `Map<K: \Hashable, V>` are now expressible and compile-time bound-checked
+  (referenced fully-qualified, like `\Stringable`). xphp ships no runtime
+  `Hashable`; you or your collection library provide the contract
+  (`hashCode(): int|string`, `equals(self): bool`). See [caveats](docs/caveats.md).
 
 ### Fixed
 
