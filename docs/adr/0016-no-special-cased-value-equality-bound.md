@@ -1,17 +1,17 @@
-# 17. No special-cased value-equality bound — use ordinary generics
+# 16. No special-cased value-equality bound — use ordinary generics
 
 - Status: Accepted — 2026-06
-- Supersedes: [ADR-0016](0016-namespaced-hashable-bound.md)
 
 ## Context and Problem Statement
 
 A generic container that keys on or deduplicates **arbitrary objects** needs a value-equality
 contract (a `hashCode()` / `equals()` pair), because PHP array keys are `int|string` only. xphp
 recognized such a contract by **whitelisting** a `Hashable` name in
-`TypeHierarchy::BUILTIN_TYPES` — first as the global `Hashable`, then (ADR-0016) as the
-namespaced `XPHP\Hashable` — so a bound like `Set<T : \XPHP\Hashable>` would compile and be
-bound-checked without the interface being in the scanned sources, and without xphp shipping a
-runtime type.
+`TypeHierarchy::BUILTIN_TYPES` — first as the global `Hashable`, then (briefly) as a
+namespaced `XPHP\Hashable` to dodge a global-namespace collision — so a bound like
+`Set<T : \XPHP\Hashable>` would compile and be bound-checked without the interface being in
+the scanned sources, and without xphp shipping a runtime type. This ADR replaces that whole
+line of thinking.
 
 This left `Hashable` as the **only invented, non-PHP-native** entry in a whitelist otherwise made
 of real PHP global interfaces (`Stringable`, `Countable`, …). Its direct analog — `Comparable<T>`,
@@ -40,8 +40,8 @@ make generics work, not to carry a domain-specific contract.
 
 ## Considered Options
 
-- **Keep the whitelisted `XPHP\Hashable`** (ADR-0016) — zero-setup static recognition, but a
-  privileged invented name, static-only, and no generic form.
+- **Keep the whitelisted `XPHP\Hashable`** (the prior approach) — zero-setup static recognition,
+  but a privileged invented name, static-only, and no generic form.
 - **Ship a runtime `XPHP\Hashable` interface** — makes the name real, but fixes one contract shape
   for everyone and reverses xphp's pure-transpiler stance.
 - **Special-case nothing; value-equality is an ordinary library generic** — a library declares
@@ -65,9 +65,9 @@ interface (ADR-0004), so the implementing class declares `equals(Money $other)` 
 type under no LSP obligation — identical to how a `Comparable<T>` implementer writes
 `compareTo(Money $other)`. The bound is checked nominally and erased (ADR-0005).
 
-This supersedes ADR-0016: rather than make a privileged name collision-safe, we drop the privilege
-entirely. The capability the original ticket asked for — a compile-time-checked value-equality
-bound — remains fully available, now uniform with the rest of the bound surface.
+Rather than make a privileged name collision-safe (an earlier iteration of this decision), we drop
+the privilege entirely. The capability the original ask wanted — a compile-time-checked
+value-equality bound — remains fully available, now uniform with the rest of the bound surface.
 
 ### Consequences
 
@@ -94,7 +94,6 @@ marker is empty. Documented in [Caveats](../caveats.md); ordering/value-equality
 
 ## More Information
 
-- [ADR-0016](0016-namespaced-hashable-bound.md) — the superseded namespaced-whitelist decision.
 - [ADR-0004](0004-marker-interfaces-for-instanceof.md) — generic templates lower to empty marker
   interfaces (why a concrete `equals(T)` has no LSP obligation).
 - [ADR-0005](0005-nominal-erased-bound-checking.md) — nominal, erased bound checking.

@@ -1,6 +1,8 @@
 # 13. Typed constructor parameters on variant classes
 
 - Status: Accepted — 2026-06
+- Amended by [ADR-0015](0015-variance-markers-on-private-properties.md) — 2026-06 (the property
+  rule below was later relaxed for *private* properties)
 
 ## Context and Problem Statement
 
@@ -60,9 +62,9 @@ invariant** — mutable, `readonly`, and public/protected *promoted* constructor
 chain *for visible members* (`Type of Child::$item must be …`), so a `T`-typed visible
 property genuinely fatals — there is no way to carry a real `T` there. Such a property is
 rejected at compile time (not erased). A **private** property is the exception — PHP does
-not type-check private slots across the chain, so it carries a real `T` soundly; see
-[ADR-0015](0015-variance-markers-on-private-properties.md). Non-bare shapes in a
-constructor parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rejected.
+not type-check private slots across the chain, so it carries a real `T` soundly. Non-bare
+shapes in a constructor parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay
+rejected.
 
 ### Consequences
 
@@ -72,9 +74,9 @@ constructor parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rej
 - Good: nothing is erased — the declared type survives into the emitted signature.
 - Trade-off: a `T`-typed *visible* (public/protected) property is rejected, because PHP
   property invariance across the edge is unavoidable for visible members. A `T`-typed
-  *private* property is allowed (see [ADR-0015](0015-variance-markers-on-private-properties.md));
-  a *multi-element* collection still hand-rolls a `mixed`/`array` backing plus a covariant
-  `get(): T`, since many elements can't live in one `private T` slot.
+  *private* property is allowed; a *multi-element* collection still hand-rolls a
+  `mixed`/`array` backing plus a covariant `get(): T`, since many elements can't live in one
+  `private T` slot.
 - Trade-off: richer constructor-parameter shapes (`?T`, `Box<T>`, `T|X`) aren't supported
   yet, only a bare variance-marked type parameter.
 
@@ -82,8 +84,7 @@ constructor parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rej
 
 `VariancePositionValidator::checkMethod` allows a plain constructor parameter of a variant
 class at any variance (a public/protected promoted one stays invariant; a private promoted
-one is exempt — see [ADR-0015](0015-variance-markers-on-private-properties.md));
-`InnerVarianceValidator` skips a bare variance-marked constructor parameter
+one is exempt); `InnerVarianceValidator` skips a bare variance-marked constructor parameter
 (`isExemptVariantConstructorParam`) and still rejects the non-bare shapes. [`Specializer::specialize`](../../src/Transpiler/Monomorphize/Specializer.php)
 substitutes the real type into the constructor parameter — no erasure step. Tests compile a
 covariant `ImmutableList<+T>` and assert each specialization's constructor keeps its real
@@ -98,8 +99,7 @@ autoloads and constructs equally cleanly.
 - Good: keeps the real type and a runtime check; no autoload fatal; localized to the
   specializer (just normal substitution).
 - Bad: visible (public/protected) properties still can't carry a real `T` (a *private* one
-  can — [ADR-0015](0015-variance-markers-on-private-properties.md)); non-bare constructor
-  shapes not yet supported.
+  can); non-bare constructor shapes not yet supported.
 
 ### Variance-erased constructor parameter
 
@@ -118,4 +118,6 @@ autoloads and constructs equally cleanly.
   `extends` edges) exist at all.
 - [ADR-0014](0014-variance-markers-are-class-level-only.md) — why variance stays at the
   class level (the related boundary).
+- [ADR-0015](0015-variance-markers-on-private-properties.md) — the later refinement that
+  relaxed the property rule for *private* properties.
 - [Variance](../syntax/variance.md) — the position rules and the typed-construction pattern.
