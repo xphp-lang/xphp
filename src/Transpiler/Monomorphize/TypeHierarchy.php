@@ -54,12 +54,14 @@ final readonly class TypeHierarchy
         'Error',
         'BackedEnum',
         'UnitEnum',
-        // Not a PHP-native interface: `Hashable` is the recognized value-equality
-        // bound so `Set<T: Hashable>` / `Map<K: Hashable, V>` are
-        // expressible and compile-time-checked. xphp ships no runtime `Hashable`
-        // — the consumer (or their collection library) provides the interface
+        // Not a PHP-native interface: `XPHP\Hashable` is the recognized value-equality
+        // bound so `Set<T: \XPHP\Hashable>` / `Map<K: \XPHP\Hashable, V>` are
+        // expressible and compile-time-checked. It is deliberately *namespaced* (not a
+        // global `\Hashable`) so it can never collide with a future PHP-native global
+        // interface — every other entry here is a real PHP global, this one is not.
+        // xphp ships no runtime `XPHP\Hashable` — the consumer provides the interface
         // contract (`hashCode(): int|string`, `equals(self): bool`).
-        'Hashable',
+        'XPHP\\Hashable',
     ];
 
     /**
@@ -253,9 +255,12 @@ final readonly class TypeHierarchy
                     $rest = substr($raw, strlen($first));
                     return $this->useMap[$first] . $rest;
                 }
-                // Special case: built-in interfaces have no namespace; if the raw name matches a
-                // known built-in we resolve as-is rather than appending the current namespace.
-                if (in_array($raw, TypeHierarchy::BUILTIN_TYPES, true)) {
+                // Special case: the PHP-native built-in interfaces have no namespace, so an
+                // unqualified reference to one resolves as-is rather than getting the current
+                // namespace appended. This is scoped to single-segment names — a namespaced
+                // built-in like `XPHP\Hashable` is only matched fully-qualified (handled above)
+                // or via a `use`, never relative, so it follows normal PHP namespacing here.
+                if (strpos($raw, '\\') === false && in_array($raw, TypeHierarchy::BUILTIN_TYPES, true)) {
                     return $raw;
                 }
                 return $this->qualify($raw);

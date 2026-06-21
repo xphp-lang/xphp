@@ -33,3 +33,4 @@ should be added here as a new numbered file; copy
 | [0013](0013-typed-constructor-parameters-on-variant-classes.md) | Typed constructor parameters on variant classes | Accepted |
 | [0014](0014-variance-markers-are-class-level-only.md) | Variance markers are class-level only | Accepted |
 | [0015](0015-variance-markers-on-private-properties.md) | Variance markers on private properties | Accepted |
+| [0016](0016-namespaced-hashable-bound.md) | A namespaced `XPHP\Hashable` value-equality bound | Accepted |

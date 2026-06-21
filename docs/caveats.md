@@ -466,30 +466,34 @@ class Map<K, V> {
 PHP array keys are `int|string` only, so `$this->items[$k] = $v` works
 only when `K` is a string/int — it **fatals for object keys**. For a
 container keyed on (or deduplicating) arbitrary objects, bound the type
-parameter on `\Hashable`, the recognized value-equality bound, and key on
+parameter on `\XPHP\Hashable`, the recognized value-equality bound, and key on
 `hashCode()` internally:
 
 ```php
-class Map<K: \Hashable, V> {
+class Map<K: \XPHP\Hashable, V> {
     private array $buckets = [];
     public function set(K $k, V $v): void { $this->buckets[$k->hashCode()] = [$k, $v]; }
     public function get(K $k): V { return $this->buckets[$k->hashCode()][1]; }
 }
 ```
 
-xphp **recognizes** the `\Hashable` bound (so `Map<K: \Hashable, V>` and
-`Set<T: \Hashable>` compile and are bound-checked) but ships **no** runtime
-`Hashable` interface — it's a pure transpiler. You (or your collection
-library) provide the contract, e.g.:
+xphp **recognizes** the `\XPHP\Hashable` bound (so `Map<K: \XPHP\Hashable, V>`
+and `Set<T: \XPHP\Hashable>` compile and are bound-checked) but ships **no**
+runtime `XPHP\Hashable` interface — it's a pure transpiler. The name is
+deliberately **namespaced** (not a global `\Hashable`) so it can never collide
+with a future PHP-native interface. You (or your collection library) provide the
+contract, e.g.:
 
 ```php
+namespace XPHP;
+
 interface Hashable {
     public function hashCode(): int|string;
     public function equals(self $other): bool;
 }
 ```
 
-Reference it fully-qualified (`\Hashable`) or via `use`, the same as the
+Reference it fully-qualified (`\XPHP\Hashable`) or via `use`, the same as the
 built-in `\Stringable` bound. The deduping/keying logic itself is ordinary
 runtime code in your container — the bound just gives it a type-checked
 contract.

@@ -46,11 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an externally-readable `public private(set)` property) stay strictly
   invariant. A covariant single-value getter over a `private T` field is also
   PHPStan-clean. See [variance](docs/syntax/variance.md).
-- **`Hashable` value-equality bound.** `Set<T: \Hashable>` and
-  `Map<K: \Hashable, V>` are now expressible and compile-time bound-checked
-  (referenced fully-qualified, like `\Stringable`). xphp ships no runtime
-  `Hashable`; you or your collection library provide the contract
-  (`hashCode(): int|string`, `equals(self): bool`). See [caveats](docs/caveats.md).
+- **`XPHP\Hashable` value-equality bound.** `Set<T: \XPHP\Hashable>` and
+  `Map<K: \XPHP\Hashable, V>` are now expressible and compile-time bound-checked
+  (referenced fully-qualified, like `\Stringable`). The name is deliberately
+  namespaced — not a global `\Hashable` — so it can never collide with a future
+  PHP-native interface. xphp ships no runtime `XPHP\Hashable`; you or your
+  collection library provide the contract (`hashCode(): int|string`,
+  `equals(self): bool`). See [caveats](docs/caveats.md).
 
 ### Fixed
 

@@ -267,16 +267,30 @@ PHP;
 
     public function testHashableIsAWhitelistedBoundName(): void
     {
-        // `Hashable` is a recognized bound name even though it isn't a PHP built-in
-        // and isn't declared in the source set — a class implementing
-        // it satisfies the bound; a known class that doesn't is rejected.
+        // `XPHP\Hashable` is a recognized bound name even though it isn't a PHP
+        // built-in and isn't declared in the source set — a class implementing
+        // it satisfies the bound; a known class that doesn't is rejected. It is
+        // namespaced (not a global `\Hashable`) to avoid ever colliding with a
+        // future PHP-native interface.
         $hierarchy = new TypeHierarchy([
-            'App\\User' => ['Hashable'],
+            'App\\User' => ['XPHP\\Hashable'],
             'App\\Plain' => [],
         ]);
 
-        self::assertTrue($hierarchy->isDeclared('Hashable'));
-        self::assertTrue($hierarchy->isSubtype('App\\User', 'Hashable'));
-        self::assertFalse($hierarchy->isSubtype('App\\Plain', 'Hashable'));
+        self::assertTrue($hierarchy->isDeclared('XPHP\\Hashable'));
+        self::assertTrue($hierarchy->isSubtype('App\\User', 'XPHP\\Hashable'));
+        self::assertFalse($hierarchy->isSubtype('App\\Plain', 'XPHP\\Hashable'));
+    }
+
+    public function testBareGlobalHashableIsNotMagic(): void
+    {
+        // A bare global `\Hashable` is no longer special — only the namespaced
+        // `XPHP\Hashable` is the recognized value-equality bound, so an unknown
+        // bare `Hashable` is not a known type.
+        $hierarchy = new TypeHierarchy([
+            'App\\Plain' => [],
+        ]);
+
+        self::assertFalse($hierarchy->isDeclared('Hashable'));
     }
 }

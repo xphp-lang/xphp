@@ -59,17 +59,17 @@ final class BoundedGenericIntegrationTest extends TestCase
 
     public function testHashableBoundIsSatisfiedByImplementingClass(): void
     {
-        // `Hashable` is a whitelisted bound name. xphp recognizes it
+        // `XPHP\Hashable` is a whitelisted bound name. xphp recognizes it
         // even though the interface is provided by the consumer/library and isn't
-        // in the scanned source set here — so `Set<T: Hashable>` resolves against a
-        // class that `implements Hashable`.
+        // in the scanned source set here — so `Set<T: \XPHP\Hashable>` resolves
+        // against a class that `implements \XPHP\Hashable`.
         $sourceDir = $this->workDir . '/src';
         mkdir($sourceDir, 0o755, true);
         $setFile = $sourceDir . '/Set.xphp';
         file_put_contents($setFile, <<<'PHP'
         <?php
         namespace App;
-        class Set<T: \Hashable>
+        class Set<T: \XPHP\Hashable>
         {
             private array $items = [];
             public function add(T $x): void { $this->items[] = $x; }
@@ -79,7 +79,7 @@ final class BoundedGenericIntegrationTest extends TestCase
         file_put_contents($userFile, <<<'PHP'
         <?php
         namespace App;
-        class User implements \Hashable
+        class User implements \XPHP\Hashable
         {
             public function hashCode(): int|string { return 1; }
             public function equals(self $other): bool { return true; }
@@ -108,7 +108,7 @@ final class BoundedGenericIntegrationTest extends TestCase
         file_put_contents($setFile, <<<'PHP'
         <?php
         namespace App;
-        class Set<T: \Hashable>
+        class Set<T: \XPHP\Hashable>
         {
             public function add(T $x): void {}
         }
@@ -131,7 +131,7 @@ final class BoundedGenericIntegrationTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Generic bound violated');
-        $this->expectExceptionMessage('Hashable');
+        $this->expectExceptionMessage('XPHP\\Hashable');
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
     }
 
