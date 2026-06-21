@@ -14,9 +14,12 @@ declare(strict_types=1);
 
 namespace App;
 
-// Covariant: T appears in return positions only
+// Covariant: T appears in return positions (and a plain constructor parameter).
+// The backing field is `mixed`, not `T` — a `T`-typed *property* is invariant
+// and would be rejected (see the rules below).
 class Producer<+T> {
-    public function __construct(private T $item) {}
+    private mixed $item;
+    public function __construct(T $item) { $this->item = $item; }
     public function get(): T { return $this->item; }
 }
 
@@ -51,10 +54,12 @@ specializations:
 namespace XPHP\Generated\App\Producer;
 
 class T_<hash-of-fruit> implements \App\Producer {
+    public function __construct(\App\Fruit $item) { ... }   // real type, runtime-checked
     public function get(): \App\Fruit { ... }
 }
 
 class T_<hash-of-banana> extends T_<hash-of-fruit> implements \App\Producer {
+    public function __construct(\App\Banana $item) { ... }  // narrowed; `__construct` is LSP-exempt
     public function get(): \App\Banana { ... }
 }
 ```
@@ -67,7 +72,8 @@ For contravariant `-T`, the edge flips: `Consumer<Fruit> extends Consumer<Banana
 
 ## Rules
 
-Position rules enforced at parse time:
+Position rules, enforced at compile time over the collected definitions
+(`Registry::validateVariancePositions`):
 
 | Position                              | `+T` allowed? | `-T` allowed? |
 |---------------------------------------|---------------|---------------|

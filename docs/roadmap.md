@@ -160,9 +160,15 @@ upcoming one.
 ### Variance
 
 - `+T` and `-T` markers on type parameters.
-- Position rules enforced at parse time (covariant in return,
-  contravariant in param, both forbidden in properties, constructor,
-  bounds, defaults).
+- Position rules enforced at compile time (covariant in return,
+  contravariant in param, any variance in a plain non-promoted
+  constructor parameter; both forbidden in properties — including
+  promoted constructor params — by-reference params, bounds, and
+  defaults).
+- Real-typed construction: a `+T`/`-T` constructor parameter keeps its
+  concrete type (nothing erased), so construction is runtime-type-checked.
+- A `final` variant class is rejected (a `final` class can't anchor the
+  `extends` edge).
 - Subtype edges emitted between specializations
   (`Producer<Banana>` actually extends `Producer<Fruit>` when
   `Banana extends Fruit`).
