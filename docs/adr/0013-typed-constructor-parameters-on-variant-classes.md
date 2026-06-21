@@ -91,7 +91,7 @@ autoloads and constructs equally cleanly.
 
 - Good: keeps the real type and a runtime check; no autoload fatal; localized to the
   specializer (just normal substitution).
-- Bad: properties still can't carry a real `T`; non-bare ctor shapes not yet supported.
+- Bad: properties still can't carry a real `T`; non-bare constructor shapes not yet supported.
 
 ### Variance-erased constructor parameter
 

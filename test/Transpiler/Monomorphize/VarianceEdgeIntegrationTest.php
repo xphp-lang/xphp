@@ -40,17 +40,17 @@ final class VarianceEdgeIntegrationTest extends TestCase
     public function testCovariantImmutableCollectionTakesTypedConstructorInput(): void
     {
         // A covariant immutable collection `ImmutableList<+T>` with a `T`-typed
-        // constructor. The ctor param keeps its REAL element type on each
+        // constructor. The constructor param keeps its REAL element type on each
         // specialization (`Fruit ...` / `Banana ...`) — PHP exempts `__construct`
         // from LSP, so `ImmutableList<Banana>` extends `ImmutableList<Fruit>` with
         // NO autoload fatal, a Banana list is usable where a Fruit list is
         // expected, and construction is runtime-type-checked.
         $fixture = CompiledFixture::compile(
-            __DIR__ . '/../../fixture/compile/generic_covariant_immutable_ctor/source',
-            'variance-covariant-ctor',
+            __DIR__ . '/../../fixture/compile/generic_covariant_immutable_constructor/source',
+            'variance-covariant-constructor',
         );
         try {
-            $specDir = $fixture->cacheDir . '/Generated/App/CovariantCtor/ImmutableList';
+            $specDir = $fixture->cacheDir . '/Generated/App/CovariantConstructor/ImmutableList';
             $files = glob($specDir . '/T_*.php') ?: [];
             self::assertCount(2, $files, 'two ImmutableList specializations (Fruit, Banana)');
 
@@ -60,20 +60,20 @@ final class VarianceEdgeIntegrationTest extends TestCase
                 $content = file_get_contents($file);
                 self::assertIsString($content);
                 $combined .= $content;
-                if (str_contains($content, 'extends \\XPHP\\Generated\\App\\CovariantCtor\\ImmutableList\\T_')) {
+                if (str_contains($content, 'extends \\XPHP\\Generated\\App\\CovariantConstructor\\ImmutableList\\T_')) {
                     $extendsEdges++;
                 }
             }
             // Each specialization keeps its REAL element type in the constructor.
             self::assertSame(
                 1,
-                preg_match_all('/function __construct\(\\\\App\\\\CovariantCtor\\\\Fruit \.\.\.\$items\)/', $combined),
-                'Fruit specialization ctor keeps `Fruit ...$items`',
+                preg_match_all('/function __construct\(\\\\App\\\\CovariantConstructor\\\\Fruit \.\.\.\$items\)/', $combined),
+                'Fruit specialization constructor keeps `Fruit ...$items`',
             );
             self::assertSame(
                 1,
-                preg_match_all('/function __construct\(\\\\App\\\\CovariantCtor\\\\Banana \.\.\.\$items\)/', $combined),
-                'Banana specialization ctor keeps `Banana ...$items`',
+                preg_match_all('/function __construct\(\\\\App\\\\CovariantConstructor\\\\Banana \.\.\.\$items\)/', $combined),
+                'Banana specialization constructor keeps `Banana ...$items`',
             );
             self::assertStringNotContainsString('mixed ...$items', $combined, 'nothing is erased to mixed');
             // Exactly one specialization extends the other — the covariant edge.
@@ -82,8 +82,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             // parent isn't a final class (which would PHP-fatal at autoload).
             self::assertStringNotContainsString('final class', $combined);
 
-            $fixture->registerAutoload('App\\CovariantCtor');
-            require __DIR__ . '/../../fixture/compile/generic_covariant_immutable_ctor/verify/runtime.php';
+            $fixture->registerAutoload('App\\CovariantConstructor');
+            require __DIR__ . '/../../fixture/compile/generic_covariant_immutable_constructor/verify/runtime.php';
         } finally {
             $fixture->cleanup();
         }
@@ -91,49 +91,49 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testBoundedCovariantConstructorKeepsConcreteType(): void
     {
-        // A bounded covariant ctor param keeps its REAL substituted type (the
+        // A bounded covariant constructor param keeps its REAL substituted type (the
         // concrete arg, not the bound and not `mixed`) — constructors are LSP-exempt.
-        $generated = $this->compileFixtureAndReadGenerated('compile/generic_covariant_bounded_ctor/source');
-        self::assertStringContainsString('__construct(\\App\\BoundCtor\\Tag ...$items)', $generated);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_covariant_bounded_constructor/source');
+        self::assertStringContainsString('__construct(\\App\\BoundConstructor\\Tag ...$items)', $generated);
         self::assertStringNotContainsString('__construct(mixed', $generated);
         self::assertStringNotContainsString('__construct(\\Stringable', $generated);
     }
 
     public function testMixedVarianceConstructorKeepsConcreteTypes(): void
     {
-        // `Pair<+A, B>`: the covariant `A` ctor param keeps its concrete type, the
+        // `Pair<+A, B>`: the covariant `A` constructor param keeps its concrete type, the
         // invariant `B` param keeps its concrete substituted type, and a plain
         // scalar param (`int $tag`) is left untouched (it isn't a type-param).
-        $generated = $this->compileFixtureAndReadGenerated('compile/generic_mixed_variance_ctor/source');
-        self::assertMatchesRegularExpression('/__construct\(\\\\App\\\\MixedCtor\\\\Apple \$a, \\\\App\\\\MixedCtor\\\\Apple \$b, int \$tag\)/', $generated);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_mixed_variance_constructor/source');
+        self::assertMatchesRegularExpression('/__construct\(\\\\App\\\\MixedConstructor\\\\Apple \$a, \\\\App\\\\MixedConstructor\\\\Apple \$b, int \$tag\)/', $generated);
         self::assertStringNotContainsString('mixed $a', $generated);
     }
 
     public function testContravariantConstructorParamKeepsConcreteType(): void
     {
-        // Symmetry with the covariant case: a `-T` ctor param keeps its real type
+        // Symmetry with the covariant case: a `-T` constructor param keeps its real type
         // too, and the contravariant edge (Consumer<Fruit> extends Consumer<Banana>)
         // stays valid because constructors are LSP-exempt.
-        $generated = $this->compileFixtureAndReadGenerated('compile/generic_contravariant_ctor/source');
-        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraCtor\\\\Banana \.\.\.\$items\)/', $generated));
-        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraCtor\\\\Fruit \.\.\.\$items\)/', $generated));
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_contravariant_constructor/source');
+        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraVarianceConstructor\\\\Banana \.\.\.\$items\)/', $generated));
+        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraVarianceConstructor\\\\Fruit \.\.\.\$items\)/', $generated));
         self::assertStringNotContainsString('mixed ...$items', $generated);
-        self::assertStringContainsString('extends \\XPHP\\Generated\\App\\ContraCtor\\Consumer\\T_', $generated);
+        self::assertStringContainsString('extends \\XPHP\\Generated\\App\\ContraVarianceConstructor\\Consumer\\T_', $generated);
     }
 
     public function testNonBareVariantConstructorParamShapesAreRejected(): void
     {
         // Only a *bare* variance-marked type-param is currently supported in a
         // constructor parameter. Richer shapes are still rejected by the
-        // inner-variance check (not yet supported in ctor position):
+        // inner-variance check (not yet supported in constructor position):
         //   - `?T`        — nullable, not a bare Name
         //   - `Box<T>`    — T through another generic's invariant slot
         //   - `(T $a, ?T $b)` — the allowed leading `T` must not stop the walk from
         //                       reaching the bad trailing `?T`
         $fixtures = [
-            'check/variance_ctor_nullable/source',
-            'check/variance_ctor_nested_generic/source',
-            'check/variance_ctor_mixed_params/source',
+            'check/variance_constructor_nullable/source',
+            'check/variance_constructor_nested_generic/source',
+            'check/variance_constructor_mixed_params/source',
         ];
         foreach ($fixtures as $fixture) {
             $this->compileFixtureExpectingVarianceViolation($fixture);
@@ -142,20 +142,20 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testTwoCovariantParamsBothKeepConcreteTypes(): void
     {
-        // Two covariant params: BOTH `T`-typed ctor params keep their real
-        // substituted types (pins that nothing is erased for any variant ctor param).
-        $generated = $this->compileFixtureAndReadGenerated('compile/generic_two_covariant_ctor/source');
-        self::assertSame(1, preg_match_all('/__construct\(\\\\App\\\\TwoCtor\\\\Apple \$a, \\\\App\\\\TwoCtor\\\\Apple \$b\)/', $generated));
+        // Two covariant params: BOTH `T`-typed constructor params keep their real
+        // substituted types (pins that nothing is erased for any variant constructor param).
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_two_covariant_constructor/source');
+        self::assertSame(1, preg_match_all('/__construct\(\\\\App\\\\TwoConstructor\\\\Apple \$a, \\\\App\\\\TwoConstructor\\\\Apple \$b\)/', $generated));
         self::assertStringNotContainsString('mixed $a', $generated);
     }
 
     public function testInvariantClassConstructorIsNotErasedAndKeepsFinal(): void
     {
-        // An invariant class is not variance-erased (ctor param keeps its concrete
+        // An invariant class is not variance-erased (constructor param keeps its concrete
         // type) and its `final` modifier is preserved (no edges → no LSP hazard).
-        $generated = $this->compileFixtureAndReadGenerated('compile/generic_invariant_ctor/source');
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_invariant_constructor/source');
         self::assertStringContainsString('final class', $generated);
-        self::assertStringContainsString('App\\InvCtor\\Apple $item', $generated);
+        self::assertStringContainsString('App\\InvConstructor\\Apple $item', $generated);
         self::assertStringNotContainsString('mixed $item', $generated);
     }
 
@@ -269,22 +269,22 @@ final class VarianceEdgeIntegrationTest extends TestCase
     {
         // The CONTRAVARIANT counterpart of the autoload proof, with a real-typed
         // constructor. The edge flips: `Consumer<Fruit>` extends `Consumer<Banana>`,
-        // so the child ctor (`Fruit ...$items`) WIDENS the parent's (`Banana ...`).
+        // so the child constructor (`Fruit ...$items`) WIDENS the parent's (`Banana ...`).
         // PHP exempts `__construct` from LSP, so the chain must both autoload AND
         // construct instances of each specialization without a fatal — empirically
         // confirming the same exemption holds in the contravariant direction.
-        $src = realpath(__DIR__ . '/../../fixture/compile/generic_contravariant_ctor/source')
+        $src = realpath(__DIR__ . '/../../fixture/compile/generic_contravariant_constructor/source')
             ?: throw new RuntimeException('Fixture missing');
         $compiler = $this->buildCompiler();
         $sources = (new NativeFileFinder())->find($src)
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
         $compiler->compile($sources, $src, $this->targetDir, $this->cacheDir);
 
-        $bananaFqn = Registry::generatedFqn('App\\ContraCtor\\Consumer', [new TypeRef('App\\ContraCtor\\Banana')]);
-        $fruitFqn = Registry::generatedFqn('App\\ContraCtor\\Consumer', [new TypeRef('App\\ContraCtor\\Fruit')]);
+        $bananaFqn = Registry::generatedFqn('App\\ContraVarianceConstructor\\Consumer', [new TypeRef('App\\ContraVarianceConstructor\\Banana')]);
+        $fruitFqn = Registry::generatedFqn('App\\ContraVarianceConstructor\\Consumer', [new TypeRef('App\\ContraVarianceConstructor\\Fruit')]);
         $prefixes = [
             'XPHP\\Generated\\' => $this->cacheDir . '/Generated',
-            'App\\ContraCtor\\' => $this->targetDir,
+            'App\\ContraVarianceConstructor\\' => $this->targetDir,
         ];
 
         $loader = $this->workDir . '/contra-load.php';
@@ -297,15 +297,15 @@ final class VarianceEdgeIntegrationTest extends TestCase
             . "        }\n"
             . "    }\n"
             . "});\n"
-            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContraCtor\\Banana());\n"
-            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContraCtor\\Fruit());\n"
+            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContraVarianceConstructor\\Banana());\n"
+            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContraVarianceConstructor\\Fruit());\n"
             . "echo \"OK\\n\";\n";
         file_put_contents($loader, $script);
 
         $output = [];
         $exitCode = 0;
         exec('php ' . escapeshellarg($loader) . ' 2>&1', $output, $exitCode);
-        self::assertSame(0, $exitCode, "Contravariant ctor chain fataled:\n" . implode("\n", $output));
+        self::assertSame(0, $exitCode, "Contravariant constructor chain fataled:\n" . implode("\n", $output));
         self::assertContains('OK', $output);
     }
 

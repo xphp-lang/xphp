@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ConstructorNested;
+
+// Rejected: `T` reaches the constructor through another generic's invariant slot
+// (`Box<T>`), which is not a bare type-param — the inner-variance check rejects it.
+class P<+T>
+{
+    public function __construct(Box<T> $b)
+    {
+    }
+}

@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ConstructorNullable;
+
+// Rejected: `?T` is not a bare type-param — a non-bare shape isn't supported in
+// a constructor parameter, so the inner-variance check rejects it.
+class P<+T>
+{
+    public function __construct(?T $x)
+    {
+    }
+}

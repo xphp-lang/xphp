@@ -1,7 +1,0 @@
-<?php
-
-declare(strict_types=1);
-
-namespace App\BoundCtor;
-
-$b = new Box::<Tag>(new Tag());

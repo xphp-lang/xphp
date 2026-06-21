@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\InvConstructor;
+
+// An invariant class: not variance-erased (the constructor param keeps its concrete
+// type) and its `final` modifier is preserved (no edges → no LSP hazard).
+final class Holder<T>
+{
+    public function __construct(public T $item)
+    {
+    }
+}

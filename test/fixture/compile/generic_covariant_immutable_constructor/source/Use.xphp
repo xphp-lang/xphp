@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\CovariantConstructor;
+
+// Covariance: an ImmutableList<Banana> is accepted where ImmutableList<Fruit>
+// is expected, because Banana extends Fruit and T is covariant.
+function firstName(ImmutableList<Fruit> $list): string
+{
+    return $list->get(0)->name;
+}
+
+$bananas = new ImmutableList::<Banana>(new Banana(), new Banana());
+$cnt = $bananas->count();
+$name = firstName($bananas);
