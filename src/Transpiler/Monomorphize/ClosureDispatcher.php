@@ -121,7 +121,7 @@ final class ClosureDispatcher
                 continue;
             }
             $seenTags[$tag] = true;
-            $spec = $this->buildSpecialization(
+            $specialization = $this->buildSpecialization(
                 $template,
                 $args,
                 $typeParams,
@@ -130,8 +130,8 @@ final class ClosureDispatcher
                 $hashLength,
                 $useClauses,
             );
-            $declarations[] = $spec['function'];
-            $arms[] = ['tag' => $tag, 'mangledFqn' => $spec['mangledFqn']];
+            $declarations[] = $specialization['function'];
+            $arms[] = ['tag' => $tag, 'mangledFqn' => $specialization['mangledFqn']];
         }
         $dispatcher = $this->buildDispatcherClosure(
             $template,

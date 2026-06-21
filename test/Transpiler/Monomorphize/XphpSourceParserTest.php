@@ -47,11 +47,11 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $ast = $parser->parse($source);
 
-        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
-        self::assertNotNull($iface);
-        self::assertSame('Container', $iface->name?->toString());
-        self::assertSame(['T'], self::paramNames($iface));
-        self::assertSame('App\\Container', $iface->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $interface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        self::assertNotNull($interface);
+        self::assertSame('Container', $interface->name?->toString());
+        self::assertSame(['T'], self::paramNames($interface));
+        self::assertSame('App\\Container', $interface->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
     }
 
     public function testGenericTraitTemplateIsDroppedFromOutputWithoutBecomingAMarker(): void
@@ -635,14 +635,14 @@ PHP;
 namespace App;
 
 use App\Containers\Box;
-use App\Containers\Lst;
+use App\Containers\Collection;
 use App\Models\Plastic;
 
-$x = new Box::<Lst<Plastic>>();
+$x = new Box::<Collection<Plastic>>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
-        self::assertSame('App\\Containers\\Lst', $args[0]->name);
+        self::assertSame('App\\Containers\\Collection', $args[0]->name);
         self::assertTrue($args[0]->isGeneric());
         self::assertCount(1, $args[0]->args);
         self::assertSame('App\\Models\\Plastic', $args[0]->args[0]->name);
@@ -1019,19 +1019,19 @@ PHP;
 
     public function testFullyQualifiedNamesInNestedGenericArg(): void
     {
-        // `new Box<\Vendor\Lst<\Vendor\Plastic>>()` — nested generic where BOTH the
+        // `new Box<\Vendor\Collection<\Vendor\Plastic>>()` — nested generic where BOTH the
         // outer-arg template and the inner-arg type use the fully-qualified form.
         // Exercises the $isFq branch on line 218 (the recursive-into-generic return).
         $source = <<<'PHP'
 <?php
 namespace App;
 
-$x = new Box::<\Vendor\Lst<\Vendor\Plastic>>();
+$x = new Box::<\Vendor\Collection<\Vendor\Plastic>>();
 PHP;
         $args = self::parseAndGetArgs($source, 'Box');
         self::assertCount(1, $args);
         self::assertTrue($args[0]->isGeneric());
-        self::assertSame('Vendor\\Lst', $args[0]->name);
+        self::assertSame('Vendor\\Collection', $args[0]->name);
         self::assertSame('Vendor\\Plastic', $args[0]->args[0]->name);
     }
 
@@ -2198,8 +2198,8 @@ interface Iter<K, +V>
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $ast = $parser->parse($source);
-        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
-        $params = $iface?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        $interface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        $params = $interface?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
         self::assertSame(Variance::Invariant, $params[0]->variance);
         self::assertSame(Variance::Covariant, $params[1]->variance);
     }

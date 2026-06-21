@@ -161,7 +161,7 @@ upcoming one.
 
 - `+T` and `-T` markers on type parameters.
 - Position rules enforced at parse time (covariant in return,
-  contravariant in param, both forbidden in properties, ctor,
+  contravariant in param, both forbidden in properties, constructor,
   bounds, defaults).
 - Subtype edges emitted between specializations
   (`Producer<Banana>` actually extends `Producer<Fruit>` when

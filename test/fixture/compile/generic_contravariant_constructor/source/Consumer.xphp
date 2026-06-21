@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\ContraVarianceConstructor;
+namespace App\ContravariantConstructor;
 
 // Contravariant constructor param: keeps its real type too. The edge flips —
 // `Consumer<Fruit>` extends `Consumer<Banana>` — and the chain still loads

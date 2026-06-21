@@ -296,14 +296,14 @@
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
-                // InnerVarianceValidator::isExemptVariantCtorParam: the promoted-param
+                // InnerVarianceValidator::isExemptVariantConstructorParam: the promoted-param
                 // `return false` guard is unreachable in practice — a covariant class with a
                 // promoted (property) type-param is flagged by the variance-POSITION pass
                 // first, and inner-variance skips position-flagged definitions, so this branch
                 // never decides anything observable.
-                "XPHP\\Transpiler\\Monomorphize\\InnerVarianceValidator::isExemptVariantCtorParam",
+                "XPHP\\Transpiler\\Monomorphize\\InnerVarianceValidator::isExemptVariantConstructorParam",
                 // Specializer::substituteTypeRef: dropping `return $ref` on the empty-args
-                // branch falls through to array_map over empty + ctor, producing an
+                // branch falls through to array_map over empty + constructor, producing an
                 // equivalent TypeRef.  Pure micro-optimisation, no observable difference.
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::substituteTypeRef",
                 // ByteOffsetMap::fromReplacements: removing the `return self::identity()`

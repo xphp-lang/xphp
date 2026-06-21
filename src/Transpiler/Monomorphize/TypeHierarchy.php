@@ -220,12 +220,12 @@ final readonly class TypeHierarchy
                         if ($node->extends !== null) {
                             $directAncestors[] = $this->resolveName($node->extends);
                         }
-                        foreach ($node->implements as $iface) {
-                            $directAncestors[] = $this->resolveName($iface);
+                        foreach ($node->implements as $interface) {
+                            $directAncestors[] = $this->resolveName($interface);
                         }
                     } elseif ($node instanceof Interface_) {
-                        foreach ($node->extends as $iface) {
-                            $directAncestors[] = $this->resolveName($iface);
+                        foreach ($node->extends as $interface) {
+                            $directAncestors[] = $this->resolveName($interface);
                         }
                     }
                     // Trait_ has no formal ancestors — uses-of-traits are statements inside the body

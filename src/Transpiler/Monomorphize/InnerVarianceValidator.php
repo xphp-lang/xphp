@@ -103,25 +103,25 @@ final class InnerVarianceValidator
         $declarationLine = $definition->templateAst->getStartLine();
 
         foreach ($definition->templateAst->getMethods() as $method) {
-            $isCtor = $method->name->toLowerString() === '__construct';
+            $isConstructor = $method->name->toLowerString() === '__construct';
             foreach ($method->params as $param) {
                 // Constructor params (promoted or not) get Invariant outer
                 // position -- PHP's class-compat rules enforce invariance on
-                // ctor signatures regardless of param flavor. `getProperties()`
+                // constructor signatures regardless of param flavor. `getProperties()`
                 // below skips promoted ones (they're `Param`, not `Property`),
                 // so each promoted property is walked exactly once.
                 //
-                // Exception: a non-promoted ctor param typed by a bare
+                // Exception: a non-promoted constructor param typed by a bare
                 // covariant/contravariant type-param is allowed — a constructor
                 // parameter isn't part of the externally-visible variance surface
                 // (constructors aren't called through upcast references), and PHP
                 // exempts `__construct` from LSP, so the real type is emitted with
-                // no hazard. Skip it. Inner-generic ctor params (e.g. `Container<T>`)
+                // no hazard. Skip it. Inner-generic constructor params (e.g. `Container<T>`)
                 // are still checked, as are promoted params (they're properties).
-                if ($isCtor && $this->isExemptVariantCtorParam($param)) {
+                if ($isConstructor && $this->isExemptVariantConstructorParam($param)) {
                     continue;
                 }
-                $outerPos = $isCtor ? Variance::Invariant : Variance::Contravariant;
+                $outerPos = $isConstructor ? Variance::Invariant : Variance::Contravariant;
                 if ($param->type !== null) {
                     $this->walkPhpType($param->type, $outerPos, $label, null, null);
                 }
@@ -152,7 +152,7 @@ final class InnerVarianceValidator
      * surface, and PHP exempts `__construct` from LSP), so the inner-variance walk
      * skips these — the real type is emitted as-is.
      */
-    private function isExemptVariantCtorParam(Param $param): bool
+    private function isExemptVariantConstructorParam(Param $param): bool
     {
         if ($param->flags !== 0) {
             return false; // promoted param == property; stays strictly invariant.

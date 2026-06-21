@@ -54,7 +54,7 @@ final class RegistryTest extends TestCase
 
     public function testNestedGenericArgsAffectHashDeterministically(): void
     {
-        $nested = new TypeRef('App\\RegistryTest\\Containers\\Lst', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $nested = new TypeRef('App\\RegistryTest\\Containers\\Collection', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         $a = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [$nested]);
         $b = Registry::generatedFqn('App\\RegistryTest\\Containers\\Box', [$nested]);
@@ -91,23 +91,23 @@ final class RegistryTest extends TestCase
     {
         $registry = new Registry();
 
-        $nested = new TypeRef('App\\RegistryTest\\Containers\\Lst', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $nested = new TypeRef('App\\RegistryTest\\Containers\\Collection', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
         $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [$nested]);
 
         self::assertCount(2, $registry->instantiations());
 
         $hasBox = false;
-        $hasLst = false;
+        $hasCollection = false;
         foreach ($registry->instantiations() as $fqn => $_) {
             if (str_starts_with($fqn, 'XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_')) {
                 $hasBox = true;
             }
-            if (str_starts_with($fqn, 'XPHP\\Generated\\App\\RegistryTest\\Containers\\Lst\\T_')) {
-                $hasLst = true;
+            if (str_starts_with($fqn, 'XPHP\\Generated\\App\\RegistryTest\\Containers\\Collection\\T_')) {
+                $hasCollection = true;
             }
         }
         self::assertTrue($hasBox, 'expected an outer Box specialization');
-        self::assertTrue($hasLst, 'expected a transitive Lst specialization');
+        self::assertTrue($hasCollection, 'expected a transitive Collection specialization');
     }
 
     public function testCustomHashLengthShortensClassName(): void
@@ -373,12 +373,12 @@ final class RegistryTest extends TestCase
     public function testToArraySerializesNestedGenericArgAsDisplayString(): void
     {
         $registry = new Registry();
-        $lstOfPlastic = new TypeRef('App\\RegistryTest\\Containers\\Lst', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
-        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [$lstOfPlastic]);
+        $collectionOfPlastic = new TypeRef('App\\RegistryTest\\Containers\\Collection', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
+        $registry->recordInstantiation('App\\RegistryTest\\Containers\\Box', [$collectionOfPlastic]);
 
         $out = $registry->toArray();
 
-        // Find the outer Box<Lst<Plastic>> entry; concreteTypes should be the angle-bracket form.
+        // Find the outer Box<Collection<Plastic>> entry; concreteTypes should be the angle-bracket form.
         $boxEntry = null;
         foreach ($out['instantiations'] as $entry) {
             if ($entry['template'] === 'App\\RegistryTest\\Containers\\Box') {
@@ -388,7 +388,7 @@ final class RegistryTest extends TestCase
         }
         self::assertNotNull($boxEntry);
         self::assertSame(
-            ['App\\RegistryTest\\Containers\\Lst<App\\RegistryTest\\Models\\Plastic>'],
+            ['App\\RegistryTest\\Containers\\Collection<App\\RegistryTest\\Models\\Plastic>'],
             $boxEntry['concreteTypes'],
         );
     }

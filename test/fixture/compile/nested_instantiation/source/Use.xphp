@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace App\NestedInstantiation;
 
 use App\NestedInstantiation\Containers\Box;
-use App\NestedInstantiation\Containers\Lst;
+use App\NestedInstantiation\Containers\Collection;
 use App\NestedInstantiation\Models\Plastic;
 
-$boxOfList = new Box::<Lst<Plastic>>();
+$boxOfList = new Box::<Collection<Plastic>>();
 
-$inner = new Lst::<Plastic>();
+$inner = new Collection::<Plastic>();
 $inner->push(new Plastic('red'));
 
 $boxOfList->set($inner);

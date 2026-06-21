@@ -48,7 +48,7 @@ final class VariancePositionPhaseTest extends TestCase
         // ALLOWED — a constructor parameter is variance-exempt (constructors aren't
         // called through upcast references, and PHP exempts `__construct` from LSP), so
         // the real type is emitted there. See VarianceEdgeIntegrationTest's covariant
-        // immutable-collection test. A *promoted* ctor param is a PROPERTY, which stays
+        // immutable-collection test. A *promoted* constructor param is a PROPERTY, which stays
         // strictly invariant (a `T`-typed property would PHP-fatal across the chain):
         yield 'covariant in promoted constructor property' => [
             "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(public T \$item) {}\n}\n",

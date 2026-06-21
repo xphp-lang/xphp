@@ -50,8 +50,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             'variance-covariant-constructor',
         );
         try {
-            $specDir = $fixture->cacheDir . '/Generated/App/CovariantConstructor/ImmutableList';
-            $files = glob($specDir . '/T_*.php') ?: [];
+            $specializationDir = $fixture->cacheDir . '/Generated/App/CovariantConstructor/ImmutableList';
+            $files = glob($specializationDir . '/T_*.php') ?: [];
             self::assertCount(2, $files, 'two ImmutableList specializations (Fruit, Banana)');
 
             $combined = '';
@@ -115,10 +115,10 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // too, and the contravariant edge (Consumer<Fruit> extends Consumer<Banana>)
         // stays valid because constructors are LSP-exempt.
         $generated = $this->compileFixtureAndReadGenerated('compile/generic_contravariant_constructor/source');
-        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraVarianceConstructor\\\\Banana \.\.\.\$items\)/', $generated));
-        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraVarianceConstructor\\\\Fruit \.\.\.\$items\)/', $generated));
+        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContravariantConstructor\\\\Banana \.\.\.\$items\)/', $generated));
+        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContravariantConstructor\\\\Fruit \.\.\.\$items\)/', $generated));
         self::assertStringNotContainsString('mixed ...$items', $generated);
-        self::assertStringContainsString('extends \\XPHP\\Generated\\App\\ContraVarianceConstructor\\Consumer\\T_', $generated);
+        self::assertStringContainsString('extends \\XPHP\\Generated\\App\\ContravariantConstructor\\Consumer\\T_', $generated);
     }
 
     public function testNonBareVariantConstructorParamShapesAreRejected(): void
@@ -155,7 +155,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // type) and its `final` modifier is preserved (no edges → no LSP hazard).
         $generated = $this->compileFixtureAndReadGenerated('compile/generic_invariant_constructor/source');
         self::assertStringContainsString('final class', $generated);
-        self::assertStringContainsString('App\\InvConstructor\\Apple $item', $generated);
+        self::assertStringContainsString('App\\InvariantConstructor\\Apple $item', $generated);
         self::assertStringNotContainsString('mixed $item', $generated);
     }
 
@@ -280,11 +280,11 @@ final class VarianceEdgeIntegrationTest extends TestCase
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
         $compiler->compile($sources, $src, $this->targetDir, $this->cacheDir);
 
-        $bananaFqn = Registry::generatedFqn('App\\ContraVarianceConstructor\\Consumer', [new TypeRef('App\\ContraVarianceConstructor\\Banana')]);
-        $fruitFqn = Registry::generatedFqn('App\\ContraVarianceConstructor\\Consumer', [new TypeRef('App\\ContraVarianceConstructor\\Fruit')]);
+        $bananaFqn = Registry::generatedFqn('App\\ContravariantConstructor\\Consumer', [new TypeRef('App\\ContravariantConstructor\\Banana')]);
+        $fruitFqn = Registry::generatedFqn('App\\ContravariantConstructor\\Consumer', [new TypeRef('App\\ContravariantConstructor\\Fruit')]);
         $prefixes = [
             'XPHP\\Generated\\' => $this->cacheDir . '/Generated',
-            'App\\ContraVarianceConstructor\\' => $this->targetDir,
+            'App\\ContravariantConstructor\\' => $this->targetDir,
         ];
 
         $loader = $this->workDir . '/contra-load.php';
@@ -297,8 +297,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             . "        }\n"
             . "    }\n"
             . "});\n"
-            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContraVarianceConstructor\\Banana());\n"
-            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContraVarianceConstructor\\Fruit());\n"
+            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContravariantConstructor\\Banana());\n"
+            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContravariantConstructor\\Fruit());\n"
             . "echo \"OK\\n\";\n";
         file_put_contents($loader, $script);
 
@@ -514,7 +514,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // extends [Apple] only, NOT [Apple, Fruit]. The filter-direct-supers
         // pass is exercised here on a multi-extends path that single-extends
         // Class_ tests don't cover.
-        $sourceDir = $this->workDir . '/src-iface-transitive';
+        $sourceDir = $this->workDir . '/src-interface-transitive';
         mkdir($sourceDir, 0o755, true);
         file_put_contents($sourceDir . '/IProducer.xphp', <<<'PHP'
         <?php

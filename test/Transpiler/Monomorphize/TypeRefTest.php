@@ -48,10 +48,10 @@ final class TypeRefTest extends TestCase
 
     public function testCanonicalFormatsNestedGenericRecursively(): void
     {
-        $inner = new TypeRef('App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
+        $inner = new TypeRef('App\\Containers\\Collection', [new TypeRef('App\\Models\\Plastic')]);
         $outer = new TypeRef('App\\Containers\\Box', [$inner]);
         self::assertSame(
-            'App\\Containers\\Box<App\\Containers\\Lst<App\\Models\\Plastic>>',
+            'App\\Containers\\Box<App\\Containers\\Collection<App\\Models\\Plastic>>',
             $outer->canonical(),
         );
     }
@@ -89,10 +89,10 @@ final class TypeRefTest extends TestCase
 
     public function testToDisplayStringNestedGeneric(): void
     {
-        $inner = new TypeRef('App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
+        $inner = new TypeRef('App\\Containers\\Collection', [new TypeRef('App\\Models\\Plastic')]);
         $outer = new TypeRef('App\\Containers\\Box', [$inner]);
         self::assertSame(
-            'App\\Containers\\Box<App\\Containers\\Lst<App\\Models\\Plastic>>',
+            'App\\Containers\\Box<App\\Containers\\Collection<App\\Models\\Plastic>>',
             $outer->toDisplayString(),
         );
     }
@@ -120,7 +120,7 @@ final class TypeRefTest extends TestCase
 
     public function testIsConcreteIsTrueWhenAllNestedArgsAreConcrete(): void
     {
-        $inner = new TypeRef('App\\Lst', [new TypeRef('App\\Plastic')]);
+        $inner = new TypeRef('App\\Collection', [new TypeRef('App\\Plastic')]);
         $outer = new TypeRef('App\\Box', [$inner]);
         self::assertTrue($outer->isConcrete());
     }

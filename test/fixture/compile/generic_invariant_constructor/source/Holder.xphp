@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\InvConstructor;
+namespace App\InvariantConstructor;
 
 // An invariant class: not variance-erased (the constructor param keeps its concrete
 // type) and its `final` modifier is preserved (no edges → no LSP hazard).

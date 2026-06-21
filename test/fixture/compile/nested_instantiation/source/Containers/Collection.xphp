@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\NestedInstantiation\Containers;
 
-class Lst<T>
+class Collection<T>
 {
     /** @var array<int, T> */
     public array $items = [];

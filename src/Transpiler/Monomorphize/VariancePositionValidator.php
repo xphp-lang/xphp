@@ -211,7 +211,7 @@ final class VariancePositionValidator
         // surface (you can't call a constructor through an upcast reference), and
         // PHP exempts `__construct` from LSP, so the specializer emits the real
         // substituted type there with no soundness or autoload hazard. A *promoted*
-        // ctor param is also a property, which stays strictly invariant (a `T`-typed
+        // constructor param is also a property, which stays strictly invariant (a `T`-typed
         // property would PHP-fatal across the chain regardless).
         $classIsVariant = $this->varianceByName !== [];
         foreach ($method->params as $param) {

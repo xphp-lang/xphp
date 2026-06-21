@@ -214,8 +214,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Sink<-X> {}
         // class P<+T> { function f(): Sink<T> }
-        // Outer pos = Cov; inner slot = Contra.
-        // effective = flip(Cov) = Contra; +T not in {Inv, Contra} -> reject.
+        // Outer pos = Covariant; inner slot = Contravariant.
+        // effective = flip(Covariant) = Contravariant; +T not in {Invariant, Contravariant} -> reject.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Sink',
@@ -246,8 +246,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Producer<+X> {}
         // class P<+T> { function f(): Producer<T> }
-        // Outer pos = Cov; inner slot = Cov.
-        // effective = Cov; +T in {Inv, Cov} -> accept.
+        // Outer pos = Covariant; inner slot = Covariant.
+        // effective = Covariant; +T in {Invariant, Covariant} -> accept.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Producer',
@@ -276,8 +276,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Sink<-X> {}
         // class P<+T> { function f(Sink<T> $x): void }
-        // Outer pos = Contra (param); inner slot = Contra.
-        // effective = flip(Contra) = Cov; +T in {Inv, Cov} -> accept.
+        // Outer pos = Contravariant (param); inner slot = Contravariant.
+        // effective = flip(Contravariant) = Covariant; +T in {Invariant, Covariant} -> accept.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Sink',
@@ -309,8 +309,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Producer<+X> {}
         // class P<T> { function f(): Producer<T> }   // T is Invariant
-        // effective for T: compose(Cov, Cov) = Cov;
-        // Invariant in {Inv, Cov} -> accept.
+        // effective for T: compose(Covariant, Covariant) = Covariant;
+        // Invariant in {Invariant, Covariant} -> accept.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Producer',
@@ -390,8 +390,8 @@ final class RegistryInnerVarianceTest extends TestCase
         // class Container<X> {}                  // Invariant
         // class Outer<+Y> {}                     // Covariant
         // class P<+T> { function f(): Outer<Container<T>> }
-        // Effective at T's leaf: compose(Cov, Cov) = Cov; then compose(Cov, Inv) = Inv.
-        // +T not in {Inv} -> reject.
+        // Effective at T's leaf: compose(Covariant, Covariant) = Covariant; then compose(Covariant, Invariant) = Invariant.
+        // +T not in {Invariant} -> reject.
         $registry = $this->registryWith([
             $this->makeDefinition('App\\Container', 'Container', [new TypeParam('X')], new Class_(new Identifier('Container'))),
             $this->makeDefinition(
@@ -423,8 +423,8 @@ final class RegistryInnerVarianceTest extends TestCase
 
     public function testTwoDeepNestingAllCovariantIsAccepted(): void
     {
-        // Replace Container with Container<+X> -- compose(Cov, Cov) = Cov twice.
-        // +T in {Inv, Cov} -> accept.
+        // Replace Container with Container<+X> -- compose(Covariant, Covariant) = Covariant twice.
+        // +T in {Invariant, Covariant} -> accept.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Container',
@@ -505,9 +505,9 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Container<-X> {}
         // class P<+T> { function __construct(public Container<T> $c) }
-        // Constructor param outer-pos is Invariant; inner slot Contra.
-        // compose(Invariant, Contra) = Invariant; +T not in {Inv} -> reject.
-        // Pins the ctor-promoted-property -> Invariant outer-pos branch.
+        // Constructor param outer-pos is Invariant; inner slot Contravariant.
+        // compose(Invariant, Contravariant) = Invariant; +T not in {Invariant} -> reject.
+        // Pins the constructor-promoted-property -> Invariant outer-pos branch.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Container',
@@ -543,8 +543,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Producer<-X> {}
         // class P<+T> { function f(): Producer<T>|null }
-        // Outer pos = Cov; arm Producer's slot = Contra.
-        // compose(Cov, Contra) = Contra; +T not in {Inv, Contra} -> reject.
+        // Outer pos = Covariant; arm Producer's slot = Contravariant.
+        // compose(Covariant, Contravariant) = Contravariant; +T not in {Invariant, Contravariant} -> reject.
         $producerOrNull = new UnionType([
             $this->genericName('App\\Producer', [new TypeRef('T', isTypeParam: true)]),
             new Identifier('null'),
@@ -574,7 +574,7 @@ final class RegistryInnerVarianceTest extends TestCase
         // class Sink<-X> {}
         // class P<+T : Sink<T>> {}
         // Bound is an Invariant outer-position (PHP class-compat); inner slot
-        // Contra; compose(Invariant, Contra) = Invariant; +T not in {Inv} ->
+        // Contravariant; compose(Invariant, Contravariant) = Invariant; +T not in {Invariant} ->
         // reject. Pins the type-param bound walk.
         $registry = $this->registryWith([
             $this->makeDefinition(
@@ -640,8 +640,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Container<-X> {}
         // class P<+T, U = Container<T>> {}
-        // Default is an Invariant outer-position; inner Container slot is Contra;
-        // compose(Invariant, Contra) = Invariant; +T not in {Inv} -> reject.
+        // Default is an Invariant outer-position; inner Container slot is Contravariant;
+        // compose(Invariant, Contravariant) = Invariant; +T not in {Invariant} -> reject.
         // Pins the type-param default walk.
         $registry = $this->registryWith([
             $this->makeDefinition(
@@ -676,8 +676,8 @@ final class RegistryInnerVarianceTest extends TestCase
         // The ltrim must strip it; otherwise the registry lookup misses the
         // template and we'd fall to conservative-unknown (Invariant).
         // Here Container's X is Covariant -- if we strip correctly, the
-        // composition stays Cov and accepts +T. If ltrim is removed,
-        // lookup misses, conservative-Inv kicks in, rejects.
+        // composition stays Covariant and accepts +T. If ltrim is removed,
+        // lookup misses, conservative-Invariant kicks in, rejects.
         $genericNode = new Name(['App', 'Container']);
         $genericNode->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, [new TypeRef('T', isTypeParam: true)]);
         $genericNode->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, '\\App\\Container');
@@ -703,7 +703,7 @@ final class RegistryInnerVarianceTest extends TestCase
 
     public function testNullableTypeWrapsInnerGenericForVarianceCheck(): void
     {
-        // class P<+T> { function f(): ?Container<T> }     where Container's X is Inv.
+        // class P<+T> { function f(): ?Container<T> }     where Container's X is Invariant.
         // The NullableType must recurse; the inner Container<T> still triggers
         // the invariant rejection. Pins the NullableType walker branch.
         $registry = $this->registryWith([
@@ -730,9 +730,9 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // BoundLeaf -> TypeRef('App\\Container', [TypeRef('App\\Producer', [T])])
         // outer pos via bound = Invariant
-        // Container's X = Cov -> compose(Inv, Cov) = Inv
-        // Producer's X = Inv -> compose(Inv, Inv) = Inv
-        // +T not in {Inv} -> reject.
+        // Container's X = Covariant -> compose(Invariant, Covariant) = Invariant
+        // Producer's X = Invariant -> compose(Invariant, Invariant) = Invariant
+        // +T not in {Invariant} -> reject.
         // Pins the TypeRef recursion path AND the inner-def lookup via TypeRef name.
         $registry = $this->registryWith([
             $this->makeDefinition(
@@ -801,8 +801,8 @@ final class RegistryInnerVarianceTest extends TestCase
         // The OUTER Outer lookup uses ATTR_TEMPLATE_FQN (walkPhpType branch);
         // the INNER `\App\Inner` lookup goes through walkTypeRef which uses
         // ltrim on `$ref->name`. If ltrim is dropped, the Inner lookup misses,
-        // conservative-Inv kicks in, compose(Cov, Inv) = Inv, rejects.
-        // With ltrim intact, Inner is found, Cov*Cov*Cov = Cov, accepts.
+        // conservative-Invariant kicks in, compose(Covariant, Invariant) = Invariant, rejects.
+        // With ltrim intact, Inner is found, Covariant*Covariant*Covariant = Covariant, accepts.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Outer',
@@ -873,8 +873,8 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Container<X> {}       // X is Invariant
         // class P<U, +T> { function f(): Container<U> }   // U is Invariant
-        // U is Invariant declared; outer pos Cov; inner slot Inv;
-        // compose(Cov, Inv) = Inv; Invariant in {Inv} -> accept.
+        // U is Invariant declared; outer pos Covariant; inner slot Invariant;
+        // compose(Covariant, Invariant) = Invariant; Invariant in {Invariant} -> accept.
         // The other type-param +T gives buildVarianceMap a non-empty map so
         // the walk actually runs. Pins the
         // `Variance::Invariant => [Variance::Invariant]` allowed-list.
@@ -904,9 +904,9 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Producer<+X> {}
         // class P<U, +T> { function f(): Producer<U> }
-        // U is Invariant declared; outer pos Cov; inner slot Cov;
-        // compose(Cov, Cov) = Cov; Invariant in {Inv, Cov} -> accept.
-        // Pins the second item of `Variance::Covariant => [Inv, Cov]` allowed-list.
+        // U is Invariant declared; outer pos Covariant; inner slot Covariant;
+        // compose(Covariant, Covariant) = Covariant; Invariant in {Invariant, Covariant} -> accept.
+        // Pins the second item of `Variance::Covariant => [Invariant, Covariant]` allowed-list.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Producer',
@@ -938,9 +938,9 @@ final class RegistryInnerVarianceTest extends TestCase
     {
         // class Producer<+X> {}
         // class P<U, +T> { function f(Producer<U> $x): void }
-        // U is Invariant declared; outer pos Contra (param); inner Cov;
-        // compose(Contra, Cov) = Contra; Invariant in {Inv, Contra} -> accept.
-        // Pins the first item of `Variance::Contravariant => [Inv, Contra]` allowed-list.
+        // U is Invariant declared; outer pos Contravariant (param); inner Covariant;
+        // compose(Contravariant, Covariant) = Contravariant; Invariant in {Invariant, Contravariant} -> accept.
+        // Pins the first item of `Variance::Contravariant => [Invariant, Contravariant]` allowed-list.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\Producer',

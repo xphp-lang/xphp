@@ -1235,22 +1235,22 @@ final class GenericMethodIntegrationTest extends TestCase
             $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
             self::assertGreaterThanOrEqual(2, count($generated));
 
-            $childSpec = null;
+            $childSpecialization = null;
             foreach ($generated as $f) {
                 if (str_contains($f, '/Child/T_')) {
-                    $childSpec = file_get_contents($f);
+                    $childSpecialization = file_get_contents($f);
                     break;
                 }
             }
-            self::assertIsString($childSpec, 'expected a Child<int> specialization at /Child/T_*.php');
+            self::assertIsString($childSpecialization, 'expected a Child<int> specialization at /Child/T_*.php');
 
             // Negative invariants kept: parent must not be misresolved
             // to a class FQN; no leftover turbofish marker.
-            self::assertStringNotContainsString('App\\PseudoParent\\parent', $childSpec);
-            self::assertStringNotContainsString('::<', $childSpec);
+            self::assertStringNotContainsString('App\\PseudoParent\\parent', $childSpecialization);
+            self::assertStringNotContainsString('::<', $childSpecialization);
             SnapshotHash::assertMatches(
                 __DIR__ . '/GenericMethodIntegrationTest/testNewParentTurbofishCompilesEndToEnd/Child.expected.php',
-                $childSpec,
+                $childSpecialization,
             );
         } finally {
             self::rrmdir($dir);
@@ -1272,29 +1272,29 @@ final class GenericMethodIntegrationTest extends TestCase
         try {
             $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
 
-            $baseSpec = '';
-            $derivedSpec = '';
+            $baseSpecialization = '';
+            $derivedSpecialization = '';
             foreach ($generated as $f) {
                 $content = file_get_contents($f);
                 self::assertIsString($content);
                 if (str_contains($f, '/Base/T_')) {
-                    $baseSpec .= $content;
+                    $baseSpecialization .= $content;
                 }
                 if (str_contains($f, '/Derived/T_')) {
-                    $derivedSpec .= $content;
+                    $derivedSpecialization .= $content;
                 }
             }
 
             // Both `identity` specializations (<string> and <int>) land on Base.
             self::assertSame(
                 2,
-                preg_match_all('/function identity_T_[0-9a-f]+\(/', $baseSpec),
+                preg_match_all('/function identity_T_[0-9a-f]+\(/', $baseSpecialization),
                 'both identity specializations emitted onto the declaring Base',
             );
             // Derived inherits them; nothing is duplicated onto the subclass.
             self::assertStringNotContainsString(
                 'identity_T_',
-                $derivedSpec,
+                $derivedSpecialization,
                 'subclass inherits the base specialization; no duplicate on Derived',
             );
 

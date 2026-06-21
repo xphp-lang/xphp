@@ -427,7 +427,7 @@ final class VisitorGuardsTest extends TestCase
             'stmts' => [new Property(0, [new PropertyItem('a')], type: new Name('T'))],
         ]);
 
-        $genericSubst = new TypeRef('\\App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
+        $genericSubst = new TypeRef('\\App\\Containers\\Collection', [new TypeRef('App\\Models\\Plastic')]);
         $specialized = (new Specializer())->specialize($template, [
             'T' => $genericSubst,
         ]);
@@ -435,9 +435,9 @@ final class VisitorGuardsTest extends TestCase
         $nameNode = $specialized->stmts[0]->type;
         self::assertInstanceOf(Name::class, $nameNode);
         self::assertNotInstanceOf(FullyQualified::class, $nameNode);
-        self::assertSame('App\\Containers\\Lst', $nameNode->toString(), 'Name() ctor must receive ltrim-normalized name (line 80)');
+        self::assertSame('App\\Containers\\Collection', $nameNode->toString(), 'Name() constructor must receive ltrim-normalized name (line 80)');
         self::assertSame(
-            'App\\Containers\\Lst',
+            'App\\Containers\\Collection',
             $nameNode->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN),
             'ATTR_TEMPLATE_FQN attribute must be ltrim-normalized (line 82)',
         );

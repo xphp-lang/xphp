@@ -77,7 +77,7 @@ parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rejected.
 
 `VariancePositionValidator::checkMethod` allows a plain constructor parameter of a variant
 class at any variance (a promoted one stays invariant); `InnerVarianceValidator` skips a
-bare variance-marked constructor parameter (`isExemptVariantCtorParam`) and still rejects
+bare variance-marked constructor parameter (`isExemptVariantConstructorParam`) and still rejects
 the non-bare shapes. [`Specializer::specialize`](../../src/Transpiler/Monomorphize/Specializer.php)
 substitutes the real type into the constructor parameter — no erasure step. Tests compile a
 covariant `ImmutableList<+T>` and assert each specialization's constructor keeps its real

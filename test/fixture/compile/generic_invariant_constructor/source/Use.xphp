@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace App\InvConstructor;
+namespace App\InvariantConstructor;
 
 $h = new Holder::<Apple>(new Apple());
