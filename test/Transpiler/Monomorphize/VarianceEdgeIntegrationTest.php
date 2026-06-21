@@ -39,7 +39,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testCovariantImmutableCollectionTakesTypedConstructorInput(): void
     {
-        // Ticket 0005: a covariant immutable collection `ImmutableList<+T>` with a
+        // A covariant immutable collection `ImmutableList<+T>` with a
         // `T`-typed constructor. The ctor param is emitted variance-erased (`mixed`)
         // so `ImmutableList<Banana>` extends `ImmutableList<Fruit>` with NO PHP
         // autoload fatal, and a Banana list is usable where a Fruit list is expected.

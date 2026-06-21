@@ -45,7 +45,7 @@ final class VariancePositionPhaseTest extends TestCase
             ['bound'],
         ];
         // NOTE: `+T` in a *non-promoted* constructor parameter of a variant class is
-        // now ALLOWED (ticket 0005) — it is emitted variance-erased, so it's no longer
+        // now ALLOWED — it is emitted variance-erased, so it's no longer
         // a variance-position violation. See VarianceEdgeIntegrationTest's covariant
         // immutable-collection test. A *promoted* ctor param is a PROPERTY, which stays
         // strictly invariant (a `T`-typed property would PHP-fatal across the chain):

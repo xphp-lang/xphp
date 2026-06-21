@@ -1260,7 +1260,7 @@ final class GenericMethodIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testGenericMethodResolvesThroughInheritance(): void
     {
-        // Ticket 0003: a generic method declared on a base class resolves and
+        // A generic method declared on a base class resolves and
         // runs when called via turbofish on a subclass receiver. The
         // specialization is emitted onto the DECLARING base so every subclass
         // inherits the single copy through the class-level `extends` edge --
@@ -1308,7 +1308,7 @@ final class GenericMethodIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testStaticGenericMethodResolvesThroughInheritance(): void
     {
-        // Ticket 0003 (static path): a static generic method declared on Base
+        // Static path: a static generic method declared on Base
         // resolves and runs when called as `Derived::make::<...>()`. The
         // specialization is emitted onto the declaring Base and reached via
         // PHP's static-method inheritance.

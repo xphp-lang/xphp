@@ -90,7 +90,7 @@ final class Specializer
         // Re-type the recorded constructor params to their erased (bound / `mixed`)
         // form so every specialization's `__construct` signature is identical and
         // stays LSP-compatible across the variance `extends` edge (a concrete
-        // `T`-typed ctor would PHP-fatal at autoload — see ticket 0005).
+        // `T`-typed ctor would PHP-fatal at autoload).
         self::applyConstructorErasures($cloned, $ctorErasures);
 
         return $cloned;

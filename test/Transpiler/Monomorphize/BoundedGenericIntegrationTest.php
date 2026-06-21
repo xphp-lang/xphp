@@ -59,7 +59,7 @@ final class BoundedGenericIntegrationTest extends TestCase
 
     public function testHashableBoundIsSatisfiedByImplementingClass(): void
     {
-        // `Hashable` is a whitelisted bound name (ticket 0006). xphp recognizes it
+        // `Hashable` is a whitelisted bound name. xphp recognizes it
         // even though the interface is provided by the consumer/library and isn't
         // in the scanned source set here — so `Set<T: Hashable>` resolves against a
         // class that `implements Hashable`.

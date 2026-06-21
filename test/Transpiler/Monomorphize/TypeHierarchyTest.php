@@ -268,7 +268,7 @@ PHP;
     public function testHashableIsAWhitelistedBoundName(): void
     {
         // `Hashable` is a recognized bound name even though it isn't a PHP built-in
-        // and isn't declared in the source set (ticket 0006) — a class implementing
+        // and isn't declared in the source set — a class implementing
         // it satisfies the bound; a known class that doesn't is rejected.
         $hierarchy = new TypeHierarchy([
             'App\\User' => ['Hashable'],
