@@ -93,11 +93,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     {
         // A bounded covariant ctor param keeps its REAL substituted type (the
         // concrete arg, not the bound and not `mixed`) — constructors are LSP-exempt.
-        $generated = $this->compileInlineAndReadGenerated([
-            'Box.xphp' => "<?php\nnamespace App\\BoundCtor;\nclass Box<+T : \\Stringable>\n{\n    private array \$items;\n    public function __construct(T ...\$items) { \$this->items = \$items; }\n    public function get(int \$i): T { return \$this->items[\$i]; }\n}\n",
-            'Tag.xphp' => "<?php\nnamespace App\\BoundCtor;\nfinal class Tag implements \\Stringable { public function __toString(): string { return 't'; } }\n",
-            'Use.xphp' => "<?php\nnamespace App\\BoundCtor;\n\$b = new Box::<Tag>(new Tag());\n",
-        ]);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_covariant_bounded_ctor/source');
         self::assertStringContainsString('__construct(\\App\\BoundCtor\\Tag ...$items)', $generated);
         self::assertStringNotContainsString('__construct(mixed', $generated);
         self::assertStringNotContainsString('__construct(\\Stringable', $generated);
@@ -108,11 +104,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // `Pair<+A, B>`: the covariant `A` ctor param keeps its concrete type, the
         // invariant `B` param keeps its concrete substituted type, and a plain
         // scalar param (`int $tag`) is left untouched (it isn't a type-param).
-        $generated = $this->compileInlineAndReadGenerated([
-            'Pair.xphp' => "<?php\nnamespace App\\MixedCtor;\nclass Pair<+A, B>\n{\n    private array \$slots;\n    public function __construct(A \$a, B \$b, int \$tag) { \$this->slots = [\$a, \$b, \$tag]; }\n    public function first(): A { return \$this->slots[0]; }\n}\n",
-            'Apple.xphp' => "<?php\nnamespace App\\MixedCtor;\nclass Apple {}\n",
-            'Use.xphp' => "<?php\nnamespace App\\MixedCtor;\n\$p = new Pair::<Apple, Apple>(new Apple(), new Apple(), 5);\n",
-        ]);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_mixed_variance_ctor/source');
         self::assertMatchesRegularExpression('/__construct\(\\\\App\\\\MixedCtor\\\\Apple \$a, \\\\App\\\\MixedCtor\\\\Apple \$b, int \$tag\)/', $generated);
         self::assertStringNotContainsString('mixed $a', $generated);
     }
@@ -122,12 +114,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // Symmetry with the covariant case: a `-T` ctor param keeps its real type
         // too, and the contravariant edge (Consumer<Fruit> extends Consumer<Banana>)
         // stays valid because constructors are LSP-exempt.
-        $generated = $this->compileInlineAndReadGenerated([
-            'Consumer.xphp' => "<?php\nnamespace App\\ContraCtor;\nclass Consumer<-T>\n{\n    private array \$items;\n    public function __construct(T ...\$items) { \$this->items = \$items; }\n    public function accept(T \$x): void { \$this->items[] = \$x; }\n}\n",
-            'Fruit.xphp' => "<?php\nnamespace App\\ContraCtor;\nclass Fruit {}\n",
-            'Banana.xphp' => "<?php\nnamespace App\\ContraCtor;\nclass Banana extends Fruit {}\n",
-            'Use.xphp' => "<?php\nnamespace App\\ContraCtor;\n\$a = new Consumer::<Banana>();\n\$b = new Consumer::<Fruit>();\n",
-        ]);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_contravariant_ctor/source');
         self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraCtor\\\\Banana \.\.\.\$items\)/', $generated));
         self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContraCtor\\\\Fruit \.\.\.\$items\)/', $generated));
         self::assertStringNotContainsString('mixed ...$items', $generated);
@@ -143,13 +130,13 @@ final class VarianceEdgeIntegrationTest extends TestCase
         //   - `Box<T>`    — T through another generic's invariant slot
         //   - `(T $a, ?T $b)` — the allowed leading `T` must not stop the walk from
         //                       reaching the bad trailing `?T`
-        $cases = [
-            "class P<+T>\n{\n    public function __construct(?T \$x) {}\n}\n",
-            "class Box<X> {}\nclass P<+T>\n{\n    public function __construct(Box<T> \$b) {}\n}\n",
-            "class P<+T>\n{\n    public function __construct(T \$a, ?T \$b) {}\n}\n",
+        $fixtures = [
+            'check/variance_ctor_nullable/source',
+            'check/variance_ctor_nested_generic/source',
+            'check/variance_ctor_mixed_params/source',
         ];
-        foreach ($cases as $i => $body) {
-            $this->compileExpectingVarianceViolation("<?php\nnamespace App\\NonErasable$i;\n$body");
+        foreach ($fixtures as $fixture) {
+            $this->compileFixtureExpectingVarianceViolation($fixture);
         }
     }
 
@@ -157,11 +144,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     {
         // Two covariant params: BOTH `T`-typed ctor params keep their real
         // substituted types (pins that nothing is erased for any variant ctor param).
-        $generated = $this->compileInlineAndReadGenerated([
-            'Two.xphp' => "<?php\nnamespace App\\TwoCtor;\nclass Two<+A, +B>\n{\n    private array \$slots;\n    public function __construct(A \$a, B \$b) { \$this->slots = [\$a, \$b]; }\n    public function getA(): A { return \$this->slots[0]; }\n    public function getB(): B { return \$this->slots[1]; }\n}\n",
-            'Apple.xphp' => "<?php\nnamespace App\\TwoCtor;\nclass Apple {}\n",
-            'Use.xphp' => "<?php\nnamespace App\\TwoCtor;\n\$t = new Two::<Apple, Apple>(new Apple(), new Apple());\n",
-        ]);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_two_covariant_ctor/source');
         self::assertSame(1, preg_match_all('/__construct\(\\\\App\\\\TwoCtor\\\\Apple \$a, \\\\App\\\\TwoCtor\\\\Apple \$b\)/', $generated));
         self::assertStringNotContainsString('mixed $a', $generated);
     }
@@ -170,11 +153,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     {
         // An invariant class is not variance-erased (ctor param keeps its concrete
         // type) and its `final` modifier is preserved (no edges → no LSP hazard).
-        $generated = $this->compileInlineAndReadGenerated([
-            'Holder.xphp' => "<?php\nnamespace App\\InvCtor;\nfinal class Holder<T>\n{\n    public function __construct(public T \$item) {}\n}\n",
-            'Apple.xphp' => "<?php\nnamespace App\\InvCtor;\nclass Apple {}\n",
-            'Use.xphp' => "<?php\nnamespace App\\InvCtor;\n\$h = new Holder::<Apple>(new Apple());\n",
-        ]);
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_invariant_ctor/source');
         self::assertStringContainsString('final class', $generated);
         self::assertStringContainsString('App\\InvCtor\\Apple $item', $generated);
         self::assertStringNotContainsString('mixed $item', $generated);
@@ -294,23 +273,18 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // PHP exempts `__construct` from LSP, so the chain must both autoload AND
         // construct instances of each specialization without a fatal — empirically
         // confirming the same exemption holds in the contravariant direction.
-        $src = $this->workDir . '/src-contra-auto';
-        mkdir($src, 0o755, true);
-        file_put_contents($src . '/Consumer.xphp', "<?php\nnamespace App\\ContraAuto;\nclass Consumer<-T>\n{\n    private array \$items;\n    public function __construct(T ...\$items) { \$this->items = \$items; }\n    public function accept(T \$x): void { \$this->items[] = \$x; }\n}\n");
-        file_put_contents($src . '/Fruit.xphp', "<?php\nnamespace App\\ContraAuto;\nclass Fruit {}\n");
-        file_put_contents($src . '/Banana.xphp', "<?php\nnamespace App\\ContraAuto;\nclass Banana extends Fruit {}\n");
-        file_put_contents($src . '/Use.xphp', "<?php\nnamespace App\\ContraAuto;\n\$a = new Consumer::<Banana>(new Banana());\n\$b = new Consumer::<Fruit>(new Fruit());\n");
-
+        $src = realpath(__DIR__ . '/../../fixture/compile/generic_contravariant_ctor/source')
+            ?: throw new RuntimeException('Fixture missing');
         $compiler = $this->buildCompiler();
         $sources = (new NativeFileFinder())->find($src)
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
         $compiler->compile($sources, $src, $this->targetDir, $this->cacheDir);
 
-        $bananaFqn = Registry::generatedFqn('App\\ContraAuto\\Consumer', [new TypeRef('App\\ContraAuto\\Banana')]);
-        $fruitFqn = Registry::generatedFqn('App\\ContraAuto\\Consumer', [new TypeRef('App\\ContraAuto\\Fruit')]);
+        $bananaFqn = Registry::generatedFqn('App\\ContraCtor\\Consumer', [new TypeRef('App\\ContraCtor\\Banana')]);
+        $fruitFqn = Registry::generatedFqn('App\\ContraCtor\\Consumer', [new TypeRef('App\\ContraCtor\\Fruit')]);
         $prefixes = [
             'XPHP\\Generated\\' => $this->cacheDir . '/Generated',
-            'App\\ContraAuto\\' => $this->targetDir,
+            'App\\ContraCtor\\' => $this->targetDir,
         ];
 
         $loader = $this->workDir . '/contra-load.php';
@@ -323,8 +297,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             . "        }\n"
             . "    }\n"
             . "});\n"
-            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContraAuto\\Banana());\n"
-            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContraAuto\\Fruit());\n"
+            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContraCtor\\Banana());\n"
+            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContraCtor\\Fruit());\n"
             . "echo \"OK\\n\";\n";
         file_put_contents($loader, $script);
 
@@ -701,20 +675,15 @@ final class VarianceEdgeIntegrationTest extends TestCase
     }
 
     /**
-     * Compile inline `.xphp` sources and return the concatenated text of every
-     * generated specialization, for asserting on emitted constructor signatures.
+     * Compile a tracked fixture's `source/` dir and return the concatenated text of
+     * every generated specialization, for asserting on emitted constructor signatures.
      *
-     * @param array<string, string> $files filename → xphp source
+     * @param string $relFixtureDir path under `test/fixture/`, e.g. `compile/foo/source`
      */
-    private function compileInlineAndReadGenerated(array $files): string
+    private function compileFixtureAndReadGenerated(string $relFixtureDir): string
     {
-        $src = $this->workDir . '/src';
-        if (!is_dir($src)) {
-            mkdir($src, 0o755, true);
-        }
-        foreach ($files as $name => $code) {
-            file_put_contents($src . '/' . $name, $code);
-        }
+        $src = realpath(__DIR__ . '/../../fixture/' . $relFixtureDir)
+            ?: throw new RuntimeException("missing fixture: {$relFixtureDir}");
         $compiler = $this->buildCompiler();
         $sources = (new NativeFileFinder())->find($src)
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
@@ -735,19 +704,22 @@ final class VarianceEdgeIntegrationTest extends TestCase
     }
 
     /**
-     * Compile a single inline source in a throwaway dir and assert it raises a
-     * variance violation (compile-mode, fail-fast).
+     * Compile a tracked fixture's `source/` dir and assert it raises a variance
+     * violation (compile-mode, fail-fast).
+     *
+     * @param string $relFixtureDir path under `test/fixture/`, e.g. `check/foo/source`
      */
-    private function compileExpectingVarianceViolation(string $source): void
+    private function compileFixtureExpectingVarianceViolation(string $relFixtureDir): void
     {
+        $src = realpath(__DIR__ . '/../../fixture/' . $relFixtureDir)
+            ?: throw new RuntimeException("missing fixture: {$relFixtureDir}");
         $dir = sys_get_temp_dir() . '/xphp-iv-' . uniqid('', true);
-        mkdir($dir . '/src', 0o755, true);
-        file_put_contents($dir . '/src/S.xphp', $source);
+        mkdir($dir, 0o755, true);
         $compiler = $this->buildCompiler();
-        $sources = (new NativeFileFinder())->find($dir . '/src')
+        $sources = (new NativeFileFinder())->find($src)
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
         try {
-            $compiler->compile($sources, $dir . '/src', $dir . '/dist', $dir . '/cache');
+            $compiler->compile($sources, $src, $dir . '/dist', $dir . '/cache');
             self::fail('expected a variance violation, none thrown');
         } catch (RuntimeException $e) {
             self::assertStringContainsString('Variance violation', $e->getMessage());

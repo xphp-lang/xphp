@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BoundCtor;
+
+// Bounded covariant constructor param: keeps its REAL substituted type (the
+// concrete arg), not the bound and not `mixed`.
+class Box<+T : \Stringable>
+{
+    private array $items;
+
+    public function __construct(T ...$items)
+    {
+        $this->items = $items;
+    }
+
+    public function get(int $i): T
+    {
+        return $this->items[$i];
+    }
+}

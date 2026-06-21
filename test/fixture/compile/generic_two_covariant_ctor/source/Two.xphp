@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\TwoCtor;
+
+// Two covariant params: BOTH `T`-typed constructor params keep their real
+// substituted types (nothing is erased for any variant ctor param).
+class Two<+A, +B>
+{
+    private array $slots;
+
+    public function __construct(A $a, B $b)
+    {
+        $this->slots = [$a, $b];
+    }
+
+    public function getA(): A
+    {
+        return $this->slots[0];
+    }
+
+    public function getB(): B
+    {
+        return $this->slots[1];
+    }
+}

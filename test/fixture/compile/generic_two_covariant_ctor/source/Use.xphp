@@ -1,0 +1,7 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\TwoCtor;
+
+$t = new Two::<Apple, Apple>(new Apple(), new Apple());
