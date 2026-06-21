@@ -30,9 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specialisation (`Book ...$items`, not `mixed`), so construction is
   **runtime-type-checked** while `ImmutableList<Book>` still extends
   `ImmutableList<Product>` — PHP exempts `__construct` from LSP, so the
-  specialisations' constructors may differ across the edge. Promoted constructor
-  params remain properties (strictly invariant — PHP property types can't vary
-  across the edge). See [variance](docs/syntax/variance.md).
+  specialisations' constructors may differ across the edge. A public/protected
+  promoted constructor param remains a visible property (strictly invariant — PHP
+  enforces property types across the edge for visible members), but a *private*
+  one is exempt (see below). See [variance](docs/syntax/variance.md).
+- **Variance markers on private properties.** A `+T` / `-T` marker is now allowed
+  on a **private** property — declared or promoted, mutable or readonly — so the
+  natural covariant shape
+  `class Producer<+T> { public function __construct(private T $item) {} ... }`
+  compiles, keeps its **real** substituted slot type (nothing erased), and stays
+  runtime-type-checked. PHP does not type-check private property types across an
+  `extends` chain (a private slot is per-declaring-scope and never inherited) and
+  a private member is invisible to the variance surface, so it carries any variance
+  soundly. Public/protected properties (including public/protected promoted params,
+  and an externally-readable `public private(set)` property) stay strictly
+  invariant. A covariant single-value getter over a `private T` field is also
+  PHPStan-clean. See [variance](docs/syntax/variance.md).
 - **`Hashable` value-equality bound.** `Set<T: \Hashable>` and
   `Map<K: \Hashable, V>` are now expressible and compile-time bound-checked
   (referenced fully-qualified, like `\Stringable`). xphp ships no runtime

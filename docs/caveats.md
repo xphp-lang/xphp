@@ -366,42 +366,49 @@ can see it.
 
 ---
 
-## Covariant getters trip the `xphp check` PHPStan pass
+## Covariant getters over an `array` backing trip the `xphp check` PHPStan pass
+
+> **Scope:** this affects only a *multi-element* covariant collection backed by an
+> `array` field. A covariant **single-value** container no longer hits this — store
+> the element in a `private T` property (PHP doesn't type-check private slots across
+> the `extends` edge), and the emitted `get(): T` over a real-typed `private T` field
+> is PHPStan-clean. See the [`Producer<+T>`](syntax/variance.md#example) example.
 
 ### ❌ What gets flagged
 
 ```php
-class Producer<+T> {
-    private mixed $item;                       // backing field can't be `T` (properties are invariant)
-    public function __construct(T $item) { $this->item = $item; }
-    public function get(): T { return $this->item; }
+class ImmutableList<+T> {
+    private array $items;                       // many elements → `array` backing, not `T`
+    public function __construct(T ...$items) { $this->items = $items; }
+    public function get(int $i): T { return $this->items[$i]; }
 }
 
-$p = new Producer::<Banana>(new Banana());     // compiles + runs fine
+$list = new ImmutableList::<Banana>(new Banana());   // compiles + runs fine
 ```
 
 `xphp compile` is happy and the runtime is correct, but `xphp check`'s
 optional [PHPStan-over-the-compiled-output pass](errors.md#phpstan-over-the-compiled-output)
-reports, on the `Producer<Banana>` specialization:
+reports, on the `ImmutableList<Banana>` specialization:
 
 ```
-Method ...\Producer\T_<hash>::get() should return App\Banana but returns mixed.
+Method ...\ImmutableList\T_<hash>::get() should return App\Banana but returns mixed.
 [phpstan.return.type]
 ```
 
 ### Why
 
-A covariant container can't store its element in a `T`-typed **property** (PHP
-property types are invariant across the `extends` edge — see
-[variance markers are class-level only](#variance-markers-are-class-level-only)
-above and the [variance](syntax/variance.md) rules), so the backing field is
-`mixed`/`array`. xphp substitutes type parameters in **signatures** (the emitted
-`get(): Banana` is correct), but **not inside method bodies** — `return
-$this->item` still reads a `mixed` field. PHPStan, analysing the concrete output,
-sees `mixed` returned where `Banana` is declared and reports it. This is the
-PHPStan pass being stricter than xphp's own generic checks, not a generics error;
-it applies to any covariant getter-over-storage (including the docs' own
-`ImmutableList` / `Producer` examples).
+A collection holds *many* elements in a single field, so the backing must be an
+`array` (you can't fit them in one `private T` slot). xphp substitutes type
+parameters in **signatures** (the emitted `get(): Banana` is correct), but **not
+inside method bodies** — `return $this->items[$i]` reads an element of an `array`,
+which PHPStan sees as `mixed`. Analysing the concrete output, it reports `mixed`
+returned where `Banana` is declared. This is the PHPStan pass being stricter than
+xphp's own generic checks, not a generics error.
+
+A single-value container avoids this entirely because its backing field can be a
+real-typed `private T` (a private property is variance-exempt — see the
+[variance](syntax/variance.md) rules), so PHPStan proves the getter's return type
+directly. The limitation is specific to the `array`-backed collection shape.
 
 ### ✅ Workaround
 
@@ -410,8 +417,8 @@ it applies to any covariant getter-over-storage (including the docs' own
 - Or scope a PHPStan ignore to the generated getter in your `phpstan.neon`
   (e.g. `ignoreErrors` on `#Method .*::get\(\) should return.*but returns mixed#`).
 - Or narrow inside the getter body so PHPStan can prove the type, e.g.
-  `assert($this->item instanceof Fruit); return $this->item;` (only viable when a
-  concrete bound is known).
+  `assert($el instanceof Fruit); return $el;` (only viable when a concrete bound
+  is known).
 
 The construction side is unaffected — the constructor parameter keeps its real
 type and is runtime-type-checked.

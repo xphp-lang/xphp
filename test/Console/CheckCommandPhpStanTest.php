@@ -68,6 +68,33 @@ final class CheckCommandPhpStanTest extends TestCase
         self::assertStringStartsWith('phpstan.', $boxError[0]['code']);
     }
 
+    public function testCovariantPrivatePropertyGetterIsPhpStanClean(): void
+    {
+        // A covariant single-value container that stores its element in a real-typed
+        // `private T` property emits a `get(): Banana` over a `private Banana $item`
+        // field — which PHPStan can prove. Unlike an `array`-backed collection (whose
+        // getter returns `mixed` and trips the pass), this shape is fully clean. Run
+        // with the same level-5 config that catches the analogous `returns mixed`
+        // error, so a clean result is a real proof, not a too-lax level.
+        $tester = $this->tester();
+        $exit = $tester->execute([
+            'source' => $this->privatePropertyFixtureDir(),
+            '--phpstan-bin' => $this->bin,
+            '--phpstan-config' => $this->level5Config(),
+            '--format' => 'json',
+        ]);
+
+        /** @var array{diagnostics: list<array{source: string}>} $decoded */
+        $decoded = json_decode($tester->getDisplay(), true, flags: JSON_THROW_ON_ERROR);
+        $phpstan = array_values(array_filter(
+            $decoded['diagnostics'],
+            static fn (array $d): bool => $d['source'] === 'phpstan',
+        ));
+
+        self::assertSame([], $phpstan, 'private-T covariant getter must produce no PHPStan diagnostics');
+        self::assertSame(0, $exit);
+    }
+
     public function testNoPhpstanFlagSkipsThePassAndStaysClean(): void
     {
         $tester = $this->tester();
@@ -137,6 +164,12 @@ final class CheckCommandPhpStanTest extends TestCase
     {
         return realpath(__DIR__ . '/../fixture/check/' . $fixture . '/source')
             ?: throw new RuntimeException("Fixture missing: {$fixture}");
+    }
+
+    private function privatePropertyFixtureDir(): string
+    {
+        return realpath(__DIR__ . '/../fixture/compile/generic_covariant_private_property/source')
+            ?: throw new RuntimeException('private-property fixture missing');
     }
 
     private function level5Config(): string

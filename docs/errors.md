@@ -167,8 +167,11 @@ allowed for <covariant|contravariant> variance.
 
 `<position>` is the forbidding position — e.g. `method parameter`,
 `method return`, `mutable property`, `readonly property`, or
-`by-reference parameter`. A **by-reference parameter** (`T &$x`) is invariant
-(it is read and written back), so neither `+T` nor `-T` is allowed there.
+`by-reference parameter`. A property only forbids variance when it is
+**public or protected**; a *private* property (declared or promoted) is exempt,
+because PHP doesn't type-check private slots across the `extends` chain. A
+**by-reference parameter** (`T &$x`) is invariant (it is read and written back),
+so neither `+T` nor `-T` is allowed there.
 
 ### Variant class declared `final`
 

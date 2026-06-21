@@ -54,13 +54,15 @@ variant class cannot be `final`. Rather than silently strip `final` from the gen
 specializations (which would make `ReflectionClass::isFinal()` lie about them), xphp
 **rejects** `final` on a `+T`/`-T` class at compile time.
 
-The relaxation is narrow. **Properties stay strictly invariant** — mutable, `readonly`,
-and *promoted* constructor parameters (which are properties). PHP makes property types
-invariant across an `extends` chain (`Type of Child::$item must be …`), so a `T`-typed
+The relaxation is narrow. **Visible (public/protected) properties stay strictly
+invariant** — mutable, `readonly`, and public/protected *promoted* constructor parameters
+(which are visible properties). PHP makes property types invariant across an `extends`
+chain *for visible members* (`Type of Child::$item must be …`), so a `T`-typed visible
 property genuinely fatals — there is no way to carry a real `T` there. Such a property is
-rejected at compile time (not erased); store elements in a plain `array`/`mixed` backing
-field and expose them through a covariant `get(): T`. Non-bare shapes in a constructor
-parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rejected.
+rejected at compile time (not erased). A **private** property is the exception — PHP does
+not type-check private slots across the chain, so it carries a real `T` soundly; see
+[ADR-0015](0015-variance-markers-on-private-properties.md). Non-bare shapes in a
+constructor parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rejected.
 
 ### Consequences
 
@@ -68,18 +70,21 @@ parameter (`?T`, `Box<T>`, `T|X`) are not yet supported and stay rejected.
   enforced at runtime, remains usable covariantly (`ImmutableList<Banana>` where
   `ImmutableList<Fruit>` is expected), and never fatals at autoload.
 - Good: nothing is erased — the declared type survives into the emitted signature.
-- Trade-off: a `T`-typed property (mutable/`readonly`/promoted) is still rejected, because
-  PHP property invariance across the edge is unavoidable. Users hand-roll a `mixed`/`array`
-  backing field plus a covariant `get(): T`.
+- Trade-off: a `T`-typed *visible* (public/protected) property is rejected, because PHP
+  property invariance across the edge is unavoidable for visible members. A `T`-typed
+  *private* property is allowed (see [ADR-0015](0015-variance-markers-on-private-properties.md));
+  a *multi-element* collection still hand-rolls a `mixed`/`array` backing plus a covariant
+  `get(): T`, since many elements can't live in one `private T` slot.
 - Trade-off: richer constructor-parameter shapes (`?T`, `Box<T>`, `T|X`) aren't supported
   yet, only a bare variance-marked type parameter.
 
 ### Confirmation
 
 `VariancePositionValidator::checkMethod` allows a plain constructor parameter of a variant
-class at any variance (a promoted one stays invariant); `InnerVarianceValidator` skips a
-bare variance-marked constructor parameter (`isExemptVariantConstructorParam`) and still rejects
-the non-bare shapes. [`Specializer::specialize`](../../src/Transpiler/Monomorphize/Specializer.php)
+class at any variance (a public/protected promoted one stays invariant; a private promoted
+one is exempt — see [ADR-0015](0015-variance-markers-on-private-properties.md));
+`InnerVarianceValidator` skips a bare variance-marked constructor parameter
+(`isExemptVariantConstructorParam`) and still rejects the non-bare shapes. [`Specializer::specialize`](../../src/Transpiler/Monomorphize/Specializer.php)
 substitutes the real type into the constructor parameter — no erasure step. Tests compile a
 covariant `ImmutableList<+T>` and assert each specialization's constructor keeps its real
 element type, that the chain autoloads with **no** fatal, that an `ImmutableList<Banana>`
@@ -92,7 +97,9 @@ autoloads and constructs equally cleanly.
 
 - Good: keeps the real type and a runtime check; no autoload fatal; localized to the
   specializer (just normal substitution).
-- Bad: properties still can't carry a real `T`; non-bare constructor shapes not yet supported.
+- Bad: visible (public/protected) properties still can't carry a real `T` (a *private* one
+  can — [ADR-0015](0015-variance-markers-on-private-properties.md)); non-bare constructor
+  shapes not yet supported.
 
 ### Variance-erased constructor parameter
 

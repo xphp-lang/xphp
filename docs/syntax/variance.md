@@ -14,12 +14,12 @@ declare(strict_types=1);
 
 namespace App;
 
-// Covariant: T appears in return positions (and a plain constructor parameter).
-// The backing field is `mixed`, not `T` — a `T`-typed *property* is invariant
-// and would be rejected (see the rules below).
+// Covariant: T appears in return positions (and in a private property).
+// A *private* `T` property is variance-exempt — PHP doesn't type-check private
+// slots across the `extends` chain — so the backing field keeps its real type
+// (a public/protected `T` property would be rejected; see the rules below).
 class Producer<+T> {
-    private mixed $item;
-    public function __construct(T $item) { $this->item = $item; }
+    public function __construct(private T $item) {}
     public function get(): T { return $this->item; }
 }
 
@@ -54,12 +54,12 @@ specializations:
 namespace XPHP\Generated\App\Producer;
 
 class T_<hash-of-fruit> implements \App\Producer {
-    public function __construct(\App\Fruit $item) { ... }   // real type, runtime-checked
+    public function __construct(private \App\Fruit $item) { ... }   // real type, runtime-checked
     public function get(): \App\Fruit { ... }
 }
 
 class T_<hash-of-banana> extends T_<hash-of-fruit> implements \App\Producer {
-    public function __construct(\App\Banana $item) { ... }  // narrowed; `__construct` is LSP-exempt
+    public function __construct(private \App\Banana $item) { ... }  // narrowed; `__construct` is LSP-exempt and the private slot isn't checked across the edge
     public function get(): \App\Banana { ... }
 }
 ```
@@ -81,17 +81,29 @@ Position rules, enforced at compile time over the collected definitions
 | Method parameter                      | ❌            | ✅            |
 | By-reference parameter (`T &$x`)      | ❌            | ❌            |
 | Constructor parameter (plain)         | ✅            | ✅            |
-| Mutable property                      | ❌            | ❌            |
-| Readonly property                     | ❌            | ❌            |
-| Promoted constructor property         | ❌            | ❌            |
+| Private property (mutable/readonly)   | ✅            | ✅            |
+| Private promoted constructor property | ✅            | ✅            |
+| Public/protected property             | ❌            | ❌            |
+| Public/protected promoted property    | ❌            | ❌            |
 | Bound expression                      | ❌            | ❌            |
 | Default expression                    | ❌            | ❌            |
 
-The strict-invariance rule on **properties** (mutable, readonly, and
-promoted-constructor) is forced by the runtime model: xphp emits real
-`extends` chains between specialised classes, and PHP enforces invariant
-property types across those chains regardless of `readonly` — a covariant
-property would PHP-fatal at autoload when the variance edge lands.
+The strict-invariance rule on **public/protected properties** (mutable,
+readonly, and promoted-constructor) is forced by the runtime model: xphp emits
+real `extends` chains between specialised classes, and PHP enforces invariant
+property types across those chains for visible members regardless of `readonly`
+— a covariant one would PHP-fatal at autoload when the variance edge lands.
+
+A **private property** (declared or promoted, mutable or readonly) is the
+exception: PHP does **not** type-check private property types across an `extends`
+chain — a private slot is per-declaring-scope and is never inherited — so each
+specialisation keeps its own real-typed field (`private Banana $item` /
+`private Fruit $item`) with no fatal. A private member is also invisible to the
+externally-visible variance surface, so it may carry any variance soundly, and
+xphp emits it with its **real** substituted type. (Detection is by the `private`
+visibility bit: a `readonly`-only promoted parameter is implicitly public, and an
+asymmetric `public private(set)` property is externally readable, so both stay
+strictly invariant.)
 
 A **by-reference parameter** (`function f(T &$x)`) is likewise invariant: the
 caller's variable is both read and written back through the reference, so it acts
@@ -106,8 +118,10 @@ the same reason Kotlin exempts constructor parameters from variance checks), and
 PHP exempts `__construct` from LSP signature checks, so the specialisations'
 constructors may legitimately differ across the edge. That's what lets a
 covariant immutable collection take *type-checked* construction input (see
-below). A *promoted* constructor parameter is a property, so it stays strictly
-invariant.
+below). A *promoted* constructor parameter is a property, so it follows the
+property rules above: a public/protected one stays strictly invariant, while a
+**private** one is exempt and keeps its real type — which is exactly what makes
+the covariant single-value `Producer<+T>` shape at the top of this page work.
 
 ### Covariant immutable collections (typed construction)
 
@@ -141,11 +155,15 @@ anchor, so `final` on a `+T`/`-T` class is rejected at compile time.)
 > keeps its real type, PHP enforces it at construction: building an
 > `ImmutableList<Book>` from a non-`Book` throws a `TypeError`. You get both
 > covariance *and* a real construction-time guarantee — nothing is erased. The
-> one position that can't carry a real `T` is a stored **property** (PHP property
-> types are invariant across the edge), so hold elements in a plain `array`/`mixed`
-> backing field and expose them through a covariant `get(): T`, as above. (That
-> `mixed`-backed getter compiles and runs fine, but trips the optional `xphp check`
-> PHPStan pass — see [caveats](../caveats.md#covariant-getters-trip-the-xphp-check-phpstan-pass).)
+> one property shape that can't carry a real `T` is a **non-private** (public or
+> protected) stored property — PHP enforces invariant property types across the
+> edge for visible members. A **private** stored property *can* hold a real `T`
+> (see the single-value `Producer<+T>` at the top), so a covariant single-value
+> container needs no `mixed` backing at all. A *multi-element* collection like
+> `ImmutableList` is different: many elements live in one `private array $items`
+> field, and `array` is `mixed` to PHPStan — so the covariant `get(): T` over an
+> `array` backing compiles and runs fine but trips the optional `xphp check`
+> PHPStan pass (see [caveats](../caveats.md#covariant-getters-over-an-array-backing-trip-the-xphp-check-phpstan-pass)).
 
 ### Inner-template variance composition
 
