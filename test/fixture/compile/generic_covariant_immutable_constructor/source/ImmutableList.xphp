@@ -8,8 +8,9 @@ namespace App\CovariantConstructor;
 // constructor parameter keeps its REAL type on every specialization
 // (`Fruit ...` / `Banana ...`); PHP exempts `__construct` from LSP, so the
 // `extends` chain (ImmutableList<Banana> extends ImmutableList<Fruit>) is
-// valid and construction is runtime-type-checked.
-final class ImmutableList<+T>
+// valid and construction is runtime-type-checked. Not `final` — a variant class
+// can't be (its specializations are linked by `extends` edges).
+class ImmutableList<+T>
 {
     private array $items;
 

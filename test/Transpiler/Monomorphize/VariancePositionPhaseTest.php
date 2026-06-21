@@ -88,6 +88,12 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function pipe(): array\n    {\n        \$f = function (T &\$x) {};\n        return [];\n    }\n}\n",
             ['by-reference parameter'],
         ];
+        // A variant class can't be `final`: its specializations are linked by
+        // real `extends` edges, which a `final` class can't anchor.
+        yield 'final variant class' => [
+            "<?php\nnamespace App;\nfinal class Producer<+T>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
+            ['cannot be declared `final`'],
+        ];
     }
 
     /**

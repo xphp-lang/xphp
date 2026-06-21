@@ -140,7 +140,6 @@ final readonly class Compiler
                 $specialized = $this->specializer->specialize(
                     $definition->templateAst,
                     $substitution,
-                    $definition->typeParams,
                 );
 
                 $specializedAsts[$generatedFqn] = $specialized;

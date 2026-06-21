@@ -13,6 +13,7 @@ use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
 use PhpParser\Node\Param;
+use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Property;
@@ -142,6 +143,20 @@ final class VariancePositionValidator
     private function collect(ClassLike $node, array $params): void
     {
         $declarationLine = $node->getStartLine();
+
+        // 0. A variant class cannot be `final`. Its specializations participate
+        // in real `extends` subtype edges, which a `final` class cannot anchor.
+        // Rejecting it (rather than silently stripping `final` from the generated
+        // class — which would make ReflectionClass::isFinal lie) keeps source and
+        // emitted output honest. Only reached for variant definitions, since
+        // assertPositions early-returns when there are no variance markers.
+        if ($node instanceof Class_ && $node->isFinal()) {
+            // One string literal (not concatenated) keeps the message stable.
+            $this->record(
+                'A variant class cannot be declared `final`: its specializations participate in `extends` subtype edges that a `final` class cannot anchor. Remove `final`.',
+                $declarationLine,
+            );
+        }
 
         // 1. Bound and default positions are invariant by RFC.
         foreach ($params as $param) {

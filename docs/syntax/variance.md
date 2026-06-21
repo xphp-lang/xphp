@@ -109,7 +109,7 @@ A covariant container can take its element type in its constructor — the
 backbone of a read-only `List<out T>`-style collection:
 
 ```php
-final class ImmutableList<+T> {
+class ImmutableList<+T> {
     private array $items;
     public function __construct(T ...$items) { $this->items = $items; }
     public function get(int $i): T { return $this->items[$i]; }
@@ -127,8 +127,9 @@ The constructor parameter keeps its real element type on every specialisation
 (`Book ...$items` on `ImmutableList<Book>`, `Product ...$items` on
 `ImmutableList<Product>`), and `ImmutableList<Book>` still `extends
 ImmutableList<Product>` without a PHP fatal — PHP doesn't signature-check
-`__construct` across the chain. (`final` is preserved in your source; xphp drops
-it only on the internal generated specialisations so the edge can land.)
+`__construct` across the chain. (A variant class **cannot be declared `final`**:
+its specializations are linked by `extends` edges, which a `final` class can't
+anchor, so `final` on a `+T`/`-T` class is rejected at compile time.)
 
 > ✅ **Construction is runtime-type-checked.** Because the constructor parameter
 > keeps its real type, PHP enforces it at construction: building an

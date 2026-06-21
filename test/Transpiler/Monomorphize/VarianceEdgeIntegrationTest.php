@@ -78,8 +78,9 @@ final class VarianceEdgeIntegrationTest extends TestCase
             self::assertStringNotContainsString('mixed ...$items', $combined, 'nothing is erased to mixed');
             // Exactly one specialization extends the other — the covariant edge.
             self::assertSame(1, $extendsEdges, 'ImmutableList<Banana> extends ImmutableList<Fruit>');
-            // `final` is stripped from variant-class specializations so the edge's
-            // parent isn't a final class (which would PHP-fatal at autoload).
+            // A variant class can't be `final` (rejected at compile time), so no
+            // specialization is `final` — the edge's parent isn't a final class
+            // (which would PHP-fatal at autoload).
             self::assertStringNotContainsString('final class', $combined);
 
             $fixture->registerAutoload('App\\CovariantConstructor');

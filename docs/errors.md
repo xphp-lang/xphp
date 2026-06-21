@@ -170,6 +170,16 @@ allowed for <covariant|contravariant> variance.
 `by-reference parameter`. A **by-reference parameter** (`T &$x`) is invariant
 (it is read and written back), so neither `+T` nor `-T` is allowed there.
 
+### Variant class declared `final`
+
+```
+A variant class cannot be declared `final`: its specializations participate
+in `extends` subtype edges that a `final` class cannot anchor. Remove `final`.
+```
+
+A `+T` / `-T` class is specialized into a chain of `extends`-linked classes; a
+`final` class can't be a parent in that chain. Drop `final` from the declaration.
+
 ### Bound violations
 
 ```

@@ -7,7 +7,6 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
-use PhpParser\Modifiers;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassLike;
@@ -41,11 +40,6 @@ final class Specializer
 {
     /**
      * @param array<string, TypeRef> $substitution Type-param name → concrete TypeRef.
-     * @param list<TypeParam> $typeParams The template's type-params. Used only to
-     *   detect whether the class is variant, so `final` can be stripped from its
-     *   specializations (a `final` parent can't anchor a variance `extends` edge).
-     *   Empty (the default) keeps `final` — fine for callers, e.g. unit tests, that
-     *   don't have the params.
      *
      * Type parameters in every position — including constructor parameters — are
      * substituted to their *concrete* type; nothing is erased. PHP exempts
@@ -54,12 +48,14 @@ final class Specializer
      * variance `extends` chain, giving a real runtime type check at construction.
      * A `T`-typed *property* (mutable, readonly, or promoted) is the one shape that
      * can't cross the edge — PHP property types are invariant — and is rejected
-     * upstream by the variance-position validator, not erased here.
+     * upstream by the variance-position validator, not erased here. A `final`
+     * variant class is likewise rejected upstream (a `final` class can't anchor a
+     * variance `extends` edge), so no `final` needs stripping here.
      *
      * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
      * is the single source of truth for the final shortname (derived from the generated FQCN).
      */
-    public function specialize(ClassLike $template, array $substitution, array $typeParams = []): ClassLike
+    public function specialize(ClassLike $template, array $substitution): ClassLike
     {
         $originalTemplateFqn = $template->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
 
@@ -81,29 +77,9 @@ final class Specializer
             }
         }
 
-        // A variant class's specializations participate in `extends` subtype
-        // edges (VarianceEdgeEmitter); a `final` parent in that chain would
-        // PHP-fatal at autoload. These generated classes are internal — user
-        // code references the marker interface or the turbofish call site, never
-        // these names — so dropping `final` here is invisible and safe.
-        if ($cloned instanceof Class_ && self::hasVariantParam($typeParams)) {
-            $cloned->flags &= ~Modifiers::FINAL;
-        }
-
         self::runSubstitutingVisitor($cloned, $substitution);
 
         return $cloned;
-    }
-
-    /** @param list<TypeParam> $typeParams */
-    private static function hasVariantParam(array $typeParams): bool
-    {
-        foreach ($typeParams as $typeParam) {
-            if ($typeParam->variance !== Variance::Invariant) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

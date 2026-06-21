@@ -49,9 +49,10 @@ specializations' constructors may legitimately differ (`Banana ...$items` on the
 construction is runtime-type-checked** — building an `ImmutableList<Banana>` from a
 non-`Banana` throws a `TypeError`.
 
-The `final`-strip corollary stands: a `final` class can't be a parent in an `extends`
-edge, so `final` is dropped from variant-class specializations (internal generated
-classes; invisible to user code).
+A corollary about `final`: a `final` class can't be a parent in an `extends` edge, so a
+variant class cannot be `final`. Rather than silently strip `final` from the generated
+specializations (which would make `ReflectionClass::isFinal()` lie about them), xphp
+**rejects** `final` on a `+T`/`-T` class at compile time.
 
 The relaxation is narrow. **Properties stay strictly invariant** — mutable, `readonly`,
 and *promoted* constructor parameters (which are properties). PHP makes property types
