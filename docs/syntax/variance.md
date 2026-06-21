@@ -70,6 +70,22 @@ including reflection and `instanceof`.
 
 For contravariant `-T`, the edge flips: `Consumer<Fruit> extends Consumer<Banana>`.
 
+### Unprovable variance edges
+
+An `extends` edge only emits when the compiler can **prove** the element relationship
+from the source set. If an element type is not in the compiled `.xphp` source set and
+isn't a recognized PHP built-in — typically a plain-`.php` domain class — the compiler
+can't prove it, so the edge is silently skipped. The specializations still work in
+isolation, but they aren't linked: passing a `Producer<Banana>` where a
+`Producer<Fruit>` is expected then fails at **runtime** with a `TypeError`, because the
+covariant edge never formed.
+
+`xphp check` reports this as a **non-failing warning** at the instantiation site
+(`xphp.variance_edge_unprovable`), naming the type and pointing at "add it to the source
+set." It mirrors the bounds "cannot prove satisfaction" check for the same condition (see
+[type bounds](type-bounds.md)); the fix is the same — include the element type in the
+source set the compiler builds its hierarchy from, so the edge can be proven and emitted.
+
 ## Rules
 
 Position rules, enforced at compile time over the collected definitions

@@ -60,6 +60,53 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(VariancePositionValidator::CODE_VARIANCE_POSITION, $diagnostics->all()[0]->code);
     }
 
+    public function testVarianceEdgeUnprovableIsReportedAsNonFailingWarning(): void
+    {
+        // A covariant template instantiated over an element type not in the source set:
+        // the `extends` edge is silently dropped today; check now reports it as a
+        // non-failing Warning at the instantiation site (so exit stays 0).
+        $diagnostics = $this->check('variance_edge_unprovable');
+
+        self::assertFalse($diagnostics->hasErrors(), 'a warning must not fail the gate');
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_VARIANCE_EDGE_UNPROVABLE, $d->code);
+        self::assertSame(\XPHP\Diagnostics\Severity::Warning, $d->severity);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+        self::assertStringContainsString('Book', $d->message);
+        self::assertStringContainsString('not in the source set', $d->message);
+    }
+
+    public function testVarianceEdgeProvableTypesProduceNoWarning(): void
+    {
+        // Same covariant template, but the element type IS declared in the source set —
+        // its edges are provable, so nothing is reported.
+        $diagnostics = $this->check('variance_edge_provable');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testCompileDoesNotFailOnUnprovableVarianceEdge(): void
+    {
+        // Compile has no warning sink; the unprovable edge is skipped exactly as before
+        // (autoload-safe), and compilation succeeds without throwing.
+        $work = sys_get_temp_dir() . '/xphp-check-compile-' . uniqid('', true);
+        mkdir($work, 0o755, true);
+        try {
+            $result = $this->buildCompiler()->compile(
+                $this->sources('variance_edge_unprovable'),
+                $this->sourceDir('variance_edge_unprovable'),
+                $work . '/dist',
+                $work . '/cache',
+            );
+            self::assertGreaterThan(0, $result->generatedCount);
+        } finally {
+            self::rrmdir($work);
+        }
+    }
+
     public function testCompileStillThrowsOnVariancePositionViolation(): void
     {
         $this->expectException(RuntimeException::class);

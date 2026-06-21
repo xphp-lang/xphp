@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\VarianceEdgeUnprovable;
+
+// `Book` is not declared in any `.xphp` in this source set (it would be a plain-`.php`
+// domain class). So the covariant element type can't be proven against any other
+// specialization and the `extends` edge is silently dropped — reported as a warning.
+$p = new Producer::<Book>();

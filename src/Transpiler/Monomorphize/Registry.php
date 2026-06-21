@@ -27,6 +27,7 @@ final class Registry
     public const CODE_TOO_MANY_TYPE_ARGUMENTS = 'xphp.too_many_type_arguments';
     public const CODE_DEFAULT_BOUND_VIOLATION = 'xphp.default_bound_violation';
     public const CODE_UNDEFINED_TEMPLATE = 'xphp.undefined_template';
+    public const CODE_VARIANCE_EDGE_UNPROVABLE = 'xphp.variance_edge_unprovable';
 
     /**
      * All specialized classes live under this namespace prefix; the full target FQCN
@@ -128,6 +129,7 @@ final class Registry
         }
 
         $this->validateBounds($templateFqn, $args, $callSite);
+        $this->validateVarianceEdgeProvability($templateFqn, $args, $callSite);
 
         $generatedFqn = self::generatedFqn($templateFqn, $args, $this->hashLength);
         $template = ltrim($templateFqn, '\\');
@@ -520,6 +522,98 @@ final class Registry
             self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
             $this->diagnostics,
             $callSite,
+        );
+    }
+
+    /**
+     * Warn (don't fail) when a variant template is instantiated over an element type the
+     * compiler can't see, so its covariant/contravariant `extends` edge is silently dropped.
+     *
+     * A covariant/contravariant `extends` edge between two specializations only emits when
+     * `TypeHierarchy::isSubtype` can *prove* the element relationship. When an element type is
+     * not in the `.xphp` source set and not a PHP built-in, that verdict is `null` and
+     * `VarianceEdgeEmitter` skips the edge — autoload-safe, but the author gets no signal and
+     * covariance degrades into a runtime `TypeError` far from the cause. The *bounds* path
+     * already rejects the same `null` verdict loudly; this mirrors that contract for variance
+     * with a non-failing Warning.
+     *
+     * Per-instantiation, single-endpoint: each unprovable element type is flagged at its own
+     * instantiation site, which collectively covers every unprovable edge while keeping the
+     * call-site location (a deferred pass would lose it — `GenericInstantiation` doesn't retain
+     * it). Leaf-only: a nested same-template generic arg (`Producer<Box<Book>>`) is covered when
+     * its own recursive instantiation is recorded above, where `Box`'s own `Book` arg is checked.
+     *
+     * A Warning only has a sink in check-mode (a collector is attached); `xphp compile` builds
+     * the Registry without one, and its edge-skipping output is unchanged. (Note: `CallSiteRewriter`
+     * re-records instantiations location-less in compile Phase 3 — harmless while compile has no
+     * sink; a future compile sink must account for it.)
+     *
+     * @param list<TypeRef> $args
+     */
+    private function validateVarianceEdgeProvability(string $templateFqn, array $args, ?SourceLocation $callSite = null): void
+    {
+        if ($this->hierarchy === null || $this->diagnostics === null) {
+            return;
+        }
+        $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
+        if ($definition === null || count($definition->typeParams) !== count($args)) {
+            return;
+        }
+        foreach ($definition->typeParams as $i => $param) {
+            // Only covariant/contravariant positions form `extends` edges; an invariant
+            // position requires identical args, so an unprovable type loses no edge there.
+            if ($param->variance === Variance::Invariant) {
+                continue;
+            }
+            $arg = $args[$i];
+            // Scalars and type-params never form class edges; a generic arg is leaf-only-deferred
+            // (its inner leaves are checked when its own instantiation is recorded).
+            if ($arg->isScalar || $arg->isTypeParam || $arg->isGeneric()) {
+                continue;
+            }
+            // A type known to the hierarchy (in-source or a PHP built-in) yields a provable
+            // true/false verdict — only the "not declared" case is the unprovable `null`.
+            if ($this->hierarchy->isDeclared($arg->name)) {
+                continue;
+            }
+            $this->diagnostics->add(new Diagnostic(
+                Severity::Warning,
+                self::CODE_VARIANCE_EDGE_UNPROVABLE,
+                self::varianceEdgeUnprovableMessage(
+                    self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+                    $param->name,
+                    $param->variance,
+                    $arg->toDisplayString(),
+                ),
+                $callSite,
+            ));
+        }
+    }
+
+    /**
+     * User-facing text for an unprovable variance edge. Mirrors the bounds "not in the source
+     * set … cannot prove" phrasing so the two read consistently; kept as its own builder because
+     * the variance message names the parameter's variance rather than a bound.
+     */
+    private static function varianceEdgeUnprovableMessage(
+        string $instantiationLabel,
+        string $paramName,
+        Variance $variance,
+        string $typeDisplay,
+    ): string {
+        $marker = $variance === Variance::Covariant ? '+' : '-';
+        return sprintf(
+            "Variance edge cannot be proven while instantiating %s.\n"
+            . "  type parameter %s%s is %s, but %s is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),\n"
+            . "  so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the %s relationship silently does not apply at runtime.\n\n"
+            . "  Add %s to the source set the hierarchy is built from to enable the edge.",
+            $instantiationLabel,
+            $marker,
+            $paramName,
+            $variance->value,
+            $typeDisplay,
+            $variance->value,
+            $typeDisplay,
         );
     }
 

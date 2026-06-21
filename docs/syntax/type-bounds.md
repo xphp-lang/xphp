@@ -83,7 +83,9 @@ once it sees `public int $value`.
 - A concrete arg that the compiler can't reason about (not in the
   source set, not a built-in) fails with a clear "cannot prove
   satisfaction" message — widen the bound or add the type to the
-  source set.
+  source set. The same "not in the source set" condition on a
+  *variance* type argument is a non-failing warning rather than an
+  error — see [variance](variance.md#unprovable-variance-edges).
 - Bounds are an **invariant position** for variance markers — `+T`
   or `-T` are rejected inside a bound expression. See
   [variance](variance.md).
