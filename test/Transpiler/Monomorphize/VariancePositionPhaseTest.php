@@ -54,6 +54,31 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(public T \$item) {}\n}\n",
             ['constructor parameter'],
         ];
+        // A *protected* property/promoted property is also a visible property (PHP
+        // enforces invariant types across the chain for it), so it stays rejected —
+        // only PRIVATE is exempt. These pin the PRIVATE-bit detection against a
+        // mutant that swaps the visibility bit for PROTECTED.
+        yield 'covariant in protected promoted constructor property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(protected T \$item) {}\n}\n",
+            ['constructor parameter'],
+        ];
+        yield 'covariant in protected mutable property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    protected T \$item;\n}\n",
+            ['mutable property'],
+        ];
+        // Asymmetric visibility (PHP 8.4): a `public private(set)` property is
+        // externally *readable* through an upcast reference (PRIVATE_SET sets a
+        // separate bit, not PRIVATE), so it's on the visible variance surface and
+        // stays strictly invariant. Only a truly *private* slot is exempt. These
+        // pin the PRIVATE-bit detection against a mutant that swaps it for PRIVATE_SET.
+        yield 'covariant in public private(set) promoted constructor property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(public private(set) T \$item) {}\n}\n",
+            ['constructor parameter'],
+        ];
+        yield 'covariant in public private(set) declared property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public private(set) T \$item;\n}\n",
+            ['mutable property'],
+        ];
         yield 'covariant in nested closure parameter' => [
             "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function emit(): array\n    {\n        \$f = function (T \$x) {};\n        return [];\n    }\n}\n",
             ['nested closure/arrow parameter'],
@@ -97,6 +122,42 @@ final class VariancePositionPhaseTest extends TestCase
     }
 
     /**
+     * Sources that must pass variance-position validation. A PRIVATE property
+     * (declared or promoted; mutable or readonly; bare or inner-generic) is exempt
+     * from the property-invariance rule: PHP doesn't type-check private slots across
+     * the `extends` chain, and a private slot is invisible to the variance surface.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function allowedSources(): iterable
+    {
+        yield 'covariant in private promoted constructor property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(private T \$item) {}\n    public function get(): T { return \$this->item; }\n}\n",
+        ];
+        yield 'covariant in private declared property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    private T \$item;\n    public function get(): T { return \$this->item; }\n}\n",
+        ];
+        yield 'covariant in private readonly declared property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    private readonly T \$item;\n    public function get(): T { return \$this->item; }\n}\n",
+        ];
+        yield 'covariant in private readonly promoted property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(private readonly T \$item) {}\n    public function get(): T { return \$this->item; }\n}\n",
+        ];
+        yield 'contravariant in private promoted constructor property' => [
+            "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function __construct(private T \$item) {}\n    public function accept(T \$x): void {}\n}\n",
+        ];
+        // Inner-generic private members are exempt too — the inner-variance walk
+        // skips them, so `private Container<T>` doesn't trip composition even though
+        // a *visible* `Container<T>` property would (Container's slot is invariant).
+        yield 'covariant in private inner-generic declared property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    private Box<T> \$item;\n    public function get(): T { throw new \\LogicException; }\n}\n",
+        ];
+        yield 'covariant in private inner-generic promoted property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(private Box<T> \$item) {}\n    public function get(): T { throw new \\LogicException; }\n}\n",
+        ];
+    }
+
+    /**
      * @param list<string> $fragments
      */
     #[DataProvider('rejectedSources')]
@@ -112,6 +173,40 @@ final class VariancePositionPhaseTest extends TestCase
                 self::assertStringContainsString($fragment, $e->getMessage());
             }
         }
+    }
+
+    /**
+     * A private property carrying a variance marker must pass BOTH the position
+     * check and the inner-variance composition check (the latter for the
+     * inner-generic cases). Neither phase may throw.
+     */
+    #[DataProvider('allowedSources')]
+    public function testPrivatePropertyVarianceIsAllowed(string $source): void
+    {
+        $registry = $this->registryFor($source);
+
+        $registry->validateVariancePositions(); // must NOT throw
+        $registry->validateInnerVariance();     // must NOT throw
+
+        self::assertTrue(true);
+    }
+
+    public function testPrivatePromotedDoesNotShortCircuitLaterConstructorParam(): void
+    {
+        // A private promoted constructor property is skipped in the inner-variance
+        // walk — but the skip must `continue`, not `break`: a LATER constructor
+        // param that DOES violate (an inner-generic `Box<T>`, T through an invariant
+        // slot) must still be reached and rejected. The position phase passes both
+        // params (a bare/inner-generic ctor param is position-allowed in a variant
+        // class), so inner-variance is the phase that must catch the trailing one.
+        $source = "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function __construct(private T \$first, Box<T> \$second) {}\n}\n";
+        $registry = $this->registryFor($source);
+
+        $registry->validateVariancePositions(); // must NOT throw — both params position-allowed
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Variance violation');
+        $registry->validateInnerVariance();
     }
 
     public function testViolationIsCollectedWithMemberLineInCheckMode(): void

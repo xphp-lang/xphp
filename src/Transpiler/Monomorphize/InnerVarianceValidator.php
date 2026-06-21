@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Modifiers;
 use PhpParser\Node;
 use PhpParser\Node\ComplexType;
 use PhpParser\Node\Identifier;
@@ -111,14 +112,30 @@ final class InnerVarianceValidator
                 // below skips promoted ones (they're `Param`, not `Property`),
                 // so each promoted property is walked exactly once.
                 //
-                // Exception: a non-promoted constructor param typed by a bare
-                // covariant/contravariant type-param is allowed — a constructor
-                // parameter isn't part of the externally-visible variance surface
-                // (constructors aren't called through upcast references), and PHP
-                // exempts `__construct` from LSP, so the real type is emitted with
-                // no hazard. Skip it. Inner-generic constructor params (e.g. `Container<T>`)
-                // are still checked, as are promoted params (they're properties).
+                // Two exemptions skip a param entirely:
+                //  - A non-promoted constructor param typed by a bare
+                //    covariant/contravariant type-param — a constructor parameter
+                //    isn't part of the externally-visible variance surface
+                //    (constructors aren't called through upcast references), and PHP
+                //    exempts `__construct` from LSP, so the real type is emitted with
+                //    no hazard.
+                //  - A *private* promoted property (handled just below) — PHP doesn't
+                //    type-check private slots across the chain.
+                // Inner-generic constructor params (e.g. `Container<T>`) and
+                // visible (public/protected) promoted properties are still checked.
                 if ($isConstructor && $this->isExemptVariantConstructorParam($param)) {
+                    continue;
+                }
+                // A *private* promoted constructor property is exempt: PHP does not
+                // type-check private property types across an `extends` chain, and a
+                // private slot is invisible to the variance surface, so it imposes no
+                // composition constraint regardless of its (possibly inner-generic)
+                // shape. Detect via the PRIVATE bit — a readonly-only promoted param
+                // (no visibility bit, implicitly public) is NOT skipped. This is a
+                // separate skip from `isExemptVariantConstructorParam` on purpose:
+                // that helper matches only bare single-segment type-params, so it
+                // would still (wrongly) walk `private Container<T> $x`.
+                if ($isConstructor && ($param->flags & Modifiers::PRIVATE) !== 0) {
                     continue;
                 }
                 // A by-reference parameter is read AND written back, so it's an
@@ -136,7 +153,11 @@ final class InnerVarianceValidator
             }
         }
         foreach ($definition->templateAst->getProperties() as $prop) {
-            if ($prop->type !== null) {
+            // A private property is exempt (PHP doesn't type-check private slots
+            // across the `extends` chain; invisible to the variance surface), so it
+            // imposes no inner-variance constraint regardless of shape — only a
+            // *visible* (public/protected) typed property is walked.
+            if (!$prop->isPrivate() && $prop->type !== null) {
                 $this->walkPhpType($prop->type, Variance::Invariant, $label, null, null);
             }
         }

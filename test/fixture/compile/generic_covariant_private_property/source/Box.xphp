@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\CovariantPrivateProperty;
+
+// Covariant container holding its element in a PRIVATE promoted property of
+// type `T`. This is the natural `class Producer<+T>` shape — and it is sound:
+// PHP does NOT type-check private property types across an `extends` chain (a
+// private slot is per-declaring-scope, never inherited), so the variance edge
+// `Box<Banana> extends Box<Fruit>` lands with NO autoload fatal even though the
+// specializations declare `private Banana $item` and `private Fruit $item`.
+// The constructor keeps its REAL element type on each specialization (PHP
+// exempts `__construct` from LSP), so construction is runtime-type-checked.
+// Not `final` — a variant class can't be (its specializations are linked by
+// `extends` edges).
+class Box<+T>
+{
+    public function __construct(private T $item)
+    {
+    }
+
+    public function get(): T
+    {
+        return $this->item;
+    }
+}

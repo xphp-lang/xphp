@@ -17,15 +17,19 @@ namespace XPHP\Transpiler\Monomorphize;
  *    a plain constructor parameter). `T1 <: T2` lifts to `Box<T2> <: Box<T1>`
  *    (flipped).
  *
- * Property positions (mutable AND readonly, including a *promoted* constructor
- * parameter), bounds, and defaults are strict-invariant for both `+T` and `-T`:
- * PHP enforces invariant property types across `extends` chains regardless of
- * `readonly`, so a covariance allowance there would PHP-fatal at autoload when
- * the variance edge emits. A **by-reference** parameter (`T &$x`) is also
- * invariant — it is read and written back, acting as input and output at once.
- * A plain (non-promoted, non-by-ref) constructor parameter, by contrast, may
- * carry any variance: a constructor isn't part of the visible variance surface
- * and PHP exempts `__construct` from LSP, so its real type is emitted.
+ * A **public/protected** property position (mutable AND readonly, including a
+ * public/protected *promoted* constructor parameter), bounds, and defaults are
+ * strict-invariant for both `+T` and `-T`: PHP enforces invariant property types
+ * across `extends` chains regardless of `readonly`, so a covariance allowance
+ * there would PHP-fatal at autoload when the variance edge emits. A **private**
+ * property (declared or promoted, mutable or readonly), by contrast, may carry
+ * any variance: PHP does not type-check private slots across the chain and a
+ * private slot is invisible to the variance surface, so the real substituted
+ * type is emitted soundly. A **by-reference** parameter (`T &$x`) is invariant —
+ * it is read and written back, acting as input and output at once. A plain
+ * (non-promoted, non-by-ref) constructor parameter may also carry any variance:
+ * a constructor isn't part of the visible variance surface and PHP exempts
+ * `__construct` from LSP, so its real type is emitted.
  *
  * String-backed so the registry JSON serializes cleanly.
  */

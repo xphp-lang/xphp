@@ -46,11 +46,14 @@ final class Specializer
      * `__construct` from LSP signature checks, so a `T`-typed constructor parameter
      * specializes to its real type (`Banana ...$items`) and stays valid across the
      * variance `extends` chain, giving a real runtime type check at construction.
-     * A `T`-typed *property* (mutable, readonly, or promoted) is the one shape that
-     * can't cross the edge — PHP property types are invariant — and is rejected
-     * upstream by the variance-position validator, not erased here. A `final`
-     * variant class is likewise rejected upstream (a `final` class can't anchor a
-     * variance `extends` edge), so no `final` needs stripping here.
+     * A `T`-typed *public/protected property* (mutable, readonly, or promoted) is the
+     * one shape that can't cross the edge — PHP enforces invariant property types across
+     * the chain for visible members — and is rejected upstream by the variance-position
+     * validator, not erased here. A `T`-typed *private* property DOES cross the edge and
+     * is substituted to its real type (PHP doesn't type-check private slots across the
+     * chain; each specialization re-emits its own field + accessor). A `final` variant
+     * class is likewise rejected upstream (a `final` class can't anchor a variance
+     * `extends` edge), so no `final` needs stripping here.
      *
      * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
      * is the single source of truth for the final shortname (derived from the generated FQCN).

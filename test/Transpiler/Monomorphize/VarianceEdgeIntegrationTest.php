@@ -90,6 +90,57 @@ final class VarianceEdgeIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testCovariantPrivatePropertyStoresRealTypeAndIsRuntimeChecked(): void
+    {
+        // A covariant container `Box<+T>` that stores its element in a PRIVATE
+        // promoted property of type `T`. Each specialization keeps the REAL slot
+        // type (`private Banana $item` / `private Fruit $item`), the variance edge
+        // `Box<Banana> extends Box<Fruit>` autoloads with NO fatal (PHP doesn't
+        // type-check private property types across the chain), a Banana box is
+        // usable where a Fruit box is expected, and construction is runtime-checked.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_covariant_private_property/source',
+            'variance-covariant-private-property',
+        );
+        try {
+            $specializationDir = $fixture->cacheDir . '/Generated/App/CovariantPrivateProperty/Box';
+            $files = glob($specializationDir . '/T_*.php') ?: [];
+            self::assertCount(2, $files, 'two Box specializations (Fruit, Banana)');
+
+            $combined = '';
+            $extendsEdges = 0;
+            foreach ($files as $file) {
+                $content = file_get_contents($file);
+                self::assertIsString($content);
+                $combined .= $content;
+                if (str_contains($content, 'extends \\XPHP\\Generated\\App\\CovariantPrivateProperty\\Box\\T_')) {
+                    $extendsEdges++;
+                }
+            }
+            // Each specialization keeps its REAL private slot type — nothing erased.
+            self::assertSame(
+                1,
+                preg_match_all('/private \\\\App\\\\CovariantPrivateProperty\\\\Fruit \$item/', $combined),
+                'Fruit specialization stores `private Fruit $item`',
+            );
+            self::assertSame(
+                1,
+                preg_match_all('/private \\\\App\\\\CovariantPrivateProperty\\\\Banana \$item/', $combined),
+                'Banana specialization stores `private Banana $item`',
+            );
+            self::assertStringNotContainsString('private mixed $item', $combined, 'nothing is erased to mixed');
+            // Exactly one specialization extends the other — the covariant edge.
+            self::assertSame(1, $extendsEdges, 'Box<Banana> extends Box<Fruit>');
+            self::assertStringNotContainsString('final class', $combined);
+
+            $fixture->registerAutoload('App\\CovariantPrivateProperty');
+            require __DIR__ . '/../../fixture/compile/generic_covariant_private_property/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     public function testBoundedCovariantConstructorKeepsConcreteType(): void
     {
         // A bounded covariant constructor param keeps its REAL substituted type (the

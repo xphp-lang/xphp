@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Modifiers;
 use PhpParser\Node;
 use PhpParser\Node\ComplexType;
 use PhpParser\Node\Expr\ArrowFunction;
@@ -30,21 +31,32 @@ use XPHP\Diagnostics\SourceLocation;
  *
  * Position rules (PHP-compat surface):
  *
- *  - Property type (mutable OR readonly) -> Invariant only
- *  - Promoted constructor parameter      -> Invariant only (it is a property)
- *  - Non-promoted constructor parameter  -> any variance (emitted with real type)
- *  - Method/function parameter type      -> Invariant or Contravariant
- *  - Method/function return type         -> Invariant or Covariant
- *  - Bound expression                    -> Invariant only
- *  - Default expression                  -> Invariant only
+ *  - Public/protected property (mutable OR readonly) -> Invariant only
+ *  - Private property (mutable OR readonly)          -> any variance
+ *  - Promoted constructor parameter (public/protected) -> Invariant only (it is a visible property)
+ *  - Promoted constructor parameter (private)        -> any variance (private property)
+ *  - Non-promoted constructor parameter              -> any variance (emitted with real type)
+ *  - Method/function parameter type                  -> Invariant or Contravariant
+ *  - Method/function return type                     -> Invariant or Covariant
+ *  - Bound expression                                -> Invariant only
+ *  - Default expression                              -> Invariant only
  *
- * Why properties are strict-invariant: PHP enforces invariant property types
- * across the `extends` chain regardless of `readonly`. A covariant +T in a
- * subtype property declaration would PHP-fatal at autoload when the variance
- * edge `Producer_Banana extends Producer_Fruit` lands. The semantic
- * argument ("readonly = output-only") doesn't override PHP's static-type
- * rule. Users who need a covariant getter use a `mixed`-typed (or
- * bound-typed) backing field + a method `get(): T`.
+ * Why public/protected properties are strict-invariant: PHP enforces invariant
+ * property types across the `extends` chain regardless of `readonly`. A covariant
+ * +T in a subtype property declaration would PHP-fatal at autoload when the
+ * variance edge `Producer_Banana extends Producer_Fruit` lands. The semantic
+ * argument ("readonly = output-only") doesn't override PHP's static-type rule.
+ *
+ * Why a PRIVATE property may carry any variance: PHP does NOT type-check private
+ * property types across an `extends` chain — a private slot is per-declaring-scope
+ * and is never inherited/overridden, so `Producer_Banana` may declare
+ * `private Banana $item` while `Producer_Fruit` declares `private Fruit $item`
+ * with no fatal. It is also invisible to the externally-visible variance surface.
+ * The Specializer emits the real substituted type there, and each specialization
+ * re-emits its own field + accessor, so no inherited method ever reads a
+ * divergent-typed private slot. This is what lets the covariant getter pattern
+ * `class Producer<+T> { public function __construct(private T $item) {} … }` be
+ * both real-typed and sound.
  *
  * Why a non-promoted constructor parameter may carry any variance: a
  * constructor isn't part of the externally-visible variance surface (it's
@@ -52,8 +64,8 @@ use XPHP\Diagnostics\SourceLocation;
  * constructor parameters), and PHP exempts `__construct` from LSP signature
  * checks, so each specialization's constructor may legitimately differ. The
  * Specializer emits the real substituted type there -- nothing is erased. A
- * *promoted* constructor parameter is a property, so it falls under the
- * strict-invariant property rule above.
+ * *promoted* constructor parameter is a property, so it falls under the property
+ * rules above: strict-invariant when public/protected, any variance when private.
  *
  * F-bounded variance (`class Sortable<+T : Comparable<T>>`) is rejected
  * because `+T` appears inside its own bound (an invariant position).
@@ -208,8 +220,15 @@ final class VariancePositionValidator
         if ($type === null) {
             return;
         }
-        // PHP enforces invariant property types across `extends` chains
-        // regardless of `readonly`. Even +T on a readonly property would
+        // A private property is exempt: PHP does not type-check private property
+        // types across an `extends` chain (the slot is per-declaring-scope, never
+        // inherited), and it is invisible to the variance surface. So a private
+        // `T` property may carry any variance — like a non-promoted ctor param.
+        if ($property->isPrivate()) {
+            return;
+        }
+        // Public/protected: PHP enforces invariant property types across `extends`
+        // chains regardless of `readonly`. Even +T on a readonly property would
         // PHP-fatal at autoload when the variance edge lands.
         $position = $property->isReadonly() ? 'readonly property' : 'mutable property';
         $this->checkPhpType($type, [Variance::Invariant], $position);
@@ -227,13 +246,15 @@ final class VariancePositionValidator
             : [Variance::Invariant, Variance::Contravariant];
         $paramPosition = $isConstructor ? 'constructor parameter' : 'method parameter';
         // A variant class (≥1 covariant/contravariant type-param) may carry its
-        // type-param in a NON-promoted constructor parameter at any variance: a
-        // constructor parameter is not part of the externally-visible variance
-        // surface (you can't call a constructor through an upcast reference), and
-        // PHP exempts `__construct` from LSP, so the specializer emits the real
-        // substituted type there with no soundness or autoload hazard. A *promoted*
-        // constructor param is also a property, which stays strictly invariant (a `T`-typed
-        // property would PHP-fatal across the chain regardless).
+        // type-param in a constructor parameter at any variance UNLESS the param is
+        // a *visible* (public/protected) promoted property. A constructor parameter
+        // is not part of the externally-visible variance surface (you can't call a
+        // constructor through an upcast reference), and PHP exempts `__construct`
+        // from LSP, so the specializer emits the real substituted type there with no
+        // soundness or autoload hazard. A *promoted* constructor param is also a
+        // property: a public/protected one stays strictly invariant (it would
+        // PHP-fatal across the chain), but a *private* promoted property is exempt
+        // (PHP doesn't type-check private slots across the chain).
         $classIsVariant = $this->varianceByName !== [];
         foreach ($method->params as $param) {
             // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
@@ -253,7 +274,12 @@ final class VariancePositionValidator
                 continue;
             }
             $isPromoted = $param->flags !== 0;
-            $allowed = ($isConstructor && !$isPromoted && $classIsVariant)
+            // A *visible* promoted property is public or protected: it carries a
+            // visibility bit other than PRIVATE. Detect via the PRIVATE bit, not the
+            // mere absence of a bit — a `readonly`-only promoted param has flags with
+            // no visibility bit and is implicitly public, so it must stay invariant.
+            $isVisibleProperty = $isPromoted && ($param->flags & Modifiers::PRIVATE) === 0;
+            $allowed = ($isConstructor && !$isVisibleProperty && $classIsVariant)
                 ? [Variance::Invariant, Variance::Covariant, Variance::Contravariant]
                 : $paramAllowed;
             $this->checkPhpType($param->type, $allowed, $paramPosition);
