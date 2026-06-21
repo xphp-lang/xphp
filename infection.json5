@@ -296,16 +296,12 @@
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
-                // Specializer::applyConstructorErasures: the `if ($erasures === []) return;`
-                // fast-exit. Dropping it falls through to findConstructor + an empty foreach
-                // (a no-op), producing identical output.
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::applyConstructorErasures",
-                // InnerVarianceValidator::isErasedVariantCtorParam: the promoted-param
+                // InnerVarianceValidator::isExemptVariantCtorParam: the promoted-param
                 // `return false` guard is unreachable in practice — a covariant class with a
                 // promoted (property) type-param is flagged by the variance-POSITION pass
                 // first, and inner-variance skips position-flagged definitions, so this branch
                 // never decides anything observable.
-                "XPHP\\Transpiler\\Monomorphize\\InnerVarianceValidator::isErasedVariantCtorParam",
+                "XPHP\\Transpiler\\Monomorphize\\InnerVarianceValidator::isExemptVariantCtorParam",
                 // Specializer::substituteTypeRef: dropping `return $ref` on the empty-args
                 // branch falls through to array_map over empty + ctor, producing an
                 // equivalent TypeRef.  Pure micro-optimisation, no observable difference.
@@ -397,12 +393,7 @@
                 // just above). Negating both sub-exprs yields `!A || !B`, which is
                 // ALWAYS true because $bound can't be both operand types at once --
                 // the mutated assert can never fail. Observationally equivalent.
-                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator::checkBoundExpr",
-                // Specializer::applyConstructorErasures: the `assert($erased instanceof
-                // Identifier || $erased instanceof Name)` type-narrowing guard. typeRefToNode
-                // only ever returns one of those two for an erased ref, so negating the
-                // sub-exprs yields an assert that still holds — observationally equivalent.
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::applyConstructorErasures"
+                "XPHP\\Transpiler\\Monomorphize\\VariancePositionValidator::checkBoundExpr"
             ]
         },
 
@@ -651,12 +642,7 @@
                 // before this optimization). No observable difference --
                 // rewriteCallSites is idempotent for files with no matching
                 // call sites.
-                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
-                // Specializer::variantConstructorErasures: the `mixed` erasure ref
-                // `new TypeRef('mixed', [], true, false)` — the final `false` is isTypeParam.
-                // typeRefToNode branches on isScalar (true) first and emits Identifier('mixed')
-                // regardless of isTypeParam, so toggling it to `true` is unobservable.
-                "XPHP\\Transpiler\\Monomorphize\\Specializer::variantConstructorErasures"
+                "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler"
             ]
         },
         // XphpSourceParser::applyReplacements: dropping the usort() entirely.

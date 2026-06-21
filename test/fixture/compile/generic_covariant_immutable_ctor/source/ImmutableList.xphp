@@ -5,9 +5,10 @@ declare(strict_types=1);
 namespace App\CovariantCtor;
 
 // Covariant immutable collection: `+T` with a `T`-typed constructor. The
-// constructor parameter is emitted variance-erased (`mixed`) on every
-// specialization so the `extends` chain (ImmutableList<Banana> extends
-// ImmutableList<Fruit>) stays LSP-safe.
+// constructor parameter keeps its REAL type on every specialization
+// (`Fruit ...` / `Banana ...`); PHP exempts `__construct` from LSP, so the
+// `extends` chain (ImmutableList<Banana> extends ImmutableList<Fruit>) is
+// valid and construction is runtime-type-checked.
 final class ImmutableList<+T>
 {
     private array $items;

@@ -112,12 +112,13 @@ final class InnerVarianceValidator
                 // so each promoted property is walked exactly once.
                 //
                 // Exception: a non-promoted ctor param typed by a bare
-                // covariant/contravariant type-param is emitted variance-erased
-                // (`mixed`/bound) by the Specializer, so its declared variance is
-                // irrelevant — skip it. Inner-generic ctor params (e.g.
-                // `Container<T>`) are NOT erased and stay checked, as do promoted
-                // params (they're properties).
-                if ($isCtor && $this->isErasedVariantCtorParam($param)) {
+                // covariant/contravariant type-param is allowed — a constructor
+                // parameter isn't part of the externally-visible variance surface
+                // (constructors aren't called through upcast references), and PHP
+                // exempts `__construct` from LSP, so the real type is emitted with
+                // no hazard. Skip it. Inner-generic ctor params (e.g. `Container<T>`)
+                // are still checked, as are promoted params (they're properties).
+                if ($isCtor && $this->isExemptVariantCtorParam($param)) {
                     continue;
                 }
                 $outerPos = $isCtor ? Variance::Invariant : Variance::Contravariant;
@@ -146,11 +147,12 @@ final class InnerVarianceValidator
 
     /**
      * A non-promoted constructor parameter whose type is a bare single-segment
-     * covariant/contravariant type-param — exactly the params the Specializer
-     * emits variance-erased. Their declared variance no longer reaches the
-     * emitted signature, so the inner-variance walk skips them.
+     * covariant/contravariant type-param. Constructor parameters are exempt from
+     * variance-position checks (a constructor isn't part of the visible variance
+     * surface, and PHP exempts `__construct` from LSP), so the inner-variance walk
+     * skips these — the real type is emitted as-is.
      */
-    private function isErasedVariantCtorParam(Param $param): bool
+    private function isExemptVariantCtorParam(Param $param): bool
     {
         if ($param->flags !== 0) {
             return false; // promoted param == property; stays strictly invariant.
@@ -161,7 +163,7 @@ final class InnerVarianceValidator
         }
         $parts = $type->getParts();
         if (count($parts) !== 1) {
-            return false; // inner-generic / qualified type — not erased, keep checking.
+            return false; // inner-generic / qualified type — not a bare type-param, keep checking.
         }
         $variance = $this->varianceMap[$parts[0]] ?? null;
         return $variance !== null && $variance !== Variance::Invariant;
