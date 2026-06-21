@@ -366,6 +366,58 @@ can see it.
 
 ---
 
+## Covariant getters trip the `xphp check` PHPStan pass
+
+### ❌ What gets flagged
+
+```php
+class Producer<+T> {
+    private mixed $item;                       // backing field can't be `T` (properties are invariant)
+    public function __construct(T $item) { $this->item = $item; }
+    public function get(): T { return $this->item; }
+}
+
+$p = new Producer::<Banana>(new Banana());     // compiles + runs fine
+```
+
+`xphp compile` is happy and the runtime is correct, but `xphp check`'s
+optional [PHPStan-over-the-compiled-output pass](errors.md#phpstan-over-the-compiled-output)
+reports, on the `Producer<Banana>` specialization:
+
+```
+Method ...\Producer\T_<hash>::get() should return App\Banana but returns mixed.
+[phpstan.return.type]
+```
+
+### Why
+
+A covariant container can't store its element in a `T`-typed **property** (PHP
+property types are invariant across the `extends` edge — see
+[variance markers are class-level only](#variance-markers-are-class-level-only)
+above and the [variance](syntax/variance.md) rules), so the backing field is
+`mixed`/`array`. xphp substitutes type parameters in **signatures** (the emitted
+`get(): Banana` is correct), but **not inside method bodies** — `return
+$this->item` still reads a `mixed` field. PHPStan, analysing the concrete output,
+sees `mixed` returned where `Banana` is declared and reports it. This is the
+PHPStan pass being stricter than xphp's own generic checks, not a generics error;
+it applies to any covariant getter-over-storage (including the docs' own
+`ImmutableList` / `Producer` examples).
+
+### ✅ Workaround
+
+- Run the generic checks without the PHPStan pass: `xphp check src --no-phpstan`
+  (the generics themselves still validate).
+- Or scope a PHPStan ignore to the generated getter in your `phpstan.neon`
+  (e.g. `ignoreErrors` on `#Method .*::get\(\) should return.*but returns mixed#`).
+- Or narrow inside the getter body so PHPStan can prove the type, e.g.
+  `assert($this->item instanceof Fruit); return $this->item;` (only viable when a
+  concrete bound is known).
+
+The construction side is unaffected — the constructor parameter keeps its real
+type and is runtime-type-checked.
+
+---
+
 ## `T[]` is xphp-only
 
 ### ❌ What doesn't work

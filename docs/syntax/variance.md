@@ -143,7 +143,9 @@ anchor, so `final` on a `+T`/`-T` class is rejected at compile time.)
 > covariance *and* a real construction-time guarantee — nothing is erased. The
 > one position that can't carry a real `T` is a stored **property** (PHP property
 > types are invariant across the edge), so hold elements in a plain `array`/`mixed`
-> backing field and expose them through a covariant `get(): T`, as above.
+> backing field and expose them through a covariant `get(): T`, as above. (That
+> `mixed`-backed getter compiles and runs fine, but trips the optional `xphp check`
+> PHPStan pass — see [caveats](../caveats.md#covariant-getters-trip-the-xphp-check-phpstan-pass).)
 
 ### Inner-template variance composition
 
