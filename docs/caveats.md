@@ -366,13 +366,14 @@ can see it.
 
 ---
 
-## Covariant getters over an `array` backing trip the `xphp check` PHPStan pass
+## Covariant `array`-backed collections trip the `xphp check` PHPStan pass
 
 > **Scope:** this affects only a *multi-element* covariant collection backed by an
-> `array` field. A covariant **single-value** container no longer hits this — store
-> the element in a `private T` property (PHP doesn't type-check private slots across
-> the `extends` edge), and the emitted `get(): T` over a real-typed `private T` field
-> is PHPStan-clean. See the [`Producer<+T>`](syntax/variance.md#example) example.
+> `array` field, at **PHPStan level 6 and above**. A covariant **single-value**
+> container no longer hits this — store the element in a `private T` property (PHP
+> doesn't type-check private slots across the `extends` edge), and the emitted
+> `get(): T` over a real-typed `private T` field is PHPStan-clean at every level.
+> See the [`Producer<+T>`](syntax/variance.md#example) example.
 
 ### ❌ What gets flagged
 
@@ -387,38 +388,44 @@ $list = new ImmutableList::<Banana>(new Banana());   // compiles + runs fine
 ```
 
 `xphp compile` is happy and the runtime is correct, but `xphp check`'s
-optional [PHPStan-over-the-compiled-output pass](errors.md#phpstan-over-the-compiled-output)
-reports, on the `ImmutableList<Banana>` specialization:
+optional [PHPStan-over-the-compiled-output pass](errors.md#phpstan-over-the-compiled-output),
+**at level 6 or higher**, reports on the `ImmutableList<Banana>` specialization:
 
 ```
-Method ...\ImmutableList\T_<hash>::get() should return App\Banana but returns mixed.
-[phpstan.return.type]
+Property ...\ImmutableList\T_<hash>::$items type has no value type specified
+in iterable type array.
+[missingType.iterableValue]
 ```
+
+(At level ≤5 it is clean — the missing-iterable-value-type rule only switches on at
+level 6.)
 
 ### Why
 
-A collection holds *many* elements in a single field, so the backing must be an
-`array` (you can't fit them in one `private T` slot). xphp substitutes type
-parameters in **signatures** (the emitted `get(): Banana` is correct), but **not
-inside method bodies** — `return $this->items[$i]` reads an element of an `array`,
-which PHPStan sees as `mixed`. Analysing the concrete output, it reports `mixed`
-returned where `Banana` is declared. This is the PHPStan pass being stricter than
-xphp's own generic checks, not a generics error.
+A collection holds *many* elements in one field, so the backing must be an `array`
+(you can't fit them in a single `private T` slot). xphp substitutes type parameters
+in **signatures** (the emitted `get(): Banana` is correct) but emits the backing as
+a plain `private array $items` with **no value-type annotation** — PHP has no native
+typed array, and xphp doesn't synthesise a `@var Banana[]` docblock for the
+specialization. From level 6 PHPStan requires a value type on every iterable, so it
+flags the untyped `array` property. This is the PHPStan pass being stricter than
+xphp's own generic checks, not a generics error. (The element read
+`return $this->items[$i]` is `mixed`, but PHPStan reports the *property*'s missing
+value type rather than the return.)
 
 A single-value container avoids this entirely because its backing field can be a
 real-typed `private T` (a private property is variance-exempt — see the
-[variance](syntax/variance.md) rules), so PHPStan proves the getter's return type
-directly. The limitation is specific to the `array`-backed collection shape.
+[variance](syntax/variance.md) rules), so there is no untyped `array` at all. The
+limitation is specific to the `array`-backed collection shape.
 
 ### ✅ Workaround
 
 - Run the generic checks without the PHPStan pass: `xphp check src --no-phpstan`
   (the generics themselves still validate).
-- Or scope a PHPStan ignore to the generated getter in your `phpstan.neon`
-  (e.g. `ignoreErrors` on `#Method .*::get\(\) should return.*but returns mixed#`).
-- Or narrow inside the getter body so PHPStan can prove the type, e.g.
-  `assert($el instanceof Fruit); return $el;` (only viable when a concrete bound
-  is known).
+- Or analyse at level ≤5 (the missing-iterable-value-type rule is off there).
+- Or scope a PHPStan ignore to the generated property in your `phpstan.neon`
+  (e.g. `ignoreErrors` on
+  `#Property .*::\$items type has no value type specified in iterable type array#`).
 
 The construction side is unaffected — the constructor parameter keeps its real
 type and is runtime-type-checked.

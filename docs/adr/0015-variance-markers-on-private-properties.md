@@ -82,9 +82,10 @@ private promoted (or declared) *property* is likewise exempt.
   **PHPStan-clean** — no `mixed` backing, so the getter's return type is provable.
 - Good: the rule now matches what PHP actually enforces — no position is rejected that PHP
   would have accepted.
-- Trade-off: a *multi-element* collection still needs a `mixed`/`array` backing (many
-  elements can't live in one `private T` slot), so its covariant `get(): T` still trips the
-  optional PHPStan pass. That case is documented, not "fixed."
+- Trade-off: a *multi-element* collection still needs an `array` backing (many elements
+  can't live in one `private T` slot), which xphp emits without a value-type annotation, so
+  it still trips the optional PHPStan pass at level 6+ (the untyped `array` property has no
+  iterable value type). That case is documented, not "fixed."
 - Trade-off: a public/protected `T` property is still rejected — unavoidable, PHP fatals on
   it across the edge.
 
@@ -108,7 +109,8 @@ getter is PHPStan-clean. The boundary is documented in [Variance](../syntax/vari
 
 - Good: sound (PHP doesn't check private slots across the edge), matches PHP's real rule,
   unlocks the natural covariant shape, PHPStan-clean for single-value containers.
-- Bad: multi-element collections still need a `mixed`/`array` backing.
+- Bad: multi-element collections still need an untyped `array` backing (trips the PHPStan
+  pass at level 6+).
 
 ### Keep rejecting all properties
 

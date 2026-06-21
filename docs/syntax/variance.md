@@ -161,9 +161,10 @@ anchor, so `final` on a `+T`/`-T` class is rejected at compile time.)
 > (see the single-value `Producer<+T>` at the top), so a covariant single-value
 > container needs no `mixed` backing at all. A *multi-element* collection like
 > `ImmutableList` is different: many elements live in one `private array $items`
-> field, and `array` is `mixed` to PHPStan — so the covariant `get(): T` over an
-> `array` backing compiles and runs fine but trips the optional `xphp check`
-> PHPStan pass (see [caveats](../caveats.md#covariant-getters-over-an-array-backing-trip-the-xphp-check-phpstan-pass)).
+> field, which xphp emits without a value-type annotation — so it compiles and
+> runs fine but trips the optional `xphp check` PHPStan pass at level 6+ (the
+> untyped `array` property has no iterable value type; see
+> [caveats](../caveats.md#covariant-array-backed-collections-trip-the-xphp-check-phpstan-pass)).
 
 ### Inner-template variance composition
 
