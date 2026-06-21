@@ -146,6 +146,10 @@ upcoming one.
 - DNF bound (e.g. `T : (A & B) | C`).
 - F-bounded recursion (e.g. `T : Comparable<T>`).
 - Built-in interface whitelist (Stringable / Countable / Iterator / ...).
+- `Hashable` value-equality bound — `Set<T : \Hashable>` /
+  `Map<K : \Hashable, V>` are expressible and compile-time bound-checked.
+  Not a PHP-native interface; xphp ships no runtime `Hashable`, so you (or
+  your collection library) provide the `hashCode()` / `equals()` contract.
 - Error messages reference the source-level instantiation, not the
   generated hash.
 
