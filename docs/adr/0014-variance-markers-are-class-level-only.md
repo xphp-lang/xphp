@@ -87,6 +87,6 @@ functions, and pinned by tests for all four shapes. The boundary is documented i
 
 - [ADR-0001](0001-monomorphization-over-type-erasure.md) — specializations and their class
   identities (or lack thereof for functions).
-- [ADR-0013](0013-variance-erased-constructor-parameters.md) — the class-level variance
-  surface this boundary sits alongside.
+- [ADR-0013](0013-typed-constructor-parameters-on-variant-classes.md) — the class-level
+  variance surface this boundary sits alongside.
 - [Variance](../syntax/variance.md), [Caveats](../caveats.md).

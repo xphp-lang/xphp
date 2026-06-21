@@ -73,7 +73,7 @@ Position rules enforced at parse time:
 |---------------------------------------|---------------|---------------|
 | Method return type                    | ✅            | ❌            |
 | Method parameter                      | ❌            | ✅            |
-| Constructor parameter (plain)         | ✅ (erased)   | ✅ (erased)   |
+| Constructor parameter (plain)         | ✅            | ✅            |
 | Mutable property                      | ❌            | ❌            |
 | Readonly property                     | ❌            | ❌            |
 | Promoted constructor property         | ❌            | ❌            |
@@ -87,12 +87,15 @@ property types across those chains regardless of `readonly` — a covariant
 property would PHP-fatal at autoload when the variance edge lands.
 
 A **plain (non-promoted) constructor parameter** is the exception: it may
-carry `+T` / `-T`, because xphp emits it **variance-erased** — the type
-parameter's bound if it's a single non-generic type, else `mixed` — so every
-specialisation's `__construct` signature is identical and stays LSP-compatible
-across the edge. That's what lets a covariant immutable collection take typed
-construction input (see below). A *promoted* constructor parameter is a
-property, so it stays strictly invariant.
+carry `+T` / `-T` at any variance, and xphp emits it with its **real**
+substituted type. A constructor parameter isn't part of the externally-visible
+variance surface (a constructor is never reached through an upcast reference —
+the same reason Kotlin exempts constructor parameters from variance checks), and
+PHP exempts `__construct` from LSP signature checks, so the specialisations'
+constructors may legitimately differ across the edge. That's what lets a
+covariant immutable collection take *type-checked* construction input (see
+below). A *promoted* constructor parameter is a property, so it stays strictly
+invariant.
 
 ### Covariant immutable collections (typed construction)
 
@@ -114,16 +117,20 @@ $books = new ImmutableList::<Book>(new Book(), new Book());
 $p = firstProduct($books);
 ```
 
-The constructor parameter is emitted as `mixed ...$items` (or the bound) on
-every specialisation, so `ImmutableList<Book>` can `extends ImmutableList<Product>`
-without a PHP fatal. (`final` is preserved in your source; xphp drops it only on
-the internal generated specialisations so the edge can land.)
+The constructor parameter keeps its real element type on every specialisation
+(`Book ...$items` on `ImmutableList<Book>`, `Product ...$items` on
+`ImmutableList<Product>`), and `ImmutableList<Book>` still `extends
+ImmutableList<Product>` without a PHP fatal — PHP doesn't signature-check
+`__construct` across the chain. (`final` is preserved in your source; xphp drops
+it only on the internal generated specialisations so the edge can land.)
 
-> ⚠️ **Construction is not runtime-type-checked.** Because the emitted
-> constructor parameter is erased to `mixed`/the bound, PHP performs no runtime
-> element-type check at construction, and the compiler does not yet statically
-> check the supplied arguments at the call site. Covariance and the typed
-> *source* surface hold; a stricter construction-time check is future work.
+> ✅ **Construction is runtime-type-checked.** Because the constructor parameter
+> keeps its real type, PHP enforces it at construction: building an
+> `ImmutableList<Book>` from a non-`Book` throws a `TypeError`. You get both
+> covariance *and* a real construction-time guarantee — nothing is erased. The
+> one position that can't carry a real `T` is a stored **property** (PHP property
+> types are invariant across the edge), so hold elements in a plain `array`/`mixed`
+> backing field and expose them through a covariant `get(): T`, as above.
 
 ### Inner-template variance composition
 

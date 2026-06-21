@@ -24,13 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary or a failed run is a non-failing Warning. Opt out with `--no-phpstan`;
   override discovery with `--phpstan-bin` / `--phpstan-config`.
 - **Type-parameter-typed constructors on variant classes.** A covariant /
-  contravariant class may now take its type parameter in a (non-promoted)
-  constructor parameter — e.g. a covariant immutable `ImmutableList<+T>` built
-  from `T ...$items`. The parameter is emitted variance-erased (the bound, else
-  `mixed`) so every specialisation's `__construct` is LSP-compatible across the
-  variance `extends` edge. Construction is accepted but not yet runtime- or
-  call-site-type-checked; promoted constructor params remain properties (strictly
-  invariant). See [variance](docs/syntax/variance.md).
+  contravariant class may take its type parameter in a (non-promoted) constructor
+  parameter — e.g. a covariant immutable `ImmutableList<+T>` built from
+  `T ...$items`. The parameter keeps its **real** element type on every
+  specialisation (`Book ...$items`, not `mixed`), so construction is
+  **runtime-type-checked** while `ImmutableList<Book>` still extends
+  `ImmutableList<Product>` — PHP exempts `__construct` from LSP, so the
+  specialisations' constructors may differ across the edge. Promoted constructor
+  params remain properties (strictly invariant — PHP property types can't vary
+  across the edge). See [variance](docs/syntax/variance.md).
 - **`Hashable` value-equality bound.** `Set<T: \Hashable>` and
   `Map<K: \Hashable, V>` are now expressible and compile-time bound-checked
   (referenced fully-qualified, like `\Stringable`). xphp ships no runtime
