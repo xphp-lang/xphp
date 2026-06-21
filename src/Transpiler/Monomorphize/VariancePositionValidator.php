@@ -30,7 +30,8 @@ use XPHP\Diagnostics\SourceLocation;
  * Position rules (PHP-compat surface):
  *
  *  - Property type (mutable OR readonly) -> Invariant only
- *  - Constructor parameter type          -> Invariant only
+ *  - Promoted constructor parameter      -> Invariant only (it is a property)
+ *  - Non-promoted constructor parameter  -> any variance (emitted with real type)
  *  - Method/function parameter type      -> Invariant or Contravariant
  *  - Method/function return type         -> Invariant or Covariant
  *  - Bound expression                    -> Invariant only
@@ -44,9 +45,14 @@ use XPHP\Diagnostics\SourceLocation;
  * rule. Users who need a covariant getter use a `mixed`-typed (or
  * bound-typed) backing field + a method `get(): T`.
  *
- * Why constructors are strict-invariant: PHP applies LSP signature
- * compatibility to `__construct` at autoload time on `extends` chains.
- * A covariant param would PHP-fatal -- same shape as the property case.
+ * Why a non-promoted constructor parameter may carry any variance: a
+ * constructor isn't part of the externally-visible variance surface (it's
+ * never reached through an upcast reference, the same reason Kotlin exempts
+ * constructor parameters), and PHP exempts `__construct` from LSP signature
+ * checks, so each specialization's constructor may legitimately differ. The
+ * Specializer emits the real substituted type there -- nothing is erased. A
+ * *promoted* constructor parameter is a property, so it falls under the
+ * strict-invariant property rule above.
  *
  * F-bounded variance (`class Sortable<+T : Comparable<T>>`) is rejected
  * because `+T` appears inside its own bound (an invariant position).
