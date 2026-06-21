@@ -158,6 +158,18 @@ appears in <invariant|covariant|contravariant>-only position
 (via slot N of <InnerTemplate>).
 ```
 
+### Variance position violation
+
+```
+Generic parameter `<+|->T` appears in <position> position, which is not
+allowed for <covariant|contravariant> variance.
+```
+
+`<position>` is the forbidding position — e.g. `method parameter`,
+`method return`, `mutable property`, `readonly property`, or
+`by-reference parameter`. A **by-reference parameter** (`T &$x`) is invariant
+(it is read and written back), so neither `+T` nor `-T` is allowed there.
+
 ### Bound violations
 
 ```

@@ -74,6 +74,20 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\ninterface Producer<+T>\n{\n    public function feed(T \$x): void;\n}\n",
             ['+T'],
         ];
+        // A by-reference parameter is read AND written back, so it is an
+        // invariant position — neither +T nor -T is allowed there.
+        yield 'contravariant in by-reference parameter' => [
+            "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function swap(T &\$x): void {}\n}\n",
+            ['-T', 'by-reference parameter'],
+        ];
+        yield 'covariant in by-reference parameter' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function swap(T &\$x): void {}\n}\n",
+            ['+T', 'by-reference parameter'],
+        ];
+        yield 'contravariant in nested closure by-reference parameter' => [
+            "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function pipe(): array\n    {\n        \$f = function (T &\$x) {};\n        return [];\n    }\n}\n",
+            ['by-reference parameter'],
+        ];
     }
 
     /**
@@ -127,6 +141,34 @@ final class VariancePositionPhaseTest extends TestCase
         foreach ($collector->all() as $d) {
             self::assertSame(VariancePositionValidator::CODE_VARIANCE_POSITION, $d->code);
         }
+    }
+
+    public function testByReferenceParamWithoutVarianceMarkersIsAllowed(): void
+    {
+        // An invariant class (no +T/-T) with a by-ref T parameter is fine — the
+        // by-ref invariance rule only constrains variance-marked type params.
+        $source = "<?php\nnamespace App;\nclass Box<T>\n{\n    public function swap(T &\$x): void {}\n}\n";
+        $registry = $this->registryFor($source);
+
+        $registry->validateVariancePositions(); // must NOT throw
+        self::assertTrue(true);
+    }
+
+    public function testByReferenceParamDoesNotShortCircuitLaterParams(): void
+    {
+        // A by-ref param violation must not stop the walk: a *later* violating
+        // param in the same signature is still reported (pins `continue`, not
+        // `break`, after the by-ref check).
+        $source = "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function f(T &\$a, T \$b): void {}\n}\n";
+        $collector = new DiagnosticCollector();
+        $registry = $this->registryFor($source, $collector);
+
+        $registry->validateVariancePositions();
+
+        $messages = array_map(static fn ($d): string => $d->message, $collector->all());
+        self::assertCount(2, $messages);
+        self::assertStringContainsString('by-reference parameter', implode("\n", $messages));
+        self::assertStringContainsString('method parameter', implode("\n", $messages));
     }
 
     private function registryFor(string $source, ?DiagnosticCollector $collector = null): Registry

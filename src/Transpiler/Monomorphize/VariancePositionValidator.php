@@ -228,6 +228,15 @@ final class VariancePositionValidator
             if ($param->type === null) {
                 continue;
             }
+            // A by-reference parameter is read AND written back through the
+            // caller's variable, so it's an invariant position regardless of
+            // method vs constructor — neither +T nor -T is sound there. Checked
+            // before the variant-constructor any-variance branch so `-T &$x` in
+            // a constructor is rejected too.
+            if ($param->byRef) {
+                $this->checkPhpType($param->type, [Variance::Invariant], 'by-reference parameter');
+                continue;
+            }
             $isPromoted = $param->flags !== 0;
             $allowed = ($isConstructor && !$isPromoted && $classIsVariant)
                 ? [Variance::Invariant, Variance::Covariant, Variance::Contravariant]
@@ -272,10 +281,15 @@ final class VariancePositionValidator
             foreach ($node->params as $param) {
                 // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
                 if ($param instanceof Param && $param->type !== null) {
+                    // A by-reference param is an invariant position (read + written
+                    // back), even inside a nested closure/arrow.
+                    $allowed = $param->byRef
+                        ? [Variance::Invariant]
+                        : [Variance::Invariant, Variance::Contravariant];
                     $this->checkPhpType(
                         $param->type,
-                        [Variance::Invariant, Variance::Contravariant],
-                        'nested closure/arrow parameter',
+                        $allowed,
+                        $param->byRef ? 'by-reference parameter' : 'nested closure/arrow parameter',
                     );
                 }
             }

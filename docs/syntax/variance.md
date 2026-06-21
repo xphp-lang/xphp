@@ -73,6 +73,7 @@ Position rules enforced at parse time:
 |---------------------------------------|---------------|---------------|
 | Method return type                    | ✅            | ❌            |
 | Method parameter                      | ❌            | ✅            |
+| By-reference parameter (`T &$x`)      | ❌            | ❌            |
 | Constructor parameter (plain)         | ✅            | ✅            |
 | Mutable property                      | ❌            | ❌            |
 | Readonly property                     | ❌            | ❌            |
@@ -85,6 +86,11 @@ promoted-constructor) is forced by the runtime model: xphp emits real
 `extends` chains between specialised classes, and PHP enforces invariant
 property types across those chains regardless of `readonly` — a covariant
 property would PHP-fatal at autoload when the variance edge lands.
+
+A **by-reference parameter** (`function f(T &$x)`) is likewise invariant: the
+caller's variable is both read and written back through the reference, so it acts
+as input *and* output — neither `+T` nor `-T` is sound. This holds in method,
+constructor, and nested closure/arrow signatures.
 
 A **plain (non-promoted) constructor parameter** is the exception: it may
 carry `+T` / `-T` at any variance, and xphp emits it with its **real**

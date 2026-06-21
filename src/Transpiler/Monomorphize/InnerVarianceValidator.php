@@ -121,7 +121,12 @@ final class InnerVarianceValidator
                 if ($isConstructor && $this->isExemptVariantConstructorParam($param)) {
                     continue;
                 }
-                $outerPos = $isConstructor ? Variance::Invariant : Variance::Contravariant;
+                // A by-reference parameter is read AND written back, so it's an
+                // invariant outer position regardless of method vs constructor
+                // (e.g. a by-ref of a covariant container `f(Container<T> &$x)`).
+                $outerPos = ($isConstructor || $param->byRef)
+                    ? Variance::Invariant
+                    : Variance::Contravariant;
                 if ($param->type !== null) {
                     $this->walkPhpType($param->type, $outerPos, $label, null, null);
                 }
@@ -156,6 +161,9 @@ final class InnerVarianceValidator
     {
         if ($param->flags !== 0) {
             return false; // promoted param == property; stays strictly invariant.
+        }
+        if ($param->byRef) {
+            return false; // by-ref is read + written back == invariant; not exempt.
         }
         $type = $param->type;
         if (!$type instanceof Name) {
