@@ -465,38 +465,39 @@ class Map<K, V> {
 
 PHP array keys are `int|string` only, so `$this->items[$k] = $v` works
 only when `K` is a string/int — it **fatals for object keys**. For a
-container keyed on (or deduplicating) arbitrary objects, bound the type
-parameter on `\XPHP\Hashable`, the recognized value-equality bound, and key on
-`hashCode()` internally:
+container keyed on (or deduplicating) arbitrary objects, define your own
+value-equality contract as a generic interface and bound on it, keying on
+`hashCode()` internally. xphp special-cases nothing here — this is the same
+pattern as a `Comparable<T>` ordering bound (see [type bounds](syntax/type-bounds.md)):
 
 ```php
-class Map<K: \XPHP\Hashable, V> {
+// Your library/app declares the contract — xphp ships no `Hashable`.
+interface Hashable<T> {
+    public function hashCode(): int|string;
+    public function equals(T $other): bool;
+}
+
+final class Money implements Hashable {                // bare marker — no LSP friction
+    public function __construct(private int $cents) {}
+    public function hashCode(): int|string { return $this->cents; }
+    public function equals(Money $other): bool { return $other->cents === $this->cents; }
+}
+
+// F-bounded: K must be hashable to its own kind.
+class Map<K: Hashable<K>, V> {
     private array $buckets = [];
     public function set(K $k, V $v): void { $this->buckets[$k->hashCode()] = [$k, $v]; }
     public function get(K $k): V { return $this->buckets[$k->hashCode()][1]; }
 }
 ```
 
-xphp **recognizes** the `\XPHP\Hashable` bound (so `Map<K: \XPHP\Hashable, V>`
-and `Set<T: \XPHP\Hashable>` compile and are bound-checked) but ships **no**
-runtime `XPHP\Hashable` interface — it's a pure transpiler. The name is
-deliberately **namespaced** (not a global `\Hashable`) so it can never collide
-with a future PHP-native interface. You (or your collection library) provide the
-contract, e.g.:
-
-```php
-namespace XPHP;
-
-interface Hashable {
-    public function hashCode(): int|string;
-    public function equals(self $other): bool;
-}
-```
-
-Reference it fully-qualified (`\XPHP\Hashable`) or via `use`, the same as the
-built-in `\Stringable` bound. The deduping/keying logic itself is ordinary
-runtime code in your container — the bound just gives it a type-checked
-contract.
+Because a generic interface lowers to an **empty marker** (see ADR-0004), the
+implementing class declares `equals(Money $other)` with its **concrete** type and
+PHP imposes no signature constraint — exactly how a `Comparable<T>` implementer
+writes `compareTo(Money $other)`. The deduping/keying logic itself is ordinary
+runtime code in your container; the bound just gives it a compile-time-checked
+contract. (The container above is illustrative — xphp is a transpiler and ships
+no collection types.)
 
 ---
 

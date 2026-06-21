@@ -1,6 +1,6 @@
 # 16. A namespaced `XPHP\Hashable` value-equality bound
 
-- Status: Accepted — 2026-06
+- Status: Superseded by [ADR-0017](0017-no-special-cased-value-equality-bound.md) — 2026-06
 
 ## Context and Problem Statement
 
