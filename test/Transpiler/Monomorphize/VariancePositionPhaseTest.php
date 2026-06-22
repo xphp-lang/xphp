@@ -44,6 +44,13 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\nclass Sortable<+T : Box<T>>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
             ['bound'],
         ];
+        // A covariant param as the BARE leaf of a sibling class param's bound is a bound position
+        // too, flagged consistently with the inner-arg `Box<T>` case above. (Distinct from the
+        // supported method-level `contains<U : E>` shape, where U is a *method* type parameter.)
+        yield 'covariant in sibling bare bound' => [
+            "<?php\nnamespace App;\nclass Pair<+T, U : T>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
+            ['bound'],
+        ];
         // NOTE: `+T` in a *non-promoted* constructor parameter of a variant class is
         // ALLOWED — a constructor parameter is variance-exempt (constructors aren't
         // called through upcast references, and PHP exempts `__construct` from LSP), so

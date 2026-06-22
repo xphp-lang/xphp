@@ -87,8 +87,43 @@ once it sees `public int $value`.
   *variance* type argument is a non-failing warning rather than an
   error — see [variance](variance.md#unprovable-variance-edges).
 - Bounds are an **invariant position** for variance markers — `+T`
-  or `-T` are rejected inside a bound expression. See
-  [variance](variance.md).
+  or `-T` are rejected inside a bound expression (whether as a bare
+  leaf, `class Pair<+T, U : T>`, or nested, `Sortable<+T : Box<T>>`).
+  See [variance](variance.md).
+
+## Bounding a method type parameter by the enclosing class parameter
+
+A method-level type parameter may be bounded by one of the **enclosing
+class's** type parameters. This is the sound way to give a covariant
+`<+E>` collection an element-consuming method without dropping to
+`mixed`: the argument is constrained to a subtype of the element type,
+while the covariant `+E` never enters a parameter position.
+
+```php
+class Box<+E> {
+    // U is a method type parameter (invariant), bounded by the class's E.
+    public function contains<U : E>(U $value): bool { /* ... */ }
+}
+
+$box = new Box::<Product>();
+$box->contains::<Book>(new Book());   // OK — Book is a subtype of Product
+```
+
+At the call site the bound `E` is **grounded** to the receiver's
+concrete type argument (`Product` for a `Box<Product>`), then checked
+like any other bound. A genuine violation
+(`Box<Book>` then `->contains::<Product>(...)`) is rejected, with the
+message naming the grounded type (`Book`). The receiver's argument is
+threaded through `extends`/`implements`, so a method declared on a
+generic interface/base and inherited by a concrete collection grounds
+the same way.
+
+When the receiver's argument can't be determined statically — an opaque
+receiver, or a `$this->m::<...>()` call inside the class body, where `E`
+has no concrete value yet — the bound is **left unchecked** for that
+call rather than reported as a spurious violation. (Bounding a *static*
+method's type parameter by the class parameter is likewise unchecked: a
+class type parameter has no value in a static context.)
 
 ## Caveats
 

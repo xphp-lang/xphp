@@ -718,7 +718,7 @@ final class Registry
      * Substitute type-param leaves inside a BoundExpr tree, returning a fresh tree.
      *
      * Grounds a method-generic bound that references an enclosing class type parameter
-     * (`<E2 : E>`) against the receiver's concrete type arguments before the bound is
+     * (`<U : E>`) against the receiver's concrete type arguments before the bound is
      * checked: each `BoundLeaf`'s `TypeRef` is rewritten via
      * {@see Specializer::substituteTypeRef}, so a leaf `E` becomes the receiver's concrete
      * `Product`, while a leaf the map does not mention is returned unchanged (and a leaf that

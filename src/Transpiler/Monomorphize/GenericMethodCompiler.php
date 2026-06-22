@@ -406,6 +406,20 @@ final class GenericMethodCompiler
              */
             private array $currentScopeLocalTypes = [];
             /**
+             * Parallel side-tables to the two type maps above, carrying each tracked receiver's
+             * generic type arguments (`$b` of declared type `Box<Product>` → `[Product]`). Kept in
+             * lockstep with the string maps through scope push/restore and branch reset/leave; a
+             * branch that assigns a variable DROPS its args (never merges them), so a post-branch
+             * receiver falls back to lenient grounding rather than risking a stale/ambiguous arg.
+             * Read by `resolveReceiverTypeArgs` to ground a method-generic bound that references an
+             * enclosing class type parameter against the receiver's concrete arguments.
+             *
+             * @var array<string, list<TypeRef>>
+             */
+            private array $currentScopeParamTypeArgs = [];
+            /** @var array<string, list<TypeRef>> */
+            private array $currentScopeLocalTypeArgs = [];
+            /**
              * Variable name -> the Closure or ArrowFunction AST node that was
              * assigned to it (only when the closure carries
              * ATTR_METHOD_GENERIC_PARAMS, i.e. is a generic anonymous template).
@@ -452,7 +466,7 @@ final class GenericMethodCompiler
              * Branch snapshots are nested per-scope so that branches inside a closure
              * don't leak to branches in the enclosing function.
              *
-             * @var list<array{params: array<string,string>, locals: array<string,string>, branches: list<array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>}>
+             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>}>
              */
             private array $scopeSnapshots = [];
             /**
@@ -491,7 +505,7 @@ final class GenericMethodCompiler
              * keeps `$x` instead of invalidating. See `P5.1-same-class-merge.md`
              * and the `computeMergedTypes` / `canMergeOnLeave` helpers below.
              *
-             * @var list<array{snapshot: array<string,string>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>
+             * @var list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>
              */
             private array $branchSnapshots = [];
 
@@ -550,13 +564,19 @@ final class GenericMethodCompiler
                     // inside the closure are independent of branches in the parent.
                     $parentParams = $this->currentScopeParamTypes;
                     $parentLocals = $this->currentScopeLocalTypes;
+                    $parentParamArgs = $this->currentScopeParamTypeArgs;
+                    $parentLocalArgs = $this->currentScopeLocalTypeArgs;
                     $this->scopeSnapshots[] = [
                         'params' => $parentParams,
                         'locals' => $parentLocals,
+                        'paramArgs' => $parentParamArgs,
+                        'localArgs' => $parentLocalArgs,
                         'branches' => $this->branchSnapshots,
                     ];
                     $this->currentScopeParamTypes = [];
                     $this->currentScopeLocalTypes = [];
+                    $this->currentScopeParamTypeArgs = [];
+                    $this->currentScopeLocalTypeArgs = [];
                     $this->branchSnapshots = [];
 
                     // For closures: `use ($x)` explicitly imports outer variables.
@@ -575,6 +595,12 @@ final class GenericMethodCompiler
                             if ($importedType !== null) {
                                 $this->currentScopeParamTypes[$importedName] = $importedType;
                             }
+                            $importedArgs = $parentParamArgs[$importedName]
+                                ?? $parentLocalArgs[$importedName]
+                                ?? null;
+                            if ($importedArgs !== null) {
+                                $this->currentScopeParamTypeArgs[$importedName] = $importedArgs;
+                            }
                         }
                     }
 
@@ -587,6 +613,12 @@ final class GenericMethodCompiler
                         }
                         foreach ($parentLocals as $importedName => $importedType) {
                             $this->currentScopeParamTypes[$importedName] = $importedType;
+                        }
+                        foreach ($parentParamArgs as $importedName => $importedArgs) {
+                            $this->currentScopeParamTypeArgs[$importedName] = $importedArgs;
+                        }
+                        foreach ($parentLocalArgs as $importedName => $importedArgs) {
+                            $this->currentScopeParamTypeArgs[$importedName] = $importedArgs;
                         }
                     }
 
@@ -605,6 +637,16 @@ final class GenericMethodCompiler
                         }
                         if ($type instanceof Name) {
                             $this->currentScopeParamTypes[$param->var->name] = $this->resolveClassName($type);
+                            // Side-table the param's generic args (`Box<Product> $b` → [Product]) so a
+                            // bound referencing the enclosing class param can be grounded. A shadowing
+                            // param without generic args clears any imported stale entry.
+                            $paramArgs = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                            if (is_array($paramArgs)) {
+                                /** @var list<TypeRef> $paramArgs */
+                                $this->currentScopeParamTypeArgs[$param->var->name] = $paramArgs;
+                            } else {
+                                unset($this->currentScopeParamTypeArgs[$param->var->name]);
+                            }
                         }
                     }
                 }
@@ -616,6 +658,7 @@ final class GenericMethodCompiler
                 if (self::isBranchingParent($node)) {
                     $this->branchSnapshots[] = [
                         'snapshot' => $this->currentScopeLocalTypes,
+                        'localArgsSnapshot' => $this->currentScopeLocalTypeArgs,
                         'assigned' => [],
                         'perBranchTypes' => [],
                         // If_'s body is the first arm (armIndex=0).
@@ -641,6 +684,9 @@ final class GenericMethodCompiler
                     }
                     $this->branchSnapshots[$top]['armIndex']++;
                     $this->currentScopeLocalTypes = $this->branchSnapshots[$top]['snapshot'];
+                    // Args track the string map: each arm restarts from the pre-branch snapshot, so a
+                    // var an earlier arm set can't leak its args into a sibling arm.
+                    $this->currentScopeLocalTypeArgs = $this->branchSnapshots[$top]['localArgsSnapshot'];
                 }
                 // Stage B flow typing: `$x = new ClassName(...)` records `$x`'s receiver
                 // type for later MethodCall sites in the same scope. Lexical last-write
@@ -665,6 +711,15 @@ final class GenericMethodCompiler
                         && $node->expr->class instanceof Name
                     ) {
                         $this->currentScopeLocalTypes[$assignedName] = $this->resolveClassName($node->expr->class);
+                        // Side-table the constructed type's generic args (`new Box::<Product>()` →
+                        // [Product]); a non-generic `new` clears any stale args from a prior write.
+                        $newArgs = $node->expr->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                        if (is_array($newArgs)) {
+                            /** @var list<TypeRef> $newArgs */
+                            $this->currentScopeLocalTypeArgs[$assignedName] = $newArgs;
+                        } else {
+                            unset($this->currentScopeLocalTypeArgs[$assignedName]);
+                        }
                     }
                     // Track anonymous generic templates: `$id = fn<T>(T $x) => $x`
                     // or `$id = function<T>(T $x): T { ... }`. The FuncCall-on-
@@ -709,6 +764,8 @@ final class GenericMethodCompiler
                     if ($snapshot !== null) {
                         $this->currentScopeParamTypes = $snapshot['params'];
                         $this->currentScopeLocalTypes = $snapshot['locals'];
+                        $this->currentScopeParamTypeArgs = $snapshot['paramArgs'];
+                        $this->currentScopeLocalTypeArgs = $snapshot['localArgs'];
                         $this->branchSnapshots = $snapshot['branches'];
                     } else {
                         // Defensive: matched enter/leave count is invariant of the
@@ -717,6 +774,8 @@ final class GenericMethodCompiler
                         // pop on the next leave.
                         $this->currentScopeParamTypes = [];
                         $this->currentScopeLocalTypes = [];
+                        $this->currentScopeParamTypeArgs = [];
+                        $this->currentScopeLocalTypeArgs = [];
                         $this->branchSnapshots = [];
                     }
                 }
@@ -741,6 +800,7 @@ final class GenericMethodCompiler
 
                         // Restore to pre-branch state.
                         $this->currentScopeLocalTypes = $popped['snapshot'];
+                        $this->currentScopeLocalTypeArgs = $popped['localArgsSnapshot'];
 
                         // P5.1 same-class merge: try to keep variables whose
                         // every reachable arm assigned the same FQN, instead
@@ -753,6 +813,11 @@ final class GenericMethodCompiler
                             } else {
                                 unset($this->currentScopeLocalTypes[$assignedName]);
                             }
+                            // Args are NOT merged across arms: even when the FQN agrees, the arms may
+                            // have passed different type arguments (Box<Product> vs Box<Book>), so an
+                            // assigned var always loses its args → the receiver falls to lenient
+                            // grounding rather than risking a stale/ambiguous argument.
+                            unset($this->currentScopeLocalTypeArgs[$assignedName]);
                             if ($this->branchSnapshots !== []) {
                                 $parentTop = count($this->branchSnapshots) - 1;
                                 $this->branchSnapshots[$parentTop]['assigned'][$assignedName] = true;
@@ -961,8 +1026,12 @@ final class GenericMethodCompiler
                 $args = $padded;
 
                 if ($this->hierarchy !== null) {
+                    // Static grounding is out of scope: a class type parameter is unbound in a
+                    // static context, so pass no receiver args — an enclosing-param bound on a
+                    // static method falls to the lenient drop inside groundBounds.
+                    $checkedParams = $this->groundBounds($params, $classFqn, [], $declaringFqn);
                     Registry::checkBounds(
-                        $params,
+                        $checkedParams,
                         $args,
                         $this->hierarchy,
                         $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
@@ -1058,8 +1127,13 @@ final class GenericMethodCompiler
                 $args = $padded;
 
                 if ($this->hierarchy !== null) {
+                    // Ground a method-generic bound that references an enclosing class type
+                    // parameter (`<U : E>`) against the receiver's concrete arguments, threaded
+                    // to the method's declaring class; an ungroundable bound drops to lenient.
+                    $receiverArgs = $this->resolveReceiverTypeArgs($node->var);
+                    $checkedParams = $this->groundBounds($params, $classFqn, $receiverArgs, $declaringFqn);
                     Registry::checkBounds(
-                        $params,
+                        $checkedParams,
                         $args,
                         $this->hierarchy,
                         $classFqn . '::' . $methodName . '<' . self::formatArgList($args) . '>',
@@ -1221,6 +1295,157 @@ final class GenericMethodCompiler
                     }
                 }
                 return null;
+            }
+
+            /**
+             * The receiver's concrete generic type arguments, parallel to {@see resolveReceiverFqn}:
+             *   - `$this`        -> the enclosing class's own type params, as identity TypeRefs (a
+             *                       method-generic bound on the uninstantiated template can't be
+             *                       grounded to a concrete, so this stays a type-param and drops).
+             *   - `$var`         -> the side-tabled args for that parameter / local.
+             *   - `$this->prop`  -> the property type's generic args.
+             * Empty when unknown -- the grounding step then falls back to lenient.
+             *
+             * @return list<TypeRef>
+             */
+            private function resolveReceiverTypeArgs(Node $receiver): array
+            {
+                if ($receiver instanceof Variable && is_string($receiver->name)) {
+                    if ($receiver->name === 'this') {
+                        $owner = $this->currentClassFqn !== null
+                            ? ($this->classByFqn[$this->currentClassFqn] ?? null)
+                            : null;
+                        $params = $owner?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                        if (!is_array($params)) {
+                            return [];
+                        }
+                        /** @var list<TypeParam> $params */
+                        return array_map(
+                            static fn (TypeParam $p): TypeRef => new TypeRef($p->name, isTypeParam: true),
+                            $params,
+                        );
+                    }
+                    return $this->currentScopeParamTypeArgs[$receiver->name]
+                        ?? $this->currentScopeLocalTypeArgs[$receiver->name]
+                        ?? [];
+                }
+                if ($receiver instanceof PropertyFetch
+                    && $receiver->var instanceof Variable
+                    && $receiver->var->name === 'this'
+                    && $receiver->name instanceof Identifier
+                    && $this->currentClassFqn !== null
+                ) {
+                    $owner = $this->classByFqn[$this->currentClassFqn] ?? null;
+                    if ($owner !== null) {
+                        $propName = $receiver->name->toString();
+                        foreach ($owner->stmts as $stmt) {
+                            if (!$stmt instanceof Property) {
+                                continue;
+                            }
+                            foreach ($stmt->props as $prop) {
+                                if ($prop->name->toString() !== $propName) {
+                                    continue;
+                                }
+                                $type = $stmt->type;
+                                if ($type instanceof NullableType) {
+                                    $type = $type->type;
+                                }
+                                if ($type instanceof Name) {
+                                    $propArgs = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                                    /** @var list<TypeRef> $result */
+                                    $result = is_array($propArgs) ? $propArgs : [];
+                                    return $result;
+                                }
+                            }
+                        }
+                    }
+                }
+                return [];
+            }
+
+            /**
+             * Ground each method type-param's bound against the receiver's concrete arguments.
+             *
+             * Builds a substitution from the declaring class's parameters to the receiver's
+             * arguments (threaded up the inheritance chain), rewrites every bound leaf with it, and —
+             * when a leaf is still a bare enclosing type parameter afterwards (no receiver args, an
+             * inherited/opaque receiver, or the `$this` template body) — DROPS that param's bound for
+             * this call rather than checking it against the phantom type-param name. A bound that
+             * doesn't reference an enclosing param (a real class, or an F-bounded `Comparable<T>`
+             * leaf) is unaffected and checked exactly as before.
+             *
+             * @param list<TypeParam> $params
+             * @param list<TypeRef> $receiverArgs
+             * @return list<TypeParam>
+             */
+            private function groundBounds(array $params, string $receiverFqn, array $receiverArgs, string $declaringFqn): array
+            {
+                $classSubst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
+
+                return array_map(
+                    static function (TypeParam $param) use ($classSubst): TypeParam {
+                        if ($param->bound === null) {
+                            return $param;
+                        }
+                        $grounded = Registry::substituteBound($param->bound, $classSubst);
+                        if (self::boundHasUngroundedLeaf($grounded)) {
+                            return new TypeParam($param->name, null, $param->default, $param->variance);
+                        }
+                        return new TypeParam($param->name, $grounded, $param->default, $param->variance);
+                    },
+                    $params,
+                );
+            }
+
+            /**
+             * The declaring-class-parameter => receiver-argument substitution, or `[]` when the
+             * receiver's arguments can't be threaded to the declaring class (no hierarchy, an
+             * unreachable/ambiguous chain, an arity mismatch, or a missing declaring class).
+             *
+             * @param list<TypeRef> $receiverArgs
+             * @return array<string, TypeRef>
+             */
+            private function classSubstitutionFor(string $receiverFqn, array $receiverArgs, string $declaringFqn): array
+            {
+                if ($this->hierarchy === null) {
+                    return [];
+                }
+                $declArgs = $this->hierarchy->resolveInheritedArgs($receiverFqn, $receiverArgs, $declaringFqn);
+                if ($declArgs === null) {
+                    return [];
+                }
+                $owner = $this->classByFqn[$declaringFqn] ?? null;
+                $params = $owner?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                if (!is_array($params) || count($params) !== count($declArgs)) {
+                    return [];
+                }
+                /** @var list<TypeParam> $params */
+                $subst = [];
+                foreach ($params as $i => $param) {
+                    $subst[$param->name] = $declArgs[$i];
+                }
+                return $subst;
+            }
+
+            /**
+             * Whether any leaf of the bound is still a bare type parameter (`isTypeParam`) — i.e. an
+             * enclosing class/method parameter that substitution couldn't ground. A leaf naming a
+             * real class with type-param ARGS (`Comparable<T>`) is not "ungrounded": the hierarchy
+             * checks it erased on the leaf name, exactly as today.
+             */
+            private static function boundHasUngroundedLeaf(BoundExpr $bound): bool
+            {
+                if ($bound instanceof BoundLeaf) {
+                    return $bound->type->isTypeParam;
+                }
+                if ($bound instanceof BoundIntersection || $bound instanceof BoundUnion) {
+                    foreach ($bound->operands as $operand) {
+                        if (self::boundHasUngroundedLeaf($operand)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
             }
 
             private function rewriteFuncCall(FuncCall $node): ?Node

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Element-typed methods on covariant collections.** A method-level type parameter
+  bounded by an enclosing class type parameter — `class Box<+E> { public function
+  contains<U : E>(U $value): bool }` — now has its bound **grounded** against the
+  receiver's concrete type argument: `Box<Product>::contains<Book>` is accepted when
+  `Book <: Product`, and a genuine violation (`Box<Book>::contains<Product>`) is rejected
+  with the bound shown as the real type, not `E`. The receiver's argument is threaded up
+  the `extends`/`implements` chain, so a method declared on a generic interface/base and
+  inherited by a concrete collection is grounded too. This is the sound, element-typed
+  alternative to a `mixed` parameter on a covariant `<+E>` collection (`U` is invariant —
+  not method-level variance). Where the receiver's argument can't be determined (an opaque
+  receiver, or a `$this` call inside the template body) the bound is left unchecked rather
+  than falsely rejected. See [type bounds](docs/syntax/type-bounds.md) and
+  [ADR-0018](docs/adr/0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md).
 - **`xphp check`** — a validate-without-emitting CI gate. It runs every generic
   validation `xphp compile` does (bounds, variance, defaults, missing/duplicate
   generics, unsupported closures), but collects **all** problems in one run —

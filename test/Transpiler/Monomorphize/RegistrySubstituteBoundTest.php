@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Unit coverage for {@see Registry::substituteBound} — the pure primitive that grounds a
- * method-generic bound referencing an enclosing class type parameter (`<E2 : E>`) against the
+ * method-generic bound referencing an enclosing class type parameter (`<U : E>`) against the
  * receiver's concrete type arguments before the bound is checked. Leaves are rewritten via
  * Specializer::substituteTypeRef; compound bounds (intersection / union / DNF) recurse.
  */

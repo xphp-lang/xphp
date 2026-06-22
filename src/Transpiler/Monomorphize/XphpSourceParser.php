@@ -1774,12 +1774,18 @@ final class XphpSourceParser
             private function buildBoundExprNode(array $node): BoundExpr
             {
                 if ($node['kind'] === 'leaf') {
+                    $resolvedArgs = $this->resolveTypeRefList($node['args']);
+                    // A bound that is a bare enclosing type parameter (`U : E`, or `B : A` over an
+                    // earlier param) is kept as an `isTypeParam` TypeRef -- mirroring resolveTypeRef
+                    // -- so the call site can ground it against the receiver's concrete argument
+                    // rather than treating `E` as a phantom class name.
+                    if (!$node['isFq'] && $this->isEnclosingTypeParam($node['name'])) {
+                        return new BoundLeaf(new TypeRef($node['name'], $resolvedArgs, isTypeParam: true));
+                    }
                     $fqn = $node['isFq']
                         ? $node['name']
                         : $this->resolveNameOnly($node['name']);
-                    $resolvedArgs = $this->resolveTypeRefList($node['args']);
                     $suspect = !$node['isFq']
-                        && !$this->isEnclosingTypeParam($node['name'])
                         && $this->isSuspectUndeclared($node['name']);
                     return new BoundLeaf(new TypeRef($fqn, $resolvedArgs, suspectUndeclared: $suspect));
                 }
