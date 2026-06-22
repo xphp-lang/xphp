@@ -34,8 +34,9 @@ developer hand-listing every dependency or re-editing config when a package is i
 
 Chosen: **an `xphp.json` manifest resolved into a multi-root source set.** A manifest declares
 `sources` (its own `.xphp` roots) and `include` (other packages, transitively). `include` entries
-may be globs; a glob-matched directory with its own `xphp.json` is pulled in, others skipped, so
-`"include": ["vendor/*/*"]` discovers every installed xphp package and is set once. Resolution
+may be globs (`*`/`?`/`[…]` within a segment, or `**` for recursive discovery); a glob-matched
+directory with its own `xphp.json` is pulled in, others skipped, so `"include": ["vendor/**"]`
+discovers every installed xphp package at any depth and is set once. Resolution
 dedups by realpath (diamonds resolve once; cycles terminate). The CLI takes `--config <path|dir>`
 or auto-detects `xphp.json` in the working directory; the single-directory positional form is
 unchanged (precedence: positional source → `--config` → auto-detect).

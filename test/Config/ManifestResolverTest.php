@@ -101,13 +101,31 @@ final class ManifestResolverTest extends TestCase
         self::assertSame(['Box.xphp', 'Use.xphp'], $this->basenames($r));
     }
 
-    public function testDoubleStarGlobIsRejected(): void
+    public function testRecursiveGlobDiscoversPackagesAtAnyDepth(): void
     {
-        $this->pkg('app', '{"include":["packages/**"]}', []);
+        // `**` finds every dir with an xphp.json under the prefix, at any depth, skipping the rest.
+        // app's own `sources` is an explicit `src` (NOT the default ".", which would recursively
+        // grab packages/*.xphp directly) — so A/B are reachable ONLY through the `**` discovery.
+        $this->pkg('app', '{"sources":["src"],"include":["packages/**"]}', ['src/Root.xphp']);
+        $this->pkg('app/packages/a', '{"sources":["src"]}', ['src/A.xphp']);
+        $this->pkg('app/packages/nested/deep/b', '{"sources":["src"]}', ['src/B.xphp']);
+        mkdir($this->work . '/app/packages/plain', 0o755, true); // no xphp.json → not discovered
+        // A non-manifest file at depth must NOT be mistaken for a package.
+        file_put_contents($this->work . '/app/packages/notes.txt', 'x');
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('"**" is not supported');
-        $this->resolve($this->work . '/app');
+        $r = $this->resolve($this->work . '/app');
+
+        self::assertSame(['A.xphp', 'B.xphp', 'Root.xphp'], $this->basenames($r));
+    }
+
+    public function testRecursiveGlobOverMissingDirIsACleanNoOp(): void
+    {
+        $this->pkg('app', '{"sources":["src"],"include":["packages/**"]}', ['src/Use.xphp']);
+        // No `packages/` dir exists at all.
+
+        $r = $this->resolve($this->work . '/app');
+
+        self::assertSame(['Use.xphp'], $this->basenames($r));
     }
 
     public function testExplicitIncludeWithoutManifestIsHardError(): void

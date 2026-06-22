@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace XPHP\Config;
 
+use FilesystemIterator;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use RuntimeException;
 use XPHP\FileSystem\FileFinder;
 use XPHP\FileSystem\FilepathArray;
@@ -12,9 +15,11 @@ use XPHP\FileSystem\FileReader;
 /**
  * Resolves an `xphp.json` manifest into the full set of `.xphp` source roots to compile: the
  * package's own `sources` plus every transitively-`include`d package. `include` entries may be
- * globs (`*`/`?`/`[…]` per segment, via native `glob`; recursive `**` is rejected) — matched
- * directories that contain an `xphp.json` are pulled in and others skipped (vendor over-matches by
- * design), while an explicit (non-glob) entry lacking an `xphp.json` is a hard error.
+ * globs: `*`/`?`/`[…]` match within a path segment (native `glob`), and `**` (globstar) matches
+ * recursively — discovering every directory at any depth that has its own `xphp.json`. Matched
+ * directories with an `xphp.json` are pulled in and others skipped (vendor over-matches by design;
+ * `"vendor/**"` is the idiomatic "every installed package" form), while an explicit (non-glob)
+ * entry lacking an `xphp.json` is a hard error.
  *
  * The walk dedups by realpath (diamonds resolve once) and is cycle-safe (a↔b terminates). Paths and
  * globs are resolved against each manifest's own directory. `target`/`cache` come from the entry
@@ -144,25 +149,56 @@ final class ManifestResolver
     }
 
     /**
-     * Expand a glob (relative to $base) to the directories it matches, via the native libc glob
-     * with GLOB_ONLYDIR (so only directories are returned, sorted). Single-star segments are
-     * supported, so composer's flat `vendor/<org>/<pkg>` layout is matched by a two-segment star
-     * glob under `vendor`. Recursive double-star is intentionally unsupported — rejected with a
-     * clear message rather than silently mis-handled.
+     * Expand a glob (relative to $base) to the directories it matches.
+     *
+     * A `**` (globstar) anywhere means recursive discovery: every directory under the literal
+     * prefix (the path up to the first `**`) that contains its own `xphp.json`. So `vendor/**`
+     * finds every installed xphp package at any depth. Otherwise the native libc glob runs with
+     * `GLOB_ONLYDIR` (single-segment `*`/`?`/`[…]`, directories only, sorted) — composer's flat
+     * `vendor/<org>/<pkg>` layout is also matched by a two-segment single-star glob.
      *
      * @return list<string>
      */
     private function expandGlob(string $base, string $pattern): array
     {
-        if (str_contains($pattern, '**')) {
-            throw new RuntimeException(sprintf(
-                'Invalid include glob "%s": "**" is not supported — use "*" per path segment (e.g. "vendor/*/*").',
-                $pattern,
-            ));
+        $full = self::join($base, $pattern);
+
+        if (str_contains($full, '**')) {
+            // Recurse from the literal prefix (everything before the first `**`).
+            return self::discoverManifestDirs(explode('**', $full)[0]);
         }
-        $matches = glob(self::join($base, $pattern), GLOB_ONLYDIR);
+
+        $matches = glob($full, GLOB_ONLYDIR);
 
         return $matches === false ? [] : $matches;
+    }
+
+    /**
+     * Recursively find every directory under $base that contains an `xphp.json`. $base may carry a
+     * trailing slash; a non-existent base yields no matches.
+     *
+     * @return list<string>
+     */
+    private static function discoverManifestDirs(string $base): array
+    {
+        if (!is_dir($base)) {
+            return [];
+        }
+        $dirs = [];
+        /** @var iterable<\SplFileInfo> $iterator */
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
+        );
+        foreach ($iterator as $entry) {
+            if ($entry->getFilename() === self::MANIFEST_FILENAME) {
+                $dirs[] = $entry->getPath();
+            }
+        }
+        // @infection-ignore-all -- ordering only; the resolved source set is order-independent, and
+        // native glob() returns sorted too — this just keeps `**` discovery deterministic.
+        sort($dirs);
+
+        return $dirs;
     }
 
     private static function isGlob(string $s): bool

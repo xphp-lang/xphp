@@ -124,7 +124,7 @@ compiler discover the roots:
 ```json
 {
   "sources": ["src"],
-  "include": ["vendor/*/*"],
+  "include": ["vendor/**"],
   "target": "dist",
   "cache": ".xphp-cache"
 }
@@ -133,11 +133,12 @@ compiler discover the roots:
 - `sources` — this package's own `.xphp` roots (relative to the manifest).
   Omitted ⇒ `["."]`.
 - `include` — other packages to pull in, transitively. Each entry is a directory
-  or a **glob** (`*`/`?`/`[…]`; recursive `**` is rejected). A glob auto-discovers:
-  any matched directory that has its own `xphp.json` is compiled in, others are
-  skipped — so `"vendor/*/*"` picks up every installed xphp package and needs no
-  edit when you add another. An explicit (non-glob) entry without an `xphp.json`
-  is an error.
+  or a **glob**: `*`/`?`/`[…]` match within one path segment, and `**` (globstar)
+  matches recursively. A glob auto-discovers: any matched directory that has its
+  own `xphp.json` is compiled in, others are skipped — so `"vendor/**"` picks up
+  every installed xphp package at any depth and needs no edit when you add another.
+  (`"vendor/*/*"` also works for Composer's flat `vendor/<org>/<pkg>` layout.) An
+  explicit (non-glob) entry without an `xphp.json` is an error.
 - `target`/`cache` — optional output dirs (CLI `--target`/`--cache` override).
 
 Then compile (or check) against the manifest — `--config`, or just run where the
