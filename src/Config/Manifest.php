@@ -12,10 +12,10 @@ namespace XPHP\Config;
 final readonly class Manifest
 {
     /**
-     * @param list<string> $sources This package's own `.xphp` source roots (relative). Defaults to
-     *   `["."]` (the manifest's own dir) when the key is absent.
+     * @param list<string> $sources This package's own `.xphp` source roots (relative). The parser
+     *   substitutes `["."]` (the manifest's own dir) when the key is absent.
      * @param list<string> $include Other packages to pull in transitively — each a dir or a glob
-     *   (`*`/`**`). Defaults to `[]`.
+     *   (`*`/`?`/`[…]` per segment; recursive `**` is rejected). The parser substitutes `[]` when absent.
      * @param ?string $target Optional build output dir (entry manifest only; CLI overrides).
      * @param ?string $cache Optional generated-class cache dir (entry manifest only; CLI overrides).
      */
