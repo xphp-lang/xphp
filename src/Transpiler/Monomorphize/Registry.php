@@ -715,6 +715,41 @@ final class Registry
     }
 
     /**
+     * Substitute type-param leaves inside a BoundExpr tree, returning a fresh tree.
+     *
+     * Grounds a method-generic bound that references an enclosing class type parameter
+     * (`<E2 : E>`) against the receiver's concrete type arguments before the bound is
+     * checked: each `BoundLeaf`'s `TypeRef` is rewritten via
+     * {@see Specializer::substituteTypeRef}, so a leaf `E` becomes the receiver's concrete
+     * `Product`, while a leaf the map does not mention is returned unchanged (and a leaf that
+     * stays a type-param signals an ungroundable bound to the caller). `Bound*` are immutable,
+     * so a fresh tree is built; the compound branches recurse so DNF shapes ground throughout.
+     *
+     * @param array<string, TypeRef> $subst
+     */
+    public static function substituteBound(BoundExpr $bound, array $subst): BoundExpr
+    {
+        if ($bound instanceof BoundLeaf) {
+            return new BoundLeaf(Specializer::substituteTypeRef($bound->type, $subst));
+        }
+        if ($bound instanceof BoundIntersection) {
+            return new BoundIntersection(...array_map(
+                static fn (BoundExpr $op): BoundExpr => self::substituteBound($op, $subst),
+                $bound->operands,
+            ));
+        }
+        if ($bound instanceof BoundUnion) {
+            return new BoundUnion(...array_map(
+                static fn (BoundExpr $op): BoundExpr => self::substituteBound($op, $subst),
+                $bound->operands,
+            ));
+        }
+        // Defensive: BoundExpr is an abstract base and we own every subtype. Unreachable in
+        // any test, but keep the return shape consistent (mirrors evaluateBound).
+        return $bound;
+    }
+
+    /**
      * Three-way verdict (true / false / null) for a bound expression against a
      * concrete TypeRef. Walks the BoundExpr tree:
      *   - Leaf:        delegates to `$hierarchy->isSubtype` using the leaf's
