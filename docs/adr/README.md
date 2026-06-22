@@ -34,3 +34,4 @@ should be added here as a new numbered file; copy
 | [0014](0014-variance-markers-are-class-level-only.md) | Variance markers are class-level only | Accepted |
 | [0015](0015-variance-markers-on-private-properties.md) | Variance markers on private properties | Accepted |
 | [0016](0016-no-special-cased-value-equality-bound.md) | No special-cased value-equality bound (use ordinary generics) | Accepted |
+| [0017](0017-config-manifest-source-resolution.md) | Config-manifest, multi-root source resolution (`xphp.json`) | Accepted |

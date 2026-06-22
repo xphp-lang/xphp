@@ -113,6 +113,48 @@ After the compile completes you'll have:
 Both `dist/` and `.xphp-cache/` can be gitignored — they're
 generated artifacts your CI/CD pipeline rebuilds on every deploy.
 
+### Compiling a package and its dependencies (`xphp.json`)
+
+A single source directory is enough for one self-contained project, but a
+package that *ships* `.xphp` templates — and any app that *consumes* one —
+needs to compile several source roots together. Instead of staging them into
+one tree, drop an **`xphp.json`** manifest at the package root and let the
+compiler discover the roots:
+
+```json
+{
+  "sources": ["src"],
+  "include": ["vendor/*/*"],
+  "target": "dist",
+  "cache": ".xphp-cache"
+}
+```
+
+- `sources` — this package's own `.xphp` roots (relative to the manifest).
+  Omitted ⇒ `["."]`.
+- `include` — other packages to pull in, transitively. Each entry is a directory
+  or a **glob** (`*`/`?`/`[…]`; recursive `**` is rejected). A glob auto-discovers:
+  any matched directory that has its own `xphp.json` is compiled in, others are
+  skipped — so `"vendor/*/*"` picks up every installed xphp package and needs no
+  edit when you add another. An explicit (non-glob) entry without an `xphp.json`
+  is an error.
+- `target`/`cache` — optional output dirs (CLI `--target`/`--cache` override).
+
+Then compile (or check) against the manifest — `--config`, or just run where the
+`xphp.json` is auto-detected:
+
+```bash
+vendor/bin/xphp compile --config xphp.json     # or: vendor/bin/xphp compile  (auto-detect)
+vendor/bin/xphp check  --config xphp.json
+```
+
+**Distribution model.** A library ships its `.xphp` *sources* plus its `xphp.json`
+(via Composer). A downstream build pulls those sources and compiles the whole
+union into its own output — so the upstream's marker interfaces and the
+specializations your call sites need all get emitted, and everything runs without
+the library being pre-compiled. The single-directory `compile src dist cache` form
+above keeps working unchanged.
+
 ## 5. Run it
 
 Any normal PHP runtime that loads Composer's autoload will pick up
