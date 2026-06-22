@@ -7,6 +7,8 @@ namespace XPHP\Console;
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use Symfony\Component\Console\Application;
+use XPHP\Config\ManifestResolver;
+use XPHP\Config\SourceResolver;
 use XPHP\Console\Command\CheckCommand;
 use XPHP\Console\Command\CompileCommand;
 use XPHP\FileSystem\FileFinder;
@@ -47,7 +49,9 @@ final class ApplicationConsole extends Application
             $hashLength,
         );
 
-        $this->addCommand(new CompileCommand($fileFinder, $compiler));
-        $this->addCommand(new CheckCommand($fileFinder, $compiler, new StaticAnalysisGate($compiler)));
+        $sourceResolver = new SourceResolver($fileFinder, new ManifestResolver($fileReader, $fileFinder));
+
+        $this->addCommand(new CompileCommand($sourceResolver, $compiler));
+        $this->addCommand(new CheckCommand($sourceResolver, $compiler, new StaticAnalysisGate($compiler)));
     }
 }

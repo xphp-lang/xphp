@@ -9,6 +9,8 @@ use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Symfony\Component\Console\Tester\CommandTester;
+use XPHP\Config\ManifestResolver;
+use XPHP\Config\SourceResolver;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
@@ -29,6 +31,25 @@ final class CheckCommandTest extends TestCase
 
         self::assertSame(0, $exit);
         self::assertStringContainsString('No problems found', $tester->getDisplay());
+    }
+
+    public function testResolvesSourcesFromConfigManifest(): void
+    {
+        // `check --config <xphp.json>` resolves sources from the manifest (no positional source).
+        $dir = sys_get_temp_dir() . '/xphp-check-cfg-' . uniqid('', true);
+        mkdir($dir . '/src', 0o755, true);
+        file_put_contents($dir . '/xphp.json', '{"sources":["src"]}');
+        file_put_contents($dir . '/src/Box.xphp', "<?php\nnamespace App;\nclass Box<T> { public function get(): T { throw new \\LogicException; } }\n");
+
+        try {
+            $tester = $this->tester();
+            $exit = $tester->execute(['--config' => $dir . '/xphp.json', '--no-phpstan' => true]);
+
+            self::assertSame(0, $exit);
+            self::assertStringContainsString('No problems found', $tester->getDisplay());
+        } finally {
+            self::rrmdir($dir);
+        }
     }
 
     public function testGenericErrorsExitOne(): void
@@ -104,8 +125,13 @@ final class CheckCommandTest extends TestCase
             $printer,
         );
 
+        $sourceResolver = new SourceResolver(
+            new NativeFileFinder(),
+            new ManifestResolver(new NativeFileReader(), new NativeFileFinder()),
+        );
+
         return new CommandTester(
-            new CheckCommand(new NativeFileFinder(), $compiler, new StaticAnalysisGate($compiler)),
+            new CheckCommand($sourceResolver, $compiler, new StaticAnalysisGate($compiler)),
         );
     }
 
@@ -113,5 +139,20 @@ final class CheckCommandTest extends TestCase
     {
         return realpath(__DIR__ . '/../fixture/check/' . $fixture . '/source')
             ?: throw new RuntimeException("Fixture missing: {$fixture}");
+    }
+
+    private static function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            is_dir($path) ? self::rrmdir($path) : unlink($path);
+        }
+        rmdir($dir);
     }
 }

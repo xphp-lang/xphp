@@ -10,6 +10,8 @@ use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Symfony\Component\Console\Tester\CommandTester;
+use XPHP\Config\ManifestResolver;
+use XPHP\Config\SourceResolver;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
@@ -156,7 +158,14 @@ final class CheckCommandPhpStanTest extends TestCase
         );
 
         return new CommandTester(
-            new CheckCommand(new NativeFileFinder(), $compiler, new StaticAnalysisGate($compiler)),
+            new CheckCommand(
+                new SourceResolver(
+                    new NativeFileFinder(),
+                    new ManifestResolver(new NativeFileReader(), new NativeFileFinder()),
+                ),
+                $compiler,
+                new StaticAnalysisGate($compiler),
+            ),
         );
     }
 

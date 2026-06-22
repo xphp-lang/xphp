@@ -10,11 +10,12 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
+use RuntimeException;
+use XPHP\Config\SourceResolver;
 use XPHP\Diagnostics\Renderer\DiagnosticRenderer;
 use XPHP\Diagnostics\Renderer\GithubRenderer;
 use XPHP\Diagnostics\Renderer\JsonRenderer;
 use XPHP\Diagnostics\Renderer\TextRenderer;
-use XPHP\FileSystem\FileFinder;
 use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 
@@ -34,7 +35,7 @@ use XPHP\Transpiler\Monomorphize\Compiler;
 final class CheckCommand extends Command
 {
     public function __construct(
-        private readonly FileFinder $fileFinder,
+        private readonly SourceResolver $sourceResolver,
         private readonly Compiler $compiler,
         private readonly StaticAnalysisGate $staticAnalysisGate,
     ) {
@@ -44,7 +45,8 @@ final class CheckCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addArgument('source', InputArgument::REQUIRED, 'Directory containing .xphp source files')
+            ->addArgument('source', InputArgument::OPTIONAL, 'Directory containing .xphp source files (omit when using --config or an auto-detected xphp.json)')
+            ->addOption('config', 'c', InputOption::VALUE_REQUIRED, 'Path to an xphp.json manifest (or a dir containing one)')
             ->addOption('format', null, InputOption::VALUE_REQUIRED, 'Output format: text, json, or github', 'text')
             ->addOption('no-phpstan', null, InputOption::VALUE_NONE, 'Skip the PHPStan pass over the compiled output')
             ->addOption('phpstan-bin', null, InputOption::VALUE_REQUIRED, 'Path to the PHPStan binary (default: vendor/bin/phpstan, then $PATH)')
@@ -55,15 +57,10 @@ final class CheckCommand extends Command
         InputInterface $input,
         OutputInterface $output,
     ): int {
-        // getArgument()/getOption() are typed `mixed`; these are scalar inputs (a required
-        // argument and an option with a string default), so they are always strings — narrow
-        // rather than blind-cast (PHPStan level 9 rejects casting mixed).
+        // getArgument()/getOption() are typed `mixed`; narrow rather than blind-cast (PHPStan
+        // level 9 rejects casting mixed).
         $sourceArg = $input->getArgument('source');
-        $sourceDir = is_string($sourceArg) ? $sourceArg : '';
-        if (!is_dir($sourceDir)) {
-            $output->writeln("<error>Source directory not found: {$sourceDir}</error>");
-            return self::INVALID;
-        }
+        $configOpt = $input->getOption('config');
 
         $formatOption = $input->getOption('format');
         $renderer = $this->rendererFor(is_string($formatOption) ? $formatOption : '');
@@ -72,10 +69,22 @@ final class CheckCommand extends Command
             return self::INVALID;
         }
 
-        $sources = $this->fileFinder
-            ->find($sourceDir)
-            ->filter(static fn (string $filepath): bool => str_ends_with($filepath, '.xphp'));
+        // @infection-ignore-all -- getcwd() is effectively always a string; the `?: '.'` fallback
+        // resolves identically to the live cwd for auto-detection and PHPStan config lookup.
+        $cwd = getcwd() ?: '.';
+        try {
+            $resolved = $this->sourceResolver->resolve(
+                is_string($sourceArg) ? $sourceArg : null,
+                is_string($configOpt) ? $configOpt : null,
+                $cwd,
+            );
+        } catch (RuntimeException $e) {
+            // @infection-ignore-all -- the <error> banner is decoration; message content is asserted.
+            $output->writeln('<error>' . $e->getMessage() . '</error>');
+            return self::INVALID;
+        }
 
+        $sources = $resolved->files;
         $diagnostics = $this->compiler->check($sources);
 
         // Only layer PHPStan on when the generic checks pass: invalid generics can't be
@@ -86,10 +95,13 @@ final class CheckCommand extends Command
             $configOption = $input->getOption('phpstan-config');
             $findings = $this->staticAnalysisGate->analyze(
                 $sources,
-                $sourceDir,
-                getcwd() ?: '.',
+                // @infection-ignore-all -- rootByFile is authoritative for the temp-workspace emit;
+                // this scalar base is an unused fallback, and PHPStan resolves by symbol not path.
+                is_string($sourceArg) ? $sourceArg : '',
+                $cwd,
                 is_string($binOption) ? $binOption : null,
                 is_string($configOption) ? $configOption : null,
+                $resolved->rootByFile,
             );
             foreach ($findings as $finding) {
                 $diagnostics->add($finding);
