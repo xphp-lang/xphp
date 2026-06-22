@@ -57,10 +57,23 @@ final readonly class TypeHierarchy
     ];
 
     /**
+     * `$ancestors` powers the erased `isSubtype`/`ancestorChain` queries. `$superTypeArgs` and
+     * `$typeParamNames` additionally model the *parameterized* supertype edges — the type
+     * arguments each `extends`/`implements` clause passes (`implements Collection<E>`) and each
+     * class's own declared parameter names — so `resolveInheritedArgs` can thread a receiver's
+     * concrete arguments up the chain to a method's declaring class. Both default to empty: a
+     * hierarchy built without them (e.g. hand-constructed in a test, or from a non-xphp AST) still
+     * answers the erased queries, and `resolveInheritedArgs` simply finds nothing to ground.
+     *
      * @param array<string, list<string>> $ancestors map<fqn, list<direct-ancestor-fqn>>
+     * @param array<string, list<TypeRef>> $superTypeArgs map<fqn, list<parameterized direct supertype>>
+     * @param array<string, list<string>> $typeParamNames map<fqn, list<own type-param name>>
      */
-    public function __construct(private array $ancestors)
-    {
+    public function __construct(
+        private array $ancestors,
+        private array $superTypeArgs = [],
+        private array $typeParamNames = [],
+    ) {
     }
 
     /**
@@ -71,10 +84,12 @@ final readonly class TypeHierarchy
     public static function fromAstPerFile(array $astPerFile): self
     {
         $ancestors = [];
+        $superTypeArgs = [];
+        $typeParamNames = [];
         foreach ($astPerFile as $ast) {
-            self::collectFromAst($ast, $ancestors);
+            self::collectFromAst($ast, $ancestors, $superTypeArgs, $typeParamNames);
         }
-        return new self($ancestors);
+        return new self($ancestors, $superTypeArgs, $typeParamNames);
     }
 
     /**
@@ -173,19 +188,113 @@ final readonly class TypeHierarchy
     }
 
     /**
+     * Thread a receiver's concrete type arguments up the parameterized supertype chain.
+     *
+     * Given a receiver of static type `$subFqn<$subArgs>` and a `$superFqn` reachable through its
+     * `extends`/`implements` clauses, returns the type arguments that `$superFqn`'s OWN parameters
+     * are bound to as witnessed from that receiver. For `class ArrayList<+E> implements Collection<E>`,
+     * `resolveInheritedArgs('App\ArrayList', [Product], 'App\Collection')` yields `[Product]`. At each
+     * hop the current class's parameters are substituted with the current arguments into the supertype
+     * clause's arguments (so nested clauses like `implements Foo<Bar<E>>` ground throughout).
+     *
+     * Returns null on any gap — an unreachable target, a non-parameterized/arity-mismatched hop, or a
+     * cyclic/expansive edge — and on ambiguity: when more than one path grounds the target to
+     * non-equal arguments. The caller reads null as "cannot ground; fall back to lenient". A direct
+     * hit (`$subFqn === $superFqn`) returns `$subArgs` unchanged.
+     *
+     * @param list<TypeRef> $subArgs
+     * @return list<TypeRef>|null
+     */
+    public function resolveInheritedArgs(string $subFqn, array $subArgs, string $superFqn): ?array
+    {
+        /** @var array<string, list<TypeRef>> $groundings canonical-args => the grounded args (dedup) */
+        $groundings = [];
+        $this->groundPaths(ltrim($subFqn, '\\'), $subArgs, ltrim($superFqn, '\\'), [], $groundings);
+
+        // 0 groundings = unreachable; >1 distinct = ambiguous (conflicting paths). Either way: null.
+        if (count($groundings) !== 1) {
+            return null;
+        }
+
+        return array_values($groundings)[0];
+    }
+
+    /**
+     * Depth-first walk of the parameterized supertype edges, accumulating every distinct grounding of
+     * `$superFqn` into `$groundings` (keyed by canonical args, so a diamond that agrees collapses to
+     * one and a diamond that conflicts yields two). `$onPath` is the set of FQNs on the current path,
+     * passed by value so siblings stay independent (diamonds work) while a repeat on one path — a
+     * regular cycle or an expansive `A<T> implements A<Box<T>>` recursion — terminates that path.
+     *
+     * @param list<TypeRef> $args
+     * @param array<string, true> $onPath
+     * @param array<string, list<TypeRef>> $groundings
+     */
+    private function groundPaths(string $fqn, array $args, string $superFqn, array $onPath, array &$groundings): void
+    {
+        if ($fqn === $superFqn) {
+            $groundings[self::argsKey($args)] = $args;
+            return;
+        }
+        if (isset($onPath[$fqn])) {
+            return; // cycle / expansive recursion on this path — a gap, not a grounding.
+        }
+        $params = $this->typeParamNames[$fqn] ?? [];
+        if (count($params) !== count($args)) {
+            return; // arity mismatch (incl. a non-parameterized hop carrying args) — a gap.
+        }
+        $subst = [];
+        foreach ($params as $i => $name) {
+            $subst[$name] = $args[$i];
+        }
+        // @infection-ignore-all TrueValue -- the on-path guard keys on isset() (existence, not
+        // value), so the assigned literal is immaterial; the cycle/expansive tests pin termination.
+        $onPath[$fqn] = true;
+        foreach ($this->superTypeArgs[$fqn] ?? [] as $clause) {
+            $nextArgs = array_map(
+                static fn (TypeRef $a): TypeRef => Specializer::substituteTypeRef($a, $subst),
+                $clause->args,
+            );
+            $this->groundPaths(ltrim($clause->name, '\\'), $nextArgs, $superFqn, $onPath, $groundings);
+        }
+    }
+
+    /**
+     * Canonical key for an argument list, used to dedup groundings and detect conflict.
+     *
+     * @param list<TypeRef> $args
+     */
+    private static function argsKey(array $args): string
+    {
+        return implode(',', array_map(static fn (TypeRef $a): string => $a->canonical(), $args));
+    }
+
+    /**
      * @param list<Node\Stmt> $ast
      * @param array<string, list<string>> $ancestors out-param accumulator
+     * @param array<string, list<TypeRef>> $superTypeArgs out-param: parameterized direct supertypes
+     * @param array<string, list<string>> $typeParamNames out-param: each class's own param names
+     * @param-out array<string, list<string>> $ancestors
+     * @param-out array<string, list<TypeRef>> $superTypeArgs
+     * @param-out array<string, list<string>> $typeParamNames
      */
-    private static function collectFromAst(array $ast, array &$ancestors): void
+    private static function collectFromAst(array $ast, array &$ancestors, array &$superTypeArgs, array &$typeParamNames): void
     {
         // @infection-ignore-all — the inner visitor is a flat AST walk over namespace/use
-        // /classlike nodes; mutations on its `?->`, `??` lastSegment fallback and
-        // `ltrim('\\')` defensives all toggle paths that are masked by nikic's
-        // representation (FQ names come without a leading backslash, anonymous namespaces
-        // aren't part of any fixture). End-to-end coverage from TypeHierarchyTest.
+        // /classlike nodes; mutations on its `?->`, `??` lastSegment fallback, the
+        // `ltrim('\\')` defensives and the `is_array` attribute guards all toggle paths that
+        // are masked by nikic's representation (FQ names come without a leading backslash,
+        // anonymous namespaces aren't part of any fixture, and a non-generic clause simply
+        // carries no ATTR_GENERIC_ARGS). The parameterized-supertype + param-name capture is
+        // end-to-end covered by TypeHierarchyTest (incl. a real-parser, aliased-arg case); the
+        // load-bearing grounding logic lives in resolveInheritedArgs, which IS mutation-tested.
         $visitor = new class extends NodeVisitorAbstract {
             /** @var array<string, list<string>> */
             public array $collected = [];
+            /** @var array<string, list<TypeRef>> parameterized direct supertypes per class */
+            public array $superArgs = [];
+            /** @var array<string, list<string>> own type-param names per class */
+            public array $paramNames = [];
             private string $currentNamespace = '';
             /** @var array<string, string> alias => FQN */
             private array $useMap = [];
@@ -209,22 +318,50 @@ final readonly class TypeHierarchy
                 }
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $selfFqn = $this->qualify($node->name->toString());
-                    $directAncestors = [];
+                    /** @var list<Name> $clauses extends + implements clause names */
+                    $clauses = [];
                     if ($node instanceof Class_) {
                         if ($node->extends !== null) {
-                            $directAncestors[] = $this->resolveName($node->extends);
+                            $clauses[] = $node->extends;
                         }
                         foreach ($node->implements as $interface) {
-                            $directAncestors[] = $this->resolveName($interface);
+                            $clauses[] = $interface;
                         }
                     } elseif ($node instanceof Interface_) {
                         foreach ($node->extends as $interface) {
-                            $directAncestors[] = $this->resolveName($interface);
+                            $clauses[] = $interface;
                         }
                     }
                     // Trait_ has no formal ancestors — uses-of-traits are statements inside the body
                     // and would only matter for shared-method bounds, which we don't model.
+                    $directAncestors = [];
+                    $parameterized = [];
+                    foreach ($clauses as $clause) {
+                        $fqn = $this->resolveName($clause);
+                        $directAncestors[] = $fqn;
+                        // The clause Name carries the xphp parser's resolved generic args
+                        // (`implements Collection<E>` → [TypeRef(E, isTypeParam)]); a non-generic
+                        // clause has none. The head FQN comes from resolveName so it keys the same
+                        // way as the bare-ancestor map.
+                        $rawArgs = $clause->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                        $clauseArgs = [];
+                        foreach (is_array($rawArgs) ? $rawArgs : [] as $arg) {
+                            if ($arg instanceof TypeRef) {
+                                $clauseArgs[] = $arg;
+                            }
+                        }
+                        $parameterized[] = new TypeRef($fqn, $clauseArgs);
+                    }
                     $this->collected[$selfFqn] = $directAncestors;
+                    $this->superArgs[$selfFqn] = $parameterized;
+                    $rawParams = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                    $paramNames = [];
+                    foreach (is_array($rawParams) ? $rawParams : [] as $param) {
+                        if ($param instanceof TypeParam) {
+                            $paramNames[] = $param->name;
+                        }
+                    }
+                    $this->paramNames[$selfFqn] = $paramNames;
                 }
                 return null;
             }
@@ -274,6 +411,12 @@ final readonly class TypeHierarchy
 
         foreach ($visitor->collected as $fqn => $direct) {
             $ancestors[$fqn] = $direct;
+        }
+        foreach ($visitor->superArgs as $fqn => $supers) {
+            $superTypeArgs[$fqn] = $supers;
+        }
+        foreach ($visitor->paramNames as $fqn => $names) {
+            $typeParamNames[$fqn] = $names;
         }
     }
 }
