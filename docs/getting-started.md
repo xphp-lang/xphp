@@ -113,13 +113,16 @@ After the compile completes you'll have:
 Both `dist/` and `.xphp-cache/` can be gitignored — they're
 generated artifacts your CI/CD pipeline rebuilds on every deploy.
 
-### Compiling a package and its dependencies (`xphp.json`)
+### The recommended project setup: an `xphp.json` manifest
 
-A single source directory is enough for one self-contained project, but a
-package that *ships* `.xphp` templates — and any app that *consumes* one —
-needs to compile several source roots together. Instead of staging them into
-one tree, drop an **`xphp.json`** manifest at the package root and let the
-compiler discover the roots:
+The single-directory form above is the quickest way to compile one
+self-contained tree (and it keeps working unchanged). But for any **real
+project** — and **required** the moment you *consume* another package's
+templates or *ship* your own — the recommended setup is an **`xphp.json`**
+manifest at the project root. It's the project config (like `composer.json`):
+it records your source roots and dependencies once, so `compile`/`check` take
+no positional arguments, and it's what lets the compiler pull several source
+roots together instead of staging them into one tree:
 
 ```json
 {

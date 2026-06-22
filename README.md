@@ -143,6 +143,34 @@ compile. `dist/` holds your rewritten code; `.xphp-cache/Generated/`
 holds the specialized classes. Both can be gitignored and rebuilt
 in CI.
 
+For a real project — and **required** once you consume another package's
+generics — drop an `xphp.json` manifest at the project root instead of
+repeating the paths on every invocation:
+
+```json
+{
+  "sources": ["src"],
+  "include": ["vendor/**"],
+  "target": "dist",
+  "cache": ".xphp-cache"
+}
+```
+
+Then `compile`/`check` take no positional source — they resolve the
+manifest (auto-detected in the working directory, or via `--config`):
+
+```bash
+vendor/bin/xphp compile        # compiles this package + every included one
+vendor/bin/xphp check
+```
+
+`include` globs auto-discover installed xphp packages (`vendor/**` finds
+every one, at any depth, with no edit when you add another), so the
+downstream build compiles the whole union into its own output. See
+[Getting started](docs/getting-started.md#the-recommended-project-setup-an-xphpjson-manifest)
+for the distribution model. The single-directory form above keeps working
+unchanged.
+
 To validate generics without emitting anything — a CI gate that reports
 every bound/variance/etc. problem with a `file:line`:
 
