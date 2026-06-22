@@ -8,6 +8,7 @@ use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use PHPUnit\Framework\TestCase;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
+use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
 use XPHP\TestSupport\SnapshotHash;
@@ -107,6 +108,76 @@ final class CompilerIntegrationTest extends TestCase
             $this->targetDir . '/Helper.php',
             'PSR-4 source must not flatten to top-level target',
         );
+    }
+
+    public function testMultiRootEmitComputesEachFileRelativeToItsOwnRoot(): void
+    {
+        // Two source roots: each file must emit relative to ITS root (no flatten). Without the
+        // root map, the second root's file would collapse to dist/Thing.php via basename().
+        $rootA = $this->workDir . '/rootA';
+        $rootB = $this->workDir . '/rootB';
+        mkdir($rootA . '/Containers', 0o755, true);
+        mkdir($rootB . '/Models', 0o755, true);
+        $boxFile = $rootA . '/Containers/Box.xphp';
+        $thingFile = $rootB . '/Models/Thing.xphp';
+        file_put_contents($boxFile, "<?php\nnamespace App\\Multi\\Containers;\nclass Box {}\n");
+        file_put_contents($thingFile, "<?php\nnamespace App\\Multi\\Models;\nclass Thing {}\n");
+
+        $sources = new FilepathArray($boxFile, $thingFile);
+        $rootByFile = [$boxFile => $rootA, $thingFile => $rootB];
+
+        $this->buildCompiler()->compile($sources, $rootA, $this->targetDir, $this->cacheDir, $rootByFile);
+
+        self::assertFileExists($this->targetDir . '/Containers/Box.php', 'rootA file relative to rootA');
+        self::assertFileExists($this->targetDir . '/Models/Thing.php', 'rootB file relative to rootB');
+        self::assertFileDoesNotExist(
+            $this->targetDir . '/Thing.php',
+            'a second root must not flatten to the target top level',
+        );
+    }
+
+    public function testFileAbsentFromRootMapFallsBackToSourceDir(): void
+    {
+        // A file present in $sources but absent from $rootByFile uses $sourceDir as its base
+        // (the defensive `?? $sourceDir` fallback), while a mapped file uses its own root.
+        $rootA = $this->workDir . '/fbA';
+        $rootB = $this->workDir . '/fbB';
+        mkdir($rootA . '/Sub', 0o755, true);
+        mkdir($rootB . '/Models', 0o755, true);
+        $mapped = $rootB . '/Models/Mapped.xphp';
+        $unmapped = $rootA . '/Sub/Unmapped.xphp';
+        file_put_contents($mapped, "<?php\nnamespace App\\Fb\\Models;\nclass Mapped {}\n");
+        file_put_contents($unmapped, "<?php\nnamespace App\\Fb\\Sub;\nclass Unmapped {}\n");
+
+        $sources = new FilepathArray($mapped, $unmapped);
+        // Only $mapped is in the map; $unmapped falls back to $sourceDir (= $rootA).
+        $rootByFile = [$mapped => $rootB];
+
+        $this->buildCompiler()->compile($sources, $rootA, $this->targetDir, $this->cacheDir, $rootByFile);
+
+        self::assertFileExists($this->targetDir . '/Models/Mapped.php', 'mapped file relative to its root');
+        self::assertFileExists($this->targetDir . '/Sub/Unmapped.php', 'unmapped file relative to $sourceDir fallback');
+    }
+
+    public function testEmitPathCollisionAcrossRootsIsAnError(): void
+    {
+        // Two roots each holding a file at the same relative path → same target path. That must be
+        // a hard error, not a silent overwrite.
+        $rootA = $this->workDir . '/cA';
+        $rootB = $this->workDir . '/cB';
+        mkdir($rootA, 0o755, true);
+        mkdir($rootB, 0o755, true);
+        $a = $rootA . '/Dup.xphp';
+        $b = $rootB . '/Dup.xphp';
+        file_put_contents($a, "<?php\nnamespace App\\CollA;\nclass Dup {}\n");
+        file_put_contents($b, "<?php\nnamespace App\\CollB;\nclass Dup {}\n");
+
+        $sources = new FilepathArray($a, $b);
+        $rootByFile = [$a => $rootA, $b => $rootB];
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Emit path collision');
+        $this->buildCompiler()->compile($sources, $rootA, $this->targetDir, $this->cacheDir, $rootByFile);
     }
 
     public function testGeneratedCodeIsLoadableViaPsr4Autoloader(): void

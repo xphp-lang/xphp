@@ -31,6 +31,7 @@ final readonly class StaticAnalysisGate
     }
 
     /**
+     * @param ?array<string,string> $rootByFile per-file source root for multi-root emit (see Compiler::compile)
      * @return list<Diagnostic>
      */
     public function analyze(
@@ -39,6 +40,7 @@ final readonly class StaticAnalysisGate
         string $workingDir,
         ?string $explicitBin,
         ?string $explicitConfig,
+        ?array $rootByFile = null,
     ): array {
         $bin = PhpStanLocator::fromEnvironment($workingDir)->locate($explicitBin);
         if ($bin === null) {
@@ -54,7 +56,7 @@ final readonly class StaticAnalysisGate
         }
 
         $config = (new PhpStanConfigResolver($workingDir))->resolve($explicitConfig);
-        $workspace = CompiledWorkspace::inTempDir($this->compiler, $sources, $sourceDir, sys_get_temp_dir());
+        $workspace = CompiledWorkspace::inTempDir($this->compiler, $sources, $sourceDir, sys_get_temp_dir(), $rootByFile);
         try {
             $representatives = RepresentativeSelector::select($workspace->registry, $workspace->generatedDir);
             if ($representatives === []) {

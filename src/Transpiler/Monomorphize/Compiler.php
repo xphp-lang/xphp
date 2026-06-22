@@ -50,11 +50,19 @@ final readonly class Compiler
     ) {
     }
 
+    /**
+     * @param ?array<string,string> $rootByFile Optional map of absolute source filepath → the
+     *   source root it was found under, used to compute each emitted file's relative (PSR-4) path.
+     *   When null (the single-source-dir form), every file is relative to $sourceDir, exactly as
+     *   before. When supplied (manifest / multi-root form), each file is relative to its own root,
+     *   so a second root's files don't flatten; $sourceDir is the fallback for any unmapped file.
+     */
     public function compile(
         FilepathArray $sources,
         string $sourceDir,
         string $targetDir,
         string $cacheDir,
+        ?array $rootByFile = null,
     ): CompileResult {
         // Phase 0: parse every source up front. The TypeHierarchy (used to validate generic
         // bounds at recordInstantiation time) needs to see every class/interface/trait
@@ -194,13 +202,29 @@ final readonly class Compiler
             $this->specializedClassGenerator->emit($classAst, $generatedFqn, $cacheDir);
         }
 
-        // Phase 4: rewrite + emit user source files.
+        // Phase 4: rewrite + emit user source files. Each file's relative (PSR-4) path is computed
+        // against its own source root (the manifest/multi-root form), falling back to $sourceDir
+        // for the single-dir form. Two roots that would emit a file to the same target path is a
+        // hard error, not a silent overwrite.
+        $emittedBy = [];
         foreach ($astPerFile as $filepath => $ast) {
             $rewrittenAst = $rewriter->rewrite($ast);
             $code = $this->printer->prettyPrintFile($rewrittenAst);
 
-            $relPath = self::relativePath($sourceDir, $filepath);
+            $base = $rootByFile[$filepath] ?? $sourceDir;
+            $relPath = self::relativePath($base, $filepath);
             $targetPath = rtrim($targetDir, '/') . '/' . preg_replace('/\.xphp$/', '.php', $relPath);
+
+            if (isset($emittedBy[$targetPath])) {
+                throw new RuntimeException(sprintf(
+                    'Emit path collision: "%s" and "%s" both map to "%s" — two source roots contain '
+                    . 'a file at the same relative path. Rename one or separate the roots.',
+                    $emittedBy[$targetPath],
+                    $filepath,
+                    $targetPath,
+                ));
+            }
+            $emittedBy[$targetPath] = $filepath;
 
             $targetSubdir = dirname($targetPath);
             if (!is_dir($targetSubdir)) {

@@ -36,31 +36,41 @@ final readonly class CompiledWorkspace
     ) {
     }
 
-    /** Compile into a fresh, uniquely-named directory beneath $tmpBase. */
+    /**
+     * Compile into a fresh, uniquely-named directory beneath $tmpBase.
+     *
+     * @param ?array<string,string> $rootByFile per-file source root for multi-root emit (see Compiler::compile)
+     */
     public static function inTempDir(
         Compiler $compiler,
         FilepathArray $sources,
         string $sourceDir,
         string $tmpBase,
+        ?array $rootByFile = null,
     ): self {
         $root = rtrim($tmpBase, '/') . '/xphp-check-' . bin2hex(random_bytes(8));
 
-        return self::compile($compiler, $sources, $sourceDir, $root);
+        return self::compile($compiler, $sources, $sourceDir, $root, $rootByFile);
     }
 
-    /** Compile into an explicit $root (deterministic; used by tests). */
+    /**
+     * Compile into an explicit $root (deterministic; used by tests).
+     *
+     * @param ?array<string,string> $rootByFile per-file source root for multi-root emit (see Compiler::compile)
+     */
     public static function compile(
         Compiler $compiler,
         FilepathArray $sources,
         string $sourceDir,
         string $root,
+        ?array $rootByFile = null,
     ): self {
         $distDir = $root . '/dist';
         $cacheDir = $root . '/cache';
 
         // The Compiler's writer creates intermediate directories as it emits, so
         // $root needs no pre-creation; an empty source set simply writes nothing.
-        $result = $compiler->compile($sources, $sourceDir, $distDir, $cacheDir);
+        $result = $compiler->compile($sources, $sourceDir, $distDir, $cacheDir, $rootByFile);
 
         // Canonicalize the analysable dirs: PHPStan reports findings under
         // realpath()'d paths (symlinks resolved, e.g. macOS /var -> /private/var),
