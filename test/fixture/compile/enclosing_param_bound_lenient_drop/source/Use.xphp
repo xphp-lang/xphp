@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace App;
 
-// Known limitation (ADR-0018, "lenient drop"): both arms construct Box<Fruit>, so a reader knows
-// $box is Box<Fruit> — but the branch merge keeps only the class (Box), dropping the tracked
-// element type. With E ungroundable the bound `<U : E>` is dropped for this call, so `Rock`
-// (plainly not a Fruit) is silently accepted.
+// Branch-merge agreement: both arms construct Box<Fruit>, so the merge keeps the element type
+// (the arms agree on Box<Fruit>) and $box is determined to be Box<Fruit>. The bound `<U : E>`
+// grounds to `<U : Fruit>`, so `Rock` — plainly not a Fruit — is rejected.
 //
-// CURRENT behaviour: compiles (no bound violation). A v2 that grounds this case should REJECT it.
+// Expected behaviour: COMPILE ERROR (Rock does not extend/implement App\Fruit). A knowable element
+// type is never dropped, so a determinate violation is never silently accepted.
 function pick(bool $cond): bool
 {
     if ($cond) {

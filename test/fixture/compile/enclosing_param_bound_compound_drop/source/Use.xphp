@@ -4,14 +4,13 @@ declare(strict_types=1);
 
 namespace App;
 
-// Known limitation (ADR-0018, "compound bounds drop whole"): both arms construct Box<Fruit>, but
-// the branch merge keeps only the class and drops the tracked element type, so E is ungroundable.
-// The WHOLE `\Stringable & E` bound is then dropped — including the `\Stringable` operand, which
-// could be enforced with no knowledge of E. `Banana` is a valid element (Banana <: Fruit) but is
-// not `\Stringable`, yet it is silently accepted.
+// Branch-merge agreement on a compound bound: both arms construct Box<Fruit>, so the merge keeps the
+// element type and $box is determined to be Box<Fruit>. The whole `\Stringable & E` bound grounds to
+// `\Stringable & Fruit`. `Banana` is a valid element (Banana <: Fruit) but is not `\Stringable`, so
+// it is rejected on the `\Stringable` operand.
 //
-// CURRENT behaviour: compiles (no bound violation). A v2 that evaluates the ungroundable operand as
-// "unknown" instead of dropping the whole bound should still REJECT on the `\Stringable` operand.
+// Expected behaviour: COMPILE ERROR (Banana does not extend/implement \Stringable). Grounding the
+// whole bound preserves every operand — the checkable `\Stringable` constraint is never lost.
 function store(bool $cond): void
 {
     if ($cond) {

@@ -466,7 +466,7 @@ final class GenericMethodCompiler
              * Branch snapshots are nested per-scope so that branches inside a closure
              * don't leak to branches in the enclosing function.
              *
-             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>}>
+             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, perBranchArgs: list<array<string, ?list<TypeRef>>>, armIndex: int}>}>
              */
             private array $scopeSnapshots = [];
             /**
@@ -505,7 +505,7 @@ final class GenericMethodCompiler
              * keeps `$x` instead of invalidating. See `P5.1-same-class-merge.md`
              * and the `computeMergedTypes` / `canMergeOnLeave` helpers below.
              *
-             * @var list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, armIndex: int}>
+             * @var list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, perBranchArgs: list<array<string, ?list<TypeRef>>>, armIndex: int}>
              */
             private array $branchSnapshots = [];
 
@@ -661,6 +661,7 @@ final class GenericMethodCompiler
                         'localArgsSnapshot' => $this->currentScopeLocalTypeArgs,
                         'assigned' => [],
                         'perBranchTypes' => [],
+                        'perBranchArgs' => [],
                         // If_'s body is the first arm (armIndex=0).
                         // Switch_ / Match_ have no parent body arm; the first
                         // sibling enter promotes armIndex from -1 to 0.
@@ -680,6 +681,11 @@ final class GenericMethodCompiler
                             self::captureArmTypes(
                                 $this->branchSnapshots[$top]['assigned'],
                                 $this->currentScopeLocalTypes,
+                            );
+                        $this->branchSnapshots[$top]['perBranchArgs'][] =
+                            self::captureArmArgs(
+                                $this->branchSnapshots[$top]['assigned'],
+                                $this->currentScopeLocalTypeArgs,
                             );
                     }
                     $this->branchSnapshots[$top]['armIndex']++;
@@ -796,6 +802,10 @@ final class GenericMethodCompiler
                                 $popped['assigned'],
                                 $this->currentScopeLocalTypes,
                             );
+                            $popped['perBranchArgs'][] = self::captureArmArgs(
+                                $popped['assigned'],
+                                $this->currentScopeLocalTypeArgs,
+                            );
                         }
 
                         // Restore to pre-branch state.
@@ -806,6 +816,7 @@ final class GenericMethodCompiler
                         // every reachable arm assigned the same FQN, instead
                         // of unconditionally invalidating below.
                         $merged = self::computeMergedTypes($node, $popped);
+                        $mergedArgs = self::computeMergedArgs($node, $popped);
 
                         foreach ($popped['assigned'] as $assignedName => $_true) {
                             if (isset($merged[$assignedName])) {
@@ -813,11 +824,14 @@ final class GenericMethodCompiler
                             } else {
                                 unset($this->currentScopeLocalTypes[$assignedName]);
                             }
-                            // Args are NOT merged across arms: even when the FQN agrees, the arms may
-                            // have passed different type arguments (Box<Product> vs Box<Book>), so an
-                            // assigned var always loses its args → the receiver falls to lenient
-                            // grounding rather than risking a stale/ambiguous argument.
-                            unset($this->currentScopeLocalTypeArgs[$assignedName]);
+                            // Keep the receiver's type args only when the class merged AND every arm
+                            // agreed on the args (by canonical()); a differing-arm receiver
+                            // (Box<Fruit> vs Box<Banana>) drops its args and stays undeterminable.
+                            if (isset($merged[$assignedName], $mergedArgs[$assignedName])) {
+                                $this->currentScopeLocalTypeArgs[$assignedName] = $mergedArgs[$assignedName];
+                            } else {
+                                unset($this->currentScopeLocalTypeArgs[$assignedName]);
+                            }
                             if ($this->branchSnapshots !== []) {
                                 $parentTop = count($this->branchSnapshots) - 1;
                                 $this->branchSnapshots[$parentTop]['assigned'][$assignedName] = true;
@@ -877,6 +891,23 @@ final class GenericMethodCompiler
                 $out = [];
                 foreach ($assigned as $name => $_true) {
                     $out[$name] = $currentTypes[$name] ?? null;
+                }
+                return $out;
+            }
+
+            /**
+             * Per-arm receiver type args for the `assigned` set, parallel to captureArmTypes.
+             * `null` means "this arm did not finish with tracked args for that name".
+             *
+             * @param array<string, bool> $assigned
+             * @param array<string, list<TypeRef>> $currentArgs
+             * @return array<string, ?list<TypeRef>>
+             */
+            private static function captureArmArgs(array $assigned, array $currentArgs): array
+            {
+                $out = [];
+                foreach ($assigned as $name => $_true) {
+                    $out[$name] = $currentArgs[$name] ?? null;
                 }
                 return $out;
             }
@@ -976,6 +1007,54 @@ final class GenericMethodCompiler
                     }
                     if ($allAgree && $firstType !== null) {
                         $merged[$name] = $firstType;
+                    }
+                }
+                return $merged;
+            }
+
+            /**
+             * Same as computeMergedTypes, but for the receiver type args: name -> args for every var
+             * whose every reachable arm ended with the SAME args (compared by `TypeRef::canonical()`).
+             * Empty when the merge isn't allowed or an arm is missing args for the name. The caller
+             * additionally gates on the FQN having merged, so args are kept only for a fully-agreed
+             * receiver.
+             *
+             * @param array{perBranchArgs: list<array<string, ?list<TypeRef>>>, assigned: array<string,bool>} $popped
+             * @return array<string, list<TypeRef>>
+             */
+            private static function computeMergedArgs(Node $node, array $popped): array
+            {
+                if (!self::canMergeOnLeave($node)) {
+                    return [];
+                }
+                if (count($popped['perBranchArgs']) !== self::expectedArmCount($node)) {
+                    return [];
+                }
+                $merged = [];
+                foreach ($popped['assigned'] as $name => $_true) {
+                    $firstKey = null;
+                    /** @var list<TypeRef>|null $firstArgs */
+                    $firstArgs = null;
+                    $allAgree = true;
+                    foreach ($popped['perBranchArgs'] as $i => $armArgs) {
+                        $args = $armArgs[$name] ?? null;
+                        if ($args === null) {
+                            $allAgree = false;
+                            break;
+                        }
+                        $key = implode(',', array_map(static fn (TypeRef $a): string => $a->canonical(), $args));
+                        if ($i === 0) {
+                            $firstKey = $key;
+                            $firstArgs = $args;
+                            continue;
+                        }
+                        if ($key !== $firstKey) {
+                            $allAgree = false;
+                            break;
+                        }
+                    }
+                    if ($allAgree && $firstArgs !== null) {
+                        $merged[$name] = $firstArgs;
                     }
                 }
                 return $merged;

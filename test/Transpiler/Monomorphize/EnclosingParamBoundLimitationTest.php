@@ -13,14 +13,15 @@ use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
 
 /**
- * Pins the two documented limitations of enclosing-type-parameter bound grounding (ADR-0018) at
- * their CURRENT behaviour: when the receiver's element type can't be grounded, a bound that
- * references it is dropped and a real violation is silently accepted.
+ * Pins enclosing-type-parameter bound grounding when the receiver's element type is recovered from a
+ * branch merge: a receiver assigned to the SAME parameterised type in every arm of an if/else is
+ * determined, the bound that references its element type is grounded, and a real violation is
+ * rejected at compile time — exactly as it is for a straight-line receiver.
  *
- * Each limitation is paired with a "groundable" control that compiles the SAME violation with a
- * receiver whose element type IS known — and is correctly rejected. The pair proves the masking is
- * real (not an unrelated no-op), and gives a future v2 a red→green target: the lenient assertions
- * here are the ones that should flip to rejections once the limitations are addressed.
+ * Each branch-merge case is paired with a "groundable" control that compiles the SAME violation with
+ * a straight-line receiver whose element type is known. The pair proves the branch-merge path grounds
+ * to the same result as the direct path, honouring the project's maximum-runtime-safety principle:
+ * a knowable type is never dropped, so a determinate violation is never silently accepted.
  */
 final class EnclosingParamBoundLimitationTest extends TestCase
 {
@@ -35,19 +36,20 @@ final class EnclosingParamBoundLimitationTest extends TestCase
         $this->workDirs = [];
     }
 
-    // --- Limitation 1: bare `<U : E>` bound is dropped when E is ungroundable ---
+    // --- Branch-merge agreement: a determinable receiver IS grounded and checked (bare `<U : E>`) ---
 
-    public function testLenientDropAcceptsAnElementTypeViolation(): void
+    public function testBranchMergedReceiverIsGroundedAndRejectsAnElementViolation(): void
     {
-        // `pick()` calls contains::<Rock> on a branch-merged Box<Fruit> receiver. Rock is not a
-        // Fruit, but the dropped bound means no check runs — it compiles and the call specializes.
-        $dist = $this->compileFixture('enclosing_param_bound_lenient_drop');
-
-        self::assertStringContainsString(
-            'contains_',
-            self::read($dist, 'Use.php'),
-            'the violating call was accepted and specialized (current lenient behaviour)',
-        );
+        // `pick()` calls contains::<Rock> on a Box<Fruit> receiver assigned in BOTH arms of an
+        // if/else. The arms agree, so the element type is determined (branch-merge agreement), the
+        // bound grounds to Fruit, and Rock — not a Fruit — is rejected at compile time.
+        try {
+            $this->compileFixture('enclosing_param_bound_lenient_drop');
+            self::fail('expected a bound violation for contains::<Rock> on a branch-merged Box<Fruit>');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('Generic bound violated', $e->getMessage());
+            self::assertStringContainsString('extend/implement "App\\Fruit"', $e->getMessage());
+        }
     }
 
     public function testTheSameElementViolationIsCaughtWhenTheReceiverIsGroundable(): void
@@ -73,20 +75,21 @@ final class EnclosingParamBoundLimitationTest extends TestCase
         }
     }
 
-    // --- Limitation 2: compound `<U : \Stringable & E>` is dropped WHOLE when E is ungroundable ---
+    // --- Branch-merge agreement: a compound `<U : \Stringable & E>` is grounded WHOLE and checked ---
 
-    public function testCompoundBoundDropDiscardsTheCheckableStringableOperand(): void
+    public function testBranchMergedReceiverIsGroundedAndRejectsACompoundViolation(): void
     {
-        // `store()` calls register::<Banana> on a branch-merged Box<Fruit> receiver. Banana satisfies
-        // the E half (Banana <: Fruit) but not the \Stringable half — yet the whole bound is dropped,
-        // so the \Stringable constraint is never enforced and it compiles.
-        $dist = $this->compileFixture('enclosing_param_bound_compound_drop');
-
-        self::assertStringContainsString(
-            'register_',
-            self::read($dist, 'Use.php'),
-            'the non-Stringable argument was accepted and specialized (current lenient behaviour)',
-        );
+        // `store()` calls register::<Banana> on a Box<Fruit> receiver assigned in BOTH arms of an
+        // if/else. The arms agree, so the element type is determined, the bound grounds to
+        // `\Stringable & Fruit`, and Banana — a Fruit but not \Stringable — is rejected on the
+        // \Stringable operand.
+        try {
+            $this->compileFixture('enclosing_param_bound_compound_drop');
+            self::fail('expected a bound violation for register::<Banana> on a branch-merged Box<Fruit>');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('Generic bound violated', $e->getMessage());
+            self::assertStringContainsString('Stringable', $e->getMessage());
+        }
     }
 
     public function testTheStringableOperandIsEnforcedWhenTheReceiverIsGroundable(): void

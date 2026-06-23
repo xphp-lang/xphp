@@ -270,6 +270,50 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
+    public function testBranchMergeAgreementGroundsAndAcceptsSubtype(): void
+    {
+        // Both arms assign Box<Fruit> — the arms AGREE, so the merge keeps the element type and the
+        // receiver is determined to be Box<Fruit>. The bound grounds to Fruit and `Banana` (a Fruit)
+        // is accepted and the call specialized.
+        $dist = $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(bool $c): bool {
+                if ($c) { $box = new Box::<Fruit>(); } else { $box = new Box::<Fruit>(); }
+                return $box->contains::<Banana>(new Banana());
+            }
+            PHP,
+        ]);
+
+        self::assertStringContainsString('contains_', self::read($dist, 'Use.php'));
+    }
+
+    public function testBranchMergeAgreementGroundsAndRejectsNonSubtype(): void
+    {
+        // Both arms assign Box<Banana> — the arms agree, so the args survive the merge and ground the
+        // call to Banana. `Fruit` is not a subtype of Banana, so the determined receiver rejects it
+        // (a knowable type is never dropped → a determinate violation is never silently accepted).
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(bool $c): bool {
+                if ($c) { $box = new Box::<Banana>(); } else { $box = new Box::<Banana>(); }
+                return $box->contains::<Fruit>(new Fruit());
+            }
+            PHP,
+        ]);
+    }
+
     public function testArgsSurviveABranchThatDoesNotTouchTheReceiver(): void
     {
         // The receiver is set before the branch and never reassigned inside it, so its args survive
