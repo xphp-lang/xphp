@@ -357,7 +357,207 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
+    // --- receiver type from a method return / chain / self-static ---
+
+    public function testReturnTypedLocalReceiverGroundsAndRejects(): void
+    {
+        // `$x = $repo->getBox()` where `getBox(): Box<Fruit>` — the local's element type comes from
+        // the declared return type, grounds to Fruit, and `Food` (a supertype) is rejected.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('extend/implement "App\\Fruit"');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Repo.xphp' => self::repo(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(Repo $repo): bool {
+                $x = $repo->getBox();
+                return $x->contains::<Food>(new Food());
+            }
+            PHP,
+        ]);
+    }
+
+    public function testChainedReturnReceiverGroundsAndAccepts(): void
+    {
+        // `$repo->getBox()->contains::<Banana>()` — the chain head's return type `Box<Fruit>` grounds
+        // the bound to Fruit, and Banana (a Fruit) is accepted and specialized.
+        $dist = $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Repo.xphp' => self::repo(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(Repo $repo): bool {
+                return $repo->getBox()->contains::<Banana>(new Banana());
+            }
+            PHP,
+        ]);
+
+        self::assertStringContainsString('contains_', self::read($dist, 'Use.php'));
+    }
+
+    public function testSelfReturningChainCarriesReceiverArgsAndRejects(): void
+    {
+        // `copy(): static` returns the receiver's own generic instance, so `$box->copy()` is still
+        // Box<Banana>; `contains::<Fruit>` then rejects Fruit (not a subtype of Banana).
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public function copy(): static { return $this; }
+                public function contains<U : E>(U $value): bool { return true; }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(): bool {
+                $box = new Box::<Banana>();
+                return $box->copy()->contains::<Fruit>(new Fruit());
+            }
+            PHP,
+        ]);
+    }
+
+    public function testStaticFactoryReturnReceiverGroundsAndRejects(): void
+    {
+        // A static call's declared return type grounds the assigned local: `Factory::make(): Box<Fruit>`
+        // makes `$x` a Box<Fruit>, and `contains::<Food>` rejects the supertype Food.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('extend/implement "App\\Fruit"');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Factory.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Factory {
+                public static function make(): Box<Fruit> { return new Box::<Fruit>(); }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(): bool {
+                $x = Factory::make();
+                return $x->contains::<Food>(new Food());
+            }
+            PHP,
+        ]);
+    }
+
+    public function testDeepSelfReturningChainResolvesWithoutBlowup(): void
+    {
+        // Regression: resolveCallReturn must memoize. Without it, a chained receiver re-descends both
+        // the FQN and the args branch at every hop — O(2^N) in chain depth — and a ~24-deep `copy()`
+        // chain hangs. Memoized, it resolves at once, still grounding to Box<Banana> and rejecting Fruit.
+        $chain = str_repeat('->copy()', 24);
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public function copy(): static { return $this; }
+                public function contains<U : E>(U $value): bool { return true; }
+            }
+            PHP,
+            'Use.xphp' => <<<PHP
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(): bool {
+                \$box = new Box::<Banana>();
+                return \$box{$chain}->contains::<Fruit>(new Fruit());
+            }
+            PHP,
+        ]);
+    }
+
+    // --- method-own sibling bound `<U, V : U>` grounded against the call's turbofish args ---
+
+    public function testMethodOwnSiblingBoundAcceptsSubtypeArg(): void
+    {
+        $dist = $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Util.xphp' => self::pairUtil(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function go(): bool {
+                $u = new Util();
+                return $u->pair::<Fruit, Banana>(new Fruit(), new Banana());
+            }
+            PHP,
+        ]);
+
+        self::assertStringContainsString('pair_', self::read($dist, 'Use.php'));
+    }
+
+    public function testMethodOwnSiblingBoundRejectsNonSubtypeArg(): void
+    {
+        // `pair<U, V : U>` with `<Banana, Fruit>` — V (Fruit) must be a subtype of U (Banana); it is
+        // not, so the call is rejected. The bound grounds against the call's own turbofish args.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Util.xphp' => self::pairUtil(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function go(): bool {
+                $u = new Util();
+                return $u->pair::<Banana, Fruit>(new Banana(), new Fruit());
+            }
+            PHP,
+        ]);
+    }
+
     // --- harness ---
+
+    private static function repo(): string
+    {
+        return <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        class Repo {
+            public function getBox(): Box<Fruit> { return new Box::<Fruit>(); }
+        }
+        PHP;
+    }
+
+    private static function pairUtil(): string
+    {
+        return <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        class Util {
+            public function pair<U, V : U>(U $a, V $b): bool { return true; }
+        }
+        PHP;
+    }
 
     private static function box(): string
     {

@@ -420,6 +420,17 @@ final class GenericMethodCompiler
             /** @var array<string, list<TypeRef>> */
             private array $currentScopeLocalTypeArgs = [];
             /**
+             * Memo for {@see resolveCallReturn}, keyed by `spl_object_id` of the call node. A call
+             * node sits at one fixed program point, so its declared-return-type resolution is
+             * deterministic; without the memo a chained receiver re-descends both the FQN and the
+             * args branch at every hop, which is O(2^N) in chain depth. With it, each hop resolves
+             * once. The value is the resolution result (or `null`); presence is tested with
+             * `array_key_exists` so a cached `null` is honoured.
+             *
+             * @var array<int, array{0: string, 1: list<TypeRef>}|null>
+             */
+            private array $callReturnCache = [];
+            /**
              * Variable name -> the Closure or ArrowFunction AST node that was
              * assigned to it (only when the closure carries
              * ATTR_METHOD_GENERIC_PARAMS, i.e. is a generic anonymous template).
@@ -725,6 +736,27 @@ final class GenericMethodCompiler
                             $this->currentScopeLocalTypeArgs[$assignedName] = $newArgs;
                         } else {
                             unset($this->currentScopeLocalTypeArgs[$assignedName]);
+                        }
+                    } elseif ($node->expr instanceof MethodCall
+                        || $node->expr instanceof NullsafeMethodCall
+                        || $node->expr instanceof StaticCall
+                    ) {
+                        // `$x = $repo->find()` / `$x = $this->getBox()`: track the call's declared
+                        // return type so a later `$x->m::<…>()` is grounded. An unresolvable call
+                        // clears any stale tracked type rather than leaving a wrong one in place.
+                        $return = $this->resolveCallReturn($node->expr);
+                        if ($return === null) {
+                            unset(
+                                $this->currentScopeLocalTypes[$assignedName],
+                                $this->currentScopeLocalTypeArgs[$assignedName],
+                            );
+                        } else {
+                            $this->currentScopeLocalTypes[$assignedName] = $return[0];
+                            if ($return[1] !== []) {
+                                $this->currentScopeLocalTypeArgs[$assignedName] = $return[1];
+                            } else {
+                                unset($this->currentScopeLocalTypeArgs[$assignedName]);
+                            }
                         }
                     }
                     // Track anonymous generic templates: `$id = fn<T>(T $x) => $x`
@@ -1105,10 +1137,11 @@ final class GenericMethodCompiler
                 $args = $padded;
 
                 if ($this->hierarchy !== null) {
-                    // Static grounding is out of scope: a class type parameter is unbound in a
-                    // static context, so pass no receiver args — an enclosing-param bound on a
-                    // static method falls to the lenient drop inside groundBounds.
-                    $checkedParams = $this->groundBounds($params, $classFqn, [], $declaringFqn);
+                    // A class type parameter is unbound in a static context, so pass no receiver
+                    // args — an enclosing-param bound on a static method falls to the lenient drop
+                    // inside groundBounds. The call's own turbofish args are still threaded, so a
+                    // method-own sibling bound (`<U, V : U>`) on a static method is grounded.
+                    $checkedParams = $this->groundBounds($params, $args, $classFqn, [], $declaringFqn);
                     Registry::checkBounds(
                         $checkedParams,
                         $args,
@@ -1210,7 +1243,7 @@ final class GenericMethodCompiler
                     // parameter (`<U : E>`) against the receiver's concrete arguments, threaded
                     // to the method's declaring class; an ungroundable bound drops to lenient.
                     $receiverArgs = $this->resolveReceiverTypeArgs($node->var);
-                    $checkedParams = $this->groundBounds($params, $classFqn, $receiverArgs, $declaringFqn);
+                    $checkedParams = $this->groundBounds($params, $args, $classFqn, $receiverArgs, $declaringFqn);
                     Registry::checkBounds(
                         $checkedParams,
                         $args,
@@ -1271,6 +1304,45 @@ final class GenericMethodCompiler
                     $inherited = $this->methodTemplates[$ancestorFqn . '::' . $methodName] ?? null;
                     if ($inherited !== null) {
                         return [$inherited, $ancestorFqn];
+                    }
+                }
+                return null;
+            }
+
+            /**
+             * Find any method declaration (generic OR not) by receiver FQN, walking the inheritance
+             * chain for an inherited declaration. Unlike {@see resolveMethodTemplate} this reads the
+             * full class AST, so a plain getter whose return type is what we want to track is found.
+             *
+             * @return array{0: ClassMethod, 1: string}|null  [method, declaringFqn]
+             */
+            private function findMethodDeclaration(string $receiverFqn, string $methodName): ?array
+            {
+                $direct = $this->findMethodOn($receiverFqn, $methodName);
+                if ($direct !== null) {
+                    return [$direct, $receiverFqn];
+                }
+                if ($this->hierarchy === null) {
+                    return null;
+                }
+                foreach ($this->hierarchy->ancestorChain($receiverFqn) as $ancestorFqn) {
+                    $inherited = $this->findMethodOn($ancestorFqn, $methodName);
+                    if ($inherited !== null) {
+                        return [$inherited, $ancestorFqn];
+                    }
+                }
+                return null;
+            }
+
+            private function findMethodOn(string $classFqn, string $methodName): ?ClassMethod
+            {
+                $owner = $this->classByFqn[$classFqn] ?? null;
+                if ($owner === null) {
+                    return null;
+                }
+                foreach ($owner->stmts as $stmt) {
+                    if ($stmt instanceof ClassMethod && $stmt->name->toString() === $methodName) {
+                        return $stmt;
                     }
                 }
                 return null;
@@ -1373,6 +1445,15 @@ final class GenericMethodCompiler
                         }
                     }
                 }
+                // A chained call (`$this->getBox()->m::<…>()`): the receiver is itself a call, so its
+                // type is that call's declared return type.
+                if ($receiver instanceof MethodCall
+                    || $receiver instanceof NullsafeMethodCall
+                    || $receiver instanceof StaticCall
+                ) {
+                    $return = $this->resolveCallReturn($receiver);
+                    return $return === null ? null : $return[0];
+                }
                 return null;
             }
 
@@ -1439,34 +1520,154 @@ final class GenericMethodCompiler
                         }
                     }
                 }
+                // A chained call (`$this->getBox()->m::<…>()`): the receiver's args are the return
+                // type's grounded args.
+                if ($receiver instanceof MethodCall
+                    || $receiver instanceof NullsafeMethodCall
+                    || $receiver instanceof StaticCall
+                ) {
+                    $return = $this->resolveCallReturn($receiver);
+                    return $return === null ? [] : $return[1];
+                }
                 return [];
             }
 
             /**
-             * Ground each method type-param's bound against the receiver's concrete arguments.
+             * The class FQN and concrete generic type-args of a method/static call's DECLARED return
+             * type, or `null` when the return type isn't a determinable class. This is what lets a
+             * receiver whose type comes from a call — `$x = $repo->find(); $x->m::<…>()`, a chained
+             * `$this->getBox()->m::<…>()`, or a `self`/`static`/`parent`-returning factory — be
+             * grounded instead of treated as opaque.
              *
-             * Builds a substitution from the declaring class's parameters to the receiver's
-             * arguments (threaded up the inheritance chain), rewrites every bound leaf with it, and —
-             * when a leaf is still a bare enclosing type parameter afterwards (no receiver args, an
-             * inherited/opaque receiver, or the `$this` template body) — DROPS that param's bound for
-             * this call rather than checking it against the phantom type-param name. A bound that
-             * doesn't reference an enclosing param (a real class, or an F-bounded `Comparable<T>`
-             * leaf) is unaffected and checked exactly as before.
+             * The return type's own generic args may reference the CALLED method's class parameters
+             * (`Repo<E> { getBox(): Box<E> }`); those are grounded through the call receiver's args
+             * (so `Box<E>` on a `Repo<Fruit>` receiver becomes `Box<Fruit>`). When the receiver's args
+             * are themselves abstract (a `$this` self-call inside the template, or an unknown
+             * receiver) the arg stays a type parameter and the downstream grounding drops it — no
+             * determinate type is ever invented.
+             *
+             * @return array{0: string, 1: list<TypeRef>}|null  [returnFqn, groundedReturnArgs]
+             */
+            private function resolveCallReturn(Node $call): ?array
+            {
+                $key = spl_object_id($call);
+                if (array_key_exists($key, $this->callReturnCache)) {
+                    return $this->callReturnCache[$key];
+                }
+                return $this->callReturnCache[$key] = $this->computeCallReturn($call);
+            }
+
+            /**
+             * The uncached body of {@see resolveCallReturn}; always go through the memoizing wrapper.
+             *
+             * @return array{0: string, 1: list<TypeRef>}|null
+             */
+            private function computeCallReturn(Node $call): ?array
+            {
+                if ($call instanceof StaticCall) {
+                    if (!$call->class instanceof Name || !$call->name instanceof Identifier) {
+                        return null;
+                    }
+                    $receiverFqn = $this->resolveClassName($call->class);
+                    $classArgs = $call->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                    /** @var list<TypeRef> $receiverArgs */
+                    $receiverArgs = is_array($classArgs) ? $classArgs : [];
+                } elseif ($call instanceof MethodCall || $call instanceof NullsafeMethodCall) {
+                    if (!$call->name instanceof Identifier) {
+                        return null;
+                    }
+                    $receiverFqn = $this->resolveReceiverFqn($call->var);
+                    if ($receiverFqn === null) {
+                        return null;
+                    }
+                    $receiverArgs = $this->resolveReceiverTypeArgs($call->var);
+                } else {
+                    return null;
+                }
+
+                // A non-generic getter (`getBox(): Box<Fruit>`) is the common return source and is NOT
+                // in $methodTemplates (which holds only generic methods), so resolve against the full
+                // class AST, walking ancestors for an inherited declaration.
+                $resolved = $this->findMethodDeclaration($receiverFqn, $call->name->toString());
+                if ($resolved === null) {
+                    return null;
+                }
+                [$method, $declaringFqn] = $resolved;
+                $returnType = $method->returnType;
+                if ($returnType instanceof NullableType) {
+                    $returnType = $returnType->type;
+                }
+                if (!$returnType instanceof Name) {
+                    return null;
+                }
+
+                // `self` / `static` / `parent` return the receiver's own generic instance: its class
+                // and args carry through unchanged. (The parser strips the `<…>` off a pseudo-type
+                // and records no marker, so these names carry no ATTR_TEMPLATE_FQN.)
+                if (in_array(strtolower($returnType->toString()), ['self', 'static', 'parent'], true)) {
+                    return [$receiverFqn, $receiverArgs];
+                }
+
+                // A parameterised return type (`Box<…>`) carries its head FQN on ATTR_TEMPLATE_FQN and
+                // its args on ATTR_GENERIC_ARGS; a plain class return type carries ATTR_RESOLVED_FQN.
+                $returnFqn = $returnType->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                if (!is_string($returnFqn)) {
+                    $plainFqn = $returnType->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN);
+                    return is_string($plainFqn) ? [$plainFqn, []] : null;
+                }
+                $returnArgs = $returnType->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                /** @var list<TypeRef> $returnArgs */
+                $returnArgs = is_array($returnArgs) ? $returnArgs : [];
+
+                // Ground the return args through the receiver: `getBox(): Box<E>` on a `Repo<Fruit>`
+                // receiver yields `Box<Fruit>`. A concrete return parameterisation has no class-param
+                // leaves, so the substitution is a no-op for it.
+                $classSubst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
+                if ($classSubst !== []) {
+                    $returnArgs = array_map(
+                        static fn (TypeRef $arg): TypeRef => Specializer::substituteTypeRef($arg, $classSubst),
+                        $returnArgs,
+                    );
+                }
+                return [$returnFqn, $returnArgs];
+            }
+
+            /**
+             * Ground each method type-param's bound against the receiver's concrete arguments and the
+             * call's own turbofish arguments.
+             *
+             * Builds a substitution from (a) the declaring class's parameters to the receiver's
+             * arguments (threaded up the inheritance chain) and (b) the method's own parameters to
+             * this call's turbofish arguments — so a bound that references a SIBLING method parameter
+             * (`<U, V : U>`) grounds to that argument too. Method parameters shadow class parameters
+             * of the same name (the inner scope wins). It then rewrites every bound leaf with the
+             * combined map, and — when a leaf is still a bare type parameter afterwards (no receiver
+             * args, an inherited/opaque receiver, or the `$this` template body) — DROPS that param's
+             * bound for this call rather than checking it against the phantom type-param name. A bound
+             * that doesn't reference an enclosing/sibling param (a real class, or an F-bounded
+             * `Comparable<T>` leaf) is unaffected and checked exactly as before.
              *
              * @param list<TypeParam> $params
+             * @param list<TypeRef> $methodArgs   the call's turbofish args, positionally per param
              * @param list<TypeRef> $receiverArgs
              * @return list<TypeParam>
              */
-            private function groundBounds(array $params, string $receiverFqn, array $receiverArgs, string $declaringFqn): array
+            private function groundBounds(array $params, array $methodArgs, string $receiverFqn, array $receiverArgs, string $declaringFqn): array
             {
-                $classSubst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
+                $subst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
+                // Method-own params shadow class params of the same name, so they are layered last.
+                foreach ($params as $i => $param) {
+                    if (isset($methodArgs[$i])) {
+                        $subst[$param->name] = $methodArgs[$i];
+                    }
+                }
 
                 return array_map(
-                    static function (TypeParam $param) use ($classSubst): TypeParam {
+                    static function (TypeParam $param) use ($subst): TypeParam {
                         if ($param->bound === null) {
                             return $param;
                         }
-                        $grounded = Registry::substituteBound($param->bound, $classSubst);
+                        $grounded = Registry::substituteBound($param->bound, $subst);
                         if (self::boundHasUngroundedLeaf($grounded)) {
                             return new TypeParam($param->name, null, $param->default, $param->variance);
                         }
