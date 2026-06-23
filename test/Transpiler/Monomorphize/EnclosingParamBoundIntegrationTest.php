@@ -34,14 +34,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::rrmdir($this->work);
     }
 
-    /** Shared model: Book extends Product extends Item. */
+    /** Shared model: Banana extends Fruit extends Food. */
     private const MODELS = <<<'PHP'
     <?php
     declare(strict_types=1);
     namespace App;
-    class Item {}
-    class Product extends Item {}
-    class Book extends Product {}
+    class Food {}
+    class Fruit extends Food {}
+    class Banana extends Fruit {}
     PHP;
 
     public function testDirectEnclosingParamBoundAcceptsSubtype(): void
@@ -60,8 +60,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            $box = new Box::<Product>();
-            $box->contains::<Book>(new Book());
+            $box = new Box::<Fruit>();
+            $box->contains::<Banana>(new Banana());
             PHP,
         ]);
 
@@ -73,7 +73,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     public function testInheritedEnclosingParamBoundAcceptsSubtype(): void
     {
         // `contains` is declared on a generic BASE; the receiver is a subclass. Grounding must
-        // thread the receiver's `Product` through `extends Base<E>` to the base's `E`.
+        // thread the receiver's `Fruit` through `extends Base<E>` to the base's `E`.
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Base.xphp' => <<<'PHP'
@@ -94,8 +94,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            $list = new ArrayList::<Product>();
-            $list->contains::<Book>(new Book());
+            $list = new ArrayList::<Fruit>();
+            $list->contains::<Banana>(new Banana());
             PHP,
         ]);
 
@@ -105,7 +105,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     public function testMultiArgEnclosingParamBoundGroundsTheRightParameter(): void
     {
         // `Pair<K, +V>::containsValue<U : V>` — grounding must pick V (index 1), not K. If it used
-        // K (Item), `Book <: Item` would also pass, so make K a type Book is NOT a subtype of.
+        // K (Food), `Banana <: Food` would also pass, so make K a type Banana is NOT a subtype of.
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Key.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Key {}",
@@ -121,8 +121,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            $pair = new Pair::<Key, Product>();
-            $pair->containsValue::<Book>(new Book());
+            $pair = new Pair::<Key, Fruit>();
+            $pair->containsValue::<Banana>(new Banana());
             PHP,
         ]);
 
@@ -131,8 +131,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testEnclosingParamBoundRejectsNonSubtypeWithGroundedMessage(): void
     {
-        // Box<Book>::contains<Product> — Product is NOT a subtype of Book, so this must reject, and
-        // the message must show the GROUNDED bound (`Book`), not the literal type parameter `E`.
+        // Box<Banana>::contains<Fruit> — Fruit is NOT a subtype of Banana, so this must reject, and
+        // the message must show the GROUNDED bound (`Banana`), not the literal type parameter `E`.
         try {
             $this->compile([
                 'Models.xphp' => self::MODELS,
@@ -148,15 +148,15 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                $box = new Box::<Book>();
-                $box->contains::<Product>(new Product());
+                $box = new Box::<Banana>();
+                $box->contains::<Fruit>(new Fruit());
                 PHP,
             ]);
-            self::fail('Expected a bound violation for Box<Book>::contains<Product>.');
+            self::fail('Expected a bound violation for Box<Banana>::contains<Fruit>.');
         } catch (RuntimeException $e) {
             $msg = $e->getMessage();
             self::assertStringContainsString('Generic bound violated', $msg);
-            self::assertStringContainsString('extend/implement "App\\Book"', $msg, 'bound must be grounded to the receiver arg Book');
+            self::assertStringContainsString('extend/implement "App\\Banana"', $msg, 'bound must be grounded to the receiver arg Banana');
             self::assertStringNotContainsString('"E"', $msg, 'must not report the literal type parameter E');
         }
     }
@@ -177,8 +177,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            $box = new Box::<Product>();
-            $box->pick::<Book>(new Book());
+            $box = new Box::<Fruit>();
+            $box->pick::<Banana>(new Banana());
             PHP,
         ]);
 
@@ -187,7 +187,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testThisReceiverEnclosingBoundIsLenient(): void
     {
-        // `$this->contains::<Book>()` inside the template body: E has no concrete value yet, so the
+        // `$this->contains::<Banana>()` inside the template body: E has no concrete value yet, so the
         // bound is dropped (lenient) rather than rejected against the phantom `E`.
         $this->compile([
             'Models.xphp' => self::MODELS,
@@ -197,14 +197,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             namespace App;
             class Box<+E> {
                 public function contains<U : E>(U $value): bool { return true; }
-                public function probe(): bool { return $this->contains::<Book>(new Book()); }
+                public function probe(): bool { return $this->contains::<Banana>(new Banana()); }
             }
             PHP,
             'Use.xphp' => <<<'PHP'
             <?php
             declare(strict_types=1);
             namespace App;
-            $box = new Box::<Product>();
+            $box = new Box::<Fruit>();
             PHP,
         ]);
 
@@ -213,10 +213,10 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testParameterReceiverGroundsAndRejects(): void
     {
-        // A parameter typed `Box<Book>` must ground `contains<U:E>` to Book; Product is not a
+        // A parameter typed `Box<Banana>` must ground `contains<U:E>` to Banana; Fruit is not a
         // subtype, so this rejects — proving the param's type args are tracked and grounded.
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('extend/implement "App\\Book"');
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => self::box(),
@@ -224,7 +224,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            function consume(Box<Book> $b): bool { return $b->contains::<Product>(new Product()); }
+            function consume(Box<Banana> $b): bool { return $b->contains::<Fruit>(new Fruit()); }
             PHP,
         ]);
     }
@@ -232,7 +232,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     public function testPropertyReceiverGroundsAndRejects(): void
     {
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('extend/implement "App\\Book"');
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => self::box(),
@@ -241,8 +241,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             declare(strict_types=1);
             namespace App;
             class Holder {
-                private Box<Book> $b;
-                public function run(): bool { return $this->b->contains::<Product>(new Product()); }
+                private Box<Banana> $b;
+                public function run(): bool { return $this->b->contains::<Fruit>(new Fruit()); }
             }
             PHP,
         ]);
@@ -252,7 +252,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     {
         // Both arms assign a Box but with DIFFERENT args; the FQN merges (still Box) yet the args
         // conflict, so they are dropped → the call is lenient. If the args were not dropped, the
-        // call would ground to one arm's type and wrongly reject `Item` (a supertype of both).
+        // call would ground to one arm's type and wrongly reject `Food` (a supertype of both).
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => self::box(),
@@ -261,8 +261,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             declare(strict_types=1);
             namespace App;
             function pick(bool $c): bool {
-                if ($c) { $box = new Box::<Product>(); } else { $box = new Box::<Book>(); }
-                return $box->contains::<Item>(new Item());
+                if ($c) { $box = new Box::<Fruit>(); } else { $box = new Box::<Banana>(); }
+                return $box->contains::<Food>(new Food());
             }
             PHP,
         ]);
@@ -273,9 +273,9 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     public function testArgsSurviveABranchThatDoesNotTouchTheReceiver(): void
     {
         // The receiver is set before the branch and never reassigned inside it, so its args survive
-        // and ground the call — Product is not a subtype of Book, so it still rejects.
+        // and ground the call — Fruit is not a subtype of Banana, so it still rejects.
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('extend/implement "App\\Book"');
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => self::box(),
@@ -284,9 +284,9 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             declare(strict_types=1);
             namespace App;
             function keep(bool $c): bool {
-                $box = new Box::<Book>();
+                $box = new Box::<Banana>();
                 if ($c) { $unrelated = 1; }
-                return $box->contains::<Product>(new Product());
+                return $box->contains::<Fruit>(new Fruit());
             }
             PHP,
         ]);
@@ -295,9 +295,9 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     public function testClosureUseReceiverGroundsAndRejects(): void
     {
         // `use ($box)` imports the outer local's args into the closure scope, so the bound grounds
-        // to Book inside the closure body and rejects Product.
+        // to Banana inside the closure body and rejects Fruit.
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('extend/implement "App\\Book"');
+        $this->expectExceptionMessage('extend/implement "App\\Banana"');
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => self::box(),
@@ -306,8 +306,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             declare(strict_types=1);
             namespace App;
             function viaClosure(): callable {
-                $box = new Box::<Book>();
-                return function () use ($box): bool { return $box->contains::<Product>(new Product()); };
+                $box = new Box::<Banana>();
+                return function () use ($box): bool { return $box->contains::<Fruit>(new Fruit()); };
             }
             PHP,
         ]);

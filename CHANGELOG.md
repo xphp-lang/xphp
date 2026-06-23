@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Element-typed methods on covariant collections.** A method-level type parameter
   bounded by an enclosing class type parameter — `class Box<+E> { public function
   contains<U : E>(U $value): bool }` — now has its bound **grounded** against the
-  receiver's concrete type argument: `Box<Product>::contains<Book>` is accepted when
-  `Book <: Product`, and a genuine violation (`Box<Book>::contains<Product>`) is rejected
+  receiver's concrete type argument: `Box<Fruit>::contains<Banana>` is accepted when
+  `Banana <: Fruit`, and a genuine violation (`Box<Fruit>::contains<Rock>`) is rejected
   with the bound shown as the real type, not `E`. The receiver's argument is threaded up
   the `extends`/`implements` chain, so a method declared on a generic interface/base and
   inherited by a concrete collection is grounded too. This is the sound, element-typed

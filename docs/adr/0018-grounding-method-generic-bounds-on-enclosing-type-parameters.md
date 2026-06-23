@@ -13,10 +13,10 @@ uses for the element-search methods on its covariant `ConstVector`). `U` is inva
 variance ([ADR-0014](0014-variance-markers-are-class-level-only.md)) — it only needs the enclosing
 `E` to be resolved.
 
-But the bound `E` was evaluated against the literal type-parameter name: `isSubtype("Book", "E")`
+But the bound `E` was evaluated against the literal type-parameter name: `isSubtype("Banana", "E")`
 treats `"E"` as a phantom class, always returns false, and rejects *valid* code
-(`Box<Product>::contains<Book>` with `Book <: Product`) with a misleading
-*"Book does not extend/implement E"*. Bound checking is otherwise nominal and erased
+(`Box<Fruit>::contains<Banana>` with `Banana <: Fruit`) with a misleading
+*"Banana does not extend/implement E"*. Bound checking is otherwise nominal and erased
 ([ADR-0005](0005-nominal-erased-bound-checking.md)); the missing piece is grounding `E` to the
 receiver's concrete type argument before the check.
 
@@ -35,9 +35,9 @@ Chosen: **at a method-generic call site, ground each bound that names an enclosi
 parameter against the receiver's concrete type arguments, then run the existing bound check.**
 
 - The receiver's type arguments are recovered from flow typing (a parameter's declared
-  `Box<Product>`, a `new Box::<Product>()` local, a `$this->prop` of declared generic type) and
+  `Box<Fruit>`, a `new Box::<Fruit>()` local, a `$this->prop` of declared generic type) and
   threaded up the parameterized `extends`/`implements` chain to the method's **declaring** class, so
-  a method inherited from `Collection<+E>` grounds against an `ArrayList<Product>` receiver.
+  a method inherited from `Collection<+E>` grounds against an `ArrayList<Fruit>` receiver.
 - A bound leaf that is still a bare type parameter after grounding — the argument couldn't be
   determined (an opaque/inherited-but-unparameterized receiver, a post-branch merged receiver, or a
   `$this` call inside the still-uninstantiated template body) — has its bound **dropped for that
@@ -48,8 +48,8 @@ parameter against the receiver's concrete type arguments, then run the existing 
 ### Consequences
 
 - Good: the one place a covariant collection degraded to `mixed` now has a sound, element-typed
-  parameter; `Box<Product>::contains<Book>` is accepted and `Box<Book>::contains<Product>` is
-  rejected with the bound shown **grounded** (`Book`), not `E`.
+  parameter; `Box<Fruit>::contains<Banana>` is accepted and `Box<Fruit>::contains<Rock>` is
+  rejected with the bound shown **grounded** (`Fruit`), not `E`.
 - Trade-off — **lenient drop is a deliberate loosening, not "always sound".** Where the receiver's
   argument can't be determined, an ungroundable bound goes from today's *hard reject* to a *silent
   accept*, so a genuine violation the compiler can't analyze is no longer caught. We accept this
@@ -77,7 +77,7 @@ parameter against the receiver's concrete type arguments, then run the existing 
 ### Confirmation
 
 The grounding, the inheritance threading, and the lenient fallbacks are covered end-to-end: a direct
-and an **inherited** (`ArrayList<Product> extends Base<+E>`) accept, a multi-argument
+and an **inherited** (`ArrayList<Fruit> extends Base<+E>`) accept, a multi-argument
 (`Pair<K, +V>::containsValue<U : V>`) accept that grounds the right parameter, a reject whose
 message shows the grounded bound, the unbounded method generic unchanged, and the lenient cases
 (`$this` body, a parameter / property / closure-`use` receiver, and a branch-merge that drops

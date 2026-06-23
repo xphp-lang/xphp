@@ -105,15 +105,15 @@ class Box<+E> {
     public function contains<U : E>(U $value): bool { /* ... */ }
 }
 
-$box = new Box::<Product>();
-$box->contains::<Book>(new Book());   // OK — Book is a subtype of Product
+$box = new Box::<Fruit>();
+$box->contains::<Banana>(new Banana());   // OK — Banana is a subtype of Fruit
 ```
 
 At the call site the bound `E` is **grounded** to the receiver's
-concrete type argument (`Product` for a `Box<Product>`), then checked
+concrete type argument (`Fruit` for a `Box<Fruit>`), then checked
 like any other bound. A genuine violation
-(`Box<Book>` then `->contains::<Product>(...)`) is rejected, with the
-message naming the grounded type (`Book`). The receiver's argument is
+(`Box<Fruit>` then `->contains::<Rock>(...)`) is rejected, with the
+message naming the grounded type (`Fruit`). The receiver's argument is
 threaded through `extends`/`implements`, so a method declared on a
 generic interface/base and inherited by a concrete collection grounds
 the same way.
