@@ -315,6 +315,15 @@ final class Registry
                 if (!$param->default->isConcrete()) {
                     continue;
                 }
+                // A bound that references a sibling type parameter (`U : T`) can't be validated at
+                // declaration time -- the sibling is abstract here. It is grounded and checked at
+                // instantiation (validateBounds substitutes the concrete sibling arg), so defer it.
+                // (A template that is never instantiated therefore never checks such a default; that
+                // is inherent -- you can't prove `default <: T` without a concrete `T` -- and admits
+                // no unsafe instantiation, since every actual use is checked.)
+                if (self::boundReferencesSiblingParam($param->bound)) {
+                    continue;
+                }
                 $verdict = self::evaluateBound(
                     $param->bound,
                     $param->default,
@@ -516,7 +525,7 @@ final class Registry
             return;
         }
         self::checkBounds(
-            $definition->typeParams,
+            self::groundSiblingBounds($definition->typeParams, $args),
             $args,
             $this->hierarchy,
             self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
@@ -747,6 +756,56 @@ final class Registry
         // Defensive: BoundExpr is an abstract base and we own every subtype. Unreachable in
         // any test, but keep the return shape consistent (mirrors evaluateBound).
         return $bound;
+    }
+
+    /**
+     * Ground each type parameter's bound against the supplied (padded) args, so a bound that
+     * references a sibling parameter (`class Pair<T, U : T>`) is checked against the concrete arg,
+     * not the literal parameter name. Counts must match -- an arity mismatch is reported upstream
+     * (padArgsWithDefaults) and is left ungrounded so checkBounds early-returns on it.
+     *
+     * @param list<TypeParam> $params
+     * @param list<TypeRef> $args
+     * @return list<TypeParam>
+     */
+    private static function groundSiblingBounds(array $params, array $args): array
+    {
+        if (count($params) !== count($args)) {
+            return $params;
+        }
+        $subst = [];
+        foreach ($params as $i => $param) {
+            $subst[$param->name] = $args[$i];
+        }
+
+        return array_map(
+            static fn (TypeParam $p): TypeParam => $p->bound === null
+                ? $p
+                : new TypeParam($p->name, self::substituteBound($p->bound, $subst), $p->default, $p->variance),
+            $params,
+        );
+    }
+
+    /**
+     * Whether the bound has a top-level leaf that is a bare type parameter (a sibling reference like
+     * `U : T`) -- which can only be checked once that parameter is bound. A leaf naming a real class
+     * with type-param ARGS (an F-bound `T : Comparable<T>`) is NOT such a reference: it is checked
+     * erased on the leaf name, so it stays a declaration-time check.
+     */
+    private static function boundReferencesSiblingParam(BoundExpr $bound): bool
+    {
+        if ($bound instanceof BoundLeaf) {
+            return $bound->type->isTypeParam;
+        }
+        if ($bound instanceof BoundIntersection || $bound instanceof BoundUnion) {
+            foreach ($bound->operands as $operand) {
+                if (self::boundReferencesSiblingParam($operand)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
