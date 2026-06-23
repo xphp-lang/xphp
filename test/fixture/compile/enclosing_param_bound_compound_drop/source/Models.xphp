@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface Named {}
+
+class Fruit {}
+
+// Banana is a valid element (Banana <: Fruit) but does NOT implement Named — so it satisfies the
+// `E` half of a `Named & E` bound while violating the `Named` half.
+class Banana extends Fruit {}
