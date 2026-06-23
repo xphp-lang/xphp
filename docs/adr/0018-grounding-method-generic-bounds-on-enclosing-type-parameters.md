@@ -57,8 +57,8 @@ parameter against the receiver's concrete type arguments, then run the existing 
   a blanket warning is noisy (a branch-merged receiver routinely drops its arguments). A *targeted*
   `xphp check` diagnostic for the narrow "receiver known, arity correct, still ungroundable" case is
   possible future work.
-- Trade-off — **compound bounds drop whole.** A method bound like `<U : Named & E>` whose `E` can't
-  be grounded drops the entire bound, including the checkable `Named` operand. Narrow (it needs a
+- Trade-off — **compound bounds drop whole.** A method bound like `<U : \Stringable & E>` whose `E`
+  can't be grounded drops the entire bound, including the checkable `\Stringable` operand. Narrow (it needs a
   concrete operand intersected with an ungroundable enclosing parameter) and an extension of the
   lenient-drop decision; a future refinement could drop only the ungrounded operand.
 - Scope — **static methods are out.** A class type parameter is unbound in a static context, so a

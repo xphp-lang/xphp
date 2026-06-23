@@ -6,7 +6,8 @@ namespace App;
 
 class Box<+E>
 {
-    // U must be BOTH `Named` AND a subtype of the element type E. The `Named` half is checkable
-    // with no knowledge of E; only the `E` half needs the receiver's element type.
-    public function register<U : Named & E>(U $value): void {}
+    // U must be BOTH `\Stringable` (have a `__toString`) AND a subtype of the element type E. The
+    // `\Stringable` half is checkable with no knowledge of E; only the `E` half needs the receiver's
+    // element type.
+    public function register<U : \Stringable & E>(U $value): void {}
 }

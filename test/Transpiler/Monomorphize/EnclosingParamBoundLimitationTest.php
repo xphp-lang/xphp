@@ -73,27 +73,27 @@ final class EnclosingParamBoundLimitationTest extends TestCase
         }
     }
 
-    // --- Limitation 2: compound `<U : Named & E>` is dropped WHOLE when E is ungroundable ---
+    // --- Limitation 2: compound `<U : \Stringable & E>` is dropped WHOLE when E is ungroundable ---
 
-    public function testCompoundBoundDropDiscardsTheCheckableNamedOperand(): void
+    public function testCompoundBoundDropDiscardsTheCheckableStringableOperand(): void
     {
         // `store()` calls register::<Banana> on a branch-merged Box<Fruit> receiver. Banana satisfies
-        // the E half (Banana <: Fruit) but not the Named half — yet the whole bound is dropped, so
-        // the Named constraint is never enforced and it compiles.
+        // the E half (Banana <: Fruit) but not the \Stringable half — yet the whole bound is dropped,
+        // so the \Stringable constraint is never enforced and it compiles.
         $dist = $this->compileFixture('enclosing_param_bound_compound_drop');
 
         self::assertStringContainsString(
             'register_',
             self::read($dist, 'Use.php'),
-            'the not-Named argument was accepted and specialized (current lenient behaviour)',
+            'the non-Stringable argument was accepted and specialized (current lenient behaviour)',
         );
     }
 
-    public function testTheNamedOperandIsEnforcedWhenTheReceiverIsGroundable(): void
+    public function testTheStringableOperandIsEnforcedWhenTheReceiverIsGroundable(): void
     {
         // Identical call, but a straight-line Box<Fruit> receiver — E grounds to Fruit, the bound
-        // becomes `Named & Fruit`, and the intersection rejects Banana for not being Named. (Control
-        // for the compound-drop limitation: it proves the Named operand is the thing being lost.)
+        // becomes `\Stringable & Fruit`, and the intersection rejects Banana for not being Stringable.
+        // (Control for the compound-drop limitation: it proves the \Stringable operand is what's lost.)
         try {
             $this->compileInline([
                 'Models.xphp' => self::MODELS_COMPOUND,
@@ -109,7 +109,7 @@ final class EnclosingParamBoundLimitationTest extends TestCase
             self::fail('expected a bound violation for register::<Banana> on Box<Fruit>');
         } catch (RuntimeException $e) {
             self::assertStringContainsString('Generic bound violated', $e->getMessage());
-            self::assertStringContainsString('Named', $e->getMessage());
+            self::assertStringContainsString('Stringable', $e->getMessage());
         }
     }
 
@@ -136,7 +136,6 @@ final class EnclosingParamBoundLimitationTest extends TestCase
     <?php
     declare(strict_types=1);
     namespace App;
-    interface Named {}
     class Fruit {}
     class Banana extends Fruit {}
     PHP;
@@ -146,7 +145,7 @@ final class EnclosingParamBoundLimitationTest extends TestCase
     declare(strict_types=1);
     namespace App;
     class Box<+E> {
-        public function register<U : Named & E>(U $value): void {}
+        public function register<U : \Stringable & E>(U $value): void {}
     }
     PHP;
 

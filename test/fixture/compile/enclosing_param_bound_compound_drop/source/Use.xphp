@@ -6,12 +6,12 @@ namespace App;
 
 // Known limitation (ADR-0018, "compound bounds drop whole"): both arms construct Box<Fruit>, but
 // the branch merge keeps only the class and drops the tracked element type, so E is ungroundable.
-// The WHOLE `Named & E` bound is then dropped — including the `Named` operand, which could be
-// enforced with no knowledge of E. `Banana` is a valid element (Banana <: Fruit) but is not
-// `Named`, yet it is silently accepted.
+// The WHOLE `\Stringable & E` bound is then dropped — including the `\Stringable` operand, which
+// could be enforced with no knowledge of E. `Banana` is a valid element (Banana <: Fruit) but is
+// not `\Stringable`, yet it is silently accepted.
 //
 // CURRENT behaviour: compiles (no bound violation). A v2 that evaluates the ungroundable operand as
-// "unknown" instead of dropping the whole bound should still REJECT on the `Named` operand.
+// "unknown" instead of dropping the whole bound should still REJECT on the `\Stringable` operand.
 function store(bool $cond): void
 {
     if ($cond) {
