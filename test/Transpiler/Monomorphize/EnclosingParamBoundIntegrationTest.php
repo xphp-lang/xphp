@@ -735,6 +735,40 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testMultiClassParamErasureMangleKeysOnTheBoundsReferentAtRuntime(): void
+    {
+        // `containsValue<U:V>` on `Map<K, +V>` mangles on V (Fruit), not K (string). Call-site and
+        // Specializer must agree on that key, or the call resolves to nothing. Executed.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/source',
+            'erase-map',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testTwoTurbofishTypesCollapseToOneWidenedMemberAtRuntime(): void
+    {
+        // The core erasure semantic: `contains::<Banana>` and `contains::<Cherry>` both lower to one
+        // `contains_<Fruit>(Fruit)` member, widened to the bound, accepting each subtype. Executed.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_param_widening/source',
+            'erase-widen',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_param_widening/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testInheritedErasableMemberResolvesAtRuntime(): void
     {
         // `contains<U:E>` declared on a generic base, called on a subclass instantiation. The

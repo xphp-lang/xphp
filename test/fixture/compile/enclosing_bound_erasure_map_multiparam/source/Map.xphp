@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Map<K, +V>
+{
+    public function describe(K $key): string
+    {
+        return (string) $key;
+    }
+
+    // Bound references the SECOND class parameter V — the erased member must mangle on V, not K.
+    public function containsValue<U : V>(U $value): bool
+    {
+        return $value instanceof Fruit;
+    }
+}

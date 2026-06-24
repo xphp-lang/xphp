@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Two DIFFERENT turbofish args (Banana, Cherry) on the same Box<Fruit> collapse to ONE erased member
+// contains_<Fruit>(Fruit): the parameter is widened to the bound E, so it accepts both subtypes.
+$box = new Box::<Fruit>();
+$banana = $box->contains::<Banana>(new Banana());
+$cherry = $box->contains::<Cherry>(new Cherry());
