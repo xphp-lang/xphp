@@ -82,13 +82,21 @@ the emitted code carries nothing).
   instance to ground `E` against — so a static method whose bound names a class parameter is
   unprovable and fails. (The call's own method-parameter bounds, e.g. `<U, V : U>`, still ground
   against the turbofish arguments and are checked.)
-- **`$this` self-calls fail, for now.** A `$this->m::<Concrete>()` self-call inside the class body
-  references the class's *own* parameter, which is abstract until the class is instantiated; whether
-  the bound holds is instance-dependent (valid for `Box<Fruit>`, not for `Box<Rock>`), and the bound
-  checker only runs on the abstract template. Rather than silently accept it, this fails with a
-  self-call-specific message. This is an intentionally loud, **temporary** limitation, not a permanent
-  erasure boundary: a future per-instantiation bound check can re-ground and check the self-call once
-  the enclosing class is specialised, turning the hard error into a real check (the safe direction).
+- **Erasable methods are lowered, and a forwarded self-call works.** A method whose enclosing-bounded
+  parameter is used *only* as a direct top-level input (`U $value`) is lowered by **erasing `U` to its
+  bound `E`**: one concrete `E`-typed member per class instantiation (`contains_<Fruit>(Fruit)`), not
+  one per call-site turbofish (`contains_<Banana>(Banana)`) — `<U : E>` is, after all, the
+  variance-legal spelling of "an `E`-typed input". A `$this`-rooted self-call that *forwards* its
+  parameter to such a method — `probe<U : E>(U $v) { return $this->contains::<U>($v); }` — therefore
+  compiles and runs (the forward rewrites to the emitted member); it is the idiomatic way to call an
+  element-consuming method from inside the class. The bound is still checked at the call site before
+  erasure, so `Box<Fruit>::contains<Rock>` is still rejected.
+- **The residual `$this` self-calls still fail — loudly, never at runtime.** A *direct concrete*
+  `$this->contains::<Banana>()` self-call (its bound is checkable only on the abstract template) fails
+  with `xphp.bound_unprovable`; a forward to a *non-erasable* method (parameter used nested, in the
+  return, or structurally) fails with `xphp.unspecializable_self_call`. Both are compile errors, never
+  a runtime fault. (A future per-instantiation re-check could relax the direct-concrete case too, but
+  the common forwarding shape is already handled by erasure.)
 - Boundary unchanged — grounding resolves the enclosing parameter to the receiver's argument; the
   grounded bound is then checked nominally/erased as before. F-bounded and generic-argument bound
   checking are unaffected.
@@ -107,8 +115,11 @@ multi-argument (`Pair<K, +V>::containsValue<U : V>`) accept that grounds the rig
 whose message shows the grounded bound, the determined-receiver cases (parameter / property /
 closure-`use` / method-return / chain / `self`-`static` / branch-arms-agree) accepting or rejecting on
 the grounded type, and the unprovable cases (a raw generic parameter, a branch whose arms disagree, a
-static class-parameter bound, and a `$this` self-call) failing with `xphp.bound_unprovable` — both
-thrown in `compile` and collected in `check`. A sibling-parameter bound (`class Pair<T, U : T>`) is
+static class-parameter bound, and a *direct concrete* `$this` self-call) failing with
+`xphp.bound_unprovable` — both thrown in `compile` and collected in `check`. The erasure lowering is
+exercised by executing the compiled output (a forwarding self-call, an inherited member, a covariant
+chain, a multi-class-param `Map<K, +V>`), and a forward to a *non-erasable* method fails with
+`xphp.unspecializable_self_call`. A sibling-parameter bound (`class Pair<T, U : T>`) is
 unit-tested accept/reject with the grounded sibling shown, and a method-own sibling bound (`<U, V : U>`)
 is grounded against the turbofish arguments. The receiver-argument threading is unit-tested for chains,
 diamonds (agreeing → one grounding, conflicting → none), cycles, and arity gaps. The variance

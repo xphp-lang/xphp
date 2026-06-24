@@ -135,6 +135,10 @@ upcoming one.
 - Enclosing-parameter method bounds (`contains<U : E>`) grounded against
   the receiver, or a compile error (`xphp.bound_unprovable`) when the
   element type can't be determined.
+- Erasure lowering of a direct-input `<U : E>` method (one `E`-typed member
+  per instantiation), so a forwarded self-call
+  (`probe<U : E>{ $this->contains::<U>(…) }`) compiles and runs; a forward to
+  a non-erasable method is a compile error (`xphp.unspecializable_self_call`).
 
 ### Anonymous templates
 
@@ -255,9 +259,11 @@ to ship.
 - Branching narrowing precision: today a turbofish call on a receiver
   whose branch arms disagree is a compile error; could track unions with
   runtime dispatch instead.
-- Per-instantiation checking of a `$this`-self-call's enclosing-parameter
-  bound (today a compile error), to accept the calls that hold for the
-  instantiations actually used.
+- Per-instantiation checking of a **direct concrete** `$this`-self-call's
+  enclosing-parameter bound (`$this->contains::<Banana>()`, today a compile
+  error), to accept the calls that hold for the instantiations actually used.
+  (The common *forwarding* shape already works via erasure lowering — see
+  Shipped.)
 
 ### Generic completeness
 

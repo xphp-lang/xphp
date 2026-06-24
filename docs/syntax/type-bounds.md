@@ -146,8 +146,10 @@ fails, with a message pointing at the fix. A *static* method whose bound
 names a class parameter fails the same way: a class type parameter has no
 value in a static context, so there is nothing to ground it to.
 
-The `$this`-self-call case is an intentionally loud, temporary limitation —
-its bound is provable per instantiation, just not yet checked there:
+A **direct, concrete** `$this`-self-call (a hardcoded turbofish type on `$this`)
+is an intentionally loud limitation — its bound is checkable only once the class
+is instantiated, so for now it fails (the *forwarding* form below is the way to
+make it compile and run):
 
 ```php
 class Box<+E> {
