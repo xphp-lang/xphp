@@ -24,7 +24,9 @@ receiver's concrete type argument before the check.
 
 - Let a covariant collection expose element-consuming methods with a *real* element-typed parameter
   instead of `mixed`, soundly.
-- Never false-reject code that compiles today — a covariant generics library can't afford it.
+- Never false-reject *provably-valid* code — determine the receiver's element type wherever it's
+  statically knowable (the misleading `"does not extend/implement E"` rejection must go) — but never
+  silently accept an *unverifiable* bound either: prove it or fail the build, never defer to runtime.
 - Keep the existing nominal/erased bound check; add grounding, don't replace it.
 - Cover the shape real libraries use: methods declared on a generic **interface/base** and inherited
   by concrete collections.
@@ -32,17 +34,34 @@ receiver's concrete type argument before the check.
 ## Decision Outcome
 
 Chosen: **at a method-generic call site, ground each bound that names an enclosing class type
-parameter against the receiver's concrete type arguments, then run the existing bound check.**
+parameter against the receiver's concrete type arguments, then run the existing bound check — and
+when the receiver's argument genuinely can't be determined, fail the build rather than skip the
+check.** This is *ground or fail*, driven by the project's non-negotiable principles
+[#2 Maximum Runtime Safety](../../README.md#2-maximum-runtime-safety) (never let an unverified bound
+through, and never defer the check to runtime) and
+[#1 Zero Runtime Penalty](../../README.md#1-zero-runtime-penalty) (the check is a compile-time fact,
+the emitted code carries nothing).
 
-- The receiver's type arguments are recovered from flow typing (a parameter's declared
-  `Box<Fruit>`, a `new Box::<Fruit>()` local, a `$this->prop` of declared generic type) and
-  threaded up the parameterized `extends`/`implements` chain to the method's **declaring** class, so
-  a method inherited from `Collection<+E>` grounds against an `ArrayList<Fruit>` receiver.
-- A bound leaf that is still a bare type parameter after grounding — the argument couldn't be
-  determined (an opaque/inherited-but-unparameterized receiver, a post-branch merged receiver, or a
-  `$this` call inside the still-uninstantiated template body) — has its bound **dropped for that
-  call** (treated as unbounded) rather than checked against the phantom name.
-- A bound that does **not** name an enclosing parameter — a real class, or an F-bounded
+- **Determination floor — maximise what's knowable first.** The receiver's type arguments are
+  recovered from flow typing and threaded up the parameterized `extends`/`implements` chain to the
+  method's **declaring** class (so a method inherited from `Collection<+E>` grounds against an
+  `ArrayList<Fruit>` receiver). The covered receiver shapes:
+  - a parameter or `$this->prop` of declared generic type (`Box<Fruit> $b`);
+  - a `new Box::<Fruit>()` local (and a closure-`use` capture of one);
+  - a value whose type comes from a **method return**, a **chained call**, or a `self`/`static`
+    factory (`$x = $repo->getBox(); $x->...`, `$repo->getBox()->...`);
+  - a **branch** whose every arm assigns the *same* parameterised type (the arms agree → the element
+    type survives the merge).
+  A bound that references a **sibling** parameter rather than the receiver's element type is grounded
+  against the supplied argument the same way, both at the class level (`class Pair<T, U : T>`) and at
+  the method level (`<U, V : U>`, grounded against the call's own turbofish arguments).
+- **The residual is a compile error.** A bound leaf that is still a bare type parameter after
+  grounding — the argument genuinely couldn't be determined (a raw/unparameterised receiver, a branch
+  whose arms construct different types, a static call with no instance) — is reported as
+  `xphp.bound_unprovable` with an actionable remedy ("bind the receiver to a typed local"). It is
+  **never** dropped to "unbounded" and **never** checked against the phantom name. In `xphp check`
+  the diagnostic is collected; in `xphp compile` it aborts the build.
+- A bound that does **not** name an enclosing/sibling parameter — a real class, or an F-bounded
   `Comparable<T>` leaf — is untouched and checked exactly as before.
 
 ### Consequences
@@ -50,20 +69,26 @@ parameter against the receiver's concrete type arguments, then run the existing 
 - Good: the one place a covariant collection degraded to `mixed` now has a sound, element-typed
   parameter; `Box<Fruit>::contains<Banana>` is accepted and `Box<Fruit>::contains<Rock>` is
   rejected with the bound shown **grounded** (`Fruit`), not `E`.
-- Trade-off — **lenient drop is a deliberate loosening, not "always sound".** Where the receiver's
-  argument can't be determined, an ungroundable bound goes from today's *hard reject* to a *silent
-  accept*, so a genuine violation the compiler can't analyze is no longer caught. We accept this
-  because the alternative (a hard error) re-introduces false-rejects on currently-compiling code, and
-  a blanket warning is noisy (a branch-merged receiver routinely drops its arguments). A *targeted*
-  `xphp check` diagnostic for the narrow "receiver known, arity correct, still ungroundable" case is
-  possible future work.
-- Trade-off — **compound bounds drop whole.** A method bound like `<U : \Stringable & E>` whose `E`
-  can't be grounded drops the entire bound, including the checkable `\Stringable` operand. Narrow (it needs a
-  concrete operand intersected with an ungroundable enclosing parameter) and an extension of the
-  lenient-drop decision; a future refinement could drop only the ungrounded operand.
-- Scope — **static methods are out.** A class type parameter is unbound in a static context, so a
-  static method's enclosing-parameter bound is never grounded (it falls to lenient drop). There is no
-  use case (the motivating methods are all instance methods).
+- **Ground or fail, never silently accept.** Where the receiver's argument can't be determined, an
+  unprovable bound is a *compile error*, not a silent accept and not a runtime check. This is the
+  whole point: a covariant generics library must not let an unverified element-type constraint reach
+  emitted PHP. The determination floor above keeps the error rare — it fires only on receivers that
+  carry no recoverable element type — and the message names the fix.
+- **Compound bounds fail whole.** A method bound like `<U : \Stringable & E>` whose `E` can't be
+  grounded fails the **entire** bound rather than checking half of it — the checkable `\Stringable`
+  operand isn't silently dropped, and the unprovable `E` operand isn't silently accepted. The user
+  grounds the receiver and the whole bound (both operands) is then checked.
+- **Static methods fail.** A class type parameter is unbound in a static context — there is no
+  instance to ground `E` against — so a static method whose bound names a class parameter is
+  unprovable and fails. (The call's own method-parameter bounds, e.g. `<U, V : U>`, still ground
+  against the turbofish arguments and are checked.)
+- **`$this` self-calls fail, for now.** A `$this->m::<Concrete>()` self-call inside the class body
+  references the class's *own* parameter, which is abstract until the class is instantiated; whether
+  the bound holds is instance-dependent (valid for `Box<Fruit>`, not for `Box<Rock>`), and the bound
+  checker only runs on the abstract template. Rather than silently accept it, this fails with a
+  self-call-specific message. This is an intentionally loud, **temporary** limitation, not a permanent
+  erasure boundary: a future per-instantiation bound check can re-ground and check the self-call once
+  the enclosing class is specialised, turning the hard error into a real check (the safe direction).
 - Boundary unchanged — grounding resolves the enclosing parameter to the receiver's argument; the
   grounded bound is then checked nominally/erased as before. F-bounded and generic-argument bound
   checking are unaffected.
@@ -76,14 +101,18 @@ parameter against the receiver's concrete type arguments, then run the existing 
 
 ### Confirmation
 
-The grounding, the inheritance threading, and the lenient fallbacks are covered end-to-end: a direct
-and an **inherited** (`ArrayList<Fruit> extends Base<+E>`) accept, a multi-argument
-(`Pair<K, +V>::containsValue<U : V>`) accept that grounds the right parameter, a reject whose
-message shows the grounded bound, the unbounded method generic unchanged, and the lenient cases
-(`$this` body, a parameter / property / closure-`use` receiver, and a branch-merge that drops
-conflicting arguments). The receiver-argument threading is unit-tested for chains, diamonds
-(agreeing → one grounding, conflicting → none), cycles, and arity gaps. The variance consistency is
-pinned in the variance-position phase. See [type bounds](../syntax/type-bounds.md).
+The grounding, the inheritance threading, the determination floor, and the hard-fail are covered
+end-to-end: a direct and an **inherited** (`ArrayList<Fruit> extends Base<+E>`) accept, a
+multi-argument (`Pair<K, +V>::containsValue<U : V>`) accept that grounds the right parameter, a reject
+whose message shows the grounded bound, the determined-receiver cases (parameter / property /
+closure-`use` / method-return / chain / `self`-`static` / branch-arms-agree) accepting or rejecting on
+the grounded type, and the unprovable cases (a raw generic parameter, a branch whose arms disagree, a
+static class-parameter bound, and a `$this` self-call) failing with `xphp.bound_unprovable` — both
+thrown in `compile` and collected in `check`. A sibling-parameter bound (`class Pair<T, U : T>`) is
+unit-tested accept/reject with the grounded sibling shown, and a method-own sibling bound (`<U, V : U>`)
+is grounded against the turbofish arguments. The receiver-argument threading is unit-tested for chains,
+diamonds (agreeing → one grounding, conflicting → none), cycles, and arity gaps. The variance
+consistency is pinned in the variance-position phase. See [type bounds](../syntax/type-bounds.md).
 
 ## More Information
 

@@ -116,14 +116,38 @@ like any other bound. A genuine violation
 message naming the grounded type (`Fruit`). The receiver's argument is
 threaded through `extends`/`implements`, so a method declared on a
 generic interface/base and inherited by a concrete collection grounds
-the same way.
+the same way. The receiver's type is determined from a typed parameter
+or `$this->prop`, a `new`-constructed local, a value returned by a
+method or chained call (or a `self`/`static` factory), and a branch
+whose arms agree on the same parameterised type.
 
-When the receiver's argument can't be determined statically — an opaque
-receiver, or a `$this->m::<...>()` call inside the class body, where `E`
-has no concrete value yet — the bound is **left unchecked** for that
-call rather than reported as a spurious violation. (Bounding a *static*
-method's type parameter by the class parameter is likewise unchecked: a
-class type parameter has no value in a static context.)
+### Ground or fail
+
+If the receiver's type argument genuinely **can't** be determined — a
+raw `Box` parameter with no type argument, a branch whose arms construct
+different `Box<...>` types, or a `$this->m::<...>()` self-call inside the
+class body (where `E` is the class's own parameter, abstract until the
+class is instantiated) — the bound **cannot be proven**, so it is a
+**compile error** (`xphp.bound_unprovable`) rather than an unchecked
+call:
+
+```php
+function pick(Box $b): bool {                 // raw Box — no element type
+    return $b->contains::<Banana>(new Banana());
+    //     ^ cannot verify `U : E`: bind the receiver to a typed local
+    //       (`Box<Fruit> $b`) so its type argument is known.
+}
+```
+
+This upholds [Maximum Runtime Safety](../../README.md#2-maximum-runtime-safety):
+a knowable type is never dropped, and an unprovable bound never becomes a
+silent accept or a runtime check — you either ground it or the build
+fails, with a message pointing at the fix. A *static* method whose bound
+names a class parameter fails the same way: a class type parameter has no
+value in a static context, so there is nothing to ground it to. The
+`$this`-self-call case is an intentionally loud, temporary limitation (its
+bound is provable per instantiation, just not yet checked there); move the
+call to a context where the receiver has a concrete element type.
 
 ## Caveats
 

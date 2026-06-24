@@ -11,16 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Element-typed methods on covariant collections.** A method-level type parameter
   bounded by an enclosing class type parameter — `class Box<+E> { public function
-  contains<U : E>(U $value): bool }` — now has its bound **grounded** against the
-  receiver's concrete type argument: `Box<Fruit>::contains<Banana>` is accepted when
-  `Banana <: Fruit`, and a genuine violation (`Box<Fruit>::contains<Rock>`) is rejected
-  with the bound shown as the real type, not `E`. The receiver's argument is threaded up
-  the `extends`/`implements` chain, so a method declared on a generic interface/base and
-  inherited by a concrete collection is grounded too. This is the sound, element-typed
-  alternative to a `mixed` parameter on a covariant `<+E>` collection (`U` is invariant —
-  not method-level variance). Where the receiver's argument can't be determined (an opaque
-  receiver, or a `$this` call inside the template body) the bound is left unchecked rather
-  than falsely rejected. See [type bounds](docs/syntax/type-bounds.md) and
+  contains<U : E>(U $value): bool }` — has its bound **grounded** against the receiver's
+  concrete type argument: `Box<Fruit>::contains<Banana>` is accepted when `Banana <: Fruit`,
+  and a genuine violation (`Box<Fruit>::contains<Rock>`) is rejected with the bound shown as
+  the real type, not `E`. The receiver's argument is threaded up the `extends`/`implements`
+  chain, so a method declared on a generic interface/base and inherited by a concrete
+  collection is grounded too. The receiver's type is determined from a typed parameter or
+  `$this->prop`, a `new`-constructed local, a value whose type comes from a method return /
+  chained call / `self`/`static` factory, and a branch whose arms agree on the same
+  parameterised type. A bound that references a sibling parameter is grounded the same way,
+  at the class level (`class Pair<T, U : T>`) and the method level (`<U, V : U>`). This is the
+  sound, element-typed alternative to a `mixed` parameter on a covariant `<+E>` collection
+  (`U` is invariant — not method-level variance). **Ground or fail:** where the receiver's
+  type argument genuinely can't be determined, the bound can't be proven, so it is a compile
+  error (`xphp.bound_unprovable`) with an actionable remedy — bind the receiver to a typed
+  local — rather than an unchecked call. Nothing knowable is skipped, and no check is deferred
+  to runtime. See [type bounds](docs/syntax/type-bounds.md) and
   [ADR-0018](docs/adr/0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md).
 - **`xphp check`** — a validate-without-emitting CI gate. It runs every generic
   validation `xphp compile` does (bounds, variance, defaults, missing/duplicate
@@ -72,6 +78,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are unaffected.
 - **Too many type arguments are now rejected** instead of silently truncated:
   `Box::<int, string>` for a one-parameter `Box` reports `xphp.too_many_type_arguments`.
+- **A turbofish call on an undeterminable receiver is now rejected** instead of
+  silently emitting a runtime fatal. A generic method call like `$x->m::<int>()` is
+  specialized at compile time and the generic method is stripped from its class, so
+  when the receiver's type can't be determined — an untyped `foreach` variable, a
+  local whose type is ambiguous after a branch — the call previously compiled to
+  `$x->m(...)`, a call to a method that no longer exists (an "undefined method" fatal
+  at runtime). It now fails `xphp compile` and is reported by `xphp check` as
+  `xphp.undetermined_receiver`, with the fix: give the receiver a statically-known
+  type. Ground or fail — the compiler never emits a call it knows will fatal.
 
 ## [0.2.0]
 
