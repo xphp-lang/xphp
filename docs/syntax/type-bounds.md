@@ -163,9 +163,13 @@ class Box<+E> {
 ```
 
 Move such a call to a context where the receiver has a concrete element type
-(e.g. a free function taking `Box<Fruit> $b`). A self-call with no concrete
-turbofish (`$this->contains::<U>($v)`, forwarding a method parameter) is
-unaffected.
+(e.g. a free function taking `Box<Fruit> $b`). Making the method itself generic
+and forwarding its own parameter — `probe<U : E>(U $v) { return
+$this->contains::<U>($v); }` — does **not** work around it: the `probe` call
+site is checked, but the forwarded `$this->contains::<U>()` is not re-specialized
+when `probe` is, so it compiles to a `$this->contains(...)` call that fatals at
+runtime. Until the per-instantiation check lands, keep an enclosing-parameter-
+bounded call out of the class body entirely.
 
 ## Caveats
 
