@@ -89,6 +89,7 @@ final class GenericMethodCompiler
     public const CODE_UNSUPPORTED_STATIC_CLOSURE = 'xphp.static_closure';
     public const CODE_UNRESOLVED_GENERIC_CALL = 'xphp.unresolved_generic_call';
     public const CODE_BOUND_UNPROVABLE = 'xphp.bound_unprovable';
+    public const CODE_UNDETERMINED_RECEIVER = 'xphp.undetermined_receiver';
 
     /**
      * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
@@ -1201,11 +1202,12 @@ final class GenericMethodCompiler
              *   - `$param->method::<T>(...)` -- receiver is the function/method
              *     parameter's declared type (snapshot in $currentScopeParamTypes).
              *
-             * Receivers we currently can't resolve (returns null -> no
-             * specialization, marker drops silently; user's call site becomes a
-             * normal MethodCall to a method that doesn't exist post-strip, surfacing
-             * a runtime "undefined method" error). Stage B will widen the receiver
-             * sources to local-variable assignments.
+             * When the receiver's type can't be resolved, a *turbofish* call can't be
+             * specialized — the generic method only exists as mangled specializations,
+             * so leaving it would emit a call to a method that doesn't exist and fatal
+             * at runtime. Ground-or-fail: report it at compile time (see
+             * `reportUndeterminedReceiverOrSkip`). An ordinary (non-turbofish) call on
+             * an unresolved receiver is none of our business and passes through.
              */
             private function rewriteInstanceMethodCall(MethodCall|NullsafeMethodCall $node): ?Node
             {
@@ -1216,7 +1218,7 @@ final class GenericMethodCompiler
 
                 $classFqn = $this->resolveReceiverFqn($node->var);
                 if ($classFqn === null) {
-                    return null;
+                    return $this->reportUndeterminedReceiverOrSkip($node->name->toString(), $node);
                 }
                 $methodName = $node->name->toString();
                 $key = $classFqn . '::' . $methodName;
@@ -1414,6 +1416,37 @@ final class GenericMethodCompiler
                     $methodName,
                     $receiverFqn,
                 );
+            }
+
+            /**
+             * A turbofish instance call (`$x->m::<...>()`) whose receiver type couldn't be determined.
+             * The call can't be specialized — the generic method only exists as mangled
+             * specializations — so leaving it would emit a call to a non-existent method that fatals
+             * at runtime. Ground-or-fail: collect-or-throw at compile time. An ordinary (non-turbofish)
+             * call has no generic args and passes through untouched (PHP resolves it normally).
+             */
+            private function reportUndeterminedReceiverOrSkip(string $methodName, Node $node): null
+            {
+                if (!is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS))) {
+                    return null;
+                }
+                $message = sprintf(
+                    'Cannot determine the receiver\'s type for the generic call `%s::<...>()`. A '
+                    . 'turbofish call is specialized at compile time, so the receiver must have a '
+                    . 'statically-known type. Give it a declared type — a typed parameter or property, '
+                    . 'or a local assigned from `new ...::<...>()` or a typed return.',
+                    $methodName,
+                );
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        GenericMethodCompiler::CODE_UNDETERMINED_RECEIVER,
+                        $message,
+                        new SourceLocation($this->currentFile, $node->getStartLine()),
+                    ));
+                    return null;
+                }
+                throw new RuntimeException($message);
             }
 
             /**

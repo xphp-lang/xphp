@@ -636,6 +636,52 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertContains(GenericMethodCompiler::CODE_BOUND_UNPROVABLE, $codes);
     }
 
+    public function testUntypedForeachReceiverIsUndeterminedAndHardFails(): void
+    {
+        // A foreach loop variable has no declared type, so a turbofish call on it can't be
+        // specialized — the generic method only exists as specializations, so leaving the call would
+        // emit a non-existent method that fatals at runtime. Ground or fail → compile error.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Cannot determine the receiver');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(array $boxes): void {
+                foreach ($boxes as $box) {
+                    $box->contains::<Banana>(new Banana());
+                }
+            }
+            PHP,
+        ]);
+    }
+
+    public function testUndeterminedReceiverIsCollectedInCheckMode(): void
+    {
+        // The same undeterminable-receiver call in `check` mode: collected as
+        // `xphp.undetermined_receiver` rather than thrown.
+        $collector = $this->check([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(array $boxes): void {
+                foreach ($boxes as $box) {
+                    $box->contains::<Banana>(new Banana());
+                }
+            }
+            PHP,
+        ]);
+
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(GenericMethodCompiler::CODE_UNDETERMINED_RECEIVER, $codes);
+    }
+
     // --- harness ---
 
     private static function repo(): string

@@ -501,14 +501,15 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingReassignmentInvalidatesPostBranchSpecialization(): void
+    public function testBranchingReassignmentMakesReceiverUndeterminedAndFailsToCompile(): void
     {
-        // Bug fix: `$x = new Foo(); if (…) { $x = new Bar(); } $x->m::<T>()`
-        // used to specialize against Bar (the last lexical write) regardless
-        // of whether the branch fired. The conservative fix invalidates `$x`
-        // on the branch's exit -- the post-branch call site no longer
-        // specializes, and PHP throws "undefined method" at runtime instead
-        // of silently calling the wrong specialization.
+        // `$x = new Foo(); if (…) { $x = new Bar(); } $x->m::<T>()` must never
+        // specialize against the last lexical write (Bar) — the branch may not
+        // fire. The flow analyzer invalidates `$x` on the branch's exit, so the
+        // receiver's type is undetermined. A turbofish call can't be specialized
+        // without a known receiver type, and the generic method is stripped from
+        // its class, so leaving the call would emit a runtime "undefined method".
+        // Ground or fail: this is a compile error.
         $dir = sys_get_temp_dir() . '/xphp-br-post-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -536,16 +537,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: ambiguous post-branch type must
-            // de-specialize, leaving the bare unmangled call.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingReassignmentInvalidatesPostBranchSpecialization/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -678,14 +672,14 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingIfWithoutElseStillDeSpecializes(): void
+    public function testBranchingIfWithoutElseUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: if-without-else has an implicit empty arm. Even when both
-        // reachable paths agree on Foo (the pre-branch assignment matches
-        // the if-body's), the merge MUST de-specialize because the
-        // expectedArmCount guard trips. This is deliberate -- the implicit
-        // arm doesn't appear in perBranchTypes, and special-casing it
-        // would be fragile against refactors.
+        // If-without-else has an implicit empty arm. Even when both reachable
+        // paths agree on Foo (the pre-branch assignment matches the if-body's),
+        // the merge MUST NOT ground the receiver because the expectedArmCount
+        // guard trips (the implicit arm doesn't appear in perBranchTypes, and
+        // special-casing it would be fragile). The receiver's type is therefore
+        // undetermined, so the turbofish call can't be specialized → compile error.
         $dir = sys_get_temp_dir() . '/xphp-br-noelse-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -707,15 +701,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: if-without-else must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingIfWithoutElseStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -802,9 +790,10 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingSwitchWithoutDefaultStillDeSpecializes(): void
+    public function testBranchingSwitchWithoutDefaultUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: no `default` case = implicit fall-through = no merge.
+        // No `default` case = implicit fall-through = no merge, so the receiver's
+        // type stays undetermined and the turbofish call can't be specialized.
         $dir = sys_get_temp_dir() . '/xphp-br-swnod-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -828,15 +817,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: switch without default must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingSwitchWithoutDefaultStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -886,11 +869,12 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingOneArmAssignsUntrackedRhsStillDeSpecializes(): void
+    public function testBranchingOneArmAssignsUntrackedRhsUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: one arm assigns the same class via `new Foo()`, the other
-        // via an untracked RHS (a function call). The untracked arm captures
-        // null, the merge fails, $x de-specializes.
+        // One arm assigns the same class via `new Foo()`, the other via an
+        // untracked RHS (a function call whose return type the flow analyzer
+        // doesn't read here). The untracked arm captures null, the merge fails,
+        // and the receiver's type is undetermined → the turbofish call fails.
         $dir = sys_get_temp_dir() . '/xphp-br-untracked-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -914,15 +898,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: untracked-RHS arm forces de-specialization.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingOneArmAssignsUntrackedRhsStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -967,11 +945,10 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingMatchWithoutDefaultStillDeSpecializes(): void
+    public function testBranchingMatchWithoutDefaultUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: match without default = canMergeOnLeave returns false.
-        // (Match would runtime-throw on unmatched value, but we're
-        // conservative.)
+        // Match without default = canMergeOnLeave returns false, so the receiver's
+        // type stays undetermined and the turbofish call can't be specialized.
         $dir = sys_get_temp_dir() . '/xphp-br-mtchnod-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -995,26 +972,21 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: match without default must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingMatchWithoutDefaultStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
     }
 
-    public function testBranchingElseifMiddleArmDiffersStillDeSpecializes(): void
+    public function testBranchingElseifMiddleArmDiffersUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: three-arm if/elseif/else where the middle arm assigns Bar
-        // instead of Foo. Locks the per-arm equality loop -- if the loop
-        // accidentally only checks the first vs last arm, this test would
-        // wrongly merge against Foo.
+        // Three-arm if/elseif/else where the middle arm assigns Bar instead of
+        // Foo. Locks the per-arm equality loop -- if it accidentally only checked
+        // the first vs last arm it would wrongly merge against Foo and ground the
+        // receiver. The arms disagree, so the receiver is undetermined → the
+        // turbofish call can't be specialized and fails to compile.
         $dir = sys_get_temp_dir() . '/xphp-br-elsmid-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -1041,15 +1013,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: middle-arm disagreement must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingElseifMiddleArmDiffersStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
