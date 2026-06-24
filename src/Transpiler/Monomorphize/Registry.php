@@ -864,8 +864,11 @@ final class Registry
      *   - Intersection    -> "A & B & C"
      *   - Union           -> "A | B | C"
      *   - DNF             -> "(A & B) | C"  (parens around inner intersections)
+     *
+     * Public so the method-generic compiler can render the same bound form in its
+     * "bound unprovable" diagnostic.
      */
-    private static function formatBound(BoundExpr $bound): string
+    public static function formatBound(BoundExpr $bound): string
     {
         if ($bound instanceof BoundLeaf) {
             return $bound->type->name;

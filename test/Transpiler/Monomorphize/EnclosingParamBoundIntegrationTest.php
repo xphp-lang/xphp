@@ -8,6 +8,8 @@ use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
@@ -16,8 +18,9 @@ use XPHP\FileSystem\FileWriter\NativeFileWriter;
  * End-to-end coverage for grounding a method-generic bound that references an enclosing class type
  * parameter (`<U : E>`) against the receiver's concrete type argument — the element-consuming
  * method shape on a covariant collection. Accept/reject/multi-arg pin that the bound is checked
- * against the *grounded* type (not the literal `E`); the lenient cases pin that ungroundable
- * receivers fall back to "no check" rather than the old misleading rejection.
+ * against the *grounded* type (not the literal `E`). When the receiver's type argument genuinely
+ * isn't determinable (and it isn't a `$this` self-call), the bound is unprovable and the build
+ * fails with `xphp.bound_unprovable` — ground or fail, never a silent accept.
  */
 final class EnclosingParamBoundIntegrationTest extends TestCase
 {
@@ -185,10 +188,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertStringContainsString('pick_', self::read($dist, 'Use.php'));
     }
 
-    public function testThisReceiverEnclosingBoundIsLenient(): void
+    public function testThisSelfCallWithConcreteTurbofishIsUnprovableAndHardFails(): void
     {
-        // `$this->contains::<Banana>()` inside the template body: E has no concrete value yet, so the
-        // bound is dropped (lenient) rather than rejected against the phantom `E`.
+        // `$this->contains::<Banana>()` inside the template body. Whether `Banana : E` holds is
+        // instance-dependent (true for Box<Fruit>, false for Box<Rock>) and the bound checker only
+        // runs on the abstract template, so it is checked by nobody. Ground or fail → compile error,
+        // with the `$this`-specific remedy (a self-call can't bind to a typed local).
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('`$this`-rooted self-call');
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => <<<'PHP'
@@ -207,8 +214,6 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             $box = new Box::<Fruit>();
             PHP,
         ]);
-
-        $this->addToAssertionCount(1);
     }
 
     public function testParameterReceiverGroundsAndRejects(): void
@@ -248,11 +253,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
-    public function testBranchMergeDropsArgsAndFallsBackToLenient(): void
+    public function testBranchMergeDisagreementIsUnprovableAndHardFails(): void
     {
-        // Both arms assign a Box but with DIFFERENT args; the FQN merges (still Box) yet the args
-        // conflict, so they are dropped → the call is lenient. If the args were not dropped, the
-        // call would ground to one arm's type and wrongly reject `Food` (a supertype of both).
+        // Both arms assign a Box but with DIFFERENT args (Fruit vs Banana); the FQN merges (still Box)
+        // yet the args conflict and are dropped, so the receiver's element type is undeterminable. The
+        // `<U : E>` bound can't be proven and — not being a `$this` self-call — must fail at compile
+        // time rather than silently drop (Maximum Runtime Safety: ground or fail).
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Cannot verify generic bound `U : E`');
         $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => self::box(),
@@ -266,8 +274,6 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             }
             PHP,
         ]);
-
-        $this->addToAssertionCount(1);
     }
 
     public function testBranchMergeAgreementGroundsAndAcceptsSubtype(): void
@@ -533,6 +539,103 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
+    // --- hard-fail the genuine residual (ground or fail) ---
+
+    public function testRawGenericReceiverIsUnprovableAndHardFails(): void
+    {
+        // A raw `Box` parameter (no type argument) gives the receiver a known class but no element
+        // type, so `<U : E>` can't be proven. Not a `$this` self-call → compile error.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Cannot verify generic bound `U : E`');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(Box $b): bool {
+                return $b->contains::<Food>(new Food());
+            }
+            PHP,
+        ]);
+    }
+
+    public function testStaticMethodClassParamBoundIsUnprovableAndHardFails(): void
+    {
+        // A class type parameter is unbound in a static context — there is no instance to ground `E` —
+        // so a static method whose bound references it is always unprovable and fails.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Cannot verify generic bound `U : E`');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public static function pick<U : E>(U $value): bool { return true; }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function go(): bool {
+                return Box::pick::<Banana>(new Banana());
+            }
+            PHP,
+        ]);
+    }
+
+    public function testThisSelfCallUnprovableIsCollectedInCheckMode(): void
+    {
+        // The same `$this`-rooted self-call in `check` mode: collected as `xphp.bound_unprovable`
+        // rather than thrown, so a whole-program check reports it instead of stopping at the first.
+        $collector = $this->check([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public function contains<U : E>(U $value): bool { return true; }
+                public function probe(): bool { return $this->contains::<Banana>(new Banana()); }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            $box = new Box::<Fruit>();
+            PHP,
+        ]);
+
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(GenericMethodCompiler::CODE_BOUND_UNPROVABLE, $codes);
+    }
+
+    public function testCheckModeCollectsTheUnprovableDiagnostic(): void
+    {
+        // In `check` mode the unprovable bound is collected as a diagnostic (with its actionable
+        // message and stable code) instead of throwing, so a whole-program check can report it.
+        $collector = $this->check([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::box(),
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            function pick(Box $b): bool {
+                return $b->contains::<Food>(new Food());
+            }
+            PHP,
+        ]);
+
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(GenericMethodCompiler::CODE_BOUND_UNPROVABLE, $codes);
+    }
+
     // --- harness ---
 
     private static function repo(): string
@@ -601,6 +704,36 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         $compiler->compile($sources, $src, $dist, $cache);
 
         return $dist;
+    }
+
+    /**
+     * Run the sources through `check` mode, which collects diagnostics instead of throwing.
+     *
+     * @param array<string, string> $files filename => contents
+     */
+    private function check(array $files): DiagnosticCollector
+    {
+        $src = $this->work . '/' . uniqid('src', true);
+        mkdir($src, 0o755, true);
+        foreach ($files as $name => $contents) {
+            file_put_contents($src . '/' . $name, $contents);
+        }
+
+        $phpParser = (new ParserFactory())->createForHostVersion();
+        $printer = new StandardPrinter();
+        $writer = new NativeFileWriter();
+        $compiler = new Compiler(
+            new NativeFileReader(),
+            $writer,
+            new XphpSourceParser($phpParser),
+            new Specializer(),
+            new SpecializedClassGenerator($printer, $writer),
+            $printer,
+        );
+        $sources = (new NativeFileFinder())->find($src)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        return $compiler->check($sources);
     }
 
     private static function read(string $dir, string $file): string

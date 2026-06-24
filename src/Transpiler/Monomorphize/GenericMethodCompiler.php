@@ -88,6 +88,7 @@ final class GenericMethodCompiler
     public const CODE_UNSUPPORTED_THIS_CAPTURE = 'xphp.closure_this_capture';
     public const CODE_UNSUPPORTED_STATIC_CLOSURE = 'xphp.static_closure';
     public const CODE_UNRESOLVED_GENERIC_CALL = 'xphp.unresolved_generic_call';
+    public const CODE_BOUND_UNPROVABLE = 'xphp.bound_unprovable';
 
     /**
      * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
@@ -1137,11 +1138,20 @@ final class GenericMethodCompiler
                 $args = $padded;
 
                 if ($this->hierarchy !== null) {
-                    // A class type parameter is unbound in a static context, so pass no receiver
-                    // args — an enclosing-param bound on a static method falls to the lenient drop
-                    // inside groundBounds. The call's own turbofish args are still threaded, so a
-                    // method-own sibling bound (`<U, V : U>`) on a static method is grounded.
-                    $checkedParams = $this->groundBounds($params, $args, $classFqn, [], $declaringFqn);
+                    // A class type parameter is unbound in a static context (no instance to ground
+                    // `E`), so pass no receiver args and never defer: a class-param bound on a static
+                    // method is genuinely unprovable and fails. The call's own turbofish args are
+                    // still threaded, so a method-own sibling bound (`<U, V : U>`) is grounded.
+                    $checkedParams = $this->groundBounds(
+                        $params,
+                        $args,
+                        $classFqn,
+                        [],
+                        $declaringFqn,
+                        false,
+                        $classFqn . '::' . $methodName,
+                        $location,
+                    );
                     Registry::checkBounds(
                         $checkedParams,
                         $args,
@@ -1241,9 +1251,20 @@ final class GenericMethodCompiler
                 if ($this->hierarchy !== null) {
                     // Ground a method-generic bound that references an enclosing class type
                     // parameter (`<U : E>`) against the receiver's concrete arguments, threaded
-                    // to the method's declaring class; an ungroundable bound drops to lenient.
+                    // to the method's declaring class. An ungroundable bound is a compile error; the
+                    // `$this`-rooted flag only tailors the diagnostic's remedy (a self-call can't
+                    // bind to a typed local), it does not suppress the failure.
                     $receiverArgs = $this->resolveReceiverTypeArgs($node->var);
-                    $checkedParams = $this->groundBounds($params, $args, $classFqn, $receiverArgs, $declaringFqn);
+                    $checkedParams = $this->groundBounds(
+                        $params,
+                        $args,
+                        $classFqn,
+                        $receiverArgs,
+                        $declaringFqn,
+                        $this->receiverRootedAtThis($node->var),
+                        $classFqn . '::' . $methodName,
+                        $location,
+                    );
                     Registry::checkBounds(
                         $checkedParams,
                         $args,
@@ -1458,6 +1479,28 @@ final class GenericMethodCompiler
             }
 
             /**
+             * Whether the receiver expression bottoms out at `$this` — directly (`$this->m`), through
+             * a property (`$this->prop->m`), or through a chain (`$this->getBox()->m`). Used only to
+             * tailor the `xphp.bound_unprovable` remedy: a `$this`-rooted self-call references the
+             * enclosing class's own (abstract) type parameter, so the "bind to a typed local" advice
+             * doesn't apply and a self-call-specific message is shown instead. It does NOT change
+             * whether the bound fails — an unprovable bound always fails.
+             */
+            private function receiverRootedAtThis(Node $receiver): bool
+            {
+                if ($receiver instanceof Variable) {
+                    return $receiver->name === 'this';
+                }
+                if ($receiver instanceof MethodCall
+                    || $receiver instanceof NullsafeMethodCall
+                    || $receiver instanceof PropertyFetch
+                ) {
+                    return $this->receiverRootedAtThis($receiver->var);
+                }
+                return false;
+            }
+
+            /**
              * The receiver's concrete generic type arguments, parallel to {@see resolveReceiverFqn}:
              *   - `$this`        -> the enclosing class's own type params, as identity TypeRefs (a
              *                       method-generic bound on the uninstantiated template can't be
@@ -1641,19 +1684,38 @@ final class GenericMethodCompiler
              * this call's turbofish arguments — so a bound that references a SIBLING method parameter
              * (`<U, V : U>`) grounds to that argument too. Method parameters shadow class parameters
              * of the same name (the inner scope wins). It then rewrites every bound leaf with the
-             * combined map, and — when a leaf is still a bare type parameter afterwards (no receiver
-             * args, an inherited/opaque receiver, or the `$this` template body) — DROPS that param's
-             * bound for this call rather than checking it against the phantom type-param name. A bound
-             * that doesn't reference an enclosing/sibling param (a real class, or an F-bounded
-             * `Comparable<T>` leaf) is unaffected and checked exactly as before.
+             * combined map.
+             *
+             * When a leaf is still a bare type parameter afterwards the bound is UNPROVABLE — the
+             * receiver's type argument for it isn't determinable here. Maximum Runtime Safety forbids
+             * silently accepting it, so this is a compile error (`xphp.bound_unprovable`); it is never
+             * dropped. A bound that doesn't reference an enclosing/sibling param (a real class, or an
+             * F-bounded `Comparable<T>` leaf) is unaffected and checked exactly as before.
+             *
+             * `$receiverIsThis` only tailors the diagnostic's remedy: a `$this`-rooted self-call can't
+             * "bind to a typed local" (the receiver is `$this`), and its enclosing parameter is
+             * abstract until the class is instantiated — a per-instantiation re-check (the future
+             * relaxation) would turn this hard error into a real check. It does NOT suppress the
+             * error: a `$this->m::<Concrete>()` self-call against an enclosing-param bound is checkable
+             * per instantiation and currently checked by nobody, so it must fail rather than slip
+             * through. (A self-call with no concrete turbofish never reaches grounding — the
+             * all-concrete guard at the call site bails first — so it is unaffected.)
              *
              * @param list<TypeParam> $params
              * @param list<TypeRef> $methodArgs   the call's turbofish args, positionally per param
              * @param list<TypeRef> $receiverArgs
              * @return list<TypeParam>
              */
-            private function groundBounds(array $params, array $methodArgs, string $receiverFqn, array $receiverArgs, string $declaringFqn): array
-            {
+            private function groundBounds(
+                array $params,
+                array $methodArgs,
+                string $receiverFqn,
+                array $receiverArgs,
+                string $declaringFqn,
+                bool $receiverIsThis,
+                string $context,
+                SourceLocation $location,
+            ): array {
                 $subst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
                 // Method-own params shadow class params of the same name, so they are layered last.
                 foreach ($params as $i => $param) {
@@ -1662,18 +1724,71 @@ final class GenericMethodCompiler
                     }
                 }
 
-                return array_map(
-                    static function (TypeParam $param) use ($subst): TypeParam {
-                        if ($param->bound === null) {
-                            return $param;
-                        }
-                        $grounded = Registry::substituteBound($param->bound, $subst);
-                        if (self::boundHasUngroundedLeaf($grounded)) {
-                            return new TypeParam($param->name, null, $param->default, $param->variance);
-                        }
-                        return new TypeParam($param->name, $grounded, $param->default, $param->variance);
-                    },
-                    $params,
+                $checked = [];
+                foreach ($params as $param) {
+                    if ($param->bound === null) {
+                        $checked[] = $param;
+                        continue;
+                    }
+                    $grounded = Registry::substituteBound($param->bound, $subst);
+                    if (self::boundHasUngroundedLeaf($grounded)) {
+                        $this->failUnprovableBound($param->name, $param->bound, $context, $receiverIsThis, $location);
+                        // In check mode failUnprovableBound collects and returns; drop the now-checked
+                        // bound so the pass can continue and surface any further diagnostics.
+                        $checked[] = new TypeParam($param->name, null, $param->default, $param->variance);
+                        continue;
+                    }
+                    $checked[] = new TypeParam($param->name, $grounded, $param->default, $param->variance);
+                }
+                return $checked;
+            }
+
+            /**
+             * A method-generic bound references an enclosing/sibling type parameter whose concrete
+             * value isn't determinable at this call site. Collect-or-throw (matching the seam): with
+             * a collector (`check`) append the diagnostic and continue; without one (`compile`) throw.
+             */
+            private function failUnprovableBound(string $paramName, BoundExpr $bound, string $context, bool $receiverIsThis, SourceLocation $location): void
+            {
+                $message = self::unprovableBoundMessage($paramName, $bound, $context, $receiverIsThis);
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        GenericMethodCompiler::CODE_BOUND_UNPROVABLE,
+                        $message,
+                        $location,
+                    ));
+                    return;
+                }
+                throw new RuntimeException($message);
+            }
+
+            private static function unprovableBoundMessage(string $paramName, BoundExpr $bound, string $context, bool $receiverIsThis): string
+            {
+                $boundText = Registry::formatBound($bound);
+                if ($receiverIsThis) {
+                    return sprintf(
+                        'Cannot verify generic bound `%s : %s` for %s in a `$this`-rooted self-call: the bound '
+                        . 'references the enclosing class\'s own type parameter, which is abstract in the class '
+                        . 'template, so it can only be checked once the class is instantiated. Move this call to '
+                        . 'a context where the receiver has a concrete element type (e.g. a function taking '
+                        . '`Box<Fruit> $b` then `$b->%s::<...>(...)`), or don\'t turbofish an enclosing-parameter-'
+                        . 'bounded method on `$this`. (A future per-instantiation bound check will relax this.)',
+                        $paramName,
+                        $boundText,
+                        $context,
+                        // The method name is the tail of the "Class::method" context.
+                        substr($context, (int) strrpos($context, ':') + 1),
+                    );
+                }
+                return sprintf(
+                    'Cannot verify generic bound `%s : %s` for %s: the receiver\'s type argument is not '
+                    . 'determinable at this call site, so the bound cannot be proven. Bind the receiver to a '
+                    . 'typed local (e.g. `Box<Fruit> $x = ...;`) or pass it as a typed parameter so its type '
+                    . 'arguments are known here.',
+                    $paramName,
+                    $boundText,
+                    $context,
                 );
             }
 
