@@ -237,17 +237,9 @@ final class GenericMethodCompiler
             // An erasable `<U : E>` method is KEPT on its (generic) class so the Specializer can erase
             // it into a concrete `contains_T_<hash>(E)` member per instantiation. The generic class is
             // lowered to a marker interface in the user file, so the kept template never reaches output.
-            $methodParams = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-            $classParams = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-            if (is_array($methodParams) && is_array($classParams)) {
-                /** @var list<TypeParam> $methodParams */
-                /** @var list<TypeParam> $classParams */
-                $classParamNames = array_map(static fn (TypeParam $p): string => $p->name, $classParams);
-                if (EnclosingBoundErasure::isErasable($template, $methodParams, $classParamNames)) {
-                    continue;
-                }
+            if (!self::isErasableMethodOnClass($template, $class)) {
+                $this->stripMethod($class, $methodName);
             }
-            $this->stripMethod($class, $methodName);
         }
 
         // Strip the original function templates: namespaced ones get stripped from
@@ -2400,6 +2392,23 @@ final class GenericMethodCompiler
                 $callSite->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, null);
             }
         }
+    }
+
+    /**
+     * Whether a generic-method template on `$class` is erasable (`<U : E>`, `U` direct-input only) —
+     * in which case it is kept for the Specializer to lower per instantiation rather than stripped.
+     */
+    private static function isErasableMethodOnClass(ClassMethod $template, ClassLike $class): bool
+    {
+        $methodParams = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        $classParams = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        if (!is_array($methodParams) || !is_array($classParams)) {
+            return false;
+        }
+        /** @var list<TypeParam> $methodParams */
+        /** @var list<TypeParam> $classParams */
+        $classParamNames = array_map(static fn (TypeParam $p): string => $p->name, $classParams);
+        return EnclosingBoundErasure::isErasable($template, $methodParams, $classParamNames);
     }
 
     private function stripMethod(ClassLike $class, string $methodName): void
