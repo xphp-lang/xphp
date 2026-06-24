@@ -735,6 +735,23 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testTwoEnclosingBoundedParamsEraseAndRunAtRuntime(): void
+    {
+        // A method with two enclosing-bounded params (`<U:E, V:E>`) erases both to E (mangles on
+        // [E, E]); both widen to the bound, so `bothAreFruit::<Banana, Cherry>` resolves and runs.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_two_params/source',
+            'erase-two',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_two_params/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testMultiClassParamErasureMangleKeysOnTheBoundsReferentAtRuntime(): void
     {
         // `containsValue<U:V>` on `Map<K, +V>` mangles on V (Fruit), not K (string). Call-site and
