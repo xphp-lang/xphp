@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+function check(Box<Fruit> $b): bool
+{
+    // Mangles on the receiver's E (Fruit) → contains_<Fruit>.
+    return $b->contains::<Banana>(new Banana());
+}
+
+$food = new Box::<Food>();
+$fruit = new Box::<Fruit>();
+$banana = new Box::<Banana>();
+
+// A Box<Banana> passed where Box<Fruit> is expected (covariant edge): the inherited
+// contains_<Fruit> dispatches on it.
+$viaCovariance = check($banana);
+$direct = $fruit->contains::<Banana>(new Banana());
+$isCovariant = $banana instanceof Box;

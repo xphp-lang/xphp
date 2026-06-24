@@ -41,6 +41,7 @@ final class EnclosingBoundErasureTest extends TestCase
         public function returnsConcrete<U : E>(U $x): Fruit { return new Fruit(); }
         public function pairMixed<U : E, V : E>(U $a, Box<V> $b): bool { return true; }
         public function unionConcrete<U : E>(U $a, Fruit|Banana $b): bool { return true; }
+        public function mixedBounds<U : E, W : \Stringable>(U $a, W $b): bool { return true; }
     }
     PHP;
 
@@ -172,6 +173,35 @@ final class EnclosingBoundErasureTest extends TestCase
     {
         // A second param `Fruit|Banana` (no bounded member) doesn't block erasure of a bare-input U.
         self::assertTrue($this->erasable('unionConcrete'));
+    }
+
+    public function testMixedBoundedAndNonBoundedParamsIsNotErasable(): void
+    {
+        // `<U : E, W : \Stringable>` — W needs real per-W specialization, so the method is not erasable.
+        self::assertFalse($this->erasable('mixedBounds'));
+    }
+
+    public function testMangleArgsKeysOnTheBoundsConcreteValue(): void
+    {
+        $fruit = new TypeRef('App\\Fruit');
+        $classConcrete = ['E' => $fruit];
+
+        // <U : E> → [Fruit]
+        $u = new TypeParam('U', new BoundLeaf(new TypeRef('E', isTypeParam: true)));
+        self::assertEquals([$fruit], EnclosingBoundErasure::mangleArgs([$u], $classConcrete));
+
+        // <U : E, V : E> → [Fruit, Fruit]
+        $v = new TypeParam('V', new BoundLeaf(new TypeRef('E', isTypeParam: true)));
+        self::assertEquals([$fruit, $fruit], EnclosingBoundErasure::mangleArgs([$u, $v], $classConcrete));
+
+        // a sibling/method-bounded param (not a class param) contributes nothing.
+        $w = new TypeParam('W', new BoundLeaf(new TypeRef('U', isTypeParam: true)));
+        self::assertEquals([$fruit], EnclosingBoundErasure::mangleArgs([$u, $w], $classConcrete));
+
+        // multi-class-param: <U : V> on Map keyed on V's concrete.
+        $banana = new TypeRef('App\\Banana');
+        $uv = new TypeParam('U', new BoundLeaf(new TypeRef('V', isTypeParam: true)));
+        self::assertEquals([$banana], EnclosingBoundErasure::mangleArgs([$uv], ['K' => new TypeRef('App\\Key'), 'V' => $banana]));
     }
 
     public function testRefTreeHasBoundedDirectly(): void

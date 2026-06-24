@@ -231,9 +231,23 @@ final class GenericMethodCompiler
             // more than one `::` so the third capture would be empty in either case.
             [$classFqn, $methodName] = explode('::', $key, 2);
             $class = $classByFqn[$classFqn] ?? null;
-            if ($class !== null) {
-                $this->stripMethod($class, $methodName);
+            if ($class === null) {
+                continue;
             }
+            // An erasable `<U : E>` method is KEPT on its (generic) class so the Specializer can erase
+            // it into a concrete `contains_T_<hash>(E)` member per instantiation. The generic class is
+            // lowered to a marker interface in the user file, so the kept template never reaches output.
+            $methodParams = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+            $classParams = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+            if (is_array($methodParams) && is_array($classParams)) {
+                /** @var list<TypeParam> $methodParams */
+                /** @var list<TypeParam> $classParams */
+                $classParamNames = array_map(static fn (TypeParam $p): string => $p->name, $classParams);
+                if (EnclosingBoundErasure::isErasable($template, $methodParams, $classParamNames)) {
+                    continue;
+                }
+            }
+            $this->stripMethod($class, $methodName);
         }
 
         // Strip the original function templates: namespaced ones get stripped from
@@ -1257,10 +1271,13 @@ final class GenericMethodCompiler
                     // A non-concrete turbofish arg is an abstract type parameter forwarded from the
                     // enclosing generic method (`probe<U:E>{ $this->contains::<U>(...) }`). On a
                     // `$this`-rooted receiver this can't be specialized at the template — the arg is
-                    // concrete only per instantiation — and the Specializer would strip the turbofish,
-                    // emitting a bare `$this->m(...)` to a method that was never specialized (a runtime
-                    // fatal). Report it rather than silently dropping it.
-                    if ($this->receiverRootedAtThis($node->var)) {
+                    // concrete only per instantiation. When the target is ERASABLE the Specializer
+                    // rewrites this self-call to the target's E-mangled name per instantiation, so it
+                    // resolves; leave it for that pass. Otherwise it would emit a bare `$this->m(...)`
+                    // to a method that was never specialized (a runtime fatal) — so report it.
+                    if ($this->receiverRootedAtThis($node->var)
+                        && !$this->isErasableTarget($template, $params, $declaringFqn)
+                    ) {
                         return $this->reportUnspecializableSelfCall($methodName, $location);
                     }
                     return null;
@@ -1292,6 +1309,31 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         $location,
                     );
+
+                    // Erasable `<U : E>` method: the bound is checked above, but the call lowers to
+                    // the E-mangled name keyed on the RECEIVER's element type (not the turbofish arg),
+                    // and the member is emitted by the Specializer per class instantiation — so there
+                    // is no per-call append here. Both sides key on EnclosingBoundErasure::mangleArgs,
+                    // producing the same name.
+                    $declaringClass = $this->classByFqn[$declaringFqn] ?? null;
+                    $classParams = $declaringClass?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                    if (is_array($classParams)) {
+                        /** @var list<TypeParam> $classParams */
+                        $classParamNames = array_map(static fn (TypeParam $p): string => $p->name, $classParams);
+                        if (EnclosingBoundErasure::isErasable($template, $params, $classParamNames)) {
+                            $classConcrete = $this->classSubstitutionFor($classFqn, $receiverArgs, $declaringFqn);
+                            if ($classConcrete !== []) {
+                                $erased = self::mangleName(
+                                    $methodName,
+                                    EnclosingBoundErasure::mangleArgs($params, $classConcrete),
+                                    $this->hashLength,
+                                );
+                                $node->name = new Identifier($erased, $node->name->getAttributes());
+                                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+                                return $node;
+                            }
+                        }
+                    }
                 }
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
@@ -1492,6 +1534,24 @@ final class GenericMethodCompiler
                     return null;
                 }
                 throw new RuntimeException($message);
+            }
+
+            /**
+             * Whether the called method is an erasable `<U : E>` method on its declaring class — i.e.
+             * the Specializer will lower it (and rewrite a forwarded self-call to it) per instantiation.
+             *
+             * @param list<TypeParam> $params
+             */
+            private function isErasableTarget(ClassMethod $template, array $params, string $declaringFqn): bool
+            {
+                $class = $this->classByFqn[$declaringFqn] ?? null;
+                $classParams = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                if (!is_array($classParams)) {
+                    return false;
+                }
+                /** @var list<TypeParam> $classParams */
+                $names = array_map(static fn (TypeParam $p): string => $p->name, $classParams);
+                return EnclosingBoundErasure::isErasable($template, $params, $names);
             }
 
             /**
@@ -2236,7 +2296,7 @@ final class GenericMethodCompiler
              */
             private static function mangleName(string $shortName, array $args, int $hashLength): string
             {
-                return $shortName . '_T_' . Registry::canonicalHash($args, $hashLength);
+                return Registry::mangledMethodName($shortName, $args, $hashLength);
             }
 
             /**

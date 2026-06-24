@@ -37,9 +37,12 @@ final class EnclosingBoundErasure
      */
     public static function isErasable(ClassMethod $method, array $methodParams, array $classParamNames): bool
     {
+        // Every type parameter must be enclosing-bounded (`<U : E>`). This rejects both a method with
+        // no enclosing-bounded parameter at all (`<T>`, `<U : \Stringable>` → empty `$bounded`) and a
+        // mixed method (`<U : E, W : \Stringable>`) whose `W` needs real per-`W` specialization.
         $bounded = self::enclosingBoundedNames($methodParams, $classParamNames);
-        if ($bounded === []) {
-            return false; // not an enclosing-parameter-bounded method
+        if (count($bounded) !== count($methodParams)) {
+            return false;
         }
 
         // Each parameter is either a bare bounded name (`U $value` — the only allowed occurrence) or
@@ -156,6 +159,27 @@ final class EnclosingBoundErasure
             }
         }
         return false;
+    }
+
+    /**
+     * The TypeRef list an erasable method is mangled on: each enclosing-bounded parameter contributes
+     * the **concrete** value of its bound's class parameter (`U : E` on `Box<Fruit>` → `Fruit`). The
+     * call site and the class specialization both compute this from the same `$classConcrete` map, so
+     * they produce the byte-identical mangled name (`contains_T_<hash>`) — the cross-cutting invariant.
+     *
+     * @param list<TypeParam> $methodParams
+     * @param array<string, TypeRef> $classConcrete class-parameter name → its concrete TypeRef
+     * @return list<TypeRef>
+     */
+    public static function mangleArgs(array $methodParams, array $classConcrete): array
+    {
+        $out = [];
+        foreach ($methodParams as $param) {
+            if ($param->bound instanceof BoundLeaf && isset($classConcrete[$param->bound->type->name])) {
+                $out[] = $classConcrete[$param->bound->type->name];
+            }
+        }
+        return $out;
     }
 
     /**

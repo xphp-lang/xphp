@@ -6,10 +6,12 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\Diagnostics\Diagnostic;
 use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\TestSupport\CompiledFixture;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
@@ -682,16 +684,96 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertContains(GenericMethodCompiler::CODE_UNDETERMINED_RECEIVER, $codes);
     }
 
-    // --- forwarded `$this` self-call: can't be specialized at the template (stop the silent break) ---
+    // --- forwarded `$this` self-call to an erasable method: lowered, not failed ---
 
-    public function testForwardedAbstractSelfCallIsUnspecializableAndHardFails(): void
+    private const BOX_FORWARDING = <<<'PHP'
+    <?php
+    declare(strict_types=1);
+    namespace App;
+    class Box<+E> {
+        public function contains<U : E>(U $value): bool { return true; }
+        public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
+    }
+    PHP;
+
+    public function testErasableForwardingSelfCallIsLoweredNotHardFailed(): void
     {
-        // `probe<U:E>` forwards its own type parameter to `$this->contains::<U>()`. The forwarded `U`
-        // is abstract in the template and can't be specialized there; rather than silently emit a bare
-        // `$this->contains(...)` to a stripped method (a runtime fatal), this is a compile error.
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('forwards a type parameter');
-        $this->compile([
+        // `probe<U:E>` forwards its parameter to `$this->contains::<U>()` — both are erasable, so the
+        // Specializer lowers both to E-mangled members and rewrites the forward. This COMPILES (it was
+        // an interim hard-fail before erasure landed); the call site lowers to the mangled `probe_`.
+        $dist = $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => self::BOX_FORWARDING,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            $box = new Box::<Fruit>();
+            $box->probe::<Banana>(new Banana());
+            PHP,
+        ]);
+
+        self::assertStringContainsString('probe_', self::read($dist, 'Use.php'));
+    }
+
+    #[RunInSeparateProcess]
+    public function testErasableForwardingRunsAtRuntime(): void
+    {
+        // The non-negotiable gate: execute the emitted output. A bare `$this->contains(...)` (the old
+        // silent break) would fatal "undefined method" when `probe` runs; that it returns proves the
+        // Specializer rewrote the forward to the emitted `contains_<E>` member.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_forwarding/source',
+            'erase-fwd',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_forwarding/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testInheritedErasableMemberResolvesAtRuntime(): void
+    {
+        // `contains<U:E>` declared on a generic base, called on a subclass instantiation. The
+        // call-site name (keyed on the receiver's E threaded to the declaring base) must match the
+        // Specializer's emitted member on Base<Fruit>, inherited by ArrayList<Fruit>. Executed.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_inherited/source',
+            'erase-inherit',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_inherited/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testErasureIsVarianceSafeOnTheCovariantChainAtRuntime(): void
+    {
+        // The variance gate: Box<+E> builds a covariant extends-chain; the distinct E-mangled
+        // contains_<E> members coexist with no LSP fatal, and a Box<Banana> dispatches the inherited
+        // contains_<Fruit>. Proven by executing the real compiled output.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_covariant_chain/source',
+            'erase-chain',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_covariant_chain/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
+    {
+        // A nullsafe forward (`$this?->contains::<U>()`) is rewritten the same as the plain form.
+        $dist = $this->compile([
             'Models.xphp' => self::MODELS,
             'Box.xphp' => <<<'PHP'
             <?php
@@ -699,7 +781,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             namespace App;
             class Box<+E> {
                 public function contains<U : E>(U $value): bool { return true; }
-                public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
+                public function probe<U : E>(U $value): bool { return $this?->contains::<U>($value); }
             }
             PHP,
             'Use.xphp' => <<<'PHP'
@@ -707,33 +789,30 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             declare(strict_types=1);
             namespace App;
             $box = new Box::<Fruit>();
+            $box->probe::<Banana>(new Banana());
             PHP,
         ]);
+
+        // Compiled with no unspecializable error; the call site lowered to the mangled `probe_`.
+        self::assertStringContainsString('probe_', self::read($dist, 'Use.php'));
     }
 
-    public function testForwardedAbstractSelfCallIsCollectedInCheckMode(): void
+    public function testErasableForwardingDoesNotReportUnspecializableInCheckMode(): void
     {
         $collector = $this->check([
             'Models.xphp' => self::MODELS,
-            'Box.xphp' => <<<'PHP'
-            <?php
-            declare(strict_types=1);
-            namespace App;
-            class Box<+E> {
-                public function contains<U : E>(U $value): bool { return true; }
-                public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
-            }
-            PHP,
+            'Box.xphp' => self::BOX_FORWARDING,
             'Use.xphp' => <<<'PHP'
             <?php
             declare(strict_types=1);
             namespace App;
             $box = new Box::<Fruit>();
+            $box->probe::<Banana>(new Banana());
             PHP,
         ]);
 
         $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
-        self::assertContains(GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL, $codes);
+        self::assertNotContains(GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL, $codes);
     }
 
     public function testUnboundedForwardedSelfCallAlsoHardFails(): void

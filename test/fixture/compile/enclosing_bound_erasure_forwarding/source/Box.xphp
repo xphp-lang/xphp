@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Box<+E>
+{
+    public function contains<U : E>(U $value): bool
+    {
+        return $value instanceof Fruit;
+    }
+
+    public function probe<U : E>(U $value): bool
+    {
+        // Forwards U to a fellow erasable method; the Specializer rewrites this to contains_<E>.
+        return $this->contains::<U>($value);
+    }
+}

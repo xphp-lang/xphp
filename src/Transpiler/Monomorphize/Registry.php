@@ -1049,6 +1049,18 @@ final class Registry
     }
 
     /**
+     * The single source of truth for a mangled generic-method name: `m_T_<canonicalHash(args)>`. The
+     * call site and the Specializer both build erased-method names through here so they agree byte for
+     * byte (the cross-cutting invariant that a rewritten call resolves to the emitted member).
+     *
+     * @param list<TypeRef> $args
+     */
+    public static function mangledMethodName(string $shortName, array $args, int $hashLength = self::DEFAULT_HASH_HEX_LENGTH): string
+    {
+        return $shortName . '_T_' . self::canonicalHash($args, $hashLength);
+    }
+
+    /**
      * Read XPHP_HASH_LENGTH from the environment, falling back to the default.
      * Throws on garbage values (non-numeric, out of range) so misconfiguration fails loud at boot.
      */

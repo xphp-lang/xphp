@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\NullsafeMethodCall;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
@@ -58,7 +61,7 @@ final class Specializer
      * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
      * is the single source of truth for the final shortname (derived from the generated FQCN).
      */
-    public function specialize(ClassLike $template, array $substitution): ClassLike
+    public function specialize(ClassLike $template, array $substitution, int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH): ClassLike
     {
         $originalTemplateFqn = $template->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
 
@@ -80,9 +83,133 @@ final class Specializer
             }
         }
 
+        // Lower an erasable `<U : E>` method (kept on the template by the method compiler) into a
+        // concrete, E-mangled member: `contains<U : E>(U)` on Box<Fruit> becomes `contains_T_<hash>`
+        // taking `Fruit`. Done before the class-wide substitution; the lowered members are already
+        // concrete, so the substitution leaves them untouched.
+        $cloned->stmts = $this->lowerErasableMethods($cloned->stmts, $substitution, $hashLength);
+
         self::runSubstitutingVisitor($cloned, $substitution);
 
         return $cloned;
+    }
+
+    /**
+     * Replace each erasable generic method with its E-erased concrete form; non-erasable methods and
+     * non-method statements pass through unchanged.
+     *
+     * @param array<\PhpParser\Node\Stmt> $stmts
+     * @param array<string, TypeRef> $classConcrete class-parameter name → concrete TypeRef
+     * @return list<\PhpParser\Node\Stmt>
+     */
+    private function lowerErasableMethods(array $stmts, array $classConcrete, int $hashLength): array
+    {
+        $classParamNames = array_keys($classConcrete);
+
+        // First pass: every erasable method's E-mangled name. Used to rewrite `$this->m::<...>()`
+        // self-calls between erasable methods to the same names the call sites produce.
+        $erasedNames = [];
+        foreach ($stmts as $stmt) {
+            if ($stmt instanceof ClassMethod) {
+                $methodParams = $stmt->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                if (is_array($methodParams)) {
+                    /** @var list<TypeParam> $methodParams */
+                    if (EnclosingBoundErasure::isErasable($stmt, $methodParams, $classParamNames)) {
+                        $erasedNames[$stmt->name->toString()] = Registry::mangledMethodName(
+                            $stmt->name->toString(),
+                            EnclosingBoundErasure::mangleArgs($methodParams, $classConcrete),
+                            $hashLength,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Second pass: erase each erasable method into a concrete member.
+        $out = [];
+        foreach ($stmts as $stmt) {
+            if ($stmt instanceof ClassMethod && isset($erasedNames[$stmt->name->toString()])) {
+                /** @var list<TypeParam> $methodParams */
+                $methodParams = $stmt->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                $out[] = $this->eraseMethod($stmt, $methodParams, $classConcrete, $erasedNames[$stmt->name->toString()], $erasedNames);
+                continue;
+            }
+            $out[] = $stmt;
+        }
+        return $out;
+    }
+
+    /**
+     * Erase one method: substitute each enclosing-bounded type parameter (and any class parameter) to
+     * its concrete bound, rename to the E-mangled name, drop method-genericness, and rewrite any
+     * `$this->m::<...>()` self-call to a fellow erasable method to that method's E-mangled name.
+     *
+     * @param list<TypeParam> $methodParams
+     * @param array<string, TypeRef> $classConcrete
+     * @param array<string, string> $erasedNames  erasable method name → its E-mangled name
+     */
+    private function eraseMethod(ClassMethod $method, array $methodParams, array $classConcrete, string $mangled, array $erasedNames): ClassMethod
+    {
+        $subst = $classConcrete;
+        foreach ($methodParams as $param) {
+            // @infection-ignore-all — invariantly true: isErasable guarantees every method parameter
+            // is a single-leaf enclosing-class bound, so `$param->bound` IS a BoundLeaf and its
+            // referent IS a key of $classConcrete. The guard is defensive against a non-erasable call.
+            if ($param->bound instanceof BoundLeaf && isset($classConcrete[$param->bound->type->name])) {
+                $subst[$param->name] = $classConcrete[$param->bound->type->name];
+            }
+        }
+
+        $lowered = $this->specializeMethod($method, $subst, $mangled);
+        self::rewriteErasableSelfCalls($lowered, $erasedNames);
+
+        return $lowered;
+    }
+
+    /**
+     * Rewrite `$this->m::<...>()` (and the nullsafe form) where `m` is a fellow erasable method to its
+     * E-mangled name, stripping the now-meaningless turbofish. The forwarded type argument is erased,
+     * so the call keys on the enclosing class's `E` exactly like every other call to `m`.
+     *
+     * @param array<string, string> $erasedNames
+     */
+    private static function rewriteErasableSelfCalls(ClassMethod $method, array $erasedNames): void
+    {
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($erasedNames) extends NodeVisitorAbstract {
+            /** @param array<string, string> $erasedNames */
+            public function __construct(private array $erasedNames)
+            {
+            }
+
+            public function leaveNode(Node $node): ?Node
+            {
+                if (!$node instanceof MethodCall && !$node instanceof NullsafeMethodCall) {
+                    return null;
+                }
+                // @infection-ignore-all — defensive receiver-shape guard: only a literal `$this->m()`
+                // with an Identifier name is rewritten. The alternate (`&&`) forms would attempt to
+                // process non-`$this` / dynamic-name calls, which an erasable method body never pairs
+                // with an erasable target — the `erasedNames` lookup below would miss them regardless.
+                if (!$node->var instanceof Variable
+                    || $node->var->name !== 'this'
+                    || !$node->name instanceof Identifier
+                ) {
+                    return null;
+                }
+                $mangled = $this->erasedNames[$node->name->toString()] ?? null;
+                if ($mangled === null) {
+                    return null;
+                }
+                $node->name = new Identifier($mangled, $node->name->getAttributes());
+                // @infection-ignore-all — clearing the now-stale turbofish attribute is hygiene only:
+                // the pretty-printer never emits ATTR_METHOD_GENERIC_ARGS, and no pass reads it on an
+                // already-specialized class, so its removal is unobservable in the output.
+                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+                return $node;
+            }
+        });
+        $traverser->traverse([$method]);
     }
 
     /**
