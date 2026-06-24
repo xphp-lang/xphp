@@ -26,7 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type argument genuinely can't be determined, the bound can't be proven, so it is a compile
   error (`xphp.bound_unprovable`) with an actionable remedy — bind the receiver to a typed
   local — rather than an unchecked call. Nothing knowable is skipped, and no check is deferred
-  to runtime. See [type bounds](docs/syntax/type-bounds.md) and
+  to runtime. **Lowering:** a method whose bounded parameter is used only as a direct input
+  (`U $value`) is emitted as one `E`-typed member per class instantiation
+  (`contains_<Fruit>(Fruit)`) rather than one per call-site type — so a self-call that *forwards*
+  the parameter, `probe<U : E>(U $v) { return $this->contains::<U>($v); }`, compiles and runs (the
+  idiomatic way to call an element-consuming method from inside the class). A `$this`-rooted
+  forward to a *non-erasable* method (parameter used nested, in the return, or structurally), and
+  a direct concrete `$this->contains::<Banana>()`, remain compile errors
+  (`xphp.unspecializable_self_call` / `xphp.bound_unprovable`) — never a runtime fault. See
+  [type bounds](docs/syntax/type-bounds.md) and
   [ADR-0018](docs/adr/0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md).
 - **`xphp check`** — a validate-without-emitting CI gate. It runs every generic
   validation `xphp compile` does (bounds, variance, defaults, missing/duplicate

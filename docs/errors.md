@@ -49,6 +49,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.unresolved_generic_call` | a turbofish method call (`$obj->m::<…>()` / `Foo::m::<…>()`) names a generic method that can't be resolved on the receiver's type — a typo or wrong receiver type, caught at compile time instead of fataling at runtime |
 | `xphp.bound_unprovable` | a method-generic bound that references an enclosing class type parameter (`contains<U : E>`) can't be proven because the receiver's type argument isn't determinable here — a raw `Box` with no argument, a branch whose arms disagree, a static call, or a `$this` self-call. Ground the receiver (bind it to a typed local) or the build fails |
 | `xphp.undetermined_receiver` | a turbofish method call's receiver has no statically-known type (an untyped `foreach` variable, a local whose type is ambiguous after a branch), so the call can't be specialized — it would emit a call to a stripped method that fatals at runtime. Give the receiver a declared type |
+| `xphp.unspecializable_self_call` | a `$this`-rooted self-call forwards a type parameter to a **non-erasable** generic method (one whose parameter is used nested, in the return, or structurally). Forwarding to an *erasable* method — parameter used only as a direct input — compiles and runs; otherwise move the call to a typed-receiver context |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
 | `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`; a finding that carries no identifier falls back to the literal `phpstan.error`) — present only when the PHPStan pass runs |
 | `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
@@ -120,6 +121,7 @@ In CI (GitHub Actions), one step gates the build and annotates the diff:
 | `could not be resolved to a declared generic method` | A turbofish method call names a generic method that can't be resolved on the receiver's type — check the method name or the receiver's type. |
 | `Cannot verify generic bound` | [Type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail) — the receiver's type argument isn't determinable; bind it to a typed local. |
 | `Cannot determine the receiver's type` | [Turbofish — receiver-type analysis](syntax/turbofish.md#receiver-type-analysis-instance-methods) — give the receiver a declared type. |
+| `Cannot specialize the self-call` | [Type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail) — the forward targets a non-erasable method; forward to an erasable one or move the call to a typed-receiver context. |
 | `was instantiated with N type argument(s) but parameter ... has no default` | [Defaults](syntax/defaults.md) — supply all required args or add defaults |
 | `Nested generic specialization exceeded depth` | A generic refers to itself transitively too deeply (compiler aborts at depth 16) — usually a recursive instantiation cycle. Refactor to break the cycle. |
 | `Parser returned null AST` | The source file isn't valid PHP after the generic strip pass. Run `php -l <file>.xphp` mentally on the cleaned source — most often a syntax error in the user code that's unrelated to generics. |
@@ -249,8 +251,38 @@ self-call: the bound references the enclosing class's own type parameter, which
 is abstract in the class template, so it can only be checked once the class is
 instantiated. Move this call to a context where the receiver has a concrete
 element type (e.g. a function taking `Box<Fruit> $b` then `$b->contains::<...>(...)`),
-or don't turbofish an enclosing-parameter-bounded method on `$this`. (A future
-per-instantiation bound check will relax this.)
+or don't turbofish an enclosing-parameter-bounded method on `$this`.
+```
+
+This is the **direct, concrete** self-call (`$this->contains::<Banana>()`). A
+self-call that **forwards a method parameter** to an *erasable* method —
+`probe<U:E>(U $v) { return $this->contains::<U>($v); }` — compiles and runs (see
+[type bounds](syntax/type-bounds.md)); only a forward to a *non-erasable* target
+fails (next).
+
+### Unspecializable forwarded self-call
+
+A `$this`-rooted self-call that forwards a type parameter compiles when the
+target is *erasable* (its parameter is used only as a direct input) — both
+methods lower to one `E`-typed member per instantiation and the forward resolves
+to it. When the target is **not** erasable (the parameter appears nested, in the
+return, or structurally), the forward can't be specialized:
+
+```php
+class Box<+E> {
+    public function nested<U : E>(Box<U> $items): bool { /* ... */ } // not erasable (U nested)
+    public function relay<U : E>(Box<U> $items): bool {
+        return $this->nested::<U>($items);                           // forwards to a non-erasable target
+    }
+}
+```
+
+```
+Cannot specialize the self-call `$this->nested::<...>()`: it forwards a type
+parameter to a generic method, which has no concrete value in the class template.
+Move the call to a context where the receiver has a concrete element type (e.g. a
+function taking a typed `Box<Fruit>`), or call the method on a directly-constructed
+value.
 ```
 
 ### Undeterminable turbofish receiver
