@@ -91,6 +91,17 @@ the emitted code carries nothing).
   compiles and runs (the forward rewrites to the emitted member); it is the idiomatic way to call an
   element-consuming method from inside the class. The bound is still checked at the call site before
   erasure, so `Box<Fruit>::contains<Rock>` is still rejected.
+- **A covariant upcast to an interface schedules its implementer.** When the erasable method is declared
+  on a covariant *interface* (`Collection<+E>`) and a concrete `ListColl<Book>` is upcast to a supertype
+  specialization (`Collection<Product>`), that specialization declares a *distinct* abstract erased member
+  (`contains_<Product>`, separate from `contains_<Book>` — distinct names keep the covariant edge from
+  narrowing a parameter). The concrete implementation is carried down the covariant chain from the
+  declaring base specialized at the supertype's argument (`AbstractColl<Product>`), which the ordinary
+  fixed-point loop never discovers (an upcast is a usage relationship, not substitution). A specialization
+  closure step schedules it so the program loads and runs without an explicit instantiation of the
+  supertype. Where the implementation can't be carried down a single covariant chain — the declaring class
+  has another parent, a trait-only body, or a reordered `implements` clause — the upcast is a compile error
+  (`xphp.unschedulable_covariant_upcast`), never emitted load-fataling code.
 - **The residual `$this` self-calls still fail — loudly, never at runtime.** A *direct concrete*
   `$this->contains::<Banana>()` self-call (its bound is checkable only on the abstract template) fails
   with `xphp.bound_unprovable`; a forward to a *non-erasable* method (parameter used nested, in the

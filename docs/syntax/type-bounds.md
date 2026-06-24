@@ -192,6 +192,41 @@ from within the class. A parameter used anywhere else (nested `Box<U>`, a
 return, `new U`) keeps the per-call lowering and a forwarded self-call to it is
 still a compile error.
 
+### Element-typed methods on a covariant interface
+
+The method may be declared on a covariant **interface** and called through a
+covariant **upcast** — the shape a collections library uses:
+
+```php
+interface Collection<+E> {
+    public function contains<E2 : E>(E2 $value): bool;
+}
+abstract class AbstractColl<+E> implements Collection<E> {
+    public function __construct(private E ...$items) {}
+    public function contains<E2 : E>(E2 $value): bool { /* ... */ }
+}
+class ListColl<+E> extends AbstractColl<E> {}
+
+function anyProduct(Collection<Product> $c): bool {
+    return $c->contains::<Product>(new Product());
+}
+$books = new ListColl::<Book>(new Book());   // Book <: Product
+anyProduct($books);                           // OK — upcast to Collection<Product>
+```
+
+Each interface specialization declares its own erased member
+(`Collection<Book>` has `contains_<Book>`, `Collection<Product>` has
+`contains_<Product>` — distinct, so the covariant edge never narrows a
+parameter), and the concrete implementation is inherited through the covariant
+chain. For that to work the element-consuming body must sit on a **parent-less
+covariant base** that passes its type parameters straight to the interface — the
+`AbstractColl<+E> implements Collection<E>` shape above. If the implementing
+class has another `extends` parent, supplies the body only through a trait, or
+reorders the interface's parameters, the implementation can't be carried down a
+single covariant chain, so the upcast is a compile error
+(`xphp.unschedulable_covariant_upcast`) rather than a runtime fault — ground or
+fail.
+
 ## Caveats
 
 - > ⚠️ Bounds aren't checked across trait `use` boundaries — if a
