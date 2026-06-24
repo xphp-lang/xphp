@@ -113,14 +113,18 @@ build time instead of fataling at runtime with "Call to undefined method".
 ## Caveats
 
 - > ⚠️ Branching narrowing precision: if `$x` is reassigned inside a
-  branch and the arms disagree on the class, post-branch calls drop
-  to a non-specialized path rather than picking a possibly-wrong
-  class. See
+  branch and the arms disagree on the class, the receiver's type is
+  undetermined and a post-branch turbofish call is a compile error
+  (`xphp.undetermined_receiver`) rather than a silently de-specialized
+  call. See
   [caveats](../caveats.md#branching-narrowing-precision-loss).
 
-- > ⚠️ Receiver-type tracking only follows local-scope assignments
-  and parameter types. A `$this->prop` that flows through a getter
-  doesn't propagate its concrete class to later call sites.
+- > ⚠️ Receiver-type tracking follows declared parameter and property
+  types, `$this`, local `new` assignments, a value returned by a
+  **method** or chained call (`$x = $repo->get(); $x->m::<T>()`), and a
+  branch whose arms agree. A value from a **free function** (`$x = make()`)
+  isn't tracked — give such a local a typed parameter/property hop, or
+  the turbofish call fails as an undetermined receiver.
 
 ## See also
 

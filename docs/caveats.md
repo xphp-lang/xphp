@@ -277,22 +277,25 @@ $x = new Foo();
 if ($cond) {
     $x = new Bar();
 }
-$x->m::<int>($arg);     // de-specializes -- not a Foo or Bar method call
+$x->m::<int>($arg);     // compile error: xphp.undetermined_receiver
 ```
 
-The post-branch call drops to a non-specialized path because the
-analysis can't prove a single class for `$x`.
+The post-branch call **fails to compile**: the analysis can't prove a
+single class for `$x`, and a turbofish call can only be specialized
+against a known receiver type.
 
-> This is a **precision** issue, not a soundness one. xphp will NOT
-> pick the wrong class — it just gives up on the specialization.
+> This is a **conservatism** issue, not a soundness one. xphp will NOT
+> pick the wrong class, and it will NOT emit a runtime-broken call — it
+> refuses at compile time and tells you to give `$x` a known type.
 
 ### Why
 
-Receiver-type analysis is conservative: when `$x` is reassigned
-inside a branch and the arms don't agree on a class, post-branch
-calls fall back to a non-specialized path. Otherwise the compiler
-could pick a class that doesn't match what the variable actually
-holds at runtime.
+Receiver-type analysis is conservative: when `$x` is reassigned inside a
+branch and the arms don't agree on a class, the receiver's type is
+undetermined. The generic method is stripped from its class at compile
+time, so a non-specialized `$x->m(...)` would call a method that no
+longer exists and fatal at runtime — so the compiler reports
+`xphp.undetermined_receiver` instead of emitting it (ground or fail).
 
 The same-arms-agree shape IS supported:
 

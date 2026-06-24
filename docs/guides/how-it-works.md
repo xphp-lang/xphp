@@ -219,8 +219,9 @@ walks the AST tracking each variable's class from typed parameters,
 typed properties, `$this`, and local `$x = new Foo()` assignments;
 when the receiver class is unambiguous, the call binds to the right
 specialization. When the analysis can't prove a single class (e.g.,
-after a branching reassignment whose arms disagree), the call falls
-back to the non-specialized path rather than risking a wrong dispatch
+after a branching reassignment whose arms disagree), the turbofish call
+is a compile error (`xphp.undetermined_receiver`) rather than a silently
+de-specialized call that would fatal at runtime
 — see the [branching narrowing caveat](../caveats.md#branching-narrowing-precision-loss).
 
 Method-scoped generics work on non-generic AND generic enclosing

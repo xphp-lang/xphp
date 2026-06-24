@@ -144,10 +144,28 @@ a knowable type is never dropped, and an unprovable bound never becomes a
 silent accept or a runtime check — you either ground it or the build
 fails, with a message pointing at the fix. A *static* method whose bound
 names a class parameter fails the same way: a class type parameter has no
-value in a static context, so there is nothing to ground it to. The
-`$this`-self-call case is an intentionally loud, temporary limitation (its
-bound is provable per instantiation, just not yet checked there); move the
-call to a context where the receiver has a concrete element type.
+value in a static context, so there is nothing to ground it to.
+
+The `$this`-self-call case is an intentionally loud, temporary limitation —
+its bound is provable per instantiation, just not yet checked there:
+
+```php
+class Box<+E> {
+    public function contains<U : E>(U $value): bool { /* ... */ }
+
+    public function probe(): bool {
+        // E is the class's own parameter, abstract until Box is instantiated;
+        // whether `Banana : E` holds is instance-dependent (Box<Fruit> yes,
+        // Box<Rock> no), so this fails rather than risk an unchecked call.
+        return $this->contains::<Banana>(new Banana());
+    }
+}
+```
+
+Move such a call to a context where the receiver has a concrete element type
+(e.g. a free function taking `Box<Fruit> $b`). A self-call with no concrete
+turbofish (`$this->contains::<U>($v)`, forwarding a method parameter) is
+unaffected.
 
 ## Caveats
 

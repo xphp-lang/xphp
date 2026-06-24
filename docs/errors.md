@@ -47,6 +47,8 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.closure_this_capture` | a generic closure/arrow used via turbofish captures `$this` (unsupported) |
 | `xphp.static_closure` | a generic `static` closure used via turbofish (unsupported) |
 | `xphp.unresolved_generic_call` | a turbofish method call (`$obj->m::<…>()` / `Foo::m::<…>()`) names a generic method that can't be resolved on the receiver's type — a typo or wrong receiver type, caught at compile time instead of fataling at runtime |
+| `xphp.bound_unprovable` | a method-generic bound that references an enclosing class type parameter (`contains<U : E>`) can't be proven because the receiver's type argument isn't determinable here — a raw `Box` with no argument, a branch whose arms disagree, a static call, or a `$this` self-call. Ground the receiver (bind it to a typed local) or the build fails |
+| `xphp.undetermined_receiver` | a turbofish method call's receiver has no statically-known type (an untyped `foreach` variable, a local whose type is ambiguous after a branch), so the call can't be specialized — it would emit a call to a stripped method that fatals at runtime. Give the receiver a declared type |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
 | `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`; a finding that carries no identifier falls back to the literal `phpstan.error`) — present only when the PHPStan pass runs |
 | `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
@@ -116,6 +118,8 @@ In CI (GitHub Actions), one step gates the build and annotates the diff:
 | `already declared` ... `duplicate declaration` | [Caveats — duplicate generic template declaration](caveats.md#duplicate-generic-template-declaration) |
 | `was instantiated but never defined` | The template was used but no source file declared it — typo or missing import |
 | `could not be resolved to a declared generic method` | A turbofish method call names a generic method that can't be resolved on the receiver's type — check the method name or the receiver's type. |
+| `Cannot verify generic bound` | [Type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail) — the receiver's type argument isn't determinable; bind it to a typed local. |
+| `Cannot determine the receiver's type` | [Turbofish — receiver-type analysis](syntax/turbofish.md#receiver-type-analysis-instance-methods) — give the receiver a declared type. |
 | `was instantiated with N type argument(s) but parameter ... has no default` | [Defaults](syntax/defaults.md) — supply all required args or add defaults |
 | `Nested generic specialization exceeded depth` | A generic refers to itself transitively too deeply (compiler aborts at depth 16) — usually a recursive instantiation cycle. Refactor to break the cycle. |
 | `Parser returned null AST` | The source file isn't valid PHP after the generic strip pass. Run `php -l <file>.xphp` mentally on the cleaned source — most often a syntax error in the user code that's unrelated to generics. |
@@ -199,6 +203,82 @@ parameter's bound.
   bound:   <Bound>
   default: <Default>
   reason:  <reason>
+```
+
+### Unprovable enclosing-parameter bound
+
+A method-generic bound that references the enclosing class parameter
+(`contains<U : E>`) is checked by grounding `E` to the receiver's element
+type. When that can't be determined, the bound can't be proven and the
+build fails — ground or fail, never an unchecked call. See
+[type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail).
+
+```php
+class Box<+E> {
+    public function contains<U : E>(U $value): bool { /* ... */ }
+}
+
+function pick(Box $b): bool {          // raw Box — no element type to ground E
+    return $b->contains::<Banana>(new Banana());
+}
+```
+
+```
+Cannot verify generic bound `U : E` for App\Box::contains: the receiver's type
+argument is not determinable at this call site, so the bound cannot be proven.
+Bind the receiver to a typed local (e.g. `Box<Fruit> $x = ...;`) or pass it as a
+typed parameter so its type arguments are known here.
+```
+
+A `$this`-rooted self-call gets a variant of the message (the receiver is
+`$this`, so "bind to a typed local" doesn't apply), and a static method whose
+bound names a class parameter fails the same way (no instance to ground `E`):
+
+```php
+class Box<+E> {
+    public function contains<U : E>(U $value): bool { /* ... */ }
+    public function probe(): bool {
+        return $this->contains::<Banana>(new Banana());   // E is abstract here
+    }
+}
+```
+
+```
+Cannot verify generic bound `U : E` for App\Box::contains in a `$this`-rooted
+self-call: the bound references the enclosing class's own type parameter, which
+is abstract in the class template, so it can only be checked once the class is
+instantiated. Move this call to a context where the receiver has a concrete
+element type (e.g. a function taking `Box<Fruit> $b` then `$b->contains::<...>(...)`),
+or don't turbofish an enclosing-parameter-bounded method on `$this`. (A future
+per-instantiation bound check will relax this.)
+```
+
+### Undeterminable turbofish receiver
+
+A turbofish call is specialized at compile time, and the generic method is
+stripped from its class, so the receiver must have a statically-known type. An
+untyped `foreach` variable or a local whose type is ambiguous after a branch
+can't be specialized — leaving the call would emit a non-existent method that
+fatals at runtime, so it fails at compile time instead.
+
+```php
+function pick(array $boxes): void {
+    foreach ($boxes as $box) {                 // $box has no static type
+        $box->contains::<Banana>(new Banana());
+    }
+}
+
+// Ambiguous after a branch:
+$x = new Foo();
+if (mt_rand(0, 1)) { $x = new Bar(); }
+$r = $x->fooId::<int>(7);                       // Foo|Bar — undeterminable
+```
+
+```
+Cannot determine the receiver's type for the generic call `contains::<...>()`. A
+turbofish call is specialized at compile time, so the receiver must have a
+statically-known type. Give it a declared type — a typed parameter or property,
+or a local assigned from `new ...::<...>()` or a typed return.
 ```
 
 ### Defaults

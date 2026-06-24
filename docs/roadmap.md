@@ -125,11 +125,16 @@ upcoming one.
 - Generic free functions at namespace scope and bare top-level.
 - Nullsafe instance turbofish (`$obj?->m::<T>()`).
 - Receiver-type analysis for `$this`, typed parameters, typed
-  properties, and local `$x = new Foo()` assignments.
-- Conservative branching: post-branch calls de-specialize on
-  reassignment rather than risking a wrong dispatch.
+  properties, local `new` assignments, and a value returned by a
+  method / chained call / `self`-`static` factory.
+- Conservative branching: when a post-branch receiver can't be proved
+  to a single type, a turbofish call is a compile error
+  (`xphp.undetermined_receiver`) rather than a runtime-broken dispatch.
 - Same-class merge: post-branch type kept when every reachable arm
   assigns the same class.
+- Enclosing-parameter method bounds (`contains<U : E>`) grounded against
+  the receiver, or a compile error (`xphp.bound_unprovable`) when the
+  element type can't be determined.
 
 ### Anonymous templates
 
@@ -247,8 +252,12 @@ to ship.
 
 - Generic type aliases (e.g. `type Pair<A, B> = ...`).
 - Variance edges on trait-owned templates.
-- Branching narrowing precision: today conservatively de-specializes
-  when arms disagree; will track unions with runtime dispatch instead.
+- Branching narrowing precision: today a turbofish call on a receiver
+  whose branch arms disagree is a compile error; could track unions with
+  runtime dispatch instead.
+- Per-instantiation checking of a `$this`-self-call's enclosing-parameter
+  bound (today a compile error), to accept the calls that hold for the
+  instantiations actually used.
 
 ### Generic completeness
 
