@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Multi-param covariant upcast: only V is covariant (K is invariant). A HashMap<Id, Book> upcast to
+// MMap<Id, Product> must schedule the implementer AbstractMap<Id, Product> — K kept (Id), V raised
+// to the supertype arg (Product). No HashMap<Id, Product> is instantiated explicitly.
+function probe(MMap<Id, Product> $m): bool
+{
+    return $m->containsValue::<Product>(new Product());
+}
+
+$map = new HashMap::<Id, Book>(new Book());
+$found = probe($map);

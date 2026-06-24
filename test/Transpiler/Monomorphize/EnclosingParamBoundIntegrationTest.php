@@ -822,6 +822,44 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testCovariantInterfaceUpcastResolvesTheErasedMemberAtRuntime(): void
+    {
+        // The headline gate: a `ListColl<Book>` upcast to `Collection<Product>` calls the erased
+        // `contains` through the interface. The concrete supertype specialization that implements
+        // `Collection<Product>`'s abstract erased member (`AbstractColl<Product>`) is NEVER
+        // instantiated explicitly — the specialization closer must schedule it, or the emitted code
+        // fatals at class load. Proven by executing the output.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast/source',
+            'iface-upcast',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testMultiParamCovariantInterfaceUpcastResolvesAtRuntime(): void
+    {
+        // Multi-param: `HashMap<Id, Book>` (K invariant, +V covariant) upcast to `MMap<Id, Product>`.
+        // The closer must schedule `AbstractMap<Id, Product>` — keep K=Id, raise V to Product — and the
+        // erased `containsValue` (mangled on V) must resolve through the covariant chain. Executed.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast_map/source',
+            'iface-upcast-map',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast_map/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testVarianceEdgeDoesNotOverwriteASourceParentAtRuntime(): void
     {
         // A covariant class with a SOURCE parent (`ListColl<+E> extends Base<E>`) instantiated at two
@@ -839,6 +877,286 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         } finally {
             $fixture->cleanup();
         }
+    }
+
+    private const PRODUCT = "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Product {}\n";
+    private const BOOK = "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Book extends Product {}\n";
+    private const COLLECTION_IFACE = <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        interface Collection<+E> {
+            public function contains<E2 : E>(E2 $value): bool;
+        }
+        PHP;
+    private const ABSTRACT_COLL = <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App;
+        abstract class AbstractColl<+E> implements Collection<E> {
+            /** @var list<mixed> */
+            protected array $items;
+            public function __construct(E ...$items) { $this->items = $items; }
+            public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+        }
+        PHP;
+
+    public function testCovariantUpcastSchedulesTheConcreteSupertypeSpecialization(): void
+    {
+        // In-process (mutation-visible) proof of the closer's success path: a `ListColl<Book>` upcast
+        // to `Collection<Product>` schedules the implementing supertype `AbstractColl<Product>`, which
+        // is never instantiated explicitly. (The runtime fixture proves it then loads + runs.)
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'AbstractColl.xphp' => self::ABSTRACT_COLL,
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> {}\n",
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Collection<Product> $c): bool { return $c->contains::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+
+        $abstractColl = self::specializationsOf($result, 'App\\AbstractColl');
+        self::assertContains(['App\\Product'], $abstractColl, 'the closer must schedule AbstractColl<Product>');
+        self::assertContains(['App\\Book'], $abstractColl, 'AbstractColl<Book> is the natural specialization');
+    }
+
+    public function testUpcastWhenTheConcreteClassDeclaresTheMethodItself(): void
+    {
+        // The erasable body is on the CONCRETE class itself (no abstract base, no other parent). The
+        // declaring-class search must include the concrete class itself, and schedule ListColl<Product>.
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> implements Collection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Collection<Product> $c): bool { return $c->contains::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+
+        $listColl = self::specializationsOf($result, 'App\\ListColl');
+        self::assertContains(['App\\Product'], $listColl, 'closer must schedule ListColl<Product> when the leaf itself declares the method');
+    }
+
+    public function testInvariantInterfaceParameterSchedulesNoUpcastImplementer(): void
+    {
+        // The interface parameter is INVARIANT, so `Holder<Book>` is NOT an instance of `Inv<Product>`
+        // even though Book <: Product. The closer must reach the strict-upcast check and decline to
+        // schedule (no `Holder<Product>` / no implementer for `Inv<Product>`).
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Inv.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface Inv<E> {
+                    public function contains<E2 : E>(E2 $value): bool;
+                }
+                PHP,
+            'Holder.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class Holder<E> implements Inv<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function withBooks(Inv<Book> $x): bool { return $x->contains::<Book>(new Book()); }
+                function withProducts(Inv<Product> $x): bool { return $x->contains::<Product>(new Product()); }
+                $h = new Holder::<Book>(new Book());
+                $r = withBooks($h);
+                PHP,
+        ]);
+
+        // Holder<Product> is never instantiated and the invariant interface gives no upcast, so the
+        // closer schedules nothing for it.
+        self::assertSame([['App\\Book']], self::specializationsOf($result, 'App\\Holder'), 'invariant interface → no upcast → no extra Holder');
+    }
+
+    public function testInterfaceWithANonGenericMethodStillFindsTheErasableOne(): void
+    {
+        // The interface mixes a non-generic method (`size`) with the erasable `contains`. Collecting the
+        // erasable names must skip `size` and keep scanning to `contains` — the closer still schedules
+        // the implementer under a covariant upcast.
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface Collection<+E> {
+                    public function size(): int;
+                    public function contains<E2 : E>(E2 $value): bool;
+                }
+                PHP,
+            'AbstractColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                abstract class AbstractColl<+E> implements Collection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function size(): int { return \count($this->items); }
+                    public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+                }
+                PHP,
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> {}\n",
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Collection<Product> $c): bool { return $c->contains::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+
+        self::assertContains(['App\\Product'], self::specializationsOf($result, 'App\\AbstractColl'), 'the erasable method must be found past the non-generic one');
+    }
+
+    public function testDirectImplementationSchedulesNoExtraSpecialization(): void
+    {
+        // The concrete spec implements the interface spec it is used as DIRECTLY (no covariant upcast:
+        // ListColl<Book> used as Collection<Book>). The closer's argsEqual early-return must fire — no
+        // AbstractColl<Product> appears.
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'AbstractColl.xphp' => self::ABSTRACT_COLL,
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> {}\n",
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Collection<Book> $c): bool { return $c->contains::<Book>(new Book()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+
+        $abstractColl = self::specializationsOf($result, 'App\\AbstractColl');
+        self::assertSame([['App\\Book']], $abstractColl, 'no upcast → only AbstractColl<Book>, nothing extra scheduled');
+    }
+
+    public function testDeclaringClassWithASourceParentMakesTheUpcastUnschedulable(): void
+    {
+        // The implementation lives on a class that itself extends another class, so the covariant edge
+        // that would inherit it can't be emitted (single inheritance). The closer must hard-fail rather
+        // than emit class-load-fataling code.
+        $this->expectException(RuntimeException::class);
+        // Assert the code, the erased method name, the interface, and the remedy all appear — pins the
+        // diagnostic's content, not just that it threw.
+        $this->expectExceptionMessageMatches(
+            '/xphp\.unschedulable_covariant_upcast.+erased method "contains".+App\\\\Collection.+'
+            . 'already extends another class.+PHP allows one parent.+'
+            . 'Provide a concrete implementation.+covariant base class/s',
+        );
+
+        $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'Mid.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nabstract class Mid<+E> {}\n",
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> extends Mid<E> implements Collection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Collection<Product> $c): bool { return $c->contains::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+    }
+
+    public function testReorderedImplementsClauseMakesTheUpcastUnschedulable(): void
+    {
+        // The declaring class implements the interface with its parameters REORDERED
+        // (`class Holder<+A, B> implements Pair<B, A>`), so the closer cannot derive the implementing
+        // specialization from the supertype's args (it would need to invert the mapping). It must
+        // hard-fail with the "does not pass its type parameters through" diagnostic, not schedule a
+        // wrong specialization.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches(
+            '/xphp\.unschedulable_covariant_upcast.+does not pass its type parameters through to the '
+            . 'interface unchanged, so the implementing specialization cannot be derived/s',
+        );
+
+        $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Id.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Id {}\n",
+            'Pair.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface Pair<K, +V> {
+                    public function contains<U : V>(U $value): bool;
+                }
+                PHP,
+            'Holder.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class Holder<+A, B> implements Pair<B, A> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(A ...$items) { $this->items = $items; }
+                    public function contains<U : A>(U $value): bool { return \in_array($value, $this->items, true); }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Pair<Id, Product> $p): bool { return $p->contains::<Product>(new Product()); }
+                $h = new Holder::<Book, Id>(new Book());
+                $r = probe($h);
+                PHP,
+        ]);
     }
 
     public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
@@ -1008,6 +1326,55 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         $compiler->compile($sources, $src, $dist, $cache);
 
         return $dist;
+    }
+
+    /**
+     * Like compile(), but returns the CompileResult so a test can inspect which specializations the
+     * registry holds (used to assert the specialization closer's effect in-process, where mutation
+     * testing can attribute kills — the runtime fixtures run in separate processes).
+     *
+     * @param array<string, string> $files
+     */
+    private function compileResult(array $files): CompileResult
+    {
+        $src = $this->work . '/' . uniqid('src', true);
+        mkdir($src, 0o755, true);
+        foreach ($files as $name => $contents) {
+            file_put_contents($src . '/' . $name, $contents);
+        }
+
+        $phpParser = (new ParserFactory())->createForHostVersion();
+        $printer = new StandardPrinter();
+        $writer = new NativeFileWriter();
+        $compiler = new Compiler(
+            new NativeFileReader(),
+            $writer,
+            new XphpSourceParser($phpParser),
+            new Specializer(),
+            new SpecializedClassGenerator($printer, $writer),
+            $printer,
+        );
+        $sources = (new NativeFileFinder())->find($src)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        return $compiler->compile($sources, $src, $src . '/dist', $src . '/.xphp-cache');
+    }
+
+    /**
+     * The concrete type-argument lists recorded for a given template FQN, each as a list of canonical
+     * argument strings. Lets a test assert exactly which specializations of a class were scheduled.
+     *
+     * @return list<list<string>>
+     */
+    private static function specializationsOf(CompileResult $result, string $templateFqn): array
+    {
+        $out = [];
+        foreach ($result->registry->instantiations() as $instantiation) {
+            if ($instantiation->templateFqn === $templateFqn) {
+                $out[] = array_map(static fn ($ref): string => $ref->canonical(), $instantiation->concreteTypes);
+            }
+        }
+        return $out;
     }
 
     /**

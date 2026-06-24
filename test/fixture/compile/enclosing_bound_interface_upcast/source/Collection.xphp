@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface Collection<+E>
+{
+    public function contains<E2 : E>(E2 $value): bool;
+}

@@ -126,6 +126,7 @@ final readonly class Compiler
         // Phase 2: fixed-point specialization loop.
         /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
         $specializedAsts = [];
+        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy));
         $depth = 0;
         while (true) {
             $countBefore = count($registry->instantiations());
@@ -155,8 +156,15 @@ final readonly class Compiler
                 $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
             }
 
+            // Close the specialization set under the covariant-upcast implementation requirement: a
+            // covariant upcast to an interface specialization carrying an erased (abstract) method
+            // needs the concrete supertype specialization that implements it, which the substitution
+            // walk above never discovers (an upcast is usage, not substitution). Schedules it here so
+            // the next iteration specializes it; the variance edge emitter then inherits the member.
+            $closerAdded = $closer->close($registry);
+
             $countAfter = count($registry->instantiations());
-            if (!$newlyProcessed) {
+            if (!$newlyProcessed && !$closerAdded) {
                 break;
             }
 
