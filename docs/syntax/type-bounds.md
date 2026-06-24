@@ -163,13 +163,32 @@ class Box<+E> {
 ```
 
 Move such a call to a context where the receiver has a concrete element type
-(e.g. a free function taking `Box<Fruit> $b`). Making the method itself generic
-and forwarding its own parameter — `probe<U : E>(U $v) { return
-$this->contains::<U>($v); }` — does **not** work around it: the `probe` call
-site is checked, but the forwarded `$this->contains::<U>()` is not re-specialized
-when `probe` is, so it compiles to a `$this->contains(...)` call that fatals at
-runtime. Until the per-instantiation check lands, keep an enclosing-parameter-
-bounded call out of the class body entirely.
+(e.g. a free function taking `Box<Fruit> $b`) — **or make the method itself
+generic and forward the parameter:**
+
+```php
+class Box<+E> {
+    public function contains<U : E>(U $value): bool { /* ... */ }
+
+    // ✅ Forwarding a method parameter compiles and runs: both methods take U
+    // only as a direct input, so each lowers to one `E`-typed member per
+    // instantiation and the forward resolves to it.
+    public function probe<U : E>(U $value): bool {
+        return $this->contains::<U>($value);
+    }
+}
+```
+
+A method whose enclosing-bounded parameter is used **only** as a top-level
+input (`U $value`) is lowered by erasing `U` to its bound `E`: one
+`contains_<Fruit>(Fruit)` member per `Box<Fruit>`, rather than one per call-site
+type. So a forwarded `$this->contains::<U>()` rewrites to that member and runs.
+The direct `$this->contains::<Banana>()` above (a *concrete* turbofish on
+`$this`) still fails — its bound is checked only on the abstract template — but
+the forwarding form is the idiomatic way to call an element-consuming method
+from within the class. A parameter used anywhere else (nested `Box<U>`, a
+return, `new U`) keeps the per-call lowering and a forwarded self-call to it is
+still a compile error.
 
 ## Caveats
 
