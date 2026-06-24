@@ -90,6 +90,7 @@ final class GenericMethodCompiler
     public const CODE_UNRESOLVED_GENERIC_CALL = 'xphp.unresolved_generic_call';
     public const CODE_BOUND_UNPROVABLE = 'xphp.bound_unprovable';
     public const CODE_UNDETERMINED_RECEIVER = 'xphp.undetermined_receiver';
+    public const CODE_UNSPECIALIZABLE_SELF_CALL = 'xphp.unspecializable_self_call';
 
     /**
      * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
@@ -1245,7 +1246,23 @@ final class GenericMethodCompiler
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
                 $location = new SourceLocation($this->currentFile, $node->getStartLine());
                 $padded = Registry::padArgsWithDefaults($params, $args, $key, $this->diagnostics, $location);
-                if (!self::allConcrete($padded) || count($params) !== count($padded)) {
+                // Arity first: in `check` mode padArgsWithDefaults collects an arity diagnostic and
+                // returns the (still mis-sized) args, so an arity problem must short-circuit here
+                // before the concreteness check — otherwise a too-many/missing-arg self-call would
+                // also draw a spurious `unspecializable_self_call` on top of the real arity error.
+                if (count($params) !== count($padded)) {
+                    return null;
+                }
+                if (!self::allConcrete($padded)) {
+                    // A non-concrete turbofish arg is an abstract type parameter forwarded from the
+                    // enclosing generic method (`probe<U:E>{ $this->contains::<U>(...) }`). On a
+                    // `$this`-rooted receiver this can't be specialized at the template — the arg is
+                    // concrete only per instantiation — and the Specializer would strip the turbofish,
+                    // emitting a bare `$this->m(...)` to a method that was never specialized (a runtime
+                    // fatal). Report it rather than silently dropping it.
+                    if ($this->receiverRootedAtThis($node->var)) {
+                        return $this->reportUnspecializableSelfCall($methodName, $location);
+                    }
                     return null;
                 }
                 $args = $padded;
@@ -1443,6 +1460,34 @@ final class GenericMethodCompiler
                         GenericMethodCompiler::CODE_UNDETERMINED_RECEIVER,
                         $message,
                         new SourceLocation($this->currentFile, $node->getStartLine()),
+                    ));
+                    return null;
+                }
+                throw new RuntimeException($message);
+            }
+
+            /**
+             * A `$this`-rooted self-call (`$this->m::<U>()`) forwards an abstract type parameter to a
+             * generic method. It can't be specialized at the template — the arg is concrete only per
+             * instantiation — and would otherwise emit a bare call to a stripped method that fatals at
+             * runtime. Collect-or-throw at compile time. (A future erasure lowering will make the
+             * common, direct-input shape of this compile and run.)
+             */
+            private function reportUnspecializableSelfCall(string $methodName, SourceLocation $location): null
+            {
+                $message = sprintf(
+                    'Cannot specialize the self-call `$this->%s::<...>()`: it forwards a type parameter '
+                    . 'to a generic method, which has no concrete value in the class template. Move the '
+                    . 'call to a context where the receiver has a concrete element type (e.g. a function '
+                    . 'taking a typed `Box<Fruit>`), or call the method on a directly-constructed value.',
+                    $methodName,
+                );
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL,
+                        $message,
+                        $location,
                     ));
                     return null;
                 }

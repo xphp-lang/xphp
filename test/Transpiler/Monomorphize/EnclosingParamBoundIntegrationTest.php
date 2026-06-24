@@ -682,6 +682,114 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertContains(GenericMethodCompiler::CODE_UNDETERMINED_RECEIVER, $codes);
     }
 
+    // --- forwarded `$this` self-call: can't be specialized at the template (stop the silent break) ---
+
+    public function testForwardedAbstractSelfCallIsUnspecializableAndHardFails(): void
+    {
+        // `probe<U:E>` forwards its own type parameter to `$this->contains::<U>()`. The forwarded `U`
+        // is abstract in the template and can't be specialized there; rather than silently emit a bare
+        // `$this->contains(...)` to a stripped method (a runtime fatal), this is a compile error.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('forwards a type parameter');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public function contains<U : E>(U $value): bool { return true; }
+                public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            $box = new Box::<Fruit>();
+            PHP,
+        ]);
+    }
+
+    public function testForwardedAbstractSelfCallIsCollectedInCheckMode(): void
+    {
+        $collector = $this->check([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public function contains<U : E>(U $value): bool { return true; }
+                public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            $box = new Box::<Fruit>();
+            PHP,
+        ]);
+
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL, $codes);
+    }
+
+    public function testUnboundedForwardedSelfCallAlsoHardFails(): void
+    {
+        // Not bound-specific: forwarding to an UNBOUNDED generic method breaks the same way (the inner
+        // turbofish is stripped and the method never specialized), so it is rejected too.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('forwards a type parameter');
+        $this->compile([
+            'Models.xphp' => self::MODELS,
+            'Holder.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Holder {
+                public function identity<T>(T $x): T { return $x; }
+                public function forward<T>(T $x): T { return $this->identity::<T>($x); }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            $h = new Holder();
+            PHP,
+        ]);
+    }
+
+    public function testForwardedSelfCallWithArityErrorDoesNotDoubleReport(): void
+    {
+        // A `$this`-rooted self-call with a too-many-args turbofish must report only the arity error
+        // in check mode, not also `unspecializable_self_call` — the arity check short-circuits first.
+        $collector = $this->check([
+            'Models.xphp' => self::MODELS,
+            'Box.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            class Box<+E> {
+                public function contains<U : E>(U $value): bool { return true; }
+                public function probe<U : E>(U $value): bool { return $this->contains::<U, U>($value); }
+            }
+            PHP,
+            'Use.xphp' => <<<'PHP'
+            <?php
+            declare(strict_types=1);
+            namespace App;
+            $box = new Box::<Fruit>();
+            PHP,
+        ]);
+
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_TOO_MANY_TYPE_ARGUMENTS, $codes);
+        self::assertNotContains(GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL, $codes);
+    }
+
     // --- harness ---
 
     private static function repo(): string
