@@ -5,10 +5,21 @@ All notable changes to `xphp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - Unreleased
+
+_In progress on this branch — content still accumulating; date set at tag time._
 
 ### Added
 
+- **Multi-root builds via an `xphp.json` manifest.** A project declares its source
+  roots, output directory, and hash length in an `xphp.json` at the project root;
+  `xphp compile` and `xphp check` auto-detect it (or take an explicit `--config`).
+  Roots are merged into a single source set — a template in one root can reference a
+  type in another — and include patterns accept a `**` globstar for recursive
+  discovery. A consuming build compiles only the `.xphp` sources whose own
+  `xphp.json` opts in (so `"vendor/**"` picks up the dependencies that ship a
+  manifest, and skips those that don't). See
+  [getting started](docs/getting-started.md).
 - **Element-typed methods on covariant collections.** A method-level type parameter
   bounded by an enclosing class type parameter — `class Box<+E> { public function
   contains<U : E>(U $value): bool }` — has its bound **grounded** against the receiver's
@@ -33,9 +44,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idiomatic way to call an element-consuming method from inside the class). A `$this`-rooted
   forward to a *non-erasable* method (parameter used nested, in the return, or structurally), and
   a direct concrete `$this->contains::<Banana>()`, remain compile errors
-  (`xphp.unspecializable_self_call` / `xphp.bound_unprovable`) — never a runtime fault. See
-  [type bounds](docs/syntax/type-bounds.md) and
+  (`xphp.unspecializable_self_call` / `xphp.bound_unprovable`) — never a runtime fault. **Covariant
+  interfaces:** the method may be declared on a covariant interface (`Collection<+E>`) and called
+  through an upcast (`ListColl<Book>` used as `Collection<Product>`) — the implementer specialization
+  is scheduled and inherited down the covariant chain automatically. When it can't be carried there
+  (the implementing class has another parent, a trait-only body, or a reordered `implements` clause)
+  the upcast is a compile error (`xphp.unschedulable_covariant_upcast`), never emitted load-fataling
+  code. See [type bounds](docs/syntax/type-bounds.md) and
   [ADR-0018](docs/adr/0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md).
+- **Generic methods resolved through inheritance.** A generic method declared on a
+  base or abstract class is now callable by turbofish on a *subclass* receiver —
+  instance (`$child->m::<int>()`), static (`Child::m::<int>()`), and nullsafe
+  (`$child?->m::<int>()`). It is specialized once on its declaring class and
+  inherited, so the call dispatches to the real member. An **unresolved** turbofish —
+  a generic method that exists on neither the receiver nor any ancestor — is now a
+  compile error (`xphp.unresolved_generic_call`) instead of an emitted call to a
+  stripped method that fatals at runtime.
 - **`xphp check`** — a validate-without-emitting CI gate. It runs every generic
   validation `xphp compile` does (bounds, variance, defaults, missing/duplicate
   generics, unsupported closures), but collects **all** problems in one run —
@@ -73,6 +97,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an externally-readable `public private(set)` property) stay strictly
   invariant. A covariant single-value getter over a `private T` field is also
   PHPStan-clean. See [variance](docs/syntax/variance.md).
+- **By-reference parameters are an invariant variance position.** A `+T` / `-T`
+  type parameter used in a by-reference parameter (`&$x`) is now rejected: a
+  by-reference slot is both read and written through the caller's binding, so it is
+  invariant — the same rule already applied to a mutable property. See
+  [variance](docs/syntax/variance.md).
+
+### Changed
+
+- **BREAKING — a `final` variant class is now rejected.** A `final class Box<+T>`
+  previously compiled, with the generated specialization silently dropping `final`
+  so the `extends` subtype edge between specializations could land — which made
+  `ReflectionClass::isFinal()` disagree with the written source. A covariant /
+  contravariant class marked `final` is now a compile error (a `final` class can't
+  anchor the `extends` edge); omit `final` on a variant template. Non-variant
+  generic classes are unaffected. See [variance](docs/syntax/variance.md).
 
 ### Fixed
 
@@ -95,6 +134,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at runtime). It now fails `xphp compile` and is reported by `xphp check` as
   `xphp.undetermined_receiver`, with the fix: give the receiver a statically-known
   type. Ground or fail — the compiler never emits a call it knows will fatal.
+- **A class bound that references a sibling type parameter is now checked**
+  correctly. A bound such as `class Pair<T, U : T>` grounds `T` against the
+  supplied argument instead of treating `T` as a phantom class — which previously
+  rejected valid code with a misleading "does not extend/implement T".
+- **A scalar bound is no longer flagged as an undeclared type.** A bound naming a
+  scalar (`int`, `string`, …) is no longer reported as `xphp.undeclared_type`.
+
+## [0.2.1] - 2026-06-17
+
+### Fixed
+
+- The Composer autoloader is located when xphp is installed as a project
+  dependency, not only when run from its own checkout.
+- Bare imported (`use`) names are fully-qualified in specialized classes, so a
+  generated specialization in a mirrored namespace resolves them correctly.
 
 ## [0.2.0]
 
@@ -193,6 +247,7 @@ These are documented in full in the [caveats](docs/caveats.md):
 - Build-time hash-collision detection and a configurable
   `XPHP_HASH_LENGTH` (16–64).
 
-[Unreleased]: https://github.com/xphp-lang/xphp/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/xphp-lang/xphp/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/xphp-lang/xphp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/xphp-lang/xphp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xphp-lang/xphp/releases/tag/v0.1.0
