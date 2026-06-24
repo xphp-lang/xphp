@@ -821,6 +821,26 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testVarianceEdgeDoesNotOverwriteASourceParentAtRuntime(): void
+    {
+        // A covariant class with a SOURCE parent (`ListColl<+E> extends Base<E>`) instantiated at two
+        // args (Fruit, Banana). The variance edge emitter must keep each specialization's source
+        // `extends Base<E>` rather than overwrite it with the same-template covariant super
+        // (`ListColl<Banana> extends ListColl<Fruit>`) — overwriting would sever the inherited
+        // `contains_<Banana>` member and fatal "undefined method". Proven by executing the output.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/variance_edge_preserves_source_parent/source',
+            'variance-src-parent',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/variance_edge_preserves_source_parent/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
     {
         // A nullsafe forward (`$this?->contains::<U>()`) is rewritten the same as the plain form.

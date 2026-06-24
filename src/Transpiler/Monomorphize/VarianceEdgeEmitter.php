@@ -267,6 +267,20 @@ final class VarianceEdgeEmitter
         );
 
         if ($ast instanceof Class_) {
+            // PHP allows a class exactly ONE parent. A specialized class that already carries a source
+            // `extends` (e.g. `class ListColl<+E> extends AbstractColl<E>` → `ListColl_Book extends
+            // AbstractColl_Book`) must keep it: that parent carries the inherited member bodies and the
+            // source-declared `is-a` relationships. A same-template covariant super
+            // (`ListColl<Book> <: ListColl<Product>`) cannot ALSO be a direct parent under single
+            // inheritance, so we do not overwrite — the source parent wins, and the covariant *leaf*
+            // edge is dropped (a missed `instanceof`, never a fatal; the covariant relationship still
+            // holds transitively through the parent-less base chain, which is where erased members are
+            // carried down). Overwriting would sever the source parent and silently drop the inherited
+            // member — a class-load / undefined-method fatal. See also the specialization closer, which
+            // hard-fails the rarer case where the dropped edge would itself have carried an erased impl.
+            if ($ast->extends !== null) {
+                return;
+            }
             $ast->extends = new FullyQualified($directSupers[0]->generatedFqn);
             return;
         }
