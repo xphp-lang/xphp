@@ -592,12 +592,19 @@ final class GenericMethodCompiler
                         'paramArgs' => $parentParamArgs,
                         'localArgs' => $parentLocalArgs,
                         'branches' => $this->branchSnapshots,
+                        // Closure-template tracking is per-scope too: a generic closure assigned to `$f`
+                        // in one function must NOT leak into a sibling scope where `$f` is an unrelated
+                        // callable, or a bare `$f(...)` there would be misreported.
+                        'closureTemplates' => $this->currentScopeClosureTemplates,
+                        'closureContexts' => $this->currentScopeClosureContexts,
                     ];
                     $this->currentScopeParamTypes = [];
                     $this->currentScopeLocalTypes = [];
                     $this->currentScopeParamTypeArgs = [];
                     $this->currentScopeLocalTypeArgs = [];
                     $this->branchSnapshots = [];
+                    $this->currentScopeClosureTemplates = [];
+                    $this->currentScopeClosureContexts = [];
 
                     // For closures: `use ($x)` explicitly imports outer variables.
                     // Copy each imported name's type from the parent scope so the
@@ -814,6 +821,8 @@ final class GenericMethodCompiler
                         $this->currentScopeParamTypeArgs = $snapshot['paramArgs'];
                         $this->currentScopeLocalTypeArgs = $snapshot['localArgs'];
                         $this->branchSnapshots = $snapshot['branches'];
+                        $this->currentScopeClosureTemplates = $snapshot['closureTemplates'];
+                        $this->currentScopeClosureContexts = $snapshot['closureContexts'];
                     } else {
                         // Defensive: matched enter/leave count is invariant of the
                         // NodeTraverser; the else-branch is only reachable if the AST
@@ -824,6 +833,8 @@ final class GenericMethodCompiler
                         $this->currentScopeParamTypeArgs = [];
                         $this->currentScopeLocalTypeArgs = [];
                         $this->branchSnapshots = [];
+                        $this->currentScopeClosureTemplates = [];
+                        $this->currentScopeClosureContexts = [];
                     }
                 }
                 // Branching parents: pop the frame, restore the pre-branch local
@@ -1132,6 +1143,11 @@ final class GenericMethodCompiler
                 // through padArgsWithDefaults too so partial-arg shapes are
                 // filled in the same way class-level instantiations are.
                 if (!is_array($args)) {
+                    // A first-class-callable (`$obj->m(...)` / `Box::m(...)`) creates a Closure rather
+                    // than invoking, so leave it alone.
+                    if ($node->isFirstClassCallable()) {
+                        return null;
+                    }
                     // Bare call (no turbofish): fall through to padArgsWithDefaults, which pads an
                     // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise. A
                     // method generic can't infer its type argument from the call args, so a bare call to a
@@ -1246,6 +1262,11 @@ final class GenericMethodCompiler
                 }
                 /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
                 if (!is_array($args)) {
+                    // A first-class-callable (`$obj->m(...)` / `Box::m(...)`) creates a Closure rather
+                    // than invoking, so leave it alone.
+                    if ($node->isFirstClassCallable()) {
+                        return null;
+                    }
                     // Bare call (no turbofish): fall through to padArgsWithDefaults, which pads an
                     // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise. A
                     // method generic can't infer its type argument from the call args, so a bare call to a
@@ -1528,6 +1549,31 @@ final class GenericMethodCompiler
                         $location,
                     ));
                     return null;
+                }
+                throw new RuntimeException($message);
+            }
+
+            /**
+             * A turbofish-less call to a generic free function or closure (`$label` is its FQN or
+             * `$var`). Unlike a method, a named generic function / closure has no bare or empty-turbofish
+             * form, so any bare call is missing its type arguments regardless of defaults. Collect-or-throw.
+             */
+            private function reportMissingTurbofishArguments(string $label, SourceLocation $location): void
+            {
+                $message = sprintf(
+                    'Generic call `%s(...)` is missing its type arguments: a generic function or closure '
+                    . 'takes no inference, so it must be called with an explicit turbofish `%s::<...>(...)`.',
+                    $label,
+                    $label,
+                );
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        Registry::CODE_MISSING_TYPE_ARGUMENT,
+                        $message,
+                        $location,
+                    ));
+                    return;
                 }
                 throw new RuntimeException($message);
             }
@@ -1981,23 +2027,21 @@ final class GenericMethodCompiler
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
                 if (!is_array($args)) {
-                    // Bare (turbofish-less) call. A generic free function or a tracked generic closure
-                    // takes no inference, so a bare call to a non-all-default one is a
-                    // missing-type-arguments error, not a silent skip that emits a call to the stripped
-                    // `f_T_<…>`. Both lookups (functionTemplates / the closure bag) hold ONLY generics, so
-                    // a non-generic bare call resolves to nothing and is left untouched — no false
-                    // positives. (An all-default generic pads silently and is left as-is; the user can
-                    // still call it with an explicit/empty turbofish.)
-                    $bare = $this->resolveBareGenericCall($node);
-                    if ($bare !== null) {
-                        [$params, $label] = $bare;
-                        Registry::padArgsWithDefaults(
-                            $params,
-                            [],
-                            $label,
-                            $this->diagnostics,
-                            new SourceLocation($this->currentFile, $node->getStartLine()),
-                        );
+                    // Bare (turbofish-less) call. A first-class-callable (`f(...)` / `$f(...)`) creates a
+                    // Closure rather than invoking, so leave it alone. Otherwise a generic free function
+                    // or tracked generic closure has no bare or empty-turbofish form (a named generic
+                    // takes no inference and the dispatcher needs concrete args), so ANY bare call to one
+                    // is a missing-type-arguments error — not a silent skip that emits a call to the
+                    // stripped `f_T_<…>`. Both lookups hold ONLY generics, so a non-generic bare call
+                    // resolves to nothing and is left untouched — no false positives.
+                    if (!$node->isFirstClassCallable()) {
+                        $bare = $this->resolveBareGenericCall($node);
+                        if ($bare !== null) {
+                            $this->reportMissingTurbofishArguments(
+                                $bare[1],
+                                new SourceLocation($this->currentFile, $node->getStartLine()),
+                            );
+                        }
                     }
                     return null;
                 }

@@ -1278,6 +1278,48 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
+    public function testFirstClassCallableOfAGenericFunctionIsNotFlagged(): void
+    {
+        // `pick(...)` (first-class-callable) creates a Closure, it doesn't invoke — so it must NOT be
+        // reported as a missing-turbofish call.
+        $collector = $this->check([
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(T \$x): T { return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$cb = pick(...);\n",
+        ]);
+        self::assertSame([], $collector->all(), 'a first-class-callable of a generic function must not be flagged');
+    }
+
+    public function testBareAllDefaultFreeFunctionCallIsReported(): void
+    {
+        // A named generic function has no bare/empty-turbofish form even when all params are defaulted,
+        // so a bare call must be reported rather than silently padded and left to fatal at runtime.
+        $collector = $this->check([
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction make<T = int>(): string { return 'x'; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = make();\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testGenericClosureDoesNotLeakAcrossScopes(): void
+    {
+        // A generic closure assigned in one method must not leak its template into a sibling method
+        // where the same variable name is an unrelated `callable` parameter — a bare `$f('x')` there is
+        // a legitimate call, not a forgotten turbofish.
+        $collector = $this->check([
+            'C.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class C {
+                    public function a(): void { $f = function<T>(T $x): T { return $x; }; }
+                    public function b(callable $f): mixed { return $f('x'); }
+                }
+                PHP,
+        ]);
+        self::assertSame([], $collector->all(), 'a generic closure must not leak across scopes');
+    }
+
     public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
     {
         // A nullsafe forward (`$this?->contains::<U>()`) is rewritten the same as the plain form.

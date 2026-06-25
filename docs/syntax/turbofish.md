@@ -75,12 +75,15 @@ $id('T_<hash-of-int>', 42);
 - Bare `new Foo;` (no `(` or `::<>`) also works for all-defaulted
   class templates — see [defaults](defaults.md).
 - **The type argument is not inferred from the call arguments.** A
-  turbofish-less call to a generic method, function, or closure that
-  has no all-default type parameters (`$x->pick('a')` instead of
+  turbofish-less call (`$x->pick('a')` instead of
   `$x->pick::<string>('a')`) is a compile error
   (`xphp.missing_type_argument`), not a silent skip — `xphp check`
   catches a forgotten turbofish at build time rather than letting it
-  fatal at runtime.
+  fatal at runtime. A generic **method** whose type parameters are all
+  defaulted may still be called bare; a named generic **function** or
+  **closure** has no bare or empty-turbofish form, so it always needs
+  an explicit turbofish. (A first-class callable `pick(...)` creates a
+  closure rather than calling, and is left alone.)
 
 ## Receiver-type analysis (instance methods)
 
