@@ -293,6 +293,20 @@ final readonly class SpecializationCloser
             return;
         }
         /** @var list<TypeParam> $declaringParams */
+        // The split substitution grounds the body's class parameter to the upcast source's OWN concrete
+        // (a subtype of the supertype the member is emitted at). That is sound for body reads, but if the
+        // class parameter also appears in the RETURN type, the member would return a supertype value (the
+        // widened bounded parameter) through a subtype return — a runtime TypeError. Direct emission can't
+        // ground that soundly; fail loudly instead. (A covariant parameter can't appear in an input
+        // position, so the return type is the only signature slot it can occupy.)
+        if (EnclosingBoundErasure::returnTypeReferencesEnclosing($declaringMethod, $declaringDef->typeParamNames())) {
+            throw new RuntimeException($this->unschedulableMessage(
+                $interfaceSpec,
+                $methodName,
+                'its enclosing type parameter appears in the method return type, which direct emission '
+                . 'cannot ground soundly against the upcast source',
+            ));
+        }
         $declaringConcrete = $this->hierarchy->resolveInheritedArgs(
             $concreteSpec->templateFqn,
             $concreteSpec->concreteTypes,

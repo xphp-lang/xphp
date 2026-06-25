@@ -1200,6 +1200,92 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
+    public function testEnclosingParamInSignatureHardFailsDirectEmission(): void
+    {
+        // The bounded method param widens to the supertype arg (Product), but the body's class param is
+        // grounded to the upcast source's OWN concrete (Book). When that class param also appears in the
+        // SIGNATURE — here a `: E` return type — the directly-emitted member would return a Product value
+        // (the widened fallback) through a `: Book` return, a runtime TypeError. The inheritance path
+        // grounds the whole member at one arg and handles this, but direct emission cannot, so it must
+        // hard-fail at compile time rather than emit a member that fatals when it runs.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches(
+            '/xphp\.unschedulable_covariant_upcast.+erased method "firstOr".+App\\\\OrderedCollection.+'
+            . 'enclosing type parameter appears in the method return type, which direct emission cannot '
+            . 'ground soundly.+Provide a concrete implementation/s',
+        );
+
+        $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function firstOr<U : E>(U $fallback): E; }
+                PHP,
+            'AbstractColl.xphp' => self::ABSTRACT_COLL,
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                    public function firstOr<U : E>(U $fallback): E { return $this->items[0] ?? $fallback; }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function first(OrderedCollection<Product> $c): Product { return $c->firstOr::<Product>(new Product()); }
+                $l = new ListColl::<Book>();
+                $r = first($l);
+                PHP,
+        ]);
+    }
+
+    public function testEnclosingParamInParameterPositionIsRejectedByVarianceFirst(): void
+    {
+        // Why the return-type guard need only inspect the return type: a covariant `+E` can never reach
+        // direct emission in a parameter position, because variance checking rejects `+E` in an input
+        // position long before the closer runs. This pins that ordering — the diagnostic is the variance
+        // error, NOT the upcast hard-fail — so the return-type-only guard is provably complete.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/`\+E` appears in method parameter position/');
+
+        $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function pairContains<U : E>(U $value, E $other): bool; }
+                PHP,
+            'AbstractColl.xphp' => self::ABSTRACT_COLL,
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                    public function pairContains<U : E>(U $value, E $other): bool {
+                        return \in_array($value, $this->items, true) && \in_array($other, $this->items, true);
+                    }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(OrderedCollection<Product> $c, Product $p): bool { return $c->pairContains::<Product>($p, $p); }
+                $l = new ListColl::<Book>();
+                $r = probe($l, new Product());
+                PHP,
+        ]);
+    }
+
     public function testTwoSameBoundParamsDirectEmitUnderUpcast(): void
     {
         // A method with two parameters both bounded by the SAME enclosing parameter (`<U : E, V : E>`)

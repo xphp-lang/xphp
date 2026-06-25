@@ -79,6 +79,26 @@ final class EnclosingBoundErasure
     }
 
     /**
+     * Whether the method's **return type** references one of the enclosing class type parameters (`E`).
+     * Used by direct upcast emission: that path grounds the body's class parameter to the upcast
+     * source's OWN concrete (a subtype of the supertype the member is emitted at), which is sound for
+     * body reads but NOT for a return position — a return type grounded to the subtype while the bounded
+     * parameter widens to the supertype lets a supertype value escape through a subtype return (a runtime
+     * `TypeError`). Such a shape can't be emitted directly and must fail loudly.
+     *
+     * Only the return type is inspected: an enclosing parameter is covariant (`+E`), so variance checking
+     * forbids it from appearing in any method *parameter* position before this point — the return type is
+     * the only signature position it can legally occupy. A bounded method parameter is typed by the
+     * *method* generic (`U`), not by `E`, so it never matches here either.
+     *
+     * @param list<string> $enclosingParamNames
+     */
+    public static function returnTypeReferencesEnclosing(ClassMethod $method, array $enclosingParamNames): bool
+    {
+        return self::typeReferencesBounded($method->returnType, $enclosingParamNames);
+    }
+
+    /**
      * Whether a type node (a parameter/return type: a Name, a nullable/union/intersection of them)
      * mentions a bounded name — bare (`U`) or nested in another type's args (`Box<U>`).
      *
