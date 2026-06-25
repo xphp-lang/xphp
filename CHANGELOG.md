@@ -140,6 +140,14 @@ _In progress on this branch — content still accumulating; date set at tag time
   rejected valid code with a misleading "does not extend/implement T".
 - **A scalar bound is no longer flagged as an undeclared type.** A bound naming a
   scalar (`int`, `string`, …) is no longer reported as `xphp.undeclared_type`.
+- **A turbofish-less call to a generic method, function, or closure is now rejected**
+  instead of silently skipped. A method generic takes no inference, so a forgotten
+  turbofish (`$x->pick('a')` instead of `$x->pick::<string>('a')`) previously emitted a
+  call to the stripped mangled member and fataled at runtime — clean `check` and
+  `compile`. It now fails `xphp compile` and is collected by `xphp check` as
+  `xphp.missing_type_argument`, across instance, static, free-function, and closure
+  calls. A generic whose type parameters are all defaulted still resolves; a
+  first-class callable (`pick(...)`) and a non-generic call are unaffected.
 
 ## [0.2.1] - 2026-06-17
 
