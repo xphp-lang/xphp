@@ -1981,27 +1981,23 @@ final class GenericMethodCompiler
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
                 if (!is_array($args)) {
-                    // Bare (turbofish-less) call. A named generic function takes no inference and has no
-                    // bare/empty-turbofish form, so a bare call to one is a missing-type-arguments error,
-                    // not a silent skip that emits a call to the stripped `f_T_<…>`. Resolve whether the
-                    // callee is a registered generic function (functionTemplates holds ONLY generics, so a
-                    // non-generic call resolves to null and is left untouched — no false positives).
-                    if ($node->name instanceof Name) {
-                        $fqn = $this->resolveGenericFunctionFqn($node->name);
-                        if ($fqn !== null) {
-                            $params = $this->functionTemplates[$fqn]
-                                ->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-                            if (is_array($params)) {
-                                /** @var list<TypeParam> $params */
-                                Registry::padArgsWithDefaults(
-                                    $params,
-                                    [],
-                                    $fqn,
-                                    $this->diagnostics,
-                                    new SourceLocation($this->currentFile, $node->getStartLine()),
-                                );
-                            }
-                        }
+                    // Bare (turbofish-less) call. A generic free function or a tracked generic closure
+                    // takes no inference, so a bare call to a non-all-default one is a
+                    // missing-type-arguments error, not a silent skip that emits a call to the stripped
+                    // `f_T_<…>`. Both lookups (functionTemplates / the closure bag) hold ONLY generics, so
+                    // a non-generic bare call resolves to nothing and is left untouched — no false
+                    // positives. (An all-default generic pads silently and is left as-is; the user can
+                    // still call it with an explicit/empty turbofish.)
+                    $bare = $this->resolveBareGenericCall($node);
+                    if ($bare !== null) {
+                        [$params, $label] = $bare;
+                        Registry::padArgsWithDefaults(
+                            $params,
+                            [],
+                            $label,
+                            $this->diagnostics,
+                            new SourceLocation($this->currentFile, $node->getStartLine()),
+                        );
                     }
                     return null;
                 }
@@ -2277,6 +2273,38 @@ final class GenericMethodCompiler
             }
 
             /**
+             * For a turbofish-less call, return the called generic template's `[params, label]` — a
+             * registered generic free function (by resolved FQN) or a tracked generic closure (by
+             * variable) — or null when the callee isn't a generic template (non-generic calls, unknown
+             * variables). The label is the diagnostic's template name.
+             *
+             * @return array{0: list<TypeParam>, 1: string}|null
+             */
+            private function resolveBareGenericCall(FuncCall $node): ?array
+            {
+                if ($node->name instanceof Name) {
+                    $fqn = $this->resolveGenericFunctionFqn($node->name);
+                    if ($fqn === null) {
+                        return null;
+                    }
+                    $params = $this->functionTemplates[$fqn]
+                        ->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                    /** @var list<TypeParam>|null $params */
+                    return is_array($params) ? [$params, $fqn] : null;
+                }
+                if ($node->name instanceof Variable && is_string($node->name->name)) {
+                    $template = $this->currentScopeClosureTemplates[$node->name->name] ?? null;
+                    if ($template === null) {
+                        return null;
+                    }
+                    $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                    /** @var list<TypeParam>|null $params */
+                    return is_array($params) ? [$params, '$' . $node->name->name] : null;
+                }
+                return null;
+            }
+
+            /**
              * Resolve a (turbofish-less) function-call name to the FQN of a registered GENERIC function
              * template, or null if it isn't one. `functionTemplates` holds only generic functions, so a
              * non-generic call (e.g. `strlen`) resolves to null and is left untouched. Mirrors PHP's
@@ -2500,11 +2528,12 @@ final class GenericMethodCompiler
             {
             }
             /**
-             * @infection-ignore-all -- pure perf optimization. Mutating the
-             * early-return or the instanceof guard just disables the fast-path
-             * exit; the subsequent rewriteCallSites pass is idempotent for
-             * files with no matching call sites, so observable behavior is
-             * identical with or without this pre-scan firing.
+             * @infection-ignore-all -- this pre-scan keeps the rewrite pass alive for files that have no
+             * NAMED generic templates but do use anonymous generics. It fires on a variable turbofish
+             * call (`$f::<…>()`) AND on a generic closure/arrow TEMPLATE assignment — the latter so a
+             * BARE call to that closure (`$f('x')`, no turbofish) is still traversed and diagnosed rather
+             * than silently skipped. (Inner anonymous visitor: Infection's blind spot — the closure-call
+             * diagnosis is covered behaviorally by the bare-closure-call accept/reject tests.)
              */
             public function enterNode(Node $node): null
             {
@@ -2514,6 +2543,12 @@ final class GenericMethodCompiler
                 if ($node instanceof FuncCall
                     && $node->name instanceof Variable
                     && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS))
+                ) {
+                    $this->found = true;
+                }
+                if ($node instanceof Assign
+                    && ($node->expr instanceof Closure || $node->expr instanceof ArrowFunction)
+                    && is_array($node->expr->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
                 ) {
                     $this->found = true;
                 }

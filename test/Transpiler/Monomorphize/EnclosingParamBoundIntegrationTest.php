@@ -1247,6 +1247,37 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertSame([], $collector->all(), 'a non-generic free-function bare call must not be flagged');
     }
 
+    public function testBareGenericClosureCallIsCollectedInCheck(): void
+    {
+        // A generic closure is tracked at assignment; a bare `$f('b')` (no turbofish) was skipped via
+        // the func-call early return and never reached the variable-turbofish path. It must be reported.
+        $collector = $this->check([
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                $f = function<T>(T $x): T { return $x; };
+                $bad = $f('b');
+                PHP,
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testBareGenericClosureCallFailsCompile(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->compile([
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                $f = function<T>(T $x): T { return $x; };
+                $bad = $f('b');
+                PHP,
+        ]);
+    }
+
     public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
     {
         // A nullsafe forward (`$this?->contains::<U>()`) is rewritten the same as the plain form.
