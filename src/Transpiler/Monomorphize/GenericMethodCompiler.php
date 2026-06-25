@@ -484,9 +484,11 @@ final class GenericMethodCompiler
              * Function_/ClassMethod/Closure/ArrowFunction boundaries. On enter we push the
              * outgoing `(params, locals, branches)` triple; on leave we pop and restore.
              * Branch snapshots are nested per-scope so that branches inside a closure
-             * don't leak to branches in the enclosing function.
+             * don't leak to branches in the enclosing function. The closure-template maps
+             * are snapshotted too so a generic closure assigned in one scope doesn't leak
+             * into a sibling scope where the same variable names an unrelated callable.
              *
-             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, perBranchArgs: list<array<string, ?list<TypeRef>>>, armIndex: int}>}>
+             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, perBranchArgs: list<array<string, ?list<TypeRef>>>, armIndex: int}>, closureTemplates: array<string, Closure|ArrowFunction>, closureContexts: array<string, array{assign: Assign, namespace: string, namespaceNode: ?Namespace_}>}>
              */
             private array $scopeSnapshots = [];
             /**
