@@ -47,10 +47,16 @@ _In progress on this branch — content still accumulating; date set at tag time
   (`xphp.unspecializable_self_call` / `xphp.bound_unprovable`) — never a runtime fault. **Covariant
   interfaces:** the method may be declared on a covariant interface (`Collection<+E>`) and called
   through an upcast (`ListColl<Book>` used as `Collection<Product>`) — the implementer specialization
-  is scheduled and inherited down the covariant chain automatically. When it can't be carried there
-  (the implementing class has another parent, a trait-only body, or a reordered `implements` clause)
-  the upcast is a compile error (`xphp.unschedulable_covariant_upcast`), never emitted load-fataling
-  code. See [type bounds](docs/syntax/type-bounds.md) and
+  is scheduled and inherited down the covariant chain automatically. When inheritance can't carry it
+  there — the implementing class has another `extends` parent, implements only a *parent* of the
+  interface, or reorders the `implements` clause — the member is instead emitted **directly** onto the
+  upcast source, with its bounded parameter widened to the supertype argument and its body read at the
+  source's own element type (sound because the source's element is a subtype of the supertype). The
+  upcast remains a compile error (`xphp.unschedulable_covariant_upcast`) — never emitted load- or
+  runtime-fataling code — only where no emittable class body exists (a truly abstract or trait-only
+  method), where the method's return type names the element parameter (the widened argument would
+  escape through a narrower return), or where its parameters are bounded by different enclosing
+  parameters (no single member can be derived). See [type bounds](docs/syntax/type-bounds.md) and
   [ADR-0018](docs/adr/0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md).
 - **Generic methods resolved through inheritance.** A generic method declared on a
   base or abstract class is now callable by turbofish on a *subclass* receiver —

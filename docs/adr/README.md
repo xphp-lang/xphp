@@ -36,3 +36,4 @@ should be added here as a new numbered file; copy
 | [0016](0016-no-special-cased-value-equality-bound.md) | No special-cased value-equality bound (use ordinary generics) | Accepted |
 | [0017](0017-config-manifest-source-resolution.md) | Config-manifest, multi-root source resolution (`xphp.json`) | Accepted |
 | [0018](0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md) | Grounding a method-generic bound that references an enclosing class type parameter | Accepted |
+| [0019](0019-trait-members-are-not-modeled-in-the-type-hierarchy.md) | Trait-imported members are not modeled in the type hierarchy | Accepted |

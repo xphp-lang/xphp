@@ -199,11 +199,11 @@ covariant **upcast** — the shape a collections library uses:
 
 ```php
 interface Collection<+E> {
-    public function contains<E2 : E>(E2 $value): bool;
+    public function contains<U : E>(U $value): bool;
 }
 abstract class AbstractColl<+E> implements Collection<E> {
     public function __construct(private E ...$items) {}
-    public function contains<E2 : E>(E2 $value): bool { /* ... */ }
+    public function contains<U : E>(U $value): bool { /* ... */ }
 }
 class ListColl<+E> extends AbstractColl<E> {}
 
@@ -217,15 +217,39 @@ anyProduct($books);                           // OK — upcast to Collection<Pro
 Each interface specialization declares its own erased member
 (`Collection<Book>` has `contains_<Book>`, `Collection<Product>` has
 `contains_<Product>` — distinct, so the covariant edge never narrows a
-parameter), and the concrete implementation is inherited through the covariant
-chain. For that to work the element-consuming body must sit on a **parent-less
-covariant base** that passes its type parameters straight to the interface — the
-`AbstractColl<+E> implements Collection<E>` shape above. If the implementing
-class has another `extends` parent, supplies the body only through a trait, or
-reorders the interface's parameters, the implementation can't be carried down a
-single covariant chain, so the upcast is a compile error
+parameter). When the element-consuming body sits on a **parent-less covariant
+base** that passes its type parameters straight to the interface — the
+`AbstractColl<+E> implements Collection<E>` shape above — the implementation is
+**inherited** through the covariant chain.
+
+When inheritance can't carry it — the implementing class has another `extends`
+parent, implements only a *parent* of the interface, or reorders the
+`implements` clause — the member is instead emitted **directly** onto the upcast
+source. Its bounded parameter widens to the supertype argument (`U → Product`),
+while the body reads the source's own element type (`E → Book`); that split is
+sound because the source's element is a subtype of the supertype, so reading the
+instance's own backing state through the widened parameter is type-safe. A class
+upcast to several supertypes gets one such member each (distinct mangled names —
+no redeclaration).
+
+> The body reads at the source's element type, not the supertype. For a method
+> whose body inspects `E` structurally — `return $value instanceof E;` — the
+> directly-emitted member tests against the source's concrete element (`Book`),
+> the runtime instance's actual element type.
+
+A handful of shapes have no sound emittable member and remain a compile error
 (`xphp.unschedulable_covariant_upcast`) rather than a runtime fault — ground or
-fail.
+fail:
+
+- **No class body** — the method is truly abstract or its only body is supplied
+  through a trait (trait-imported members aren't modelled in the type hierarchy;
+  see [ADR-0019](../adr/0019-trait-members-are-not-modeled-in-the-type-hierarchy.md)).
+- **The return type names the element parameter** — e.g. `first<U : E>(U $fallback): E`.
+  Direct emission would return the widened (supertype) value through the narrower
+  element return type, a runtime `TypeError`. (Such a method still works through the
+  inheritance path, which grounds the whole member at one argument.)
+- **Parameters bounded by different enclosing parameters** — `pick<U : E, V : F>`.
+  No single member can be derived for a non-uniform bound.
 
 ## Caveats
 
