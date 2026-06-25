@@ -1132,9 +1132,11 @@ final class GenericMethodCompiler
                 // through padArgsWithDefaults too so partial-arg shapes are
                 // filled in the same way class-level instantiations are.
                 if (!is_array($args)) {
-                    if (!self::hasAllDefaults($params)) {
-                        return null;
-                    }
+                    // Bare call (no turbofish): fall through to padArgsWithDefaults, which pads an
+                    // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise. A
+                    // method generic can't infer its type argument from the call args, so a bare call to a
+                    // non-all-default generic is an error — not a silent skip that emits a call to the
+                    // stripped method and fatals at runtime.
                     $args = [];
                 }
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
@@ -1244,9 +1246,11 @@ final class GenericMethodCompiler
                 }
                 /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
                 if (!is_array($args)) {
-                    if (!self::hasAllDefaults($params)) {
-                        return null;
-                    }
+                    // Bare call (no turbofish): fall through to padArgsWithDefaults, which pads an
+                    // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise. A
+                    // method generic can't infer its type argument from the call args, so a bare call to a
+                    // non-all-default generic is an error — not a silent skip that emits a call to the
+                    // stripped method and fatals at runtime.
                     $args = [];
                 }
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
@@ -2257,26 +2261,6 @@ final class GenericMethodCompiler
             {
                 foreach ($args as $a) {
                     if (!$a->isConcrete()) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-
-            /**
-             * True iff every TypeParam in the template carries a default.
-             * Bare calls (no `::<...>`) can specialize only against all-defaults
-             * templates -- otherwise there's no way to derive the type-args.
-             *
-             * @param list<TypeParam> $params
-             */
-            private static function hasAllDefaults(array $params): bool
-            {
-                if ($params === []) {
-                    return false;
-                }
-                foreach ($params as $param) {
-                    if ($param->default === null) {
                         return false;
                     }
                 }

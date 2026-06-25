@@ -1159,6 +1159,63 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
+    public function testBareInstanceMethodGenericCallFailsCompile(): void
+    {
+        // A turbofish-less call to a method generic with no all-default params can't infer its type
+        // argument — it must fail compile, not silently emit a call to the stripped `pick_T_<…>`.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/pick/');
+
+        $this->compile([
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function pick<T>(T \$x): T { return \$x; } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$bad = \$b->pick('b');\n",
+        ]);
+    }
+
+    public function testBareInstanceMethodGenericCallIsCollectedInCheck(): void
+    {
+        // The same bare call in `check` mode is collected (not thrown), so a whole-program check reports
+        // it instead of a runtime fatal — the gap the ticket is about.
+        $collector = $this->check([
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function pick<T>(T \$x): T { return \$x; } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$bad = \$b->pick('b');\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testBareCallToAnAllDefaultMethodGenericStillResolves(): void
+    {
+        // A bare call to a method generic whose type parameter is fully defaulted pads to the default and
+        // compiles — unchanged behavior, no false positive.
+        $dist = $this->compile([
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function make<T = int>(): string { return 'x'; } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$ok = \$b->make();\n",
+        ]);
+        self::assertStringContainsString('make_', self::read($dist, 'Use.php'));
+    }
+
+    public function testBareCallToANonGenericMethodIsUnaffected(): void
+    {
+        // A plain call to a non-generic method must not be flagged (it isn't a method-generic template).
+        $collector = $this->check([
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function plain(string \$x): string { return \$x; } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$ok = \$b->plain('x');\n",
+        ]);
+        self::assertSame([], $collector->all(), 'a non-generic bare call must not be flagged');
+    }
+
+    public function testBareStaticMethodGenericCallIsReported(): void
+    {
+        // The static path (`Box::pick('b')`) has the identical silent-skip branch — also reported.
+        $collector = $this->check([
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public static function pick<T>(T \$x): T { return \$x; } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = Box::pick('b');\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
     public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
     {
         // A nullsafe forward (`$this?->contains::<U>()`) is rewritten the same as the plain form.
