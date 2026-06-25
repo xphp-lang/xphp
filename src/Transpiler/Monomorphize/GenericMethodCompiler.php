@@ -1981,6 +1981,28 @@ final class GenericMethodCompiler
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
                 if (!is_array($args)) {
+                    // Bare (turbofish-less) call. A named generic function takes no inference and has no
+                    // bare/empty-turbofish form, so a bare call to one is a missing-type-arguments error,
+                    // not a silent skip that emits a call to the stripped `f_T_<…>`. Resolve whether the
+                    // callee is a registered generic function (functionTemplates holds ONLY generics, so a
+                    // non-generic call resolves to null and is left untouched — no false positives).
+                    if ($node->name instanceof Name) {
+                        $fqn = $this->resolveGenericFunctionFqn($node->name);
+                        if ($fqn !== null) {
+                            $params = $this->functionTemplates[$fqn]
+                                ->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                            if (is_array($params)) {
+                                /** @var list<TypeParam> $params */
+                                Registry::padArgsWithDefaults(
+                                    $params,
+                                    [],
+                                    $fqn,
+                                    $this->diagnostics,
+                                    new SourceLocation($this->currentFile, $node->getStartLine()),
+                                );
+                            }
+                        }
+                    }
                     return null;
                 }
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
@@ -2252,6 +2274,36 @@ final class GenericMethodCompiler
                 return $this->currentNamespace !== ''
                     ? $this->currentNamespace . '\\' . $raw
                     : $raw;
+            }
+
+            /**
+             * Resolve a (turbofish-less) function-call name to the FQN of a registered GENERIC function
+             * template, or null if it isn't one. `functionTemplates` holds only generic functions, so a
+             * non-generic call (e.g. `strlen`) resolves to null and is left untouched. Mirrors PHP's
+             * function name resolution: fully-qualified and `use`-aliased names resolve directly; an
+             * unqualified name tries the current namespace first, then falls back to the global scope.
+             */
+            private function resolveGenericFunctionFqn(Name $name): ?string
+            {
+                if ($name instanceof FullyQualified || str_starts_with($name->toString(), '\\')) {
+                    $fqn = ltrim($name->toString(), '\\');
+                    return isset($this->functionTemplates[$fqn]) ? $fqn : null;
+                }
+                $raw = $name->toString();
+                $first = self::firstSegment($raw);
+                if (isset($this->useMap[$first])) {
+                    $fqn = $this->useMap[$first] . substr($raw, strlen($first));
+                    return isset($this->functionTemplates[$fqn]) ? $fqn : null;
+                }
+                if ($this->currentNamespace !== '') {
+                    $namespaced = $this->currentNamespace . '\\' . $raw;
+                    if (isset($this->functionTemplates[$namespaced])) {
+                        return $namespaced;
+                    }
+                }
+                // Global-scope fallback (PHP resolves an unqualified function to global when the
+                // namespaced one doesn't exist).
+                return isset($this->functionTemplates[$raw]) ? $raw : null;
             }
 
             /**

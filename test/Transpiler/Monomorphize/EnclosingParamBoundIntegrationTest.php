@@ -1216,6 +1216,37 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
     }
 
+    public function testBareFreeFunctionGenericCallFailsCompile(): void
+    {
+        // The free-function path skipped bare calls via a different early return; a bare call to a
+        // generic function must also fail rather than emit a call to the stripped `pick_T_<…>`.
+        $this->expectException(RuntimeException::class);
+        $this->compile([
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(T \$x): T { return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = pick('b');\n",
+        ]);
+    }
+
+    public function testBareFreeFunctionGenericCallIsCollectedInCheck(): void
+    {
+        $collector = $this->check([
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(T \$x): T { return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = pick('b');\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testBareNonGenericFreeFunctionCallIsUnaffected(): void
+    {
+        // A bare call to a non-generic free function (not in functionTemplates) must not be flagged.
+        $collector = $this->check([
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction plain(string \$x): string { return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$ok = plain('x');\n",
+        ]);
+        self::assertSame([], $collector->all(), 'a non-generic free-function bare call must not be flagged');
+    }
+
     public function testNullsafeForwardedSelfCallIsAlsoRewritten(): void
     {
         // A nullsafe forward (`$this?->contains::<U>()`) is rewritten the same as the plain form.
