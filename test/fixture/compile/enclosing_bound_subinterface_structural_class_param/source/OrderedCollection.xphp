@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface OrderedCollection<+E> extends Collection<E>
+{
+    public function firstKind<U : E>(U $value): bool;
+}

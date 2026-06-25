@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E>
+{
+    // Body references the CLASS parameter E structurally (`instanceof E`). Under the upcast this member
+    // is emitted directly onto ListColl<Book>; E must resolve to the upcast-source's concrete (Book),
+    // NOT the supertype (Product). So `$value instanceof E` asks "is the argument a Book?".
+    public function firstKind<U : E>(U $value): bool
+    {
+        return $value instanceof E;
+    }
+}

@@ -47,15 +47,22 @@ final readonly class SpecializationCloser
     public function __construct(
         private TypeHierarchy $hierarchy,
         private VarianceSubtyping $subtyping,
+        private Specializer $specializer,
+        private int $hashLength,
     ) {
     }
 
     /**
-     * Schedule the concrete supertype specializations required by the covariant upcasts present in
-     * the registry. Returns true when it recorded at least one new instantiation, so the caller
-     * re-runs the fixed-point loop to specialize it.
+     * Close the specialization set for the covariant upcasts present in the registry. Two paths supply
+     * an upcast's erased member: scheduling the declaring class so the variance edge inherits it (the
+     * primary, WI-09 path — records a new instantiation), or — when inheritance can't carry it (the
+     * declaring class has a source parent, or implements only a parent interface) — emitting the member
+     * directly onto the upcast-source's specialized class. Returns true when it recorded at least one new
+     * instantiation, so the caller re-runs the fixed-point loop.
+     *
+     * @param array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN
      */
-    public function close(Registry $registry): bool
+    public function close(Registry $registry, array &$specializedAsts): bool
     {
         $countBefore = count($registry->instantiations());
 
@@ -87,7 +94,7 @@ final readonly class SpecializationCloser
 
         foreach ($interfaceSpecs as [$interfaceSpec, $methodNames]) {
             foreach ($concreteSpecs as $concreteSpec) {
-                $this->closeOne($interfaceSpec, $methodNames, $concreteSpec, $registry);
+                $this->closeOne($interfaceSpec, $methodNames, $concreteSpec, $registry, $specializedAsts);
             }
         }
 
@@ -101,12 +108,14 @@ final readonly class SpecializationCloser
 
     /**
      * @param list<string> $methodNames erasable method names declared on the interface
+     * @param array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts
      */
     private function closeOne(
         GenericInstantiation $interfaceSpec,
         array $methodNames,
         GenericInstantiation $concreteSpec,
         Registry $registry,
+        array &$specializedAsts,
     ): void {
         $interfaceFqn = $interfaceSpec->templateFqn;
         $concreteFqn = $concreteSpec->templateFqn;
@@ -152,72 +161,194 @@ final readonly class SpecializationCloser
         }
 
         foreach ($methodNames as $methodName) {
-            $this->scheduleImplementer($interfaceSpec, $concreteFqn, $methodName, $registry);
+            $this->scheduleImplementer($interfaceSpec, $concreteSpec, $methodName, $registry, $specializedAsts);
         }
     }
 
     /**
-     * Schedule the class that declares `$methodName`'s body, specialized at the interface spec's
-     * arguments, so the concrete subtype inherits a concrete member through the covariant chain.
+     * Supply `$methodName`'s erased member for the upcast. Primary path (WI-09): when the body's
+     * declaring class is parent-less and threads its parameters through to this interface unchanged,
+     * schedule it at the supertype args and let the variance edge inherit it. Otherwise — the declaring
+     * class has a source parent (so the covariant edge can't be emitted under single inheritance), or it
+     * doesn't thread to this interface (it implements only a parent interface, or reorders its params) —
+     * emit the member directly onto the upcast-source class instead. Only a body that can't be found on
+     * any `Class_` in the ancestry (trait-supplied / interface-only) hard-fails.
+     *
+     * @param array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts
      */
     private function scheduleImplementer(
         GenericInstantiation $interfaceSpec,
-        string $concreteFqn,
+        GenericInstantiation $concreteSpec,
         string $methodName,
         Registry $registry,
+        array &$specializedAsts,
     ): void {
-        $declaring = $this->declaringClassWithBody($concreteFqn, $methodName, $registry);
+        $declaring = $this->declaringClassWithBody($concreteSpec->templateFqn, $methodName, $registry);
         if ($declaring === null) {
             throw new RuntimeException($this->unschedulableMessage(
                 $interfaceSpec,
                 $methodName,
                 'its implementation is not declared on a class in the hierarchy (a trait-supplied or '
-                . 'interface-only body cannot be inherited through the covariant edge)',
+                . 'interface-only body cannot be inherited through the covariant edge, nor emitted directly)',
             ));
         }
 
-        $declaringDef = $registry->definition($declaring);
-        // @infection-ignore-all -- `?->` is defensive: declaringClassWithBody() returned $declaring
-        // precisely because registry->definition($declaring) resolved to a class definition carrying
-        // the method, so it is never null here.
-        $declaringAst = $declaringDef?->templateAst;
-        // If the declaring class itself has a source parent, the covariant edge that would carry the
-        // member (`<declaring><sub> extends <declaring><super>`) cannot be emitted (PHP single
-        // inheritance — the source parent must win), so the member would not be inherited. Fail loudly.
-        if ($declaringAst instanceof Class_ && $declaringAst->extends !== null) {
-            throw new RuntimeException($this->unschedulableMessage(
-                $interfaceSpec,
-                $methodName,
-                sprintf(
-                    'its declaring class "%s" already extends another class, so the covariant edge that '
-                    . 'would inherit the member cannot be emitted (PHP allows one parent)',
-                    $declaring,
-                ),
-            ));
-        }
-
-        // Schedule the declaring class at the interface spec's arguments. This is valid only when the
-        // declaring class threads its parameters through to the interface identically — verify it.
-        // Schedule the declaring class at the interface spec's args only when it passes its parameters
-        // through to the interface UNCHANGED. A reordered/wrapped `implements` clause (the implementing
-        // spec can't be derived without inverting the mapping) or an unreachable target hard-fails — the
-        // closer never schedules a non-implementing specialization. (`$threaded === null` is the
-        // unreachable/ambiguous case; `!argsEqual` is the reorder/wrap case, covered by a reject test.)
         $supertypeArgs = $interfaceSpec->concreteTypes;
+        $declaringDef = $registry->definition($declaring);
+        // @infection-ignore-all -- `?->` is defensive: declaringClassWithBody() returned $declaring via a
+        // resolved class definition, so registry->definition($declaring) is non-null here.
+        $declaringAst = $declaringDef?->templateAst;
+        $parentLess = $declaringAst instanceof Class_ && $declaringAst->extends === null;
         $threaded = $this->hierarchy->resolveInheritedArgs($declaring, $supertypeArgs, $interfaceSpec->templateFqn);
-        if ($threaded === null || !$this->argsEqual($threaded, $supertypeArgs)) {
+        $threadsIdentically = $threaded !== null && $this->argsEqual($threaded, $supertypeArgs);
+
+        if ($parentLess && $threadsIdentically) {
+            // Inheritance can carry it: schedule the declaring class at the supertype args; Phase 2.5
+            // emits `<declaring><sub> extends <declaring><super>` and the member is inherited.
+            $registry->recordInstantiation($declaring, $supertypeArgs);
+            return;
+        }
+
+        $this->emitDirectly($interfaceSpec, $concreteSpec, $declaring, $methodName, $registry, $specializedAsts);
+    }
+
+    /**
+     * Emit the erased member directly onto the upcast-source class's specialized AST. The member's NAME
+     * and parameter come from the interface's declaration at the supertype args (so it byte-matches the
+     * abstract member `<interface><super>` exposes); the BODY comes from the declaring class, specialized
+     * with a SPLIT substitution — the declaring class's own parameters take the upcast-source's concretes
+     * (so the body reads the inherited backing state), while the bounded method parameter widens to the
+     * supertype arg. Sound because `sub <: super`. Self-contained (no covariant edge).
+     *
+     * @param array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts
+     */
+    private function emitDirectly(
+        GenericInstantiation $interfaceSpec,
+        GenericInstantiation $concreteSpec,
+        string $declaringFqn,
+        string $methodName,
+        Registry $registry,
+        array &$specializedAsts,
+    ): void {
+        $interfaceDef = $registry->definition($interfaceSpec->templateFqn);
+        $declaringDef = $registry->definition($declaringFqn);
+        // @infection-ignore-all -- defensive: both definitions resolved upstream (the interface spec
+        // entered $interfaceSpecs with a definition; declaringClassWithBody returned a defined class).
+        if ($interfaceDef === null || $declaringDef === null) {
+            return;
+        }
+
+        // The supertype value the method's bound takes — from the INTERFACE's own declaration, so the
+        // mangled name matches the abstract member `<interface><super>` declares.
+        $interfaceMethod = self::methodNamed($interfaceDef->templateAst, $methodName);
+        // @infection-ignore-all -- defensive `?->`: $interfaceMethod always resolves here (see below).
+        $interfaceParams = $interfaceMethod?->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        // @infection-ignore-all -- defensive: the method name came from this interface's
+        // erasableMethodNames(), so $interfaceMethod and its method-generic params always resolve here;
+        // the `?->` and this null / non-array guard never fire.
+        if ($interfaceMethod === null || !is_array($interfaceParams)) {
+            return;
+        }
+        /** @var list<TypeParam> $interfaceParams */
+        $boundReferent = self::boundReferentName($interfaceParams);
+        // @infection-ignore-all FalseValue -- `false` vs `true` is equivalent: either non-int $boundIndex
+        // routes a null bound-referent to the same hard-fail (`!is_int(...)` below).
+        $boundIndex = $boundReferent === null
+            ? false
+            : array_search($boundReferent, $interfaceDef->typeParamNames(), true);
+        if (!is_int($boundIndex) || !isset($interfaceSpec->concreteTypes[$boundIndex])) {
+            // The parameters aren't uniformly bounded by ONE leaf interface parameter (a rare shape like
+            // `<U : E, V : F>`). Direct emission can't derive the single mangled member — fail loudly
+            // rather than emit nothing and leave the interface's abstract member unimplemented.
             throw new RuntimeException($this->unschedulableMessage(
                 $interfaceSpec,
                 $methodName,
-                sprintf(
-                    'its declaring class "%s" does not pass its type parameters through to the interface '
-                    . 'unchanged, so the implementing specialization cannot be derived',
-                    $declaring,
-                ),
+                'its parameters are not uniformly bounded by one enclosing type parameter, so the '
+                . 'member cannot be emitted directly',
             ));
         }
+        $superValue = $interfaceSpec->concreteTypes[$boundIndex];
 
-        $registry->recordInstantiation($declaring, $supertypeArgs);
+        $mangled = Registry::mangledMethodName(
+            $methodName,
+            EnclosingBoundErasure::mangleArgs($interfaceParams, [$boundReferent => $superValue]),
+            $this->hashLength,
+        );
+
+        // Idempotency: never append a member the upcast-source spec already carries (its own erased
+        // member, or one already emitted) — a PHP redeclaration is a load fatal.
+        $upcastAst = $specializedAsts[$concreteSpec->generatedFqn] ?? null;
+        if (!$upcastAst instanceof Class_ || self::methodNamed($upcastAst, $mangled) !== null) {
+            return;
+        }
+
+        // The body, from the declaring class, with the split substitution.
+        $declaringMethod = self::methodNamed($declaringDef->templateAst, $methodName);
+        // @infection-ignore-all -- defensive `?->`: $declaringMethod always resolves here (see below).
+        $declaringParams = $declaringMethod?->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        // @infection-ignore-all -- defensive: declaringClassWithBody found an erasable, bodied method of
+        // this name on this class, so it resolves here with method-generic params; the `?->` and this
+        // null / non-array guard never fire.
+        if ($declaringMethod === null || !is_array($declaringParams)) {
+            return;
+        }
+        /** @var list<TypeParam> $declaringParams */
+        $declaringConcrete = $this->hierarchy->resolveInheritedArgs(
+            $concreteSpec->templateFqn,
+            $concreteSpec->concreteTypes,
+            $declaringFqn,
+        );
+        if ($declaringConcrete === null) {
+            throw new RuntimeException($this->unschedulableMessage(
+                $interfaceSpec,
+                $methodName,
+                sprintf('its body class "%s" can\'t be grounded against the upcast source', $declaringFqn),
+            ));
+        }
+        $subst = array_combine($declaringDef->typeParamNames(), $declaringConcrete);
+        foreach ($declaringParams as $param) {
+            $subst[$param->name] = $superValue; // the bounded method param widens to the supertype arg
+        }
+
+        $member = $this->specializer->specializeMethod($declaringMethod, $subst, $mangled);
+        $upcastAst->stmts[] = $member;
+        // No re-collection of the body is needed: it substitutes the class parameter to the
+        // upcast-source's OWN concrete — the same value as the mandatory inherited erased member the
+        // upcast-source already carries at that arg — so any generic instantiation in the body has
+        // already been discovered and specialized through that member.
+    }
+
+    /** The first method named `$name` on a ClassLike, or null. */
+    private static function methodNamed(\PhpParser\Node\Stmt\ClassLike $ast, string $name): ?ClassMethod
+    {
+        foreach ($ast->getMethods() as $method) {
+            if ($method->name->toString() === $name) {
+                return $method;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The single enclosing-class parameter all the method's params are bounded by (the erasable shape),
+     * or null if the params aren't uniformly bounded by one leaf.
+     *
+     * @param list<TypeParam> $params
+     */
+    private static function boundReferentName(array $params): ?string
+    {
+        $referent = null;
+        foreach ($params as $param) {
+            if (!$param->bound instanceof BoundLeaf) {
+                return null;
+            }
+            $name = $param->bound->type->name;
+            if ($referent !== null && $referent !== $name) {
+                return null;
+            }
+            $referent = $name;
+        }
+        return $referent;
     }
 
     /**

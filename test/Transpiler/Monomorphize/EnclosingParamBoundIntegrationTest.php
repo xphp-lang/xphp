@@ -842,6 +842,45 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testSubInterfaceMethodDirectEmittedUnderUpcastRunsAtRuntime(): void
+    {
+        // The headline case: `indexOf` on the sub-interface `OrderedCollection<+E>`, body on
+        // `ListColl extends AbstractColl` (a class with a parent). Upcast `ListColl<Book>` →
+        // `OrderedCollection<Product>` can't inherit `indexOf_<Product>` through a covariant edge, so it's
+        // emitted directly onto `ListColl<Book>` (reading its inherited Book-typed $items). `contains`
+        // still resolves via inheritance. Executed end to end.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_direct_emit/source',
+            'subiface-direct',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_direct_emit/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testDirectEmittedBodyResolvesTheClassParamToTheUpcastSourceAtRuntime(): void
+    {
+        // The split-substitution gate: a directly-emitted body that references the class `E` structurally
+        // (`$value instanceof E`) must resolve `E` to the upcast-source's concrete (Book), not the
+        // supertype (Product). The call returns false ($value instanceof Book) — true would mean E wrongly
+        // became Product. Executed.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_structural_class_param/source',
+            'subiface-structural',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_structural_class_param/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testMultiParamCovariantInterfaceUpcastResolvesAtRuntime(): void
     {
         // Multi-param: `HashMap<Id, Book>` (K invariant, +V covariant) upcast to `MMap<Id, Product>`.
@@ -1071,21 +1110,186 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         self::assertSame([['App\\Book']], $abstractColl, 'no upcast → only AbstractColl<Book>, nothing extra scheduled');
     }
 
-    public function testDeclaringClassWithASourceParentMakesTheUpcastUnschedulable(): void
+    public function testDirectEmittedMemberHasSupertypeParamAndUpcastSourceBody(): void
     {
-        // The implementation lives on a class that itself extends another class, so the covariant edge
-        // that would inherit it can't be emitted (single inheritance). The closer must hard-fail rather
-        // than emit class-load-fataling code.
+        // In-process (mutation-visible) proof of the split substitution: the directly-emitted member's
+        // PARAMETER widens to the supertype arg (Product), while the body's class parameter E resolves to
+        // the upcast-source's concrete (Book). A body `$value instanceof E` becomes `instanceof \App\Book`
+        // even though the parameter is `\App\Product`. The wrong (conflated) substitution would emit
+        // `instanceof \App\Product`, and a broken arg-name mapping would leave `E` unsubstituted.
+        $php = $this->generatedSourceFor([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function firstKind<U : E>(U $value): bool; }
+                PHP,
+            'AbstractColl.xphp' => self::ABSTRACT_COLL,
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                    public function firstKind<U : E>(U $value): bool { return $value instanceof E; }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(OrderedCollection<Product> $c): bool { return $c->firstKind::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ], 'ListColl');
+
+        self::assertStringContainsString('\\App\\Product $value', $php, 'direct member parameter widens to the supertype arg');
+        self::assertStringContainsString('instanceof \\App\\Book', $php, 'body class parameter E resolves to the upcast-source concrete (Book)');
+        self::assertStringNotContainsString('instanceof \\App\\Product', $php, 'the split must NOT resolve the body E to the supertype (Product)');
+        self::assertStringNotContainsString('instanceof E;', $php, 'the body class parameter E must be substituted (not left bare — the arg-name mapping)');
+        // `contains` (parent-less base, threads identically) is supplied by INHERITANCE — its member must
+        // NOT also be emitted directly onto ListColl. (The inheritance path returns before direct emission.)
+        self::assertStringNotContainsString('contains_', $php, 'an inheritance-supplied member must not also be direct-emitted onto the upcast source');
+    }
+
+    public function testMultipleDistinctBoundsHardFailsDirectEmission(): void
+    {
+        // A method whose parameters are bounded by DIFFERENT enclosing parameters (`<U : E, V : F>`)
+        // isn't the uniformly-bounded shape direct emission can derive a single member for. Rather than
+        // silently emit nothing (leaving the abstract member unimplemented → load fatal), it hard-fails.
         $this->expectException(RuntimeException::class);
-        // Assert the code, the erased method name, the interface, and the remedy all appear — pins the
-        // diagnostic's content, not just that it threw.
+        // Pin the whole diagnostic — code, the erased method, the interface, the reason, and the remedy —
+        // so each operand of the shared message is asserted.
         $this->expectExceptionMessageMatches(
-            '/xphp\.unschedulable_covariant_upcast.+erased method "contains".+App\\\\Collection.+'
-            . 'already extends another class.+PHP allows one parent.+'
-            . 'Provide a concrete implementation.+covariant base class/s',
+            '/xphp\.unschedulable_covariant_upcast.+erased method "pick".+App\\\\BiColl.+'
+            . 'not uniformly bounded by one enclosing type parameter, so the member cannot be emitted '
+            . 'directly.+Provide a concrete implementation.+move the method body onto the covariant '
+            . 'base class/s',
         );
 
         $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Tag.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Tag {}\n",
+            'BiColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface BiColl<+E, F> { public function pick<U : E, V : F>(U $a, V $b): bool; }
+                PHP,
+            'Mid.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nabstract class Mid<+E, F> {}\n",
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E, F> extends Mid<E, F> implements BiColl<E, F> {
+                    public function pick<U : E, V : F>(U $a, V $b): bool { return true; }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(BiColl<Product, Tag> $c): bool { return $c->pick::<Product, Tag>(new Product(), new Tag()); }
+                $l = new ListColl::<Book, Tag>();
+                $r = probe($l);
+                PHP,
+        ]);
+    }
+
+    public function testTwoSameBoundParamsDirectEmitUnderUpcast(): void
+    {
+        // A method with two parameters both bounded by the SAME enclosing parameter (`<U : E, V : E>`)
+        // is uniformly bounded, so direct emission derives one member mangled on [E, E] at the supertype
+        // args. Compiles (no hard-fail), emitted directly (no scheduling).
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function eitherIn<U : E, V : E>(U $a, V $b): bool; }
+                PHP,
+            'AbstractColl.xphp' => self::ABSTRACT_COLL,
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                    public function eitherIn<U : E, V : E>(U $a, V $b): bool {
+                        return \in_array($a, $this->items, true) || \in_array($b, $this->items, true);
+                    }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(OrderedCollection<Product> $c): bool { return $c->eitherIn::<Product, Product>(new Product(), new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+
+        self::assertSame([['App\\Book']], self::specializationsOf($result, 'App\\ListColl'), 'two same-bound params emit directly, no scheduling');
+    }
+
+    public function testBodyOnAParentInterfaceBaseEmitsDirectlyForTheSubInterface(): void
+    {
+        // Case 2: the body sits on a parent-less base that implements only the PARENT interface
+        // (`Collection`), so it can't thread to the sub-interface (`OrderedCollection`) for scheduling —
+        // direct emission onto the upcast source supplies it instead.
+        $result = $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function indexOf<U : E>(U $value): int; }
+                PHP,
+            'AbstractColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                abstract class AbstractColl<+E> implements Collection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<U : E>(U $value): bool { return \in_array($value, $this->items, true); }
+                    public function indexOf<U : E>(U $value): int { return \count($this->items); }
+                }
+                PHP,
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {}\n",
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(OrderedCollection<Product> $c): int { return $c->indexOf::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ]);
+
+        // contains is scheduled via inheritance (AbstractColl<Product>); indexOf is emitted directly onto
+        // ListColl<Book> — so AbstractColl<Product> IS scheduled (for contains) but no ListColl<Product> is.
+        self::assertSame([['App\\Book']], self::specializationsOf($result, 'App\\ListColl'), 'indexOf emitted directly, ListColl not scheduled');
+        self::assertContains(['App\\Product'], self::specializationsOf($result, 'App\\AbstractColl'), 'contains still scheduled via inheritance');
+    }
+
+    public function testDeclaringClassWithASourceParentEmitsTheMemberDirectly(): void
+    {
+        // The implementation lives on a class that itself extends another class, so the member can't be
+        // inherited through a covariant edge (single inheritance). Rather than hard-fail, the closer emits
+        // it DIRECTLY onto the upcast-source class — so no supertype spec is scheduled, and compile
+        // succeeds.
+        $result = $this->compileResult([
             'Product.xphp' => self::PRODUCT,
             'Book.xphp' => self::BOOK,
             'Collection.xphp' => self::COLLECTION_IFACE,
@@ -1098,7 +1302,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
-                    public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+                    public function contains<U : E>(U $value): bool { return \in_array($value, $this->items, true); }
                 }
                 PHP,
             'Use.xphp' => <<<'PHP'
@@ -1110,22 +1314,18 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 $r = probe($l);
                 PHP,
         ]);
+
+        // Direct emission, not scheduling: only ListColl<Book> exists — no ListColl<Product> / Mid<Product>.
+        self::assertSame([['App\\Book']], self::specializationsOf($result, 'App\\ListColl'), 'no supertype spec scheduled — emitted directly');
     }
 
-    public function testReorderedImplementsClauseMakesTheUpcastUnschedulable(): void
+    public function testReorderedImplementsClauseEmitsTheMemberDirectly(): void
     {
         // The declaring class implements the interface with its parameters REORDERED
-        // (`class Holder<+A, B> implements Pair<B, A>`), so the closer cannot derive the implementing
-        // specialization from the supertype's args (it would need to invert the mapping). It must
-        // hard-fail with the "does not pass its type parameters through" diagnostic, not schedule a
-        // wrong specialization.
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessageMatches(
-            '/xphp\.unschedulable_covariant_upcast.+does not pass its type parameters through to the '
-            . 'interface unchanged, so the implementing specialization cannot be derived/s',
-        );
-
-        $this->compileResult([
+        // (`class Holder<+A, B> implements Pair<B, A>`), so the implementing spec can't be derived by
+        // inversion for scheduling. Direct emission doesn't need to invert — it emits onto the
+        // upcast-source class with the supertype's bound value — so this now compiles (no scheduled spec).
+        $result = $this->compileResult([
             'Product.xphp' => self::PRODUCT,
             'Book.xphp' => self::BOOK,
             'Id.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Id {}\n",
@@ -1157,6 +1357,9 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 $r = probe($h);
                 PHP,
         ]);
+
+        // Emitted directly onto Holder<Book, Id> — no reordered supertype spec scheduled.
+        self::assertSame([['App\\Book', 'App\\Id']], self::specializationsOf($result, 'App\\Holder'), 'reorder emits directly, no scheduling');
     }
 
     public function testBareInstanceMethodGenericCallFailsCompile(): void
@@ -1519,6 +1722,46 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
 
         return $compiler->compile($sources, $src, $src . '/dist', $src . '/.xphp-cache');
+    }
+
+    /**
+     * Compile `$files` and return the generated specialized PHP for one template (every spec of it),
+     * concatenated. Lets a test assert the SHAPE the closer's direct emission produces (member name +
+     * parameter type + body) in-process, where mutation testing can attribute kills — the runtime
+     * fixtures execute the output but run in separate processes.
+     *
+     * @param array<string, string> $files
+     */
+    private function generatedSourceFor(array $files, string $templateSegment): string
+    {
+        $src = $this->work . '/' . uniqid('src', true);
+        mkdir($src, 0o755, true);
+        foreach ($files as $name => $contents) {
+            file_put_contents($src . '/' . $name, $contents);
+        }
+        $phpParser = (new ParserFactory())->createForHostVersion();
+        $printer = new StandardPrinter();
+        $writer = new NativeFileWriter();
+        $compiler = new Compiler(
+            new NativeFileReader(),
+            $writer,
+            new XphpSourceParser($phpParser),
+            new Specializer(),
+            new SpecializedClassGenerator($printer, $writer),
+            $printer,
+        );
+        $sources = (new NativeFileFinder())->find($src)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $src, $src . '/dist', $src . '/.xphp-cache');
+
+        $dir = $src . '/.xphp-cache/Generated/App/' . $templateSegment;
+        $out = '';
+        foreach (is_dir($dir) ? (scandir($dir) ?: []) : [] as $entry) {
+            if (str_ends_with($entry, '.php')) {
+                $out .= (string) file_get_contents($dir . '/' . $entry);
+            }
+        }
+        return $out;
     }
 
     /**
