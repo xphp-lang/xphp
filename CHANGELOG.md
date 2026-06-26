@@ -119,6 +119,17 @@ _In progress on this branch — content still accumulating; date set at tag time
   when positively provable, so the covariance now holds at runtime (`instanceof`, type
   hints) and not only at `check`. Previously such an upcast passed `check` but fatal'd at
   load. See [variance](docs/syntax/variance.md).
+- **A contravariant generic may be consumed by a covariant class.** A method parameter typed
+  by a contravariant generic of the class's covariant parameter — `class Box<+E> { pick(
+  Comparator<E> $c): ?E }` where `Comparator<-T>` — is now accepted: `E` sits in a
+  contravariant slot inside a contravariant parameter position, which composes to a covariant
+  position a `+E` may occupy (sound under upcast — a `Comparator<Product>` compares the `Book`
+  elements of a `Box<Book>` viewed as `Box<Product>`). Variance validation now routes every
+  type-constructor-nested type-parameter through the composing check (which already knew the
+  inner slot's variance) instead of judging it by the bare outer position, so this sound,
+  `mixed`-free `sortedWith`/`minWith`/`pick` shape compiles instead of being wrongly rejected.
+  A bare `E` in a parameter position is still rejected — only the composed position is
+  covariant. See [variance](docs/syntax/variance.md).
 
 ### Changed
 

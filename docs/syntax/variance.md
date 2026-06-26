@@ -230,6 +230,28 @@ invariant, so the outer `+T` is rejected. The validator walks every
 generic class's method signatures, bounds, and defaults to apply this
 composition.
 
+Composition can also *permit* a position that looks wrong at a glance.
+A consuming method that takes a **contravariant** generic is sound on a
+covariant class:
+
+```php
+interface Comparator<-T> { public function compare(T $a, T $b): int; }
+
+class Box<+E> {
+    public function pick(Comparator<E> $c): ?E { /* … */ }   // ALLOWED
+}
+```
+
+`E` is in a contravariant slot (`Comparator<-T>`) inside a contravariant
+parameter position — contra ∘ contra = **covariant**, which a covariant
+`+E` may occupy. (Under an upcast, a `Box<Book>` viewed as `Box<Product>`
+takes a `Comparator<Product>`, which by contravariance compares the `Book`
+elements — sound.) This is the element-consuming counterpart to the
+covariant immutable constructor: a `mixed`-free, fluent
+`sortedWith`/`minWith`/`pick` on a covariant collection. A **direct**
+covariant `E` in a parameter (`pick(E $x)`) stays rejected — only the
+*composed* position is covariant here, not the bare one.
+
 ## Caveats
 
 - > ⚠️ **Not allowed on closures or arrows** — anonymous templates
