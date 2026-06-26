@@ -174,11 +174,7 @@ final readonly class Compiler
 
             $depth++;
             if ($depth > self::MAX_SPECIALIZATION_DEPTH) {
-                throw new RuntimeException(sprintf(
-                    'Nested generic specialization exceeded depth %d. Latest registry: %s',
-                    self::MAX_SPECIALIZATION_DEPTH,
-                    implode(', ', array_keys($registry->instantiations())),
-                ));
+                throw new RuntimeException(self::unconvergedSpecializationMessage($registry));
             }
         }
 
@@ -361,6 +357,57 @@ final readonly class Compiler
             return substr($filepath, strlen($base));
         }
         return basename($filepath);
+    }
+
+    /**
+     * Build a localized diagnostic for a specialization set that didn't converge: identify the type
+     * family whose arguments nest the deepest (the tip of the growing tower) and name it, instead of
+     * dumping the whole registry. The common cause is a method whose return type re-wraps the receiver's
+     * own type family in a growing form (`groupBy(): Map<L, List<E>>` where Map's views re-expose List).
+     */
+    private static function unconvergedSpecializationMessage(Registry $registry): string
+    {
+        $deepest = null;
+        $deepestDepth = -1;
+        foreach ($registry->instantiations() as $instantiation) {
+            $depth = 0;
+            foreach ($instantiation->concreteTypes as $arg) {
+                $depth = max($depth, self::typeRefDepth($arg));
+            }
+            if ($depth > $deepestDepth) {
+                $deepestDepth = $depth;
+                $deepest = $instantiation;
+            }
+        }
+
+        $family = $deepest === null ? '(unknown)' : $deepest->templateFqn;
+        $example = $deepest === null
+            ? '(none)'
+            : $deepest->templateFqn . '<' . implode(', ', array_map(
+                static fn (TypeRef $r): string => $r->canonical(),
+                $deepest->concreteTypes,
+            )) . '>';
+
+        return sprintf(
+            'Generic specialization did not converge (exceeded depth %d): the type family rooted at "%s" '
+            . 'grows without bound — e.g. "%s". This happens when a member\'s type re-wraps the receiver\'s '
+            . 'own type family in a growing form (for example `groupBy(): Map<L, List<E>>`, where Map\'s '
+            . 'views re-expose List). Break the cycle: give the member a non-self-reintroducing type, or '
+            . 'split the derivation so the growing type isn\'t reached through an unbounded chain.',
+            self::MAX_SPECIALIZATION_DEPTH,
+            $family,
+            $example,
+        );
+    }
+
+    /** The maximum nesting depth of a TypeRef's generic-argument tree (a non-generic ref is depth 0). */
+    private static function typeRefDepth(TypeRef $ref): int
+    {
+        $max = 0;
+        foreach ($ref->args as $arg) {
+            $max = max($max, self::typeRefDepth($arg));
+        }
+        return $ref->args === [] ? 0 : 1 + $max;
     }
 }
 

@@ -52,7 +52,12 @@ final class CompilerDepthCapTest extends TestCase
             ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessageMatches('/Nested generic specialization exceeded depth \d+\./');
+        // The localized diagnostic names the growing type family (here the recursive template) instead
+        // of dumping the whole registry.
+        $this->expectExceptionMessageMatches(
+            '/Generic specialization did not converge \(exceeded depth \d+\): the type family rooted at '
+            . '"App\\\\[^"]*Recursive"/',
+        );
         $compiler->compile(
             $sources,
             $sourceDir,
