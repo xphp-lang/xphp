@@ -70,6 +70,35 @@ including reflection and `instanceof`.
 
 For contravariant `-T`, the edge flips: `Consumer<Fruit> extends Consumer<Banana>`.
 
+### Nested type-arguments (a generic as a type-argument)
+
+A covariant slot can hold another generic as its argument, and the edge
+composes through it — including when the inner argument is a generic of a
+**different but related template**. A covariant `Tuple<+A, +B>` holding a
+covariant container relates by *its* element relationship:
+
+```php
+interface Collection<+E> { /* … */ }
+class ImmutableList<+E> implements Collection<E> { /* … */ }
+interface Tuple<+A, +B> { /* … */ }
+class Couple<+A, +B> implements Tuple<A, B> { /* … */ }
+
+// Book <: Product, ImmutableList implements Collection, all covariant ⇒
+//   Tuple<ImmutableList<Book>, Tag> ⊑ Tuple<Collection<Product>, Tag>
+```
+
+The compiler proves the argument relationship `ImmutableList<Book> ⊑
+Collection<Product>` by threading the subtype's element up its
+`implements`/`extends` chain to the supertype's template
+(`ImmutableList<Book>` → `Collection<Book>`) and comparing under the inner
+template's variance (`Book ⊑ Product` under `Collection`'s covariant `E`),
+then emits the `Tuple` edge. So a `Couple<ImmutableList<Book>, Tag>` is
+usable where a `Tuple<Collection<Product>, Tag>` is required, with the
+covariance honoured at runtime (`instanceof`, type hints), not only at
+`check`. The edge is emitted only when the relationship is *positively*
+provable — an unrelated or unprovable inner pair stays conservative (no
+edge), never a bogus one that would PHP-fatal at autoload.
+
 ### Unprovable variance edges
 
 An `extends` edge only emits when the compiler can **prove** the element relationship

@@ -108,6 +108,17 @@ _In progress on this branch — content still accumulating; date set at tag time
   by-reference slot is both read and written through the caller's binding, so it is
   invariant — the same rule already applied to a mutable property. See
   [variance](docs/syntax/variance.md).
+- **Variance composes through a nested generic type-argument.** A covariant slot whose
+  argument is itself a generic of a *different but related* template now emits its
+  `extends`/`implements` edge — so a covariant `Tuple<+A, +B>` holding a covariant
+  container relates by that container's element type (`Tuple<ImmutableList<Book>, Tag>`
+  is usable where a `Tuple<Collection<Product>, Tag>` is required, because
+  `ImmutableList<Book> ⊑ Collection<Product>`). The argument relationship is proven by
+  threading the subtype's element up its `implements`/`extends` chain to the supertype's
+  template and comparing under the inner template's variance; the edge is emitted only
+  when positively provable, so the covariance now holds at runtime (`instanceof`, type
+  hints) and not only at `check`. Previously such an upcast passed `check` but fatal'd at
+  load. See [variance](docs/syntax/variance.md).
 
 ### Changed
 
