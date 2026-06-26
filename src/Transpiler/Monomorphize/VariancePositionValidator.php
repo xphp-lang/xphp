@@ -203,14 +203,15 @@ final class VariancePositionValidator
 
     private function checkTypeRef(TypeRef $ref, string $hostParam, string $hostPosition, int $line): void
     {
+        // Direct occurrence only: a bare type-param as a bound/default (`U : T`, `U = T`). A type-param
+        // NESTED inside a type constructor in a bound/default (`U : Box<T>`) is the composing pass's job
+        // (its effective variance depends on the inner slot) — descending here with the uncomposed
+        // position would mis-judge it and double-report against InnerVarianceValidator.
         if ($ref->isTypeParam && isset($this->varianceByName[$ref->name])) {
             $this->record(
                 self::violationMessage($ref->name, $this->varianceByName[$ref->name], $hostPosition, $hostParam),
                 $line,
             );
-        }
-        foreach ($ref->args as $inner) {
-            $this->checkTypeRef($inner, $hostParam, $hostPosition, $line);
         }
     }
 
@@ -383,17 +384,12 @@ final class VariancePositionValidator
                     }
                 }
             }
-            // Generic args attached via xphp:genericArgs are TypeRef trees;
-            // recurse into them so `Box<T>` in a parameter position is
-            // checked too.
-            $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
-            if (is_array($args)) {
-                foreach ($args as $arg) {
-                    if ($arg instanceof TypeRef) {
-                        $this->checkInnerTypeRef($arg, $allowed, $position, $type->getStartLine());
-                    }
-                }
-            }
+            // A type-param NESTED inside a type constructor (`Box<T>`, `Comparator<E>`) is NOT judged
+            // here: its effective variance is the composition of this position with the referenced
+            // type's slot variance, which only InnerVarianceValidator resolves. Descending with this
+            // (uncomposed) position would wrongly reject a sound `Comparator<E>` on a covariant `+E`
+            // (contra ∘ contra = covariant) and wrongly pass an unsound one. This validator owns only
+            // DIRECT occurrences; the composing pass owns the nested ones.
             return;
         }
         if ($type instanceof NullableType) {
@@ -408,22 +404,6 @@ final class VariancePositionValidator
         }
         if ($type instanceof ComplexType) {
             return;
-        }
-    }
-
-    /**
-     * @param list<Variance> $allowed
-     */
-    private function checkInnerTypeRef(TypeRef $ref, array $allowed, string $position, int $line): void
-    {
-        if ($ref->isTypeParam && isset($this->varianceByName[$ref->name])) {
-            $variance = $this->varianceByName[$ref->name];
-            if (!in_array($variance, $allowed, true)) {
-                $this->record(self::violationMessage($ref->name, $variance, $position, null), $line);
-            }
-        }
-        foreach ($ref->args as $inner) {
-            $this->checkInnerTypeRef($inner, $allowed, $position, $line);
         }
     }
 

@@ -32,11 +32,12 @@ use XPHP\Diagnostics\DiagnosticCollector;
  */
 final class RegistryInnerVarianceTest extends TestCase
 {
-    public function testPositionFlaggedDefinitionIsSkippedButLaterDefinitionsStillRun(): void
+    public function testDirectAndNestedViolationsAreEachReportedExactlyOnce(): void
     {
-        // P (direct +T-in-param) is flagged by the position check and recorded FIRST;
-        // Q (composition violation) is recorded AFTER. Inner-variance must skip P (already
-        // reported) yet still report Q — i.e. it must `continue` past P, not `break`.
+        // P (direct +T-in-param) is owned by the position pass; Q (a nested composition violation) is
+        // owned by the composing inner pass. With disjoint responsibilities (no skip handoff), the two
+        // passes report exactly one diagnostic each — P's `variance_position` and Q's `inner_variance`,
+        // with no double-report of P by the inner pass.
         $collector = new DiagnosticCollector();
         $registry = $this->registryWith([
             $this->makeDefinition(
@@ -55,7 +56,7 @@ final class RegistryInnerVarianceTest extends TestCase
         ], $collector);
 
         $flagged = $registry->validateVariancePositions();
-        $registry->validateInnerVariance($flagged);
+        $registry->validateInnerVariance();
 
         self::assertSame(['App\\P'], $flagged);
         self::assertCount(2, $collector->all());
@@ -64,10 +65,11 @@ final class RegistryInnerVarianceTest extends TestCase
         self::assertContains(InnerVarianceValidator::CODE_INNER_VARIANCE, $codes);
     }
 
-    public function testAllPositionFlaggedDefinitionsAreSkippedByInnerVariance(): void
+    public function testDirectViolationsAreNotDoubleReportedByTheComposingPass(): void
     {
-        // Two direct +T-in-param violations: both flagged by the position check, so the
-        // inner-variance pass must skip BOTH (the full flagged list, not a truncation).
+        // Two direct +T-in-param violations: both owned by the position pass. The composing inner pass
+        // reports only NESTED occurrences, so it adds nothing here — exactly two diagnostics total, both
+        // `variance_position`, with no double-report.
         $collector = new DiagnosticCollector();
         $registry = $this->registryWith([
             $this->makeDefinition(
@@ -85,7 +87,7 @@ final class RegistryInnerVarianceTest extends TestCase
         ], $collector);
 
         $flagged = $registry->validateVariancePositions();
-        $registry->validateInnerVariance($flagged);
+        $registry->validateInnerVariance();
 
         self::assertSame(['App\\P', 'App\\R'], $flagged);
         self::assertCount(2, $collector->all());
@@ -999,12 +1001,12 @@ final class RegistryInnerVarianceTest extends TestCase
         $registry->validateInnerVariance();
     }
 
-    public function testPropertyInvariantPositionRejectsCovariantOuter(): void
+    public function testDirectPropertyCovariantOuterIsOwnedByThePositionPass(): void
     {
-        // class P<+T> { public T $item; }
-        // Property slot is Invariant for outer T directly (not even via inner).
-        // The parse-time validator catches this; verify the new pass doesn't
-        // double-throw (its error path uses a different framing).
+        // class P<+T> { public T $item; } — a DIRECT covariant type-param in an invariant
+        // (visible-property) position. This is a direct occurrence, owned by the position pass; the
+        // composing inner pass reports only type-constructor-NESTED occurrences, so it stays SILENT here
+        // (no double-report). The position pass is the one that rejects it.
         $registry = $this->registryWith([
             $this->makeDefinition(
                 'App\\P',
@@ -1014,9 +1016,11 @@ final class RegistryInnerVarianceTest extends TestCase
             ),
         ]);
 
+        $registry->validateInnerVariance(); // silent on a direct occurrence — must not throw
+
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('invariant-only position');
-        $registry->validateInnerVariance();
+        $this->expectExceptionMessage('mutable property');
+        $registry->validateVariancePositions();
     }
 
     // ----- helpers ---------------------------------------------------------

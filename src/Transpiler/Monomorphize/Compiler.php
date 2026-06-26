@@ -107,7 +107,7 @@ final readonly class Compiler
         // collect across files; compile-mode still throws on the first violation.
         // Runs BEFORE the defaults-vs-bounds check so that, when a class has both,
         // the variance error surfaces first (the order it surfaced at parse time).
-        $variancePositionFlagged = $registry->validateVariancePositions();
+        $registry->validateVariancePositions();
         // Undeclared type names in member signatures (a stray/typo'd type param)
         // fail before defaults/instantiation so a non-existent reference never
         // reaches emission as broken PHP.
@@ -118,7 +118,7 @@ final readonly class Compiler
         // couldn't catch (e.g. `class P<+T> { f(): Container<T> }` where
         // Container's slot is invariant) fail here BEFORE instantiations
         // amplify the error.
-        $registry->validateInnerVariance($variancePositionFlagged);
+        $registry->validateInnerVariance();
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }
@@ -316,11 +316,11 @@ final readonly class Compiler
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectDefinitions($ast, $filepath);
         }
-        $variancePositionFlagged = $registry->validateVariancePositions();
+        $registry->validateVariancePositions();
         $registry->validateUndeclaredTypeParameters();
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);
         $registry->validateDefaultsAgainstBounds();
-        $registry->validateInnerVariance($variancePositionFlagged);
+        $registry->validateInnerVariance();
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }

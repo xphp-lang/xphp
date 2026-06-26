@@ -479,15 +479,14 @@ final class Registry
      * {@see InnerVarianceValidator}). With this Registry's collector it gathers every violation
      * (each located at the offending member); without one (compile) it throws the first.
      *
-     * @param list<string> $skipTemplateFqns Definitions already flagged by the position check;
-     *   skipped here so the same `+T`/`-T` misuse isn't reported by both passes.
+     * Runs on every definition: this composing pass and {@see validateVariancePositions} own disjoint
+     * responsibilities — the position pass reports DIRECT occurrences of a variant type-param, this one
+     * the type-constructor-NESTED occurrences (composing the inner slot's variance) — so there is no
+     * double-reporting and no template to skip.
      */
-    public function validateInnerVariance(array $skipTemplateFqns = []): void
+    public function validateInnerVariance(): void
     {
-        foreach ($this->definitions as $templateFqn => $definition) {
-            if (in_array($templateFqn, $skipTemplateFqns, true)) {
-                continue;
-            }
+        foreach ($this->definitions as $definition) {
             InnerVarianceValidator::assertComposition(
                 $definition,
                 $this->definitions,

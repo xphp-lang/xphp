@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A covariant container with a `Comparator<E>` CONSUMING method — the sound shape where `E` sits in a
+// contravariant slot (Comparator<-T>) inside a contravariant parameter position, so
+// contra ∘ contra = covariant, which a covariant `+E` may occupy.
+class Box<+E>
+{
+    /** @var list<E> */
+    private array $items;
+
+    public function __construct(E ...$items)
+    {
+        $this->items = $items;
+    }
+
+    public function pick(Comparator<E> $c): ?E
+    {
+        $best = $this->items[0] ?? null;
+        foreach ($this->items as $item) {
+            if ($best !== null && $c->compare($item, $best) > 0) {
+                $best = $item;
+            }
+        }
+        return $best;
+    }
+}

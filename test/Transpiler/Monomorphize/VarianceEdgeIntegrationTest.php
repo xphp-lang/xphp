@@ -187,6 +187,27 @@ final class VarianceEdgeIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testComparatorParamOnCovariantClassCompilesAndRunsUnderUpcast(): void
+    {
+        // A covariant `Box<+E>` with a `pick(Comparator<E> $c): ?E` consuming method — the sound shape
+        // where `E` sits in a contravariant slot (Comparator<-T>) inside a contravariant parameter
+        // (contra ∘ contra = covariant). Previously rejected `xphp.variance_position` even though sound;
+        // the composing variance pass now accepts it. A `Box<Book>` is upcast to `Box<Product>` and
+        // `pick` is called with a `ById` (a Comparator<Product>, hence by contravariance a
+        // Comparator<Book>): it loads, runs, and returns the max Book — proving the acceptance is sound.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/comparator_param_covariant_upcast/source',
+            'comparator-param-covariant',
+        );
+        try {
+            $fixture->registerAutoload('App\\');
+            require __DIR__ . '/../../fixture/compile/comparator_param_covariant_upcast/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     public function testBoundedCovariantConstructorKeepsConcreteType(): void
     {
         // A bounded covariant constructor param keeps its REAL substituted type (the

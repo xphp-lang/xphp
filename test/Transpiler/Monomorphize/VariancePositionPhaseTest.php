@@ -40,10 +40,9 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public readonly T \$item;\n    public function get(): T { return \$this->item; }\n}\n",
             ['readonly property'],
         ];
-        yield 'covariant in bound' => [
-            "<?php\nnamespace App;\nclass Sortable<+T : Box<T>>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
-            ['bound'],
-        ];
+        // NOTE: a NESTED type-param in a bound (`+T : Box<T>`) is owned by the composing
+        // inner-variance pass, not this direct-position pass — see
+        // testNestedTypeParamIsRejectedByTheComposingPass.
         // A covariant param as the BARE leaf of a sibling class param's bound is a bound position
         // too, flagged consistently with the inner-arg `Box<T>` case above. (Distinct from the
         // supported method-level `contains<U : E>` shape, where U is a *method* type parameter.)
@@ -94,14 +93,8 @@ final class VariancePositionPhaseTest extends TestCase
             "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function pipe(): array\n    {\n        \$f = fn (): T => null;\n        return [];\n    }\n}\n",
             ['nested closure/arrow return'],
         ];
-        yield 'covariant in nested generic input' => [
-            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function set(Box<T> \$x): void {}\n}\n",
-            ['+T', 'method parameter'],
-        ];
-        yield 'contravariant in nested generic return' => [
-            "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function fetch(): Box<T> { throw new \\LogicException; }\n}\n",
-            ['-T', 'method return'],
-        ];
+        // NOTE: a NESTED type-param in a method parameter/return (`Box<T>`) is owned by the
+        // composing inner-variance pass — see testNestedTypeParamIsRejectedByTheComposingPass.
         yield 'interface method signature' => [
             "<?php\nnamespace App;\ninterface Producer<+T>\n{\n    public function feed(T \$x): void;\n}\n",
             ['+T'],
@@ -180,6 +173,106 @@ final class VariancePositionPhaseTest extends TestCase
                 self::assertStringContainsString($fragment, $e->getMessage());
             }
         }
+    }
+
+    /**
+     * A type-param NESTED inside a type constructor (`Box<T>` in a parameter, return, or bound) is
+     * judged by the COMPOSING inner-variance pass, not the direct-position pass: its effective variance
+     * is the composition of the outer position with the inner slot's variance (here Box's invariant
+     * slot ⇒ invariant ⇒ `+T`/`-T` rejected). The direct-position pass deliberately does NOT descend
+     * into type-constructor args, so these are reported by `validateInnerVariance` with the composing
+     * "via slot N of …" message — never double-reported by both passes.
+     *
+     * @param list<string> $fragments
+     */
+    #[DataProvider('nestedComposingRejections')]
+    public function testNestedTypeParamIsRejectedByTheComposingPass(string $source, array $fragments): void
+    {
+        $registry = $this->registryFor($source);
+        // The direct-position pass must stay SILENT on a purely-nested violation (no double-report).
+        $registry->validateVariancePositions();
+
+        try {
+            $registry->validateInnerVariance();
+            self::fail('expected an inner-variance composition violation');
+        } catch (RuntimeException $e) {
+            foreach ($fragments as $fragment) {
+                self::assertStringContainsString($fragment, $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * @return iterable<string, array{string, list<string>}>
+     */
+    public static function nestedComposingRejections(): iterable
+    {
+        yield 'covariant nested in method parameter' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public function set(Box<T> \$x): void {}\n}\n",
+            ['+T', 'invariant-only position', 'via slot 0 of'],
+        ];
+        yield 'contravariant nested in method return' => [
+            "<?php\nnamespace App;\nclass Consumer<-T>\n{\n    public function fetch(): Box<T> { throw new \\LogicException; }\n}\n",
+            ['-T', 'invariant-only position', 'via slot 0 of'],
+        ];
+        yield 'covariant nested in bound' => [
+            "<?php\nnamespace App;\nclass Sortable<+T : Box<T>>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
+            ['+T', 'invariant-only position', 'via slot 0 of'],
+        ];
+        // A NESTED type-param in a VISIBLE (non-promoted) declared property — `public Box<T> $item` on
+        // `+T`. The property's outer position is invariant; Box's invariant slot composes to invariant,
+        // so `+T` is rejected by the composing pass via the declared-property walk (a private property
+        // would be exempt — only visible ones are walked).
+        yield 'covariant nested in visible declared property' => [
+            "<?php\nnamespace App;\nclass Producer<+T>\n{\n    public Box<T> \$item;\n}\n",
+            ['+T', 'invariant-only position', 'via slot 0 of'],
+        ];
+        // Composition through a NON-invariant inner slot. `Producer<+X>` as a method PARAMETER:
+        // compose(contravariant param, covariant slot) = contravariant → a covariant `+E` is rejected.
+        yield 'covariant Producer param composes to contravariant' => [
+            "<?php\nnamespace App;\ninterface Producer<+X> { public function get(): X; }\nclass Box<+E>\n{\n    public function take(Producer<E> \$p): void {}\n}\n",
+            ['+E', 'contravariant-only position', 'via slot 0 of'],
+        ];
+        // The mirror that confirms the composing pass owns the unsound direction too: `Sink<-E>` with a
+        // `Comparator<-T>` parameter — compose(contravariant param, contravariant slot) = covariant → a
+        // contravariant `-E` is rejected. (The sound covariant case is the accept test below.)
+        yield 'contravariant Sink with Comparator composes to covariant' => [
+            "<?php\nnamespace App;\ninterface Comparator<-T> { public function compare(T \$a, T \$b): int; }\nclass Sink<-E>\n{\n    public function pick(Comparator<E> \$c): void {}\n}\n",
+            ['-E', 'covariant-only position', 'via slot 0 of'],
+        ];
+    }
+
+    /**
+     * The sound nested compositions that the buggy direct-position descent used to reject: a type-param
+     * nested in a contravariant slot inside a same-variance outer position composes back to that
+     * variance, which the class's marker may occupy. Neither pass may flag these.
+     *
+     * @param string $source
+     */
+    #[DataProvider('soundNestedCompositions')]
+    public function testSoundNestedCompositionIsAccepted(string $source): void
+    {
+        $registry = $this->registryFor($source);
+        $registry->validateVariancePositions(); // must NOT throw
+        $registry->validateInnerVariance();     // must NOT throw
+        $this->addToAssertionCount(1);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function soundNestedCompositions(): iterable
+    {
+        // The headline sound case: a `Comparator<-T>` parameter on a covariant `+E` — compose(contra
+        // param, contra slot) = covariant, which `+E` may occupy. Sound; must be accepted.
+        yield 'Comparator param on covariant class' => [
+            "<?php\nnamespace App;\ninterface Comparator<-T> { public function compare(T \$a, T \$b): int; }\nclass Box<+E>\n{\n    public function pick(Comparator<E> \$c): void {}\n}\n",
+        ];
+        // A `Producer<+X>` RETURN on a covariant `+E` — compose(covariant return, covariant slot) =
+        // covariant. Sound; must be accepted.
+        yield 'Producer return on covariant class' => [
+            "<?php\nnamespace App;\ninterface Producer<+X> { public function get(): X; }\nclass Box<+E>\n{\n    public function make(): Producer<E> { throw new \\LogicException; }\n}\n",
+        ];
     }
 
     /**

@@ -145,7 +145,11 @@ final class InnerVarianceValidator
                     ? Variance::Invariant
                     : Variance::Contravariant;
                 if ($param->type !== null) {
-                    $this->walkPhpType($param->type, $outerPos, $label, null, null);
+                    // Constructor params are exempt from the position pass entirely, so this pass keeps
+                    // ownership of a non-bare DIRECT type-param there (`?T`); the bare-`T` immutable
+                    // shape was already exempted above. Every other position cedes its direct leaves to
+                    // the position pass (reportDirect = false).
+                    $this->walkPhpType($param->type, $outerPos, $label, null, null, reportDirect: $isConstructor);
                 }
             }
             if ($method->returnType !== null) {
@@ -209,6 +213,7 @@ final class InnerVarianceValidator
         string $outerLabel,
         ?string $innerLabel,
         ?int $innerSlot,
+        bool $reportDirect = false,
     ): void {
         if ($type instanceof Identifier) {
             return;
@@ -216,7 +221,7 @@ final class InnerVarianceValidator
         if ($type instanceof Name) {
             $parts = $type->getParts();
             if (count($parts) === 1 && isset($this->varianceMap[$parts[0]])) {
-                $this->assertLeaf($parts[0], $this->varianceMap[$parts[0]], $position, $outerLabel, $innerLabel, $innerSlot, $type->getStartLine());
+                $this->assertLeaf($parts[0], $this->varianceMap[$parts[0]], $position, $outerLabel, $innerLabel, $innerSlot, $type->getStartLine(), $reportDirect);
             }
             $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
             if (is_array($args)) {
@@ -236,12 +241,12 @@ final class InnerVarianceValidator
             return;
         }
         if ($type instanceof NullableType) {
-            $this->walkPhpType($type->type, $position, $outerLabel, $innerLabel, $innerSlot);
+            $this->walkPhpType($type->type, $position, $outerLabel, $innerLabel, $innerSlot, $reportDirect);
             return;
         }
         if ($type instanceof UnionType || $type instanceof IntersectionType) {
             foreach ($type->types as $sub) {
-                $this->walkPhpType($sub, $position, $outerLabel, $innerLabel, $innerSlot);
+                $this->walkPhpType($sub, $position, $outerLabel, $innerLabel, $innerSlot, $reportDirect);
             }
             return;
         }
@@ -309,7 +314,19 @@ final class InnerVarianceValidator
         ?string $innerLabel,
         ?int $innerSlot,
         ?int $line,
+        bool $reportDirect = false,
     ): void {
+        // This composing pass reports only NESTED leaves — a type-param inside a type constructor's
+        // arguments (`innerSlot !== null`), where the effective variance is the composition of the
+        // outer position with the inner slot. A DIRECT occurrence (a bare type-param as the
+        // param/return/property/bound/default type, `innerSlot === null`) is owned by
+        // VariancePositionValidator; reporting it here too would double-report it. The ONE exception is
+        // a non-bare *constructor* parameter (`?T`, where the bare-`T` immutable-construction shape is
+        // already exempted before the walk): the position pass exempts constructor params entirely, so
+        // this pass keeps ownership of that direct case via `$reportDirect`.
+        if ($innerSlot === null && !$reportDirect) {
+            return;
+        }
         $allowed = match ($effective) {
             Variance::Invariant     => [Variance::Invariant],
             Variance::Covariant     => [Variance::Invariant, Variance::Covariant],
