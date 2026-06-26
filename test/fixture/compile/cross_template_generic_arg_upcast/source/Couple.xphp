@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Couple<+A, +B> implements Tuple<A, B>
+{
+    public function __construct(private A $a, private B $b) {}
+
+    public function left(): A
+    {
+        return $this->a;
+    }
+
+    public function right(): B
+    {
+        return $this->b;
+    }
+}

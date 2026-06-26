@@ -141,6 +141,52 @@ final class VarianceEdgeIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testCrossTemplateGenericArgUpcastEmitsEdgeAndRunsAtRuntime(): void
+    {
+        // A covariant `Couple<+A, +B> implements Tuple<A, B>` holding a covariant container
+        // `ImmutableList<Book>` as its first type-argument is upcast to `Tuple<Collection<Product>,
+        // Tag>`. That requires the covariant edge `Tuple<ImmutableList<Book>, Tag> ⊑
+        // Tuple<Collection<Product>, Tag>`, whose per-argument check must recognize `ImmutableList<Book>
+        // ⊑ Collection<Product>` ACROSS DIFFERENT TEMPLATES (ImmutableList implements Collection, both
+        // covariant). Before the cross-template case in `isNestedSubtype`, the edge was silently
+        // omitted: `xphp check` passed, then the upcast fatal'd at runtime. This proves the edge is now
+        // emitted AND the covariance holds when the program actually runs.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/cross_template_generic_arg_upcast/source',
+            'cross-template-arg',
+        );
+        try {
+            // The interface `Tuple` specializations carry the cross-template covariant edge: the
+            // `Tuple<ImmutableList<Book>, Tag>` spec must `extends` the `Tuple<Collection<Product>, Tag>`
+            // spec (an interface-to-interface variance edge). Pre-fix there is no such edge at all.
+            $tupleDir = $fixture->cacheDir . '/Generated/App/Tuple';
+            $tupleFiles = glob($tupleDir . '/T_*.php') ?: [];
+            self::assertGreaterThanOrEqual(2, count($tupleFiles), 'two Tuple specializations exist');
+            $crossEdges = 0;
+            foreach ($tupleFiles as $file) {
+                $content = file_get_contents($file);
+                self::assertIsString($content);
+                // A Tuple spec whose `extends` clause references ANOTHER generated Tuple spec is the
+                // cross-template covariant edge (`Tuple<ImmutableList<Book>,Tag> extends
+                // Tuple<Collection<Product>,Tag>`). The supertype spec extends only `\App\Tuple`.
+                if (str_contains($content, '\\XPHP\\Generated\\App\\Tuple\\T_')) {
+                    $crossEdges++;
+                }
+            }
+            self::assertGreaterThanOrEqual(
+                1,
+                $crossEdges,
+                'the cross-template covariant edge between the two Tuple specializations is emitted',
+            );
+
+            $fixture->registerAutoload('App\\');
+            require __DIR__ . '/../../fixture/compile/cross_template_generic_arg_upcast/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     public function testBoundedCovariantConstructorKeepsConcreteType(): void
     {
         // A bounded covariant constructor param keeps its REAL substituted type (the

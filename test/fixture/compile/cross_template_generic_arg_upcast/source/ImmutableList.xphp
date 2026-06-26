@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class ImmutableList<+E> implements Collection<E>
+{
+    /** @var list<E> */
+    private array $items;
+
+    public function __construct(E ...$items)
+    {
+        $this->items = $items;
+    }
+
+    public function first(): ?E
+    {
+        return $this->items[0] ?? null;
+    }
+}

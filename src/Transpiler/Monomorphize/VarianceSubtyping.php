@@ -93,26 +93,35 @@ final readonly class VarianceSubtyping
      *    `Producer<Box<Banana>>` and `Producer<Box<Fruit>>` relate when Box has covariant T — without
      *    it, the comparison would flatten to `isSubtype('Box', 'Box') == true` and claim a relationship
      *    even when the INNER args aren't subtype-related.
-     *  - Otherwise (different templates, or one generic one not): conservative false.
+     *  - Both generic of DIFFERENT templates: if `$child`'s template provably implements/extends
+     *    `$parent`'s, thread `$child`'s args up to `$parent`'s template and recurse under `$parent`'s
+     *    OWN variance — so a covariant container nested as a type-argument relates
+     *    (`ImmutableList<Book>` as `Collection<Product>` → `ImmutableList implements Collection`, thread
+     *    to `Collection<Book>`, then `Book ⊑ Product` under `Collection`'s covariant `E`). Stays
+     *    conservative (no edge) unless the relationship is POSITIVELY grounded.
+     *  - Otherwise (one generic, one not): conservative false.
      *
-     * @infection-ignore-all LogicalAnd UnwrapLtrim -- the both-generic / same-template guard `&&`s are
-     * equivalent for every reachable input: instantiation args are always FULLY parameterized
-     * TypeRefs, so a parameterized-vs-bare or different-template pairing (the only inputs where `&&`
-     * and `||` would diverge) never arises — a mixed/different pairing is rejected either way
-     * (conservative false). The `ltrim('\\')` calls are no-ops because registry/canonical names never
-     * carry a leading backslash (same defensive the hierarchy collector documents), so unwrapping them
-     * is equivalent. The meaningful comparisons — the leaf `isSubtype(...) === true` and the inner
-     * recursion — stay mutation-covered by VarianceSubtypingTest.
+     * Trust model — the fatal-vs-missed-edge asymmetry: a wrong "yes" emits a bogus `implements` edge
+     * that PHP-fatals at autoload, so emit only on a positive `isSubtype(...) === true` AND a threaded
+     * arg tuple the recursion's arity guard ({@see isVarianceSubtype}'s `count()` check) accepts —
+     * `resolveInheritedArgs` can return a NON-null but wrong-arity tuple (a bare or over-supplied
+     * parameterized super), so that recursion is load-bearing, not inert reuse. A missed "yes" only
+     * loses a relationship the compiler couldn't positively prove.
+     *
+     * @infection-ignore-all UnwrapLtrim -- the `ltrim('\\')` calls are no-ops: registry/canonical names
+     * never carry a leading backslash (the same defensive the hierarchy collector documents), so
+     * unwrapping them is equivalent. The meaningful guards — `isSubtype(...) === true`, the same- vs
+     * different-template routing, and the inner recursion — stay mutation-covered by VarianceSubtypingTest.
      */
     private function isNestedSubtype(TypeRef $child, TypeRef $parent, Registry $registry): bool
     {
         if (!$child->isGeneric() && !$parent->isGeneric()) {
             return $this->hierarchy->isSubtype($child->name, $parent->name) === true;
         }
-        if ($child->isGeneric() && $parent->isGeneric()
-            && ltrim($child->name, '\\') === ltrim($parent->name, '\\')
-        ) {
-            $innerDef = $registry->definition(ltrim($child->name, '\\'));
+        $childName = ltrim($child->name, '\\');
+        $parentName = ltrim($parent->name, '\\');
+        if ($child->isGeneric() && $parent->isGeneric() && $childName === $parentName) {
+            $innerDef = $registry->definition($childName);
             $innerParams = $innerDef !== null ? $innerDef->typeParams : [];
             // @infection-ignore-all ReturnRemoval -- equivalent: removing this early return falls
             // through to isVarianceSubtype() with empty params, whose arity guard
@@ -126,6 +135,20 @@ final readonly class VarianceSubtyping
                 $innerParams,
                 $registry,
             );
+        }
+        // Different-template generics: emit only if child's template provably implements/extends
+        // parent's. Thread child's args up to parent's template (the same helper SpecializationCloser
+        // uses) and recurse under parent's OWN params. resolveInheritedArgs may return a non-null
+        // wrong-arity tuple, so the recursion's count() guard is what rejects the malformed case -- never
+        // trust $threaded for being merely non-null.
+        if ($child->isGeneric() && $parent->isGeneric()
+            && $this->hierarchy->isSubtype($childName, $parentName) === true
+        ) {
+            $threaded = $this->hierarchy->resolveInheritedArgs($childName, $child->args, $parentName);
+            $parentDef = $registry->definition($parentName);
+            if ($threaded !== null && $parentDef !== null && $parentDef->typeParams !== []) {
+                return $this->isVarianceSubtype($threaded, $parent->args, $parentDef->typeParams, $registry);
+            }
         }
         return false;
     }

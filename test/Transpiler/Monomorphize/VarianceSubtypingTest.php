@@ -192,4 +192,143 @@ final class VarianceSubtypingTest extends TestCase
             $this->registry(),
         ));
     }
+
+    // ---- Cross-template generic type-argument subtyping ----
+    //
+    // `ImmutableList<+E> implements Collection<+E>`, `Book <: Product`. The hierarchy carries the
+    // PARAMETERISED supertype edge so `resolveInheritedArgs` can thread `ImmutableList<Book>` up to
+    // `Collection<Book>`. `Mid<X> implements Collection<X, X>` is the MALFORMED case — a 2-arg
+    // parameterised super against a 1-param target — exercising the load-bearing count() arity guard.
+
+    private const COLLECTION = 'App\\Collection';
+    private const IMMUTABLE_LIST = 'App\\ImmutableList';
+    private const BOOK = 'App\\Book';
+    private const PRODUCT = 'App\\Product';
+
+    private function crossHierarchy(): TypeHierarchy
+    {
+        return new TypeHierarchy(
+            ancestors: [
+                self::IMMUTABLE_LIST => [self::COLLECTION],
+                self::BOOK => [self::PRODUCT],
+                'App\\Mid' => [self::COLLECTION],
+                'App\\Foo' => [],
+                'App\\Bar' => [],
+            ],
+            superTypeArgs: [
+                self::IMMUTABLE_LIST => [new TypeRef(self::COLLECTION, [new TypeRef('E', isTypeParam: true)])],
+                // Malformed: declares two args for a one-param Collection.
+                'App\\Mid' => [new TypeRef(self::COLLECTION, [
+                    new TypeRef('X', isTypeParam: true),
+                    new TypeRef('X', isTypeParam: true),
+                ])],
+            ],
+            typeParamNames: [
+                self::IMMUTABLE_LIST => ['E'],
+                self::COLLECTION => ['E'],
+                'App\\Mid' => ['X'],
+            ],
+        );
+    }
+
+    private function crossRegistry(): Registry
+    {
+        $hierarchy = $this->crossHierarchy();
+        $registry = new Registry(Registry::DEFAULT_HASH_HEX_LENGTH, $hierarchy);
+        // Only the PARENT template's definition is read (for its slot variance); Collection<+E>.
+        $registry->recordDefinition(
+            self::COLLECTION,
+            'Collection',
+            [new TypeParam('E', variance: Variance::Covariant)],
+            new Class_('Collection'),
+            'test',
+        );
+        return $registry;
+    }
+
+    private function crossSubtyping(): VarianceSubtyping
+    {
+        return new VarianceSubtyping($this->crossHierarchy());
+    }
+
+    public function testCrossTemplateGenericArgRelatesThroughThreadedSupertype(): void
+    {
+        // The headline: a covariant outer slot holding `ImmutableList<Book>` vs `Collection<Product>`.
+        // isNestedSubtype's different-template branch threads ImmutableList<Book> → Collection<Book>,
+        // then compares Book ⊑ Product under Collection's covariant E → true. Kills the new branch's
+        // `isSubtype(...) === true` guard (a mutant dropping it would mis-handle this) and proves the
+        // threading produces the right arity.
+        self::assertTrue($this->crossSubtyping()->isVarianceSubtype(
+            [new TypeRef(self::IMMUTABLE_LIST, [new TypeRef(self::BOOK)])],
+            [new TypeRef(self::COLLECTION, [new TypeRef(self::PRODUCT)])],
+            self::covariant(),
+            $this->crossRegistry(),
+        ));
+    }
+
+    public function testCrossTemplateUnrelatedTemplatesAreNotSubtype(): void
+    {
+        // Foo ⋢ Bar (no hierarchy edge): isSubtype short-circuits → no edge. A wrong "yes" here would
+        // emit a bogus `implements` → autoload fatal, so this is the expensive direction to keep false.
+        self::assertFalse($this->crossSubtyping()->isVarianceSubtype(
+            [new TypeRef('App\\Foo', [new TypeRef(self::BOOK)])],
+            [new TypeRef('App\\Bar', [new TypeRef(self::PRODUCT)])],
+            self::covariant(),
+            $this->crossRegistry(),
+        ));
+    }
+
+    public function testCrossTemplateReverseDirectionIsNotSubtype(): void
+    {
+        // Operand order: the SUPER template in the subtype slot. Collection ⋢ ImmutableList, so
+        // isSubtype(Collection, ImmutableList) is false → no edge. Kills an operand-swap mutant on the
+        // `isSubtype($childName, $parentName)` call.
+        self::assertFalse($this->crossSubtyping()->isVarianceSubtype(
+            [new TypeRef(self::COLLECTION, [new TypeRef(self::BOOK)])],
+            [new TypeRef(self::IMMUTABLE_LIST, [new TypeRef(self::PRODUCT)])],
+            self::covariant(),
+            $this->crossRegistry(),
+        ));
+    }
+
+    public function testContravariantSlotThreadsCrossTemplateArgInTheFlippedDirection(): void
+    {
+        // A contravariant outer slot flips the operands (isNestedSubtype($a2, $a1)): a subtype needs the
+        // SUPERTYPE-spec's arg to be a subtype of the SUBTYPE-spec's arg. With a cross-template inner
+        // pair, the branch must thread `ImmutableList<Book>` (the flipped child, from args2) up to
+        // `Collection<Product>` (args1) — proving the cross-template case composes symmetrically across
+        // variance, not just for the covariant direction.
+        self::assertTrue($this->crossSubtyping()->isVarianceSubtype(
+            [new TypeRef(self::COLLECTION, [new TypeRef(self::PRODUCT)])],
+            [new TypeRef(self::IMMUTABLE_LIST, [new TypeRef(self::BOOK)])],
+            [new TypeParam('X', variance: Variance::Contravariant)],
+            $this->crossRegistry(),
+        ));
+    }
+
+    public function testContravariantSlotRejectsTheWrongCrossTemplateDirection(): void
+    {
+        // The flipped reject: with the args the other way round a contravariant slot needs
+        // `Collection<Product> ⊑ ImmutableList<Book>`, which is false (Collection ⋢ ImmutableList).
+        self::assertFalse($this->crossSubtyping()->isVarianceSubtype(
+            [new TypeRef(self::IMMUTABLE_LIST, [new TypeRef(self::BOOK)])],
+            [new TypeRef(self::COLLECTION, [new TypeRef(self::PRODUCT)])],
+            [new TypeParam('X', variance: Variance::Contravariant)],
+            $this->crossRegistry(),
+        ));
+    }
+
+    public function testCrossTemplateMalformedGroundingIsNotSubtype(): void
+    {
+        // The load-bearing guard: `Mid implements Collection<X, X>` grounds
+        // Mid<Book> to a NON-null but wrong-arity tuple [Book, Book] against the one-param Collection.
+        // resolveInheritedArgs returns it non-null; only isVarianceSubtype's count() arity guard rejects
+        // it. Without that guard a bogus edge would be emitted → autoload fatal.
+        self::assertFalse($this->crossSubtyping()->isVarianceSubtype(
+            [new TypeRef('App\\Mid', [new TypeRef(self::BOOK)])],
+            [new TypeRef(self::COLLECTION, [new TypeRef(self::PRODUCT)])],
+            self::covariant(),
+            $this->crossRegistry(),
+        ));
+    }
 }
