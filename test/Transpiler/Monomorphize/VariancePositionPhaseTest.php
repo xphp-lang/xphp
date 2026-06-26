@@ -309,6 +309,41 @@ final class VariancePositionPhaseTest extends TestCase
         $registry->validateInnerVariance();
     }
 
+    public function testVisiblePromotedConstructorPropertyIsReportedExactlyOnce(): void
+    {
+        // A VISIBLE promoted constructor property (`public T $item`) is a direct occurrence the
+        // position pass owns (it reports it as a 'constructor parameter'). The composing pass must NOT
+        // also report it — it cedes the direct leaf of a PROMOTED constructor param (only a NON-promoted
+        // constructor param, which the position pass exempts, stays owned by the composing pass). In
+        // check-mode (both passes run) this must yield EXACTLY ONE diagnostic, not two.
+        $source = "<?php\nnamespace App;\nclass P<+T>\n{\n    public function __construct(public T \$item) {}\n}\n";
+        $collector = new DiagnosticCollector();
+        $registry = $this->registryFor($source, $collector);
+
+        $registry->validateVariancePositions();
+        $registry->validateInnerVariance();
+
+        self::assertCount(1, $collector->all());
+        self::assertSame(VariancePositionValidator::CODE_VARIANCE_POSITION, $collector->all()[0]->code);
+    }
+
+    public function testNonPromotedNonBareConstructorParamIsOwnedByTheComposingPassOnce(): void
+    {
+        // The companion: a NON-promoted, non-bare constructor param (`?T $x`) is exempt from the
+        // position pass, so the composing pass keeps ownership of its direct leaf — exactly one
+        // `inner_variance` diagnostic, no double-report. (The bare-`T` immutable shape stays exempt by
+        // both; a promoted `public T $item` is owned by the position pass — see the test above.)
+        $source = "<?php\nnamespace App;\nclass P<+T>\n{\n    public function __construct(?T \$x) {}\n}\n";
+        $collector = new DiagnosticCollector();
+        $registry = $this->registryFor($source, $collector);
+
+        $registry->validateVariancePositions();
+        $registry->validateInnerVariance();
+
+        self::assertCount(1, $collector->all());
+        self::assertSame(InnerVarianceValidator::CODE_INNER_VARIANCE, $collector->all()[0]->code);
+    }
+
     public function testViolationIsCollectedWithMemberLineInCheckMode(): void
     {
         // Line 5 holds `public function set(T $x)`.

@@ -145,11 +145,15 @@ final class InnerVarianceValidator
                     ? Variance::Invariant
                     : Variance::Contravariant;
                 if ($param->type !== null) {
-                    // Constructor params are exempt from the position pass entirely, so this pass keeps
-                    // ownership of a non-bare DIRECT type-param there (`?T`); the bare-`T` immutable
-                    // shape was already exempted above. Every other position cedes its direct leaves to
-                    // the position pass (reportDirect = false).
-                    $this->walkPhpType($param->type, $outerPos, $label, null, null, reportDirect: $isConstructor);
+                    // A NON-PROMOTED constructor param is exempt from the position pass entirely, so
+                    // this pass keeps ownership of a non-bare DIRECT type-param there (`?T`); the bare-`T`
+                    // immutable shape was already exempted above. A PROMOTED constructor property
+                    // (`public T $item`) is NOT exempt from the position pass (it reports it as a
+                    // 'constructor parameter'), so this pass must cede its direct leaf to avoid a
+                    // double-report — only its NESTED leaves stay here. Every non-constructor position
+                    // cedes its direct leaves too (reportDirect = false).
+                    $reportDirect = $isConstructor && $param->flags === 0;
+                    $this->walkPhpType($param->type, $outerPos, $label, null, null, reportDirect: $reportDirect);
                 }
             }
             if ($method->returnType !== null) {
