@@ -33,11 +33,53 @@ the class hierarchy already uses. That is a self-contained feature, not a tweak 
 
 ## Considered Options
 
-- **Partially model traits** — record `use` edges and copy trait method bodies, ignoring conflict
-  resolution / aliasing / abstract trait methods. Cheap to start, but silently wrong the moment a
-  program uses any of the omitted semantics.
-- **Fully model traits** — implement PHP's trait resolution end-to-end in `TypeHierarchy`. Correct,
-  but a large feature unrelated to the upcast work, and unneeded until a real program hits it.
+- **Partially model traits** — record `use` edges and copy the matching trait method body, ignoring
+  conflict resolution / aliasing / abstract trait methods / trait composition. Cheap to start, and it
+  does handle the trivial case (a single trait, one unambiguous body, whose name matches the
+  interface). But it is silently wrong the moment a program uses any of the omitted semantics — and
+  because the closer *synthesizes* a new member (not just keeps a runtime `use`), getting it wrong
+  emits the wrong member rather than failing.
+
+- **Fully model traits** — implement PHP's trait resolution end-to-end (method resolution order,
+  `insteadof` conflict resolution, `as` aliasing and visibility changes, abstract trait methods, and
+  trait-on-trait composition), threaded through the same parameterised-supertype machinery the class
+  hierarchy already uses. This is what *correctly* supplying a trait body requires — partial modeling
+  is unsound the instant resolution decides **which** body lands or **under what name**:
+
+  - **`as` aliasing — the body's name differs from the interface's.** A trait method imported under an
+    alias is what satisfies the interface, so the synthesized member must be found under the trait's
+    *original* name and emitted under the *alias*:
+
+    ```php
+    trait SearchOps<+E> { public function locate<U : E>(U $value): int { /* scan $this->items */ } }
+    interface OrderedCollection<+E> extends Collection<E> { public function indexOf<U : E>(U $value): int; }
+    class ListColl<+E> extends LinkedNode<E> implements OrderedCollection<E> {
+        use SearchOps<E> { locate as indexOf; }   // the alias is what satisfies indexOf
+    }
+    ```
+
+    The abstract member is `indexOf` at the supertype argument; its body is the trait's `locate`. A
+    name-keyed copy looks for `indexOf` in `SearchOps`, finds nothing, and leaves the member
+    unimplemented — a load fatal. Only the alias map resolves it.
+
+  - **`insteadof` — two trait bodies, only one wins.** When two `use`d traits both supply the method,
+    PHP's `insteadof` picks the authoritative body; a copy with no conflict resolution emits the wrong
+    algorithm (a silent correctness bug) or a duplicate:
+
+    ```php
+    trait LinearSearch<+E> { public function contains<U : E>(U $v): bool { /* O(n) scan */ } }
+    trait HashSearch<+E>   { public function contains<U : E>(U $v): bool { /* hash lookup */ } }
+    class FastColl<+E> extends RingBuffer<E> implements Collection<E> {
+        use LinearSearch<E>, HashSearch<E> { HashSearch::contains insteadof LinearSearch; }
+    }
+    ```
+
+    Only honouring `insteadof` emits `HashSearch::contains` as the supertype-argument member; a partial
+    copy cannot tell which body is correct.
+
+  Correct, but a large, self-contained feature unrelated to the upcast work, and unneeded until a real
+  program hits one of these shapes.
+
 - **Don't model traits; treat a trait-only body as a residual** — the hierarchy stays
   `extends`/`implements`-only; a covariant-upcast member with no reachable *class* body fails loudly.
 
