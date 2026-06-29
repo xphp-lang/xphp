@@ -1,0 +1,48 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class ImmutableMap<K, +V> implements Map<K, V>
+{
+    /** @var array<array-key, V> */
+    private array $entries;
+
+    public function __construct(array $entries)
+    {
+        $this->entries = $entries;
+    }
+
+    public function count(): int
+    {
+        return \count($this->entries);
+    }
+
+    public function get(K $key): ?V
+    {
+        return $this->entries[$key] ?? null;
+    }
+
+    // The covariant view methods re-expose the value type as a list — the self-reintroducing return
+    // types that towered. Never called below, so they stay lazy and bounded.
+    public function values(): OrderedCollection<V>
+    {
+        return new ImmutableList::<V>(...\array_values($this->entries));
+    }
+
+    public function keys(): OrderedCollection<K>
+    {
+        return new ImmutableList::<K>(...\array_keys($this->entries));
+    }
+
+    public function entries(): OrderedCollection<Entry<K, V>>
+    {
+        $pairs = [];
+        foreach ($this->entries as $key => $value) {
+            $pairs[] = new Pair::<K, V>($key, $value);
+        }
+
+        return new ImmutableList::<Entry<K, V>>(...$pairs);
+    }
+}

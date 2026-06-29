@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface OrderedCollection<+E> extends Collection<E>
+{
+    public function get(int $i): E;
+
+    public function first(): ?E;
+}

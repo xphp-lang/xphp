@@ -1,0 +1,18 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Group a covariant ImmutableList, then walk the entries through the map's covariant `entries()` view
+// (OrderedCollection<Entry<string, ImmutableList<Item>>>). Reaching it pulls in Pair<string,
+// ImmutableList<Item>> and the nested list, re-seeding the same self-reintroducing tower by a longer
+// path than `values()`.
+$list = new ImmutableList::<Item>(new Item(1, 'a'), new Item(2, 'a'), new Item(3, 'b'));
+$map  = $list->groupBy::<string>(fn (Item $i): string => $i->group);
+
+$entries = $map->entries();
+$head    = $entries->first();
+$key     = $head?->key();
+$group   = $head?->value();
+$n       = $group?->count();

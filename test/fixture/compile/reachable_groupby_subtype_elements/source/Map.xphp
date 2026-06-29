@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface Map<K, +V>
+{
+    public function get(K $key): ?V;
+
+    public function values(): OrderedCollection<V>;
+
+    public function keys(): OrderedCollection<K>;
+
+    public function entries(): OrderedCollection<Entry<K, V>>;
+}

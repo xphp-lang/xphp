@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface Entry<K, +V>
+{
+    public function key(): K;
+
+    public function value(): V;
+}
