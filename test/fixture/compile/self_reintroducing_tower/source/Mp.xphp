@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Mp<K, +V>
+{
+    public function values(): Lst<V>
+    {
+        return new Lst::<V>();
+    }
+}

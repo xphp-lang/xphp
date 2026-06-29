@@ -4,4 +4,4 @@ declare(strict_types=1);
 
 namespace App;
 
-class Book extends Media {}
+class Item {}

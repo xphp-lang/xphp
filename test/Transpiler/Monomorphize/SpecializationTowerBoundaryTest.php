@@ -9,18 +9,17 @@ use RuntimeException;
 use XPHP\TestSupport\CompiledFixture;
 
 /**
- * Characterization of the boundary where a covariant collection's grouping derivation re-exposes its own
- * type family. These programs do NOT compile-and-run as written, and that is the accepted behavior: the
- * decision is to diagnose and have the author restructure the re-exposing member's body (return a
- * non-generic iterable / split the derivation), not to make this exact source compile. The tests pin
- * HOW it fails (fast, loud, and bounded — not a hang or OOM), so a regression that turned the controlled
- * failure into a hang, an OOM, or a silently-wrong build would be caught. The planned change is a more
- * precise diagnostic (firing in `check`, naming the member), which sharpens the message without altering
- * these outcomes; a `dyn`-style erased seam that would make the natural source compile is deferred.
+ * Characterization of the boundary where a derivation's result type re-exposes the receiver's own type
+ * family in a growing form (a list-to-map derivation whose map re-exposes the list). Such a program does
+ * NOT compile, and that is the accepted behavior: the decision is to diagnose and have the author
+ * restructure (give the result a view-less type / split the derivation), not to make this source compile.
+ * The test pins HOW it fails — fast, loud, and bounded by the depth cap, with a localized diagnostic that
+ * names every concrete class in the cycle and its source file — so a regression that turned the controlled
+ * failure into a hang, an OOM, or a silently-wrong build would be caught. A `dyn`-style erased seam that
+ * would make the natural source compile is deferred (see ADR-0020).
  *
- * The shape is the faithful collections lattice: a covariant `ImmutableList<+E>` with
- * `groupBy<L>(): ImmutableMap<L, ImmutableList<E>>`, and `ImmutableMap<K, +V>` whose views
- * (`values()`/`entries()`) re-expose the value as a list.
+ * The fixture is a minimal two-template cycle (`Lst<+E>::toMap(): Mp<int, Lst<E>>` +
+ * `Mp<K, +V>::values(): Lst<V>`) — small enough to reach the depth cap quickly under any memory config.
  */
 final class SpecializationTowerBoundaryTest extends TestCase
 {
@@ -50,8 +49,8 @@ final class SpecializationTowerBoundaryTest extends TestCase
     }
 
     /**
-     * The exact expected divergence diagnostic (sans worked example) for a List <-> Map tower, naming the
-     * two concrete cycle classes in the order the diagnostic lists them, each tagged with its file.
+     * The exact expected divergence diagnostic (sans worked example), naming the two concrete cycle
+     * classes in the order the diagnostic lists them, each tagged with its file.
      */
     private function expectedTowerMessage(
         string $first,
@@ -69,119 +68,25 @@ final class SpecializationTowerBoundaryTest extends TestCase
     }
 
     /**
-     * Iterating the groups through the map's covariant `values()` view re-exposes a list-of-lists, whose
-     * own `groupBy` re-wraps one level deeper each pass — an unbounded `List -> Map -> List -> ...` tower.
-     * The depth cap aborts it fast with the localized diagnostic. The whole message is asserted: it names
-     * both concrete cycle classes (Map-then-List order for this fixture) with their files, and nothing
-     * else — no interface/abstract supertypes dragged in.
+     * The whole diagnostic is asserted: the depth-cap header, both concrete cycle classes (Mp-then-Lst
+     * order for this fixture) each tagged with its source file, and the actionable guidance — and nothing
+     * else (no interface/abstract supertypes dragged in). The deepest worked example is pinned separately
+     * by its nesting depth (which also proves the *deepest* instantiation is chosen, not the shallowest).
      */
-    public function testGroupByThenValuesViewTowersAndAbortsWithLocalizedDiagnostic(): void
+    public function testSelfReintroducingDerivationTowersAndNamesTheCycle(): void
     {
-        $src = realpath(__DIR__ . '/../../fixture/compile/reachable_groupby_then_values/source');
+        $src = realpath(__DIR__ . '/../../fixture/compile/self_reintroducing_tower/source');
         self::assertIsString($src);
-        $message = $this->towerMessage($src, 'tower-values');
+        $message = $this->towerMessage($src, 'tower-min');
 
         self::assertSame(
-            $this->expectedTowerMessage(
-                'App\\ImmutableMap',
-                '<SRC>/ImmutableMap.xphp',
-                'App\\ImmutableList',
-                '<SRC>/ImmutableList.xphp',
-            ),
-            $this->normalizeTowerMessage($message, $src),
-        );
-        // The worked example is the DEEPEST type (many nested lists) — pins deepest, not shallowest.
-        self::assertGreaterThanOrEqual(
-            5,
-            substr_count($message, 'App\\ImmutableList<'),
-            'the worked example should be the deeply-nested deepest instantiation',
-        );
-    }
-
-    /**
-     * The `entries()` view re-exposes the list behind an `Entry<K, V>`, re-seeding the same tower by a
-     * longer path. Same controlled abort; the whole message is asserted, here in List-then-Map order.
-     */
-    public function testGroupByThenEntriesViewTowersAndAbortsWithLocalizedDiagnostic(): void
-    {
-        $src = realpath(__DIR__ . '/../../fixture/compile/reachable_groupby_then_entries/source');
-        self::assertIsString($src);
-        $message = $this->towerMessage($src, 'tower-entries');
-
-        self::assertSame(
-            $this->expectedTowerMessage(
-                'App\\ImmutableList',
-                '<SRC>/ImmutableList.xphp',
-                'App\\ImmutableMap',
-                '<SRC>/ImmutableMap.xphp',
-            ),
+            $this->expectedTowerMessage('App\\Mp', '<SRC>/Mp.xphp', 'App\\Lst', '<SRC>/Lst.xphp'),
             $this->normalizeTowerMessage($message, $src),
         );
         self::assertGreaterThanOrEqual(
             5,
-            substr_count($message, 'App\\ImmutableList<'),
+            substr_count($message, 'App\\Lst<'),
             'the worked example should be the deeply-nested deepest instantiation',
         );
-    }
-
-    /**
-     * Grouping at two subtype-related element types (`Book` <: `Media`) produces variance-related map
-     * specializations, so a covariant override edge should form on a view method — but under single
-     * inheritance that covariant leaf edge is dropped, so the build is CLEAN yet the generated overrides
-     * are incompatible at PHP class-load time. The load fatal is non-catchable, so it is observed from a
-     * child process: the compile succeeds in-process, then loading the specs fatals with a
-     * "must be compatible with" declaration error.
-     */
-    public function testGroupByAcrossSubtypeRelatedElementsCompilesButFatalsAtLoad(): void
-    {
-        $fixture = CompiledFixture::compile(
-            __DIR__ . '/../../fixture/compile/reachable_groupby_subtype_elements/source',
-            'tower-subtype',
-        );
-        try {
-            // The build itself is clean — that is precisely the trap this case documents.
-            self::assertNotEmpty(
-                glob($fixture->cacheDir . '/Generated/App/ImmutableMap/T_*.php') ?: [],
-                'the subtype-related grouping compiles to ImmutableMap specializations',
-            );
-
-            // Force the generated specs to load in a child process; the covariant override is
-            // incompatible, so PHP fatals at class-link time.
-            $runner = __DIR__
-                . '/../../fixture/compile/reachable_groupby_subtype_elements/verify/load_is_incompatible.php';
-            $cmd = sprintf(
-                '%s %s %s %s 2>&1',
-                escapeshellarg(PHP_BINARY),
-                escapeshellarg($runner),
-                escapeshellarg($fixture->targetDir),
-                escapeshellarg($fixture->cacheDir),
-            );
-            $output = (string) shell_exec($cmd);
-
-            // Asserted by parts, not as one whole string (unlike the tower-message tests above): a PHP
-            // class-link fatal carries irreducibly run-/environment-dependent scaffolding — the absolute
-            // temp paths of the generated files, and a Call Stack with per-frame timings, memory figures,
-            // and absolute include paths — none of which is stable across runs or PHP builds. The parts
-            // that ARE deterministic (the failure phrase and the offending specialization FQNs) are
-            // pinned below; the volatile scaffolding is intentionally left unmatched.
-            self::assertStringNotContainsString('LOADED_OK', $output, 'the specs must not load cleanly');
-            self::assertStringContainsString(
-                'must be compatible with',
-                $output,
-                'loading fatals on the incompatible covariant override',
-            );
-            // The incompatibility is specifically between the two covariant value-list specializations.
-            // The generated FQN is a pure function of the type arguments (a sha256 of their canonical
-            // form), so it is deterministic and computed here via the production hasher rather than
-            // hard-coded — pinning that it is the `ImmutableList<Book>` vs `ImmutableList<Media>` override
-            // that fatals, not merely "some" incompatibility. (Which method PHP reports first is link
-            // order, but both candidates return the value list, so both FQNs always appear.)
-            $bookList = Registry::generatedFqn('App\\ImmutableList', [new TypeRef('App\\Book')]);
-            $mediaList = Registry::generatedFqn('App\\ImmutableList', [new TypeRef('App\\Media')]);
-            self::assertStringContainsString($bookList, $output, 'names the ImmutableList<Book> spec');
-            self::assertStringContainsString($mediaList, $output, 'names the ImmutableList<Media> spec');
-        } finally {
-            $fixture->cleanup();
-        }
     }
 }

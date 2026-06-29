@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Minimal self-reintroducing cycle: Lst's derivation returns a map of sub-lists, re-introducing the
+// receiver's own family (Lst) one level deeper. Paired with Mp::values() (which re-exposes the value as
+// a Lst), instantiating Lst<Item> re-seeds Lst -> Mp -> Lst -> ... without bound under eager structural
+// discovery — a tiny shape that reaches the depth cap fast (compile-only; never converges).
+class Lst<+E>
+{
+    public function toMap(): Mp<int, Lst<E>>
+    {
+        return new Mp::<int, Lst<E>>();
+    }
+}

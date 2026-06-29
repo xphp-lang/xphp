@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Instantiating Lst<Item> is enough: eager structural discovery walks toMap()'s result (Mp<int,
+// Lst<Item>>), whose values() re-exposes Lst<Lst<Item>>, and so on — the cycle re-seeds without bound.
+$l = new Lst::<Item>();

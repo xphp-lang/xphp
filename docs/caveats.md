@@ -636,13 +636,12 @@ the supported floor for xphp itself is PHP 8.4 (`composer.json`).
 
 ### ❌ What doesn't work
 
-A derivation whose return type re-wraps the receiver's own type family in a
-*growing* form — and then **driving** that growth by reaching the re-wrapping
-member — does not compile:
+A derivation whose result type re-wraps the receiver's own type family in a
+*growing* form does not compile once that result is instantiated:
 
 ```php
 class ImmutableList<+E> {
-    // Seeds a map of sub-lists: the return type reintroduces the receiver's own
+    // Seeds a map of sub-lists: the result type reintroduces the receiver's own
     // family (ImmutableList) one level deeper.
     public function groupBy<L>(callable $keyOf): ImmutableMap<L, ImmutableList<E>> { /* ... */ }
 }
@@ -650,10 +649,10 @@ class ImmutableMap<K, +V> {
     public function values(): OrderedCollection<V> { /* ... */ }   // re-exposes the value as a list
 }
 
-$byKey  = $list->groupBy::<string>($keyOf);   // ✅ compiles
-$bucket = $byKey->get('a');                   // ✅ compiles — read a bucket back
-$all    = $byKey->values();                   // ❌ aborts — iterating the buckets re-seeds
-                                              //    List → Map → List → … without bound
+// Aborts as soon as the result map is instantiated: specializing it walks its view
+// bodies (values()/entries() construct deeper lists) even if you never call them.
+$byKey  = $list->groupBy::<string>($keyOf);   // ❌ re-seeds List → Map → List → … without bound
+$bucket = $byKey->get('a');
 ```
 
 ```
@@ -671,41 +670,38 @@ This is a **by-design boundary**, not a pending feature
 xphp monomorphizes — one class per instantiation
 ([ADR-0001](adr/0001-monomorphization-over-type-erasure.md)) — so a member that
 keeps producing a strictly-deeper instantiation of its own family has no fixed
-point. The growth is driven by the member's **body** — it *constructs* the deeper
-value (`new ImmutableMap::<L, ImmutableList<E>>(…)`), so retyping the signature
-alone does not stop it. Termination is guaranteed by the depth cap
+point. Specialization discovers new instantiations **structurally**, from every
+member of a specialized class — return types *and* the `new` expressions in method
+bodies — including members you never call. So the result map's family-re-exposing
+views (`values()`/`entries()`) re-seed the cycle on their own, and retyping a
+signature without also changing the body that *constructs* the deeper value does not
+stop it. Termination is guaranteed by the depth cap
 ([ADR-0006](adr/0006-bounded-specialization-depth-cap.md)), which aborts with a
-localized diagnostic naming every concrete class in the cycle and its source file
-(the same divergence is also reported by `xphp check`). Auto-erasing the cycle (a
+localized diagnostic naming every concrete class in the cycle and its source file.
+(It surfaces at `xphp compile`; `xphp check` does not specialize, so it passes
+green — compile to see the diagnostic.) Auto-erasing the cycle (a
 `dyn`-style seam) is deferred, not built: every monomorphizing language provides
 such an escape hatch (Rust's `dyn Trait`, JVM/HHVM erasure), but it must erase the
 *constructed value*, not merely the type.
 
 ### ✅ Workaround
 
-**The common shape already compiles** — group (or associate), then read a bucket
-back (`get`/`first`/`count`). Only *iterating the grouped buckets through the
-map's own generic views* drives the tower.
+Give the grouped result a **view-less type** — one with no `values()`/`entries()`/
+`keys()` member (and no body) that returns or constructs the receiver's family. A
+result exposing only `get(key)`/`count` cannot re-seed the cycle, so the derivation
+converges. In practice, host `groupBy`/`associateBy` as static generics on a plain,
+non-variant helper returning that view-less result, rather than as members of the
+collection — which also keeps the list template free of any map-returning member.
 
-To iterate the buckets, expose them past a **non-generic seam** instead of the
-re-wrapping generic view — return a plain `iterable`/`array`, which the
-specializer does not chase:
+If you do want bucket iteration, expose it past a **non-generic seam**: a view typed
+`iterable`/`array` whose body returns a plain array (no `new ImmutableList::<…>`), so
+neither the signature nor the body re-introduces the family:
 
 ```php
-class ImmutableMap<K, +V> {
-    // Instead of values(): OrderedCollection<V>, which re-wraps the family and towers when reached:
-    public function valuesList(): iterable { return array_values($this->entries); }
-}
-
-foreach ($byKey->valuesList() as $bucket) { /* a real list at runtime; static element type is mixed */ }
+public function valuesList(): iterable { return array_values($this->entries); }
+// foreach ($byKey->valuesList() as $bucket) { /* a real list at runtime; element type is mixed */ }
 ```
 
-The element type is `mixed` past that seam (re-narrow with `instanceof` where a
-typed bucket is needed) — the same trade a `dyn` boundary makes. Or **split the
-derivation** so the growing type is never reached through an unbounded chain.
-
-A related point for the *subtype-element* case (e.g. grouping at both `Book` and
-`Media` where `Book <: Media`, then upcasting the result): type the grouped value
-as the **`OrderedCollection` interface**, not the concrete `ImmutableList`, so the
-covariant view override stays compatible at class load (the same covariant-leaf
-rule that governs covariant slots).
+The element type is `mixed` past that seam (re-narrow with `instanceof` where a typed
+bucket is needed) — the same trade a `dyn` boundary makes. Or **split the derivation**
+so the growing type is never reached through an unbounded chain.
