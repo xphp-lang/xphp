@@ -164,6 +164,16 @@ final class SpecializationTowerBoundaryTest extends TestCase
                 $output,
                 'loading fatals on the incompatible covariant override',
             );
+            // The incompatibility is specifically between the two covariant value-list specializations.
+            // The generated FQN is a pure function of the type arguments (a sha256 of their canonical
+            // form), so it is deterministic and computed here via the production hasher rather than
+            // hard-coded — pinning that it is the `ImmutableList<Book>` vs `ImmutableList<Media>` override
+            // that fatals, not merely "some" incompatibility. (Which method PHP reports first is link
+            // order, but both candidates return the value list, so both FQNs always appear.)
+            $bookList = Registry::generatedFqn('App\\ImmutableList', [new TypeRef('App\\Book')]);
+            $mediaList = Registry::generatedFqn('App\\ImmutableList', [new TypeRef('App\\Media')]);
+            self::assertStringContainsString($bookList, $output, 'names the ImmutableList<Book> spec');
+            self::assertStringContainsString($mediaList, $output, 'names the ImmutableList<Media> spec');
         } finally {
             $fixture->cleanup();
         }
