@@ -9,11 +9,14 @@ use RuntimeException;
 use XPHP\TestSupport\CompiledFixture;
 
 /**
- * Characterization of the current boundary where a covariant collection's grouping derivation re-exposes
- * its own type family. These programs do NOT compile-and-run today; the tests pin exactly HOW they fail
- * (fast, loud, and bounded — not a hang or OOM), so a regression that turned the controlled failure into
- * a hang, an OOM, or a silently-wrong build would be caught. When an erased seam lands to break the
- * self-reintroducing cycle at the view boundary, the tower tests flip from "aborts" to "compiles".
+ * Characterization of the boundary where a covariant collection's grouping derivation re-exposes its own
+ * type family. These programs do NOT compile-and-run as written, and that is the accepted behavior: the
+ * decision is to diagnose and have the author restructure the re-exposing member's body (return a
+ * non-generic iterable / split the derivation), not to make this exact source compile. The tests pin
+ * HOW it fails (fast, loud, and bounded — not a hang or OOM), so a regression that turned the controlled
+ * failure into a hang, an OOM, or a silently-wrong build would be caught. The planned change is a more
+ * precise diagnostic (firing in `check`, naming the member), which sharpens the message without altering
+ * these outcomes; a `dyn`-style erased seam that would make the natural source compile is deferred.
  *
  * The shape is the faithful collections lattice: a covariant `ImmutableList<+E>` with
  * `groupBy<L>(): ImmutableMap<L, ImmutableList<E>>`, and `ImmutableMap<K, +V>` whose views
