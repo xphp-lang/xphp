@@ -168,9 +168,53 @@ non-output position.
   class-level property; the seam's output-position restriction builds on it.
 - [Caveats](../caveats.md) — the variance-edge-under-single-inheritance limit the
   seam also addresses.
-- Prior art: Rust's `dyn Trait` / `Box<dyn Trait>` (an erased boundary that breaks
-  monomorphization's otherwise-unbounded expansion), and the type-erasure model of
-  JVM-hosted and HHVM generics (one runtime class per generic, type argument
-  dropped) — the seam imports that mechanism at a single chosen position rather
-  than program-wide.
+### Prior art
+
+This mechanism is not novel to xphp; it is the established escape hatch in every
+monomorphizing language. The seam imports it at a single chosen position rather
+than program-wide.
+
+**Rust — `dyn Trait` / `Box<dyn Trait>` (trait objects).** Rust monomorphizes
+generics by default (static dispatch); a trait object is the opt-in *erased*
+alternative. The Rust documentation calls `dyn Trait` an **"erased type"** —
+"an object that implements a specific trait, but whose underlying concrete type
+is not known at compile time" — accessed through a fat pointer to a vtable
+([Rust Reference: Trait objects](https://doc.rust-lang.org/reference/types/trait-object.html),
+[Rust Book §18.2](https://doc.rust-lang.org/book/ch18-02-trait-objects.html)).
+Crucially, it "enables polymorphism **without monomorphization**, which directly
+avoids the monomorphization recursion limit" and produces no per-type code. A
+self-reintroducing generic that towers under static dispatch:
+
+```rust
+// Static dispatch: each call instantiates T at a strictly deeper type, so the
+// compiler must emit wrap::<Item>, wrap::<Vec<Item>>, wrap::<Vec<Vec<Item>>>, …
+fn wrap<T: std::fmt::Debug>(x: T) {
+    println!("{:?}", x);
+    wrap(vec![x]); // T -> Vec<T> each level
+}
+// error: reached the recursion limit while instantiating `wrap::<Vec<Vec<…>>>`
 ```
+
+is fixed by erasing the value behind a trait object — the seam — so no new
+instantiation is generated per level:
+
+```rust
+fn wrap(x: Box<dyn std::fmt::Debug>) {
+    println!("{:?}", x);
+    // x is type-erased behind `dyn`; the expansion stops here.
+}
+```
+
+The same indirection breaks infinitely-sized recursive *types*
+(`enum List { Cons(i32, Box<List>) }` — [Rust Book §15.1](https://doc.rust-lang.org/book/ch15-01-box.html),
+[Rust By Example: Returning `dyn`](https://doc.rust-lang.org/rust-by-example/trait/dyn.html)).
+Note that Rust's `impl Trait` is *opaque but still monomorphized* — it is **not**
+the erased seam; only `dyn` erases. xphp's seam is the `dyn` analogue: erase to
+the supertype at one position, keep monomorphization everywhere else.
+
+**JVM-hosted and HHVM generics — whole-program erasure.** Kotlin/Java and Hack
+erase generics outright — one runtime class per generic, the type argument
+dropped ([Hack & HHVM: Type Erasure](https://docs.hhvm.com/hack/generics/type-erasure/)).
+xphp does the same thing the seam does, but at *one chosen position* instead of
+for the entire program — which is why monomorphization's guarantees survive
+everywhere else.
