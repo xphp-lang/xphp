@@ -158,6 +158,12 @@ final class SpecializationTowerBoundaryTest extends TestCase
             );
             $output = (string) shell_exec($cmd);
 
+            // Asserted by parts, not as one whole string (unlike the tower-message tests above): a PHP
+            // class-link fatal carries irreducibly run-/environment-dependent scaffolding — the absolute
+            // temp paths of the generated files, and a Call Stack with per-frame timings, memory figures,
+            // and absolute include paths — none of which is stable across runs or PHP builds. The parts
+            // that ARE deterministic (the failure phrase and the offending specialization FQNs) are
+            // pinned below; the volatile scaffolding is intentionally left unmatched.
             self::assertStringNotContainsString('LOADED_OK', $output, 'the specs must not load cleanly');
             self::assertStringContainsString(
                 'must be compatible with',
