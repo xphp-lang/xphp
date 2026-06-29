@@ -629,3 +629,83 @@ PHP 8.5 for the pipe operator. Plain (non-generic) code, including
 newer-PHP syntax, passes straight through untouched. Note the emitted
 PHP still requires a runtime that supports those features to *execute*;
 the supported floor for xphp itself is PHP 8.4 (`composer.json`).
+
+---
+
+## Self-reintroducing specialization (list ↔ map derivations)
+
+### ❌ What doesn't work
+
+A derivation whose return type re-wraps the receiver's own type family in a
+*growing* form — and then **driving** that growth by reaching the re-wrapping
+member — does not compile:
+
+```php
+class ImmutableList<+E> {
+    // Seeds a map of sub-lists: the return type reintroduces the receiver's own
+    // family (ImmutableList) one level deeper.
+    public function groupBy<L>(callable $keyOf): ImmutableMap<L, ImmutableList<E>> { /* ... */ }
+}
+class ImmutableMap<K, +V> {
+    public function values(): OrderedCollection<V> { /* ... */ }   // re-exposes the value as a list
+}
+
+$byKey  = $list->groupBy::<string>($keyOf);   // ✅ compiles
+$bucket = $byKey->get('a');                   // ✅ compiles — read a bucket back
+$all    = $byKey->values();                   // ❌ aborts — iterating the buckets re-seeds
+                                              //    List → Map → List → … without bound
+```
+
+```
+Generic specialization did not converge (exceeded depth 16): a self-reintroducing
+cycle grows without bound through App\ImmutableMap (…/ImmutableMap.xphp) and
+App\ImmutableList (…/ImmutableList.xphp) — e.g. "…". Break the cycle: return a
+non-self-reintroducing type from the re-exposing member (for example a
+non-generic iterable), or split the derivation …
+```
+
+### Why
+
+This is a **by-design boundary**, not a pending feature
+([ADR-0020](adr/0020-diagnose-and-restructure-self-reintroducing-specialization.md)).
+xphp monomorphizes — one class per instantiation
+([ADR-0001](adr/0001-monomorphization-over-type-erasure.md)) — so a member that
+keeps producing a strictly-deeper instantiation of its own family has no fixed
+point. The growth is driven by the member's **body** — it *constructs* the deeper
+value (`new ImmutableMap::<L, ImmutableList<E>>(…)`), so retyping the signature
+alone does not stop it. Termination is guaranteed by the depth cap
+([ADR-0006](adr/0006-bounded-specialization-depth-cap.md)), which aborts with a
+localized diagnostic naming every concrete class in the cycle and its source file
+(the same divergence is also reported by `xphp check`). Auto-erasing the cycle (a
+`dyn`-style seam) is deferred, not built: every monomorphizing language provides
+such an escape hatch (Rust's `dyn Trait`, JVM/HHVM erasure), but it must erase the
+*constructed value*, not merely the type.
+
+### ✅ Workaround
+
+**The common shape already compiles** — group (or associate), then read a bucket
+back (`get`/`first`/`count`). Only *iterating the grouped buckets through the
+map's own generic views* drives the tower.
+
+To iterate the buckets, expose them past a **non-generic seam** instead of the
+re-wrapping generic view — return a plain `iterable`/`array`, which the
+specializer does not chase:
+
+```php
+class ImmutableMap<K, +V> {
+    // Instead of values(): OrderedCollection<V>, which re-wraps the family and towers when reached:
+    public function valuesList(): iterable { return array_values($this->entries); }
+}
+
+foreach ($byKey->valuesList() as $bucket) { /* a real list at runtime; static element type is mixed */ }
+```
+
+The element type is `mixed` past that seam (re-narrow with `instanceof` where a
+typed bucket is needed) — the same trade a `dyn` boundary makes. Or **split the
+derivation** so the growing type is never reached through an unbounded chain.
+
+A related point for the *subtype-element* case (e.g. grouping at both `Book` and
+`Media` where `Book <: Media`, then upcasting the result): type the grouped value
+as the **`OrderedCollection` interface**, not the concrete `ImmutableList`, so the
+covariant view override stays compatible at class load (the same covariant-leaf
+rule that governs covariant slots).
