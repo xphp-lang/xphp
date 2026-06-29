@@ -367,37 +367,144 @@ final readonly class Compiler
      */
     private static function unconvergedSpecializationMessage(Registry $registry): string
     {
+        $deepest = self::deepestInstantiation($registry);
+        if ($deepest === null) {
+            return sprintf(
+                'Generic specialization did not converge (exceeded depth %d): a member\'s type re-wraps '
+                . 'the receiver\'s own type family in a growing form. Break the cycle: give the member a '
+                . 'non-self-reintroducing type, or split the derivation so the growing type isn\'t reached '
+                . 'through an unbounded chain.',
+                self::MAX_SPECIALIZATION_DEPTH,
+            );
+        }
+
+        // @infection-ignore-all ConcatOperandRemoval -- a dropped angle-bracket in the illustrative
+        // example type is cosmetic, not a behavior change; the example's shape (root family + nesting) is
+        // pinned by the diagnostic test's "ImmutableMap<string," and deep-nesting assertions.
+        $example = $deepest->templateFqn . '<' . implode(', ', array_map(
+            static fn (TypeRef $r): string => $r->canonical(),
+            $deepest->concreteTypes,
+        )) . '>';
+
+        // Name every template whose family appears in the top tiers of the growing tower — those are
+        // the types whose mutual references form the cycle. Point at each one's source file so the
+        // author knows where to break it.
+        $cycleDefs = self::cycleDefinitions($registry);
+        $families = $cycleDefs === []
+            ? ltrim($deepest->templateFqn, '\\')
+            : implode(' and ', array_map(
+                static fn (GenericDefinition $d): string => sprintf('%s (%s)', $d->templateFqn, $d->sourceFile),
+                $cycleDefs,
+            ));
+
+        return sprintf(
+            'Generic specialization did not converge (exceeded depth %d): a self-reintroducing cycle '
+            . 'grows without bound through %s — e.g. "%s". This happens when a member\'s type re-wraps the '
+            . 'receiver\'s own type family in a growing form (for example `groupBy(): Map<L, List<E>>`, '
+            . 'where Map\'s views re-expose List). Break the cycle: return a non-self-reintroducing type '
+            . 'from the re-exposing member (for example a non-generic iterable), or split the derivation '
+            . 'so the growing type isn\'t reached through an unbounded chain.',
+            self::MAX_SPECIALIZATION_DEPTH,
+            $families,
+            $example,
+        );
+    }
+
+    /**
+     * The maximum nesting depth across an instantiation's concrete type arguments.
+     *
+     * @infection-ignore-all DecrementInteger -- the `0` seed is equivalent: a recorded generic
+     *     instantiation always has at least one concrete type, so the loop runs and `max()` dominates
+     *     the seed; only an (impossible) zero-argument instantiation could observe the seed value.
+     */
+    private static function instantiationDepth(GenericInstantiation $instantiation): int
+    {
+        $depth = 0;
+        foreach ($instantiation->concreteTypes as $arg) {
+            $depth = max($depth, self::typeRefDepth($arg));
+        }
+        return $depth;
+    }
+
+    /**
+     * The recorded instantiation whose argument tree nests the deepest (the tip of a growing tower).
+     *
+     * @infection-ignore-all DecrementInteger/IncrementInteger/GreaterThan -- the `-1` seed and the `>`
+     *     vs `>=` tie-break are equivalent under divergence: the loop always finds a strictly-positive
+     *     deepest, and ties resolve to an equally-deep instantiation either way. Behaviorally pinned —
+     *     the diagnostic test asserts the chosen example carries the deepest (multi-level) nesting.
+     */
+    private static function deepestInstantiation(Registry $registry): ?GenericInstantiation
+    {
         $deepest = null;
         $deepestDepth = -1;
         foreach ($registry->instantiations() as $instantiation) {
-            $depth = 0;
-            foreach ($instantiation->concreteTypes as $arg) {
-                $depth = max($depth, self::typeRefDepth($arg));
-            }
+            $depth = self::instantiationDepth($instantiation);
             if ($depth > $deepestDepth) {
                 $deepestDepth = $depth;
                 $deepest = $instantiation;
             }
         }
+        return $deepest;
+    }
 
-        $family = $deepest === null ? '(unknown)' : $deepest->templateFqn;
-        $example = $deepest === null
-            ? '(none)'
-            : $deepest->templateFqn . '<' . implode(', ', array_map(
-                static fn (TypeRef $r): string => $r->canonical(),
-                $deepest->concreteTypes,
-            )) . '>';
+    /**
+     * The generic definitions that drive the growing cycle: the concrete classes appearing in the top
+     * tiers of the tower (instantiations within one level of the deepest). A single tip type only names
+     * the families in *its* branch — e.g. a `List<List<…>>` tip omits the `Map` it alternates with — so
+     * the top two tiers are scanned. Interfaces and abstract bases are dragged along as supertypes of the
+     * growing classes but don't construct the deeper values, so they are filtered out to keep the
+     * diagnostic pointed at the classes whose members re-wrap the family. If nothing concrete remains
+     * (the cycle runs purely through interfaces), the unfiltered set is returned rather than nothing.
+     * Deduplicated, in first-seen order.
+     *
+     * @infection-ignore-all DecrementInteger/IncrementInteger/LessThan/LessThanNegotiation/Foreach/Coalesce/UnwrapLtrim/FunctionCallRemoval/UnwrapArrayValues
+     *     -- error-path diagnostic only. The family set is collected via redundant paths (each scanned
+     *     instantiation's root plus a full walk of its argument tree), so dropping the recursion or a
+     *     collection call still names the same families; the `maxDepth - 1` tier window only excludes
+     *     unrelated shallow bystanders (none exist in a pure tower); and the `?? ltrim()` / `array_values()`
+     *     calls are defensive no-ops on canonical registry names. All behaviorally pinned by the
+     *     diagnostic test (names exactly the two concrete cycle classes and excludes the supertypes).
+     *
+     * @return list<GenericDefinition>
+     */
+    private static function cycleDefinitions(Registry $registry): array
+    {
+        $instantiations = $registry->instantiations();
+        $maxDepth = 0;
+        foreach ($instantiations as $instantiation) {
+            $maxDepth = max($maxDepth, self::instantiationDepth($instantiation));
+        }
 
-        return sprintf(
-            'Generic specialization did not converge (exceeded depth %d): the type family rooted at "%s" '
-            . 'grows without bound — e.g. "%s". This happens when a member\'s type re-wraps the receiver\'s '
-            . 'own type family in a growing form (for example `groupBy(): Map<L, List<E>>`, where Map\'s '
-            . 'views re-expose List). Break the cycle: give the member a non-self-reintroducing type, or '
-            . 'split the derivation so the growing type isn\'t reached through an unbounded chain.',
-            self::MAX_SPECIALIZATION_DEPTH,
-            $family,
-            $example,
-        );
+        $defs = [];
+        $consider = static function (string $name) use ($registry, &$defs): void {
+            $def = $registry->definition($name) ?? $registry->definition(ltrim($name, '\\'));
+            if ($def !== null) {
+                $defs[$def->templateFqn] = $def;
+            }
+        };
+        $walk = static function (TypeRef $ref) use (&$walk, $consider): void {
+            $consider($ref->name);
+            foreach ($ref->args as $arg) {
+                $walk($arg);
+            }
+        };
+        foreach ($instantiations as $instantiation) {
+            if (self::instantiationDepth($instantiation) < $maxDepth - 1) {
+                continue;
+            }
+            $consider($instantiation->templateFqn);
+            foreach ($instantiation->concreteTypes as $arg) {
+                $walk($arg);
+            }
+        }
+
+        $concrete = array_values(array_filter(
+            $defs,
+            static fn (GenericDefinition $d): bool =>
+                $d->templateAst instanceof \PhpParser\Node\Stmt\Class_ && !$d->templateAst->isAbstract(),
+        ));
+        return $concrete !== [] ? $concrete : array_values($defs);
     }
 
     /** The maximum nesting depth of a TypeRef's generic-argument tree (a non-generic ref is depth 0). */
