@@ -244,6 +244,174 @@ final class BoundedGenericIntegrationTest extends TestCase
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
     }
 
+    public function testScalarUnionBoundAcceptsScalarArguments(): void
+    {
+        // A scalar-union bound `<T : int|string>` must accept scalar type arguments. Each scalar operand of
+        // the bound is recognised as a builtin (left unqualified, flagged isScalar) rather than
+        // namespace-qualified as a phantom class `App\int` -- so the bound check compares
+        // scalar-against-scalar and both `::<int>` and `::<string>` specialize.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : int|string>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $i = new Box::<int>(7);
+        $s = new Box::<string>('x');
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $result = $compiler->compile(new FilepathArray($boxFile, $useFile), $sourceDir, $this->targetDir, $this->cacheDir);
+
+        self::assertSame(2, $result->generatedCount, 'both int and string satisfy the int|string bound');
+    }
+
+    public function testScalarUnionBoundRejectsClassArgument(): void
+    {
+        // The dual of the accept case: a class argument does NOT satisfy a scalar-union bound, and the
+        // diagnostic renders the bound with its scalar operands unqualified (`int | string`, not
+        // `App\int | App\string`).
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : int|string>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $thingFile = $sourceDir . '/Thing.xphp';
+        file_put_contents($thingFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Thing {}
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $t = new Box::<Thing>(new Thing());
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($boxFile, $thingFile, $useFile);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated');
+        $this->expectExceptionMessage('int | string');
+        $this->expectExceptionMessage('does not satisfy');
+        $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
+    public function testSingleScalarBoundRejectsDifferentScalar(): void
+    {
+        // A single scalar bound `<T : string>` rejects a different scalar (`int`) -- the bound is a concrete
+        // scalar, so only that scalar (or a subtype, of which scalars have none) satisfies it.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : string>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $b = new Box::<int>(7);
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($boxFile, $useFile);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated');
+        $this->expectExceptionMessage('int');
+        $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
+    public function testNonReservedScalarAliasResolvesAsClassBoundNotScalar(): void
+    {
+        // Regression guard: `integer`/`boolean`/`double` are in SCALAR_TYPES but are LEGAL class names (they
+        // are not reserved PHP keywords). A bound `<T : Double>` must resolve `Double` to the class, not be
+        // mistaken for the scalar `double` -- otherwise a valid subtype argument would be falsely rejected.
+        // Recognising only RESERVED keywords in the bound leaf keeps this class bound working.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $modelFile = $sourceDir . '/Models.xphp';
+        file_put_contents($modelFile, <<<'PHP'
+        <?php
+        namespace App;
+        class Double {}
+        final class Sub extends Double {}
+        PHP);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : Double>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $b = new Box::<Sub>(new Sub());
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $result = $compiler->compile(new FilepathArray($boxFile, $modelFile, $useFile), $sourceDir, $this->targetDir, $this->cacheDir);
+
+        self::assertSame(1, $result->generatedCount, 'Sub extends Double, so the class bound <T : Double> is satisfied');
+    }
+
+    public function testMixedCaseScalarBoundIsRecognisedCaseInsensitively(): void
+    {
+        // PHP type keywords are case-insensitive, so a bound written `<T : Int|String>` must be recognised
+        // as the scalar union, not namespace-qualified as classes `App\Int` / `App\String`. The leaf
+        // lowercases the name before matching the keyword list, exactly as the signature-type resolver does.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : Int|String>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $i = new Box::<int>(7);
+        $s = new Box::<string>('x');
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $result = $compiler->compile(new FilepathArray($boxFile, $useFile), $sourceDir, $this->targetDir, $this->cacheDir);
+
+        self::assertSame(2, $result->generatedCount, 'Int|String is the scalar union regardless of letter case');
+    }
+
     public function testUnionBoundWithUnknownOperandYieldsNullVerdict(): void
     {
         // when at least one union operand returns `null` from

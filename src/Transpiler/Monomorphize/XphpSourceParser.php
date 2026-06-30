@@ -90,6 +90,23 @@ final class XphpSourceParser
         'array', 'iterable', 'object', 'callable', 'self', 'static', 'parent',
     ];
 
+    /**
+     * The subset of {@see SCALAR_TYPES} that are RESERVED PHP type keywords — names PHP forbids as class
+     * names. Use this (not the broader list) when a bare name must be recognised as a builtin instead of
+     * namespace-qualified as a class reference: only a reserved keyword is unambiguously a builtin. The
+     * gettype-style aliases `integer`/`boolean`/`double` are deliberately excluded — they are legal class
+     * names (`class Double {}`), so a generic bound `<T : Double>` must resolve to the class, not a scalar.
+     *
+     * (The signature/default resolver {@see resolveTypeRef} and {@see markName} still match the broader
+     * SCALAR_TYPES and so carry the same latent `integer`/`boolean`/`double` collision in those positions;
+     * that is a pre-existing, untested edge tracked separately, not introduced here.)
+     */
+    public const RESERVED_SCALAR_TYPES = [
+        'int', 'string', 'bool', 'float',
+        'void', 'mixed', 'never', 'null', 'false', 'true',
+        'array', 'iterable', 'object', 'callable', 'self', 'static', 'parent',
+    ];
+
     public function __construct(private readonly Parser $parser)
     {
     }
@@ -1781,6 +1798,20 @@ final class XphpSourceParser
                     // rather than treating `E` as a phantom class name.
                     if (!$node['isFq'] && $this->isEnclosingTypeParam($node['name'])) {
                         return new BoundLeaf(new TypeRef($node['name'], $resolvedArgs, isTypeParam: true));
+                    }
+                    // A scalar/builtin-keyword leaf (`T : int|string`) must stay unqualified and flagged
+                    // isScalar -- mirroring resolveTypeRef -- so the bound check compares
+                    // scalar-against-scalar. Otherwise resolveNameOnly would namespace-qualify it (`int` ->
+                    // `Ns\int`) and every valid scalar argument would be rejected. Only RESERVED keywords
+                    // match here: `integer`/`boolean`/`double` are legal class names, so `<T : Double>` must
+                    // resolve to the class via the fallback below, not be mistaken for a scalar.
+                    $lowerName = strtolower($node['name']);
+                    if (!$node['isFq'] && in_array($lowerName, XphpSourceParser::RESERVED_SCALAR_TYPES, true)) {
+                        // @infection-ignore-all TrueValue -- equivalent: a bound leaf's isScalar flag is
+                        // never read (the bound check keys on the TypeRef name; the only isScalar readers
+                        // are instantiation-argument / variance paths, not bound leaves). It is set true
+                        // solely to mirror resolveTypeRef's scalar branch, so true vs false is unobservable.
+                        return new BoundLeaf(new TypeRef($lowerName, $resolvedArgs, isScalar: true));
                     }
                     $fqn = $node['isFq']
                         ? $node['name']

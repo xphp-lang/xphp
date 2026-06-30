@@ -180,6 +180,16 @@ _In progress on this branch — content still accumulating; date set at tag time
   `xphp.missing_type_argument`, across instance, static, free-function, and closure
   calls. A generic whose type parameters are all defaulted still resolves; a
   first-class callable (`pick(...)`) and a non-generic call are unaffected.
+- **A scalar type argument now satisfies a scalar generic bound.** A bound naming a
+  scalar or scalar union — `class Box<T : int|string>` — previously namespace-qualified
+  its operands (`App\int | App\string`), so *every* valid scalar argument was rejected
+  with `"string" does not satisfy "App\int | App\string"`. The bound leaf was the one
+  type position that skipped the scalar-aware name resolution every other position uses.
+  Its reserved scalar/builtin keywords are now recognised and left unqualified, so
+  `Box::<string>` satisfies `<T : int|string>` and `<T : int|float>` accepts `::<float>`,
+  while a class argument is still rejected (`"App\Thing" does not satisfy "int | string"`)
+  and a class bound that merely *looks* like a legacy alias (`<T : Double>`, where `Double`
+  is a real class — not a reserved keyword) keeps resolving to the class.
 
 ## [0.2.1] - 2026-06-17
 
