@@ -14,6 +14,7 @@ use XPHP\Config\SourceResolver;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\StaticAnalysis\CheckGate;
 use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\Specializer;
@@ -131,7 +132,7 @@ final class CheckCommandTest extends TestCase
         );
 
         return new CommandTester(
-            new CheckCommand($sourceResolver, $compiler, new StaticAnalysisGate($compiler)),
+            new CheckCommand($sourceResolver, new CheckGate($compiler, new StaticAnalysisGate($compiler))),
         );
     }
 

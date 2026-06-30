@@ -137,6 +137,17 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Changed
 
+- **`xphp compile` runs the validation gate by default.** Compile now runs the same
+  gate as `xphp check` (the generic validators plus PHPStan over the compiled output)
+  *before* emitting, and fails the build — emitting nothing — when the gate reports an
+  error. So a type argument that names no real class (`new Box::<Nonexistent>()`) and
+  every other PHPStan-detectable error now fails at compile time instead of slipping
+  through to runtime. PHPStan's real autoloader visibility makes this sound — a genuine
+  plain-`.php` domain class used as a type argument is never false-rejected. For a fast
+  iteration build, `--no-check` skips the gate and compiles directly (the previous
+  behavior). `--no-phpstan` runs only the generic validators; a missing PHPStan degrades
+  to a non-failing warning.
+  See [ADR-0021](docs/adr/0021-compile-runs-the-check-gate-by-default.md).
 - **BREAKING — a `final` variant class is now rejected.** A `final class Box<+T>`
   previously compiled, with the generated specialization silently dropping `final`
   so the `extends` subtype edge between specializations could land — which made

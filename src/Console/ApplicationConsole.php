@@ -14,6 +14,7 @@ use XPHP\Console\Command\CompileCommand;
 use XPHP\FileSystem\FileFinder;
 use XPHP\FileSystem\FileReader;
 use XPHP\FileSystem\FileWriter;
+use XPHP\StaticAnalysis\CheckGate;
 use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\Registry;
@@ -50,8 +51,9 @@ final class ApplicationConsole extends Application
         );
 
         $sourceResolver = new SourceResolver($fileFinder, new ManifestResolver($fileReader, $fileFinder));
+        $gate = new CheckGate($compiler, new StaticAnalysisGate($compiler));
 
-        $this->addCommand(new CompileCommand($sourceResolver, $compiler));
-        $this->addCommand(new CheckCommand($sourceResolver, $compiler, new StaticAnalysisGate($compiler)));
+        $this->addCommand(new CompileCommand($sourceResolver, $compiler, $gate));
+        $this->addCommand(new CheckCommand($sourceResolver, $gate));
     }
 }

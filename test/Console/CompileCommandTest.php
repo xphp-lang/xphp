@@ -6,14 +6,22 @@ namespace XPHP\Console\Command;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 use XPHP\Config\ManifestResolver;
 use XPHP\Config\SourceResolver;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\StaticAnalysis\CheckGate;
+use XPHP\StaticAnalysis\Gate;
+use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\SpecializedClassGenerator;
 use XPHP\Transpiler\Monomorphize\Specializer;
@@ -217,7 +225,120 @@ final class CompileCommandTest extends TestCase
 
     // --- helpers ---
 
-    private function tester(): CommandTester
+    public function testGateErrorFailsCompileAndEmitsNothing(): void
+    {
+        mkdir($this->work . '/src', 0o755, true);
+        file_put_contents($this->work . '/src/Plain.xphp', "<?php\nnamespace App;\nclass Plain {}\n");
+
+        $gate = new RecordingGate(fail: true);
+        $tester = $this->tester($gate);
+        $exit = $tester->execute([
+            'source' => $this->work . '/src',
+            'target' => $this->work . '/dist',
+            'cache' => $this->work . '/cache',
+        ]);
+
+        self::assertSame(Command::FAILURE, $exit);
+        self::assertStringContainsString('gate failed', $tester->getDisplay());
+        self::assertSame(1, $gate->calls, 'the gate runs once');
+        self::assertFileDoesNotExist($this->work . '/dist/Plain.php', 'a failed gate emits nothing');
+    }
+
+    public function testNoCheckSkipsGateAndCompilesEvenWhenItWouldFail(): void
+    {
+        mkdir($this->work . '/src', 0o755, true);
+        file_put_contents($this->work . '/src/Plain.xphp', "<?php\nnamespace App;\nclass Plain {}\n");
+
+        $gate = new RecordingGate(fail: true);
+        $exit = $this->tester($gate)->execute([
+            'source' => $this->work . '/src',
+            'target' => $this->work . '/dist',
+            'cache' => $this->work . '/cache',
+            '--no-check' => true,
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exit);
+        self::assertSame(0, $gate->calls, '--no-check never invokes the gate');
+        self::assertFileExists($this->work . '/dist/Plain.php');
+    }
+
+    public function testCleanGateRunsEveryCompileWithoutASkipMarker(): void
+    {
+        mkdir($this->work . '/src', 0o755, true);
+        file_put_contents($this->work . '/src/Plain.xphp', "<?php\nnamespace App;\nclass Plain {}\n");
+        $args = [
+            'source' => $this->work . '/src',
+            'target' => $this->work . '/dist',
+            'cache' => $this->work . '/cache',
+        ];
+
+        // The gate is always run: there is no skip path that could pass off stale output as validated.
+        $gate = new RecordingGate();
+        $this->tester($gate)->execute($args);
+        $this->tester($gate)->execute($args);
+        self::assertSame(2, $gate->calls, 'the gate runs on every compile (no skip marker)');
+        self::assertFileDoesNotExist($this->work . '/cache/.check-ok', 'no skip marker is written');
+    }
+
+    public function testCleanGateWithWarningStillCompilesAndRendersTheWarning(): void
+    {
+        mkdir($this->work . '/src', 0o755, true);
+        file_put_contents($this->work . '/src/Plain.xphp', "<?php\nnamespace App;\nclass Plain {}\n");
+
+        $gate = new RecordingGate(fail: false, warn: true);
+        $tester = $this->tester($gate);
+        $exit = $tester->execute([
+            'source' => $this->work . '/src',
+            'target' => $this->work . '/dist',
+            'cache' => $this->work . '/cache',
+        ]);
+
+        self::assertSame(Command::SUCCESS, $exit, 'a non-error diagnostic does not fail the build');
+        self::assertStringContainsString('gate warned', $tester->getDisplay(), 'the warning is surfaced');
+        self::assertStringContainsString('Compiled', $tester->getDisplay());
+        self::assertFileExists($this->work . '/dist/Plain.php');
+    }
+
+    #[Group('phpstan')]
+    public function testRealGateFailsCompileOnUndeclaredTypeArgument(): void
+    {
+        $bin = realpath(__DIR__ . '/../../vendor/bin/phpstan');
+        if ($bin === false) {
+            self::markTestSkipped('phpstan binary not installed (vendor/bin/phpstan)');
+        }
+        mkdir($this->work . '/src', 0o755, true);
+        file_put_contents($this->work . '/src/Box.xphp', "<?php\ndeclare(strict_types=1);\nnamespace App;\nfinal class Box<T> { public function __construct(public readonly T \$v) {} }\n");
+        file_put_contents($this->work . '/src/Use.xphp', "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box::<Nonexistent>(new \\stdClass());\n");
+
+        $exit = $this->tester($this->realGate())->execute([
+            'source' => $this->work . '/src',
+            'target' => $this->work . '/dist',
+            'cache' => $this->work . '/cache',
+            '--phpstan-bin' => $bin,
+        ]);
+
+        self::assertSame(Command::FAILURE, $exit, 'a type argument that resolves to no real class fails the gate');
+        self::assertFileDoesNotExist($this->work . '/dist/Use.php', 'nothing is emitted when the gate fails');
+    }
+
+    private function realGate(): Gate
+    {
+        $phpParser = (new ParserFactory())->createForHostVersion();
+        $printer = new StandardPrinter();
+        $writer = new NativeFileWriter();
+        $compiler = new Compiler(
+            new NativeFileReader(),
+            $writer,
+            new XphpSourceParser($phpParser),
+            new Specializer(),
+            new SpecializedClassGenerator($printer, $writer),
+            $printer,
+        );
+
+        return new CheckGate($compiler, new StaticAnalysisGate($compiler));
+    }
+
+    private function tester(?Gate $gate = null): CommandTester
     {
         $phpParser = (new ParserFactory())->createForHostVersion();
         $printer = new StandardPrinter();
@@ -235,7 +356,27 @@ final class CompileCommandTest extends TestCase
             new ManifestResolver(new NativeFileReader(), new NativeFileFinder()),
         );
 
-        return new CommandTester(new CompileCommand($sourceResolver, $compiler));
+        return new CommandTester(
+            new CompileCommand($sourceResolver, $compiler, $gate ?? self::cleanGate()),
+        );
+    }
+
+    /** A gate that always passes — isolates the compile-mechanics tests from the real validators/PHPStan. */
+    private static function cleanGate(): Gate
+    {
+        return new class implements Gate {
+            public function run(
+                FilepathArray $sources,
+                string $sourceDir,
+                string $workingDir,
+                bool $runPhpStan,
+                ?string $phpstanBin,
+                ?string $phpstanConfig,
+                ?array $rootByFile,
+            ): DiagnosticCollector {
+                return new DiagnosticCollector();
+            }
+        };
     }
 
     /** @param array<string,string> $files relative path => content */
@@ -294,5 +435,42 @@ final class CompileCommandTest extends TestCase
             is_dir($p) ? self::rrmdir($p) : unlink($p);
         }
         rmdir($dir);
+    }
+}
+
+/**
+ * A {@see Gate} double for the compile-orchestration tests: counts invocations and, when `fail` is set,
+ * returns one error-severity diagnostic — so the tests exercise the gate/flag logic without the real
+ * validators or PHPStan.
+ */
+final class RecordingGate implements Gate
+{
+    public int $calls = 0;
+
+    public function __construct(
+        private readonly bool $fail = false,
+        private readonly bool $warn = false,
+    ) {
+    }
+
+    public function run(
+        FilepathArray $sources,
+        string $sourceDir,
+        string $workingDir,
+        bool $runPhpStan,
+        ?string $phpstanBin,
+        ?string $phpstanConfig,
+        ?array $rootByFile,
+    ): DiagnosticCollector {
+        $this->calls++;
+        $collector = new DiagnosticCollector();
+        if ($this->fail) {
+            $collector->add(new Diagnostic(Severity::Error, 'test.gate_error', 'gate failed'));
+        }
+        if ($this->warn) {
+            $collector->add(new Diagnostic(Severity::Warning, 'test.gate_warning', 'gate warned'));
+        }
+
+        return $collector;
     }
 }
