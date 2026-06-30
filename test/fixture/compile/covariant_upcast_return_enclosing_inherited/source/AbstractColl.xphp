@@ -1,0 +1,15 @@
+<?php
+declare(strict_types=1);
+namespace App;
+use function in_array;
+// Parent-less covariant base that holds BOTH erased bodies. firstOr returns E (return-position
+// enclosing parameter): it can be supplied ONLY by inheritance (grounded entirely at the supertype),
+// never by direct emission. The post-edge gap-fill must leave it to inheritance here (no diamond).
+abstract class AbstractColl<+E> implements OrderedCollection<E>
+{
+    /** @var list<mixed> */
+    protected array $items;
+    public function __construct(E ...$items) { $this->items = $items; }
+    public function contains<S : E>(S $element): bool { return in_array($element, $this->items, true); }
+    public function firstOr<S : E>(S $fallback): E { return $this->items[0] ?? $fallback; }
+}

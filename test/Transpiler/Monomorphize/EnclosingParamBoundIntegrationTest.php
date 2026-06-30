@@ -1245,6 +1245,252 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         ]);
     }
 
+    #[RunInSeparateProcess]
+    public function testNestedGenericDiamondCovariantUpcastCompilesAndRuns(): void
+    {
+        // A covariant element type with two covariant slots (`Tuple<+A,+B>`) instantiated at
+        // all four Book/Product combos forms a DIAMOND, so `Lst<Tuple<Book,Book>>` is an instance of
+        // `Collection` at several `Tuple` supertypes at once. Single inheritance carries the erased
+        // `contains` for one diamond path only; the post-edge gap-fill supplies the incomparable siblings
+        // directly. Before the fix this spec was emitted with an unimplemented abstract
+        // `contains_<Tuple<Book,Product>>` and fataled at class load. Executed end-to-end.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/covariant_upcast_nested_generic_diamond/source',
+            'upcast-diamond',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/covariant_upcast_nested_generic_diamond/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testMultiPathDiamondClosureSuppliesEverySiblingAcrossInterfacesAndConcretesAtRuntime(): void
+    {
+        // The order-robustness gate. The minimal diamond reaches one concrete spec through one interface;
+        // the real defect surfaced only when a spec is reached as an upcast implementer through SEVERAL
+        // paths in a larger closure. Here two interfaces (`Collection::contains`, `Lookup::indexOf`) and two
+        // concretes (`Lst`, `Bag`) all converge on the same `Tuple<+A,+B>` element diamond, so each concrete
+        // spec carries eight erased obligations discovered along multiple routes. Single inheritance threads
+        // one path per interface; the post-edge gap-fill — running after the chain is final — must supply
+        // every remaining sibling on both concretes regardless of discovery order, or a spec loads
+        // abstract-incomplete and fatals. Executed end-to-end (both an upcast `contains` and `indexOf` run).
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/covariant_upcast_multipath_diamond/source',
+            'upcast-multipath-diamond',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/covariant_upcast_multipath_diamond/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testReturnEnclosingParamOnParentlessBaseSurvivesPlainUpcast(): void
+    {
+        // Regression guard (the A1 trap the design review caught): a return-position enclosing-parameter
+        // erased method (`firstOr<S:E>(S): E`) on a parent-less covariant base is supplied by INHERITANCE
+        // across a plain (non-diamond) upcast. The post-edge gap-fill must recognise it as already provided
+        // and NOT direct-emit it — direct emission can't ground a return-E member and would hard-fail. That
+        // this compiles, loads, and runs proves A3 leaves inheritable members alone. Executed.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/covariant_upcast_return_enclosing_inherited/source',
+            'upcast-return-inherited',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/covariant_upcast_return_enclosing_inherited/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testReturnEnclosingParamUnderDiamondHardFails(): void
+    {
+        // The same return-E method (`firstOr<S:E>(S): E`), but the element type is a covariant `Tuple<+A,+B>`
+        // instantiated at all four Book/Product combos — a DIAMOND. The primary `firstOr` is inherited, but
+        // the incomparable sibling obligation cannot be carried by single inheritance AND cannot be
+        // direct-emitted (return-E). The gap-fill must FAIL LOUDLY at compile time, never emit a spec that
+        // fatals at load — a compile error is strictly safer than a runtime/load error.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches(
+            '/xphp\.unschedulable_covariant_upcast.+erased method "firstOr".+App\\\\OrderedCollection.+'
+            . 'enclosing type parameter appears in the method return type, which direct emission cannot '
+            . 'ground soundly/s',
+        );
+
+        $this->compileResult([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface Collection<+E> { public function contains<S : E>(S $element): bool; }
+                PHP,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function firstOr<S : E>(S $fallback): E; }
+                PHP,
+            'AbstractColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                abstract class AbstractColl<+E> implements OrderedCollection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<S : E>(S $element): bool { return \in_array($element, $this->items, true); }
+                    public function firstOr<S : E>(S $fallback): E { return $this->items[0] ?? $fallback; }
+                }
+                PHP,
+            'ListColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {}
+                PHP,
+            'Tuple.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface Tuple<+A, +B> { public function first(): A; public function second(): B; }
+                PHP,
+            'Couple.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class Couple<+A, +B> implements Tuple<A, B> {
+                    public function __construct(private A $a, private B $b) {}
+                    public function first(): A { return $this->a; }
+                    public function second(): B { return $this->b; }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(OrderedCollection<Tuple<Product, Product>> $c): Tuple<Product, Product> { return $c->firstOr::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product())); }
+                $bb = new ListColl::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+                $bp = new ListColl::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+                $pb = new ListColl::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+                $pp = new ListColl::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+                $r = probe($bb);
+                PHP,
+        ]);
+    }
+
+    public function testNestedGenericDiamondEmitsTheSiblingMemberDirectly(): void
+    {
+        // In-process (mutation-visible) proof of the gap-fill's EMIT path. The diamond leaves
+        // `Lst<Tuple<Book,Book>>` missing the incomparable sibling `contains_<…>` that single inheritance
+        // can't carry; the post-edge gap-fill emits it DIRECTLY onto the Lst spec, so the Lst spec — which
+        // declares no `contains` of its own (it inherits the base's) — now carries a `contains_` member.
+        $php = $this->generatedSourceFor([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface Collection<+E> { public function contains<S : E>(S $element): bool; }
+                PHP,
+            'AbstractColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                abstract class AbstractColl<+E> implements Collection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<S : E>(S $element): bool { return \in_array($element, $this->items, true); }
+                }
+                PHP,
+            'Lst.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Lst<+E> extends AbstractColl<E> implements Collection<E> {}\n",
+            'Tuple.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Tuple<+A, +B> { public function first(): A; public function second(): B; }\n",
+            'Couple.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                class Couple<+A, +B> implements Tuple<A, B> {
+                    public function __construct(private A $a, private B $b) {}
+                    public function first(): A { return $this->a; }
+                    public function second(): B { return $this->b; }
+                }
+                PHP,
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(Collection<Tuple<Product, Product>> $c): bool { return $c->contains::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product())); }
+                $bb = new Lst::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+                $bp = new Lst::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+                $pb = new Lst::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+                $pp = new Lst::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+                $r = probe($bb);
+                PHP,
+        ], 'Lst');
+
+        self::assertStringContainsString(
+            'contains_',
+            $php,
+            'the incomparable diamond sibling is emitted directly onto the upcast-source Lst spec',
+        );
+    }
+
+    public function testInheritedReturnEnclosingMemberIsNotReEmittedOntoTheUpcastSource(): void
+    {
+        // In-process (mutation-visible) proof of the gap-fill's SKIP path, and the guard against the A1
+        // regression. `firstOr<S:E>: E` on a parent-less base is supplied to a PLAIN (non-diamond) upcast by
+        // INHERITANCE; the gap-fill must see it on the chain and NOT direct-emit it (direct emission can't
+        // ground a return-E member — it would hard-fail). So the upcast-source ListColl spec must carry no
+        // `firstOr_` of its own. (If the skip were removed, compilation would hard-fail instead.)
+        $php = $this->generatedSourceFor([
+            'Product.xphp' => self::PRODUCT,
+            'Book.xphp' => self::BOOK,
+            'Collection.xphp' => self::COLLECTION_IFACE,
+            'OrderedCollection.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                interface OrderedCollection<+E> extends Collection<E> { public function firstOr<S : E>(S $fallback): E; }
+                PHP,
+            'AbstractColl.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                abstract class AbstractColl<+E> implements OrderedCollection<E> {
+                    /** @var list<mixed> */
+                    protected array $items;
+                    public function __construct(E ...$items) { $this->items = $items; }
+                    public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
+                    public function firstOr<S : E>(S $fallback): E { return $this->items[0] ?? $fallback; }
+                }
+                PHP,
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {}\n",
+            'Use.xphp' => <<<'PHP'
+                <?php
+                declare(strict_types=1);
+                namespace App;
+                function probe(OrderedCollection<Product> $c): Product { return $c->firstOr::<Product>(new Product()); }
+                $l = new ListColl::<Book>(new Book());
+                $r = probe($l);
+                PHP,
+        ], 'ListColl');
+
+        self::assertStringNotContainsString(
+            'firstOr_',
+            $php,
+            'an inherited return-E member must not be re-emitted onto the upcast source',
+        );
+    }
+
     public function testEnclosingParamInParameterPositionIsRejectedByVarianceFirst(): void
     {
         // Why the return-type guard need only inspect the return type: a covariant `+E` can never reach

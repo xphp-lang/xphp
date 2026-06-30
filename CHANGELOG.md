@@ -51,7 +51,11 @@ _In progress on this branch — content still accumulating; date set at tag time
   there — the implementing class has another `extends` parent, implements only a *parent* of the
   interface, or reorders the `implements` clause — the member is instead emitted **directly** onto the
   upcast source, with its bounded parameter widened to the supertype argument and its body read at the
-  source's own element type (sound because the source's element is a subtype of the supertype). The
+  source's own element type (sound because the source's element is a subtype of the supertype). When the
+  element type is itself a covariant generic (e.g. a `Tuple<+A, +B>`), per-argument covariance makes the
+  source an instance of the interface at *several* supertype arguments at once — a diamond that single
+  inheritance can carry only one path of; the remaining obligations are supplied directly once the
+  inheritance chain is final, so a covariant container of covariant containers upcasts soundly. The
   upcast remains a compile error (`xphp.unschedulable_covariant_upcast`) — never emitted load- or
   runtime-fataling code — only where no emittable class body exists (a truly abstract or trait-only
   method), where the method's return type names the element parameter (the widened argument would

@@ -1,0 +1,8 @@
+<?php
+declare(strict_types=1);
+namespace App;
+interface Tuple<+A, +B>
+{
+    public function first(): A;
+    public function second(): B;
+}

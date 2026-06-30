@@ -117,46 +117,9 @@ final readonly class SpecializationCloser
         Registry $registry,
         array &$specializedAsts,
     ): void {
-        $interfaceFqn = $interfaceSpec->templateFqn;
-        $concreteFqn = $concreteSpec->templateFqn;
-
-        // The concrete class must implement the interface (the interface is an ancestor).
-        if (!in_array($interfaceFqn, $this->hierarchy->ancestorChain($concreteFqn), true)) {
-            return;
-        }
-
-        // Thread the concrete receiver's args up to the interface: the interface's args as witnessed
-        // from this concrete spec. Null = unreachable / ambiguous (conflicting diamond paths).
-        $asSeen = $this->hierarchy->resolveInheritedArgs(
-            $concreteFqn,
-            $concreteSpec->concreteTypes,
-            $interfaceFqn,
-        );
-        if ($asSeen === null) {
-            return;
-        }
-
-        $interfaceDef = $registry->definition($interfaceFqn);
-
-        // The concrete already implements THIS interface spec directly (no upcast): its own erased
-        // member already satisfies it — nothing to schedule.
-        // @infection-ignore-all -- this early return is an optimization the strict-upcast check below
-        // subsumes: when `$asSeen` equals the spec's args, isVarianceSubtype() returns false (no
-        // differing arg) and control returns anyway; `$interfaceDef === null` is unreachable (the spec
-        // entered $interfaceSpecs only after its definition resolved). Every mutant of this condition
-        // yields the same outcome; the strict-upcast path (and its non-subtype return) stays covered.
-        if ($interfaceDef === null || $this->argsEqual($asSeen, $interfaceSpec->concreteTypes)) {
-            return;
-        }
-
-        // Is it a STRICT covariant upcast — `<concrete-as-seen> <: <interface spec>`? Only then does
-        // the concrete inherit the interface spec's (distinctly-named) abstract erased member.
-        if (!$this->subtyping->isVarianceSubtype(
-            $asSeen,
-            $interfaceSpec->concreteTypes,
-            $interfaceDef->typeParams,
-            $registry,
-        )) {
+        // Only when the concrete is — by a strict covariant upcast — an instance of the interface spec does
+        // it inherit the interface spec's distinctly-named abstract erased member and need it supplied.
+        if ($this->strictUpcastArgs($interfaceSpec, $concreteSpec, $registry) === null) {
             return;
         }
 
@@ -209,6 +172,11 @@ final readonly class SpecializationCloser
             return;
         }
 
+        // @infection-ignore-all MethodCallRemoval -- equivalent since the post-edge gap-fill
+        // (supplyUnmetMembers) was added: it re-checks every concrete spec against the FINAL chain and emits
+        // any still-unmet member via the same emitDirectly. So this in-fixpoint emission is now a redundant
+        // (earlier) backstop — removing it leaves the gap-fill to supply the identical member. Kept because
+        // emitting at discovery time keeps the common single-inheritance case off the post-edge pass.
         $this->emitDirectly($interfaceSpec, $concreteSpec, $declaring, $methodName, $registry, $specializedAsts);
     }
 
@@ -238,25 +206,11 @@ final readonly class SpecializationCloser
             return;
         }
 
-        // The supertype value the method's bound takes — from the INTERFACE's own declaration, so the
-        // mangled name matches the abstract member `<interface><super>` declares.
-        $interfaceMethod = self::methodNamed($interfaceDef->templateAst, $methodName);
-        // @infection-ignore-all -- defensive `?->`: $interfaceMethod always resolves here (see below).
-        $interfaceParams = $interfaceMethod?->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
-        // @infection-ignore-all -- defensive: the method name came from this interface's
-        // erasableMethodNames(), so $interfaceMethod and its method-generic params always resolve here;
-        // the `?->` and this null / non-array guard never fire.
-        if ($interfaceMethod === null || !is_array($interfaceParams)) {
-            return;
-        }
-        /** @var list<TypeParam> $interfaceParams */
-        $boundReferent = self::boundReferentName($interfaceParams);
-        // @infection-ignore-all FalseValue -- `false` vs `true` is equivalent: either non-int $boundIndex
-        // routes a null bound-referent to the same hard-fail (`!is_int(...)` below).
-        $boundIndex = $boundReferent === null
-            ? false
-            : array_search($boundReferent, $interfaceDef->typeParamNames(), true);
-        if (!is_int($boundIndex) || !isset($interfaceSpec->concreteTypes[$boundIndex])) {
+        // The mangled member name (matching the abstract `<interface><super>` declares) + the supertype
+        // value its bound widens to — from the single source of truth shared with the gap-fill, so the two
+        // can never compute different names for the same obligation.
+        $member = $this->erasedUpcastMember($interfaceDef, $interfaceSpec, $methodName);
+        if ($member === null) {
             // The parameters aren't uniformly bounded by ONE leaf interface parameter (a rare shape like
             // `<U : E, V : F>`). Direct emission can't derive the single mangled member — fail loudly
             // rather than emit nothing and leave the interface's abstract member unimplemented.
@@ -267,16 +221,15 @@ final readonly class SpecializationCloser
                 . 'member cannot be emitted directly',
             ));
         }
-        $superValue = $interfaceSpec->concreteTypes[$boundIndex];
+        [$mangled, $superValue] = $member;
 
-        $mangled = Registry::mangledMethodName(
-            $methodName,
-            EnclosingBoundErasure::mangleArgs($interfaceParams, [$boundReferent => $superValue]),
-            $this->hashLength,
-        );
-
-        // Idempotency: never append a member the upcast-source spec already carries (its own erased
-        // member, or one already emitted) — a PHP redeclaration is a load fatal.
+        // Idempotency / materialization guard. Skip when the upcast source isn't an emitted class (a
+        // registry instantiation that was never materialized as a `Class_` in $specializedAsts — e.g. one
+        // reached only through a variance relation, which carries no load-time obligation of its own), or
+        // when it already carries this member (its own erased member, or one already emitted) — a PHP
+        // redeclaration is itself a load fatal. A genuinely-needed-but-unsuppliable member never reaches
+        // here silently: the gap-fill only calls emitDirectly for a chain that does NOT already provide the
+        // member, and a concrete class that lacks an emitted AST is not a class PHP loads.
         $upcastAst = $specializedAsts[$concreteSpec->generatedFqn] ?? null;
         if (!$upcastAst instanceof Class_ || self::methodNamed($upcastAst, $mangled) !== null) {
             return;
@@ -330,6 +283,236 @@ final readonly class SpecializationCloser
         // upcast-source's OWN concrete — the same value as the mandatory inherited erased member the
         // upcast-source already carries at that arg — so any generic instantiation in the body has
         // already been discovered and specialized through that member.
+    }
+
+    /**
+     * Post-edge gap-fill: after the variance edges are final (Phase 2.5) and the specialized ASTs are
+     * fully qualified (Phase 3 rewrite), every CONCRETE spec must carry — on itself or through its final
+     * single-inheritance chain — a body for each erased member its covariant-upcast obligations expose.
+     *
+     * The fixpoint's schedule-and-inherit path supplies the ONE member the class chain threads. Under a
+     * covariant DIAMOND (a multi-parameter or nested covariant element type, e.g. `Tuple<+A,+B>` over
+     * `Book <: Product`) the same concrete is, by per-argument covariance, an instance of SEVERAL supertype
+     * specializations at once, and PHP single inheritance can carry only one of them — leaving the sibling
+     * obligations' distinctly-mangled abstract members unimplemented (a class-load fatal). This pass walks
+     * every (interface spec, concrete spec) covariant upcast and, for each obligated erased member NOT
+     * provided by the concrete's final class chain, emits it directly onto the concrete spec. A member that
+     * direct emission cannot ground (a return-position enclosing parameter, a trait-only body) still raises
+     * `xphp.unschedulable_covariant_upcast` — a loud compile error, never code that fatals at class load.
+     *
+     * Runs after the chain is final, so it fills exactly the gaps inheritance left, regardless of the order
+     * specs were discovered (the downstream's acceptance bar). Returns the generated FQNs it appended a
+     * member to, so the caller can re-rewrite those specs.
+     *
+     * @param array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN
+     * @return list<string> generated FQNs that gained a directly-emitted member
+     */
+    public function supplyUnmetMembers(Registry $registry, array &$specializedAsts): array
+    {
+        /** @var list<array{0: GenericInstantiation, 1: list<string>, 2: GenericDefinition}> $interfaceSpecs */
+        $interfaceSpecs = [];
+        /** @var list<GenericInstantiation> $concreteSpecs */
+        $concreteSpecs = [];
+        foreach ($registry->instantiations() as $instantiation) {
+            $definition = $registry->definition($instantiation->templateFqn);
+            if ($definition === null) {
+                continue;
+            }
+            $ast = $definition->templateAst;
+            if ($ast instanceof Interface_) {
+                $erasable = $this->erasableMethodNames($definition);
+                if ($erasable !== []) {
+                    $interfaceSpecs[] = [$instantiation, $erasable, $definition];
+                }
+            } elseif ($ast instanceof Class_) {
+                // @infection-ignore-all -- the `!isAbstract()` filter is an optimization, not a correctness
+                // condition (mirrors close()): an abstract spec included here would only emit a concrete
+                // member onto an abstract class (harmless), while its concrete subclasses are processed and
+                // supplied directly anyway. Every mutant of the negation yields the same emitted output.
+                // Only concrete classes must satisfy every abstract member; an abstract spec may keep them.
+                if (!$ast->isAbstract()) {
+                    $concreteSpecs[] = $instantiation;
+                }
+            }
+        }
+
+        $modified = [];
+        foreach ($interfaceSpecs as [$interfaceSpec, $methodNames, $interfaceDef]) {
+            foreach ($concreteSpecs as $concreteSpec) {
+                if ($this->strictUpcastArgs($interfaceSpec, $concreteSpec, $registry) === null) {
+                    continue;
+                }
+                foreach ($methodNames as $methodName) {
+                    $member = $this->erasedUpcastMember($interfaceDef, $interfaceSpec, $methodName);
+                    if ($member !== null
+                        && $this->chainProvides($concreteSpec->generatedFqn, $member[0], $specializedAsts)
+                    ) {
+                        // @infection-ignore-all Continue -- behaviorally pinned by
+                        // testInheritedReturnEnclosingMemberIsNotReEmittedOntoTheUpcastSource: removing this
+                        // skip re-emits an already-inherited return-E member, so emitDirectly hard-fails and
+                        // that compile test errors (verified). Infection's per-line coverage intermittently
+                        // fails to attribute the in-process compile test to this line, so it is pinned here.
+                        continue; // already carried by the final class chain — do not re-emit
+                    }
+                    // Not carried — supply it directly, or fail loudly (emitDirectly throws when it can't
+                    // ground the member soundly). A compile error here is strictly better than a class-load
+                    // fatal in the emitted output.
+                    $declaring = $this->declaringClassWithBody($concreteSpec->templateFqn, $methodName, $registry);
+                    if ($declaring === null) {
+                        throw new RuntimeException($this->unschedulableMessage(
+                            $interfaceSpec,
+                            $methodName,
+                            'its implementation is not declared on a class in the hierarchy (a trait-supplied '
+                            . 'or interface-only body cannot be emitted directly)',
+                        ));
+                    }
+                    $this->emitDirectly($interfaceSpec, $concreteSpec, $declaring, $methodName, $registry, $specializedAsts);
+                    // @infection-ignore-all TrueValue -- a visited-SET write; the method returns
+                    // array_keys($modified), so only the key matters and the assigned value is irrelevant.
+                    $modified[$concreteSpec->generatedFqn] = true;
+                }
+            }
+        }
+        return array_keys($modified);
+    }
+
+    /**
+     * The interface spec's arguments as witnessed from the concrete spec, IF the concrete is — by a STRICT
+     * covariant upcast — an instance of the interface spec (so it inherits the interface's distinctly-named
+     * abstract erased member). Null when there is no such strict-upcast relationship. Mirrors the gate in
+     * {@see closeOne()}.
+     *
+     * @return list<TypeRef>|null
+     */
+    private function strictUpcastArgs(
+        GenericInstantiation $interfaceSpec,
+        GenericInstantiation $concreteSpec,
+        Registry $registry,
+    ): ?array {
+        // @infection-ignore-all ReturnRemoval -- subsumed by the `$asSeen === null` return below:
+        // resolveInheritedArgs returns null for an interface that is not an ancestor, so removing this
+        // ancestry short-circuit reaches the same null. An optimization, not a separate correctness gate.
+        if (!in_array($interfaceSpec->templateFqn, $this->hierarchy->ancestorChain($concreteSpec->templateFqn), true)) {
+            return null;
+        }
+        $asSeen = $this->hierarchy->resolveInheritedArgs(
+            $concreteSpec->templateFqn,
+            $concreteSpec->concreteTypes,
+            $interfaceSpec->templateFqn,
+        );
+        if ($asSeen === null) {
+            return null;
+        }
+        $interfaceDef = $registry->definition($interfaceSpec->templateFqn);
+        // @infection-ignore-all LogicalOr ReturnRemoval -- subsumed: when `$asSeen` equals the spec's args
+        // there is no differing argument, so `isVarianceSubtype()` below returns false and control returns
+        // the same null; `$interfaceDef === null` is unreachable (the spec entered $interfaceSpecs only
+        // after its definition resolved). Every mutant of this condition yields the identical outcome.
+        if ($interfaceDef === null || $this->argsEqual($asSeen, $interfaceSpec->concreteTypes)) {
+            return null;
+        }
+        if (!$this->subtyping->isVarianceSubtype($asSeen, $interfaceSpec->concreteTypes, $interfaceDef->typeParams, $registry)) {
+            return null;
+        }
+        return $asSeen;
+    }
+
+    /**
+     * The erased member the interface spec exposes for `$methodName`: its mangled name and the supertype
+     * value the bounded method parameter widens to (`[mangledName, superValue]`), or null when the method
+     * isn't uniformly bounded by one enclosing type parameter.
+     *
+     * The SINGLE source of truth for the member's mangled name — shared by {@see emitDirectly()} (which
+     * emits it) and {@see supplyUnmetMembers()} (which checks whether the class chain already provides it).
+     * Keeping one derivation is load-bearing: if the two ever computed different names, the gap-fill could
+     * believe a member is present when the abstract it must satisfy uses a different name → an unimplemented
+     * abstract member → a class-load fatal.
+     *
+     * @return array{0: string, 1: TypeRef}|null
+     */
+    private function erasedUpcastMember(
+        GenericDefinition $interfaceDef,
+        GenericInstantiation $interfaceSpec,
+        string $methodName,
+    ): ?array {
+        $interfaceMethod = self::methodNamed($interfaceDef->templateAst, $methodName);
+        // @infection-ignore-all -- defensive `?->`: the method name came from this interface's
+        // erasableMethodNames(), so $interfaceMethod and its method-generic params always resolve.
+        $interfaceParams = $interfaceMethod?->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        // @infection-ignore-all LogicalOr -- defensive: the method name came from erasableMethodNames(),
+        // so $interfaceMethod and its method-generic params always resolve; this guard never fires.
+        if ($interfaceMethod === null || !is_array($interfaceParams)) {
+            return null;
+        }
+        /** @var list<TypeParam> $interfaceParams */
+        $boundReferent = self::boundReferentName($interfaceParams);
+        // @infection-ignore-all FalseValue -- `false` vs `true` is equivalent: either routes a null
+        // bound-referent to the same null return via the `!is_int(...)` guard below.
+        $boundIndex = $boundReferent === null
+            ? false
+            : array_search($boundReferent, $interfaceDef->typeParamNames(), true);
+        if (!is_int($boundIndex) || !isset($interfaceSpec->concreteTypes[$boundIndex])) {
+            return null;
+        }
+        $superValue = $interfaceSpec->concreteTypes[$boundIndex];
+        return [
+            Registry::mangledMethodName(
+                $methodName,
+                EnclosingBoundErasure::mangleArgs($interfaceParams, [$boundReferent => $superValue]),
+                $this->hashLength,
+            ),
+            $superValue,
+        ];
+    }
+
+    /**
+     * Whether the concrete spec, or any of its specialized class ancestors along the final (post-Phase-3,
+     * fully-qualified) `extends` chain, declares a BODIED method named `$mangled` — i.e. the member is
+     * already carried, by the class itself or by inheritance, and must not be re-emitted. Cycle-safe.
+     *
+     * @infection-ignore-all LogicalAnd TrueValue -- the `!isset($seen)` half of the loop condition is a
+     *     robustness cycle-guard; a well-formed class chain is acyclic and terminates via the null parent,
+     *     so on real input `&&` and its mutants are equivalent. `$seen[...] = true` is a visited-SET write
+     *     read only via `isset` (key), so the assigned value is irrelevant.
+     *
+     * @param array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts
+     */
+    private function chainProvides(string $generatedFqn, string $mangled, array $specializedAsts): bool
+    {
+        $seen = [];
+        $current = $generatedFqn;
+        while ($current !== null && !isset($seen[$current])) {
+            $seen[$current] = true;
+            $ast = $specializedAsts[$current] ?? null;
+            if (!$ast instanceof Class_) {
+                return false;
+            }
+            $method = self::methodNamed($ast, $mangled);
+            if ($method !== null && $method->stmts !== null) {
+                return true;
+            }
+            $current = self::parentGeneratedName($ast);
+        }
+        return false;
+    }
+
+    /**
+     * The generated FQCN a specialized class extends (its parent spec key), or null when it has no
+     * generated parent (a non-generic source base, or no parent). Reads the post-rewrite, fully-qualified
+     * `extends` clause.
+     *
+     * @infection-ignore-all UnwrapLtrim ConcatOperandRemoval -- the `extends` name is an already-qualified
+     *     generated FQN with no leading `\`, so `ltrim` is a no-op; and `str_starts_with` matches with or
+     *     without the trailing namespace separator for our FQNs, so dropping the `'\\'` operand is equivalent.
+     */
+    private static function parentGeneratedName(Class_ $ast): ?string
+    {
+        $extends = $ast->extends;
+        if ($extends === null) {
+            return null;
+        }
+        $name = ltrim($extends->toString(), '\\');
+        return str_starts_with($name, Registry::GENERATED_NAMESPACE_PREFIX . '\\') ? $name : null;
     }
 
     /** The first method named `$name` on a ClassLike, or null. */

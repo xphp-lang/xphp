@@ -197,6 +197,18 @@ final readonly class Compiler
             $specializedAsts[$generatedFqn] = $first;
         }
 
+        // Phase 3.5: covariant-upcast gap-fill. The inheritance chain is now final and fully qualified, so
+        // each concrete spec's erased members that single inheritance couldn't carry across a covariant
+        // diamond are supplied directly here — or fail loudly (`xphp.unschedulable_covariant_upcast`),
+        // never emitted as a class-load fatal. Re-rewrite the specs it appended a member to so the new
+        // member's type references are fully qualified like the rest.
+        foreach ($closer->supplyUnmetMembers($registry, $specializedAsts) as $generatedFqn) {
+            $rewritten = $rewriter->rewrite([$specializedAsts[$generatedFqn]]);
+            $first = $rewritten[0];
+            assert($first instanceof \PhpParser\Node\Stmt\ClassLike);
+            $specializedAsts[$generatedFqn] = $first;
+        }
+
         // Note for future-proofing (review F9): method-level specialization runs in Phase 1a
         // against the raw user-file ASTs, NOT against the specialized cache classes. That's
         // safe under the current MVP limit ("generic methods on non-generic classes only" —

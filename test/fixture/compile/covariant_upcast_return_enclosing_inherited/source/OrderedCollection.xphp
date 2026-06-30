@@ -1,0 +1,7 @@
+<?php
+declare(strict_types=1);
+namespace App;
+interface OrderedCollection<+E> extends Collection<E>
+{
+    public function firstOr<S : E>(S $fallback): E;
+}

@@ -1,0 +1,27 @@
+<?php
+declare(strict_types=1);
+namespace App;
+// Lst and Bag are TWO concrete implementers, each reached as a covariant-upcast implementer through TWO
+// interface ancestry chains (Collection's `contains`, Lookup's `indexOf`). The element type Tuple<+A,+B>
+// over Book<:Product is a DIAMOND, so each concrete spec is obligated at four incomparable Tuple supertypes
+// per interface — eight erased members converging on one spec through several discovery paths. Single
+// inheritance threads one path per interface; the post-edge gap-fill must supply every remaining sibling on
+// both Lst and Bag, regardless of the order the closure discovered them, or this fatals at class load.
+function has(Collection<Tuple<Product, Product>> $c): bool
+{
+    return $c->contains::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+}
+function at(Lookup<Tuple<Product, Product>> $c): int
+{
+    return $c->indexOf::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+}
+$lbb = new Lst::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+$lbp = new Lst::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+$lpb = new Lst::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+$lpp = new Lst::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+$bbb = new Bag::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+$bbp = new Bag::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+$bpb = new Bag::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+$bpp = new Bag::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+$found = has($lbb);
+$index = at($bbb);

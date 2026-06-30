@@ -1,0 +1,13 @@
+<?php
+declare(strict_types=1);
+namespace App;
+// A PLAIN covariant upcast (single parameter, no diamond): ListColl<Book> used as
+// OrderedCollection<Product>. firstOr returns E; the covariant chain inherits it grounded at Product.
+// The gap-fill must NOT direct-emit it (direct emission can't ground a return-E member) — chainProvides
+// sees it inherited and skips. If A3 over-emitted, this would fail to compile (unschedulable).
+function probe(OrderedCollection<Product> $c): Product
+{
+    return $c->firstOr::<Product>(new Product());
+}
+$books = new ListColl::<Book>(new Book());
+$first = probe($books);
