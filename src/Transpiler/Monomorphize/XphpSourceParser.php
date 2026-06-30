@@ -84,24 +84,17 @@ final class XphpSourceParser
     // tagged (the escape hatch). Advisory metadata only — not emitted.
     public const ATTR_SUSPECT_UNDECLARED_TYPE = 'xphp:suspectUndeclaredType';
 
-    public const SCALAR_TYPES = [
-        'int', 'integer', 'string', 'bool', 'boolean', 'float', 'double',
-        'void', 'mixed', 'never', 'null', 'false', 'true',
-        'array', 'iterable', 'object', 'callable', 'self', 'static', 'parent',
-    ];
-
     /**
-     * The subset of {@see SCALAR_TYPES} that are RESERVED PHP type keywords — names PHP forbids as class
-     * names. Use this (not the broader list) when a bare name must be recognised as a builtin instead of
-     * namespace-qualified as a class reference: only a reserved keyword is unambiguously a builtin. The
-     * gettype-style aliases `integer`/`boolean`/`double` are deliberately excluded — they are legal class
-     * names (`class Double {}`), so a generic bound `<T : Double>` must resolve to the class, not a scalar.
+     * The reserved PHP type keywords — names PHP forbids as class names. A bare name in this list is
+     * unambiguously a builtin, so every site that asks "is this name a builtin keyword or a class?"
+     * (type-argument / signature / default / bound resolution, and the FQN-rewrite tagger) matches here to
+     * leave it unqualified instead of namespace-qualifying it as a class reference.
      *
-     * (The signature/default resolver {@see resolveTypeRef} and {@see markName} still match the broader
-     * SCALAR_TYPES and so carry the same latent `integer`/`boolean`/`double` collision in those positions;
-     * that is a pre-existing, untested edge tracked separately, not introduced here.)
+     * The gettype-style aliases `integer`/`boolean`/`double` are deliberately NOT listed: they are legal
+     * class names (`class Double {}`) and are not PHP type keywords (the float keyword is `float`), so a
+     * `Double` used anywhere as a type must resolve to the class, never be mistaken for a scalar.
      */
-    public const RESERVED_SCALAR_TYPES = [
+    public const SCALAR_TYPES = [
         'int', 'string', 'bool', 'float',
         'void', 'mixed', 'never', 'null', 'false', 'true',
         'array', 'iterable', 'object', 'callable', 'self', 'static', 'parent',
@@ -1802,11 +1795,11 @@ final class XphpSourceParser
                     // A scalar/builtin-keyword leaf (`T : int|string`) must stay unqualified and flagged
                     // isScalar -- mirroring resolveTypeRef -- so the bound check compares
                     // scalar-against-scalar. Otherwise resolveNameOnly would namespace-qualify it (`int` ->
-                    // `Ns\int`) and every valid scalar argument would be rejected. Only RESERVED keywords
-                    // match here: `integer`/`boolean`/`double` are legal class names, so `<T : Double>` must
-                    // resolve to the class via the fallback below, not be mistaken for a scalar.
+                    // `Ns\int`) and every valid scalar argument would be rejected. SCALAR_TYPES holds only
+                    // reserved keywords, so a class that aliases a scalar (`<T : Double>`) correctly falls
+                    // through to class resolution below.
                     $lowerName = strtolower($node['name']);
-                    if (!$node['isFq'] && in_array($lowerName, XphpSourceParser::RESERVED_SCALAR_TYPES, true)) {
+                    if (!$node['isFq'] && in_array($lowerName, XphpSourceParser::SCALAR_TYPES, true)) {
                         // @infection-ignore-all TrueValue -- equivalent: a bound leaf's isScalar flag is
                         // never read (the bound check keys on the TypeRef name; the only isScalar readers
                         // are instantiation-argument / variance paths, not bound leaves). It is set true

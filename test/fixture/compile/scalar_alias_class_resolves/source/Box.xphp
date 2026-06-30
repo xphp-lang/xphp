@@ -1,0 +1,8 @@
+<?php
+declare(strict_types=1);
+namespace App;
+final class Box<T>
+{
+    public function __construct(public readonly T $value) {}
+    public function value(): T { return $this->value; }
+}

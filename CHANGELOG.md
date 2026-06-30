@@ -190,6 +190,17 @@ _In progress on this branch — content still accumulating; date set at tag time
   while a class argument is still rejected (`"App\Thing" does not satisfy "int | string"`)
   and a class bound that merely *looks* like a legacy alias (`<T : Double>`, where `Double`
   is a real class — not a reserved keyword) keeps resolving to the class.
+- **A class whose name aliases a scalar (`Integer`/`Boolean`/`Double`) now resolves to the
+  class in every type position.** The internal keyword list conflated the reserved PHP scalar
+  keywords with the legacy gettype-style aliases `integer`/`boolean`/`double`, which are
+  *legal class names*. So a class `Double` used as a generic type argument (`new
+  Box::<Double>(...)`) or as a member/signature type was mistaken for a scalar and emitted
+  as the bare type `double`, which PHP reads as a non-existent class — a `TypeError` at
+  runtime. The list now holds only the reserved keywords, so such a class resolves to
+  `\App\Double` in argument and signature positions (and, as before, in a bound). Genuine
+  scalars (`int`, `string`, `bool`, `float`, and case variants like `Int`) are unchanged;
+  an undeclared `Double` member is now reported as `xphp.undeclared_type` instead of being
+  silently absorbed as a scalar.
 
 ## [0.2.1] - 2026-06-17
 
