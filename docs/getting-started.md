@@ -113,6 +113,17 @@ After the compile completes you'll have:
 Both `dist/` and `.xphp-cache/` can be gitignored — they're
 generated artifacts your CI/CD pipeline rebuilds on every deploy.
 
+**Safe by default:** `compile` runs the same validation gate as
+[`check`](#) — the generic validators plus PHPStan over the compiled
+output — *before* emitting, and fails the build (writing nothing) if it
+finds an error, so a typo'd or undeclared type never reaches runtime. For a
+fast iteration build — when you've already run `check` and just want to
+re-emit — skip the gate with `--no-check`:
+
+```bash
+vendor/bin/xphp compile src dist .xphp-cache --no-check   # transpile only, no gate
+```
+
 ### The recommended project setup: an `xphp.json` manifest
 
 The single-directory form above is the quickest way to compile one

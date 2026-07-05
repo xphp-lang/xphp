@@ -38,3 +38,4 @@ should be added here as a new numbered file; copy
 | [0018](0018-grounding-method-generic-bounds-on-enclosing-type-parameters.md) | Grounding a method-generic bound that references an enclosing class type parameter | Accepted |
 | [0019](0019-trait-members-are-not-modeled-in-the-type-hierarchy.md) | Trait-imported members are not modeled in the type hierarchy | Accepted |
 | [0020](0020-diagnose-and-restructure-self-reintroducing-specialization.md) | Diagnose and restructure self-reintroducing specialization (erased seam deferred) | Accepted |
+| [0021](0021-compile-runs-the-check-gate-by-default.md) | `xphp compile` runs the check gate by default | Accepted |

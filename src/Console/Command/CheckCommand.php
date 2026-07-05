@@ -12,12 +12,8 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use RuntimeException;
 use XPHP\Config\SourceResolver;
-use XPHP\Diagnostics\Renderer\DiagnosticRenderer;
-use XPHP\Diagnostics\Renderer\GithubRenderer;
-use XPHP\Diagnostics\Renderer\JsonRenderer;
-use XPHP\Diagnostics\Renderer\TextRenderer;
-use XPHP\StaticAnalysis\StaticAnalysisGate;
-use XPHP\Transpiler\Monomorphize\Compiler;
+use XPHP\Diagnostics\Renderer\RendererFactory;
+use XPHP\StaticAnalysis\Gate;
 
 /**
  * `xphp check <source> [--format=text|json|github] [--no-phpstan]
@@ -36,8 +32,7 @@ final class CheckCommand extends Command
 {
     public function __construct(
         private readonly SourceResolver $sourceResolver,
-        private readonly Compiler $compiler,
-        private readonly StaticAnalysisGate $staticAnalysisGate,
+        private readonly Gate $gate,
     ) {
         parent::__construct();
     }
@@ -63,7 +58,7 @@ final class CheckCommand extends Command
         $configOpt = $input->getOption('config');
 
         $formatOption = $input->getOption('format');
-        $renderer = $this->rendererFor(is_string($formatOption) ? $formatOption : '');
+        $renderer = RendererFactory::for(is_string($formatOption) ? $formatOption : '');
         if ($renderer === null) {
             $output->writeln('<error>Unknown format (expected: text, json, github)</error>');
             return self::INVALID;
@@ -84,42 +79,22 @@ final class CheckCommand extends Command
             return self::INVALID;
         }
 
-        $sources = $resolved->files;
-        $diagnostics = $this->compiler->check($sources);
-
-        // Only layer PHPStan on when the generic checks pass: invalid generics can't be
-        // compiled to the concrete output PHPStan needs, and reporting both at once would
-        // just be noise on top of the real (generic) errors.
-        if (!$diagnostics->hasErrors() && $input->getOption('no-phpstan') !== true) {
-            $binOption = $input->getOption('phpstan-bin');
-            $configOption = $input->getOption('phpstan-config');
-            $findings = $this->staticAnalysisGate->analyze(
-                $sources,
-                // @infection-ignore-all -- rootByFile is authoritative for the temp-workspace emit;
-                // this scalar base is an unused fallback, and PHPStan resolves by symbol not path.
-                is_string($sourceArg) ? $sourceArg : '',
-                $cwd,
-                is_string($binOption) ? $binOption : null,
-                is_string($configOption) ? $configOption : null,
-                $resolved->rootByFile,
-            );
-            foreach ($findings as $finding) {
-                $diagnostics->add($finding);
-            }
-        }
+        $binOption = $input->getOption('phpstan-bin');
+        $configOption = $input->getOption('phpstan-config');
+        $diagnostics = $this->gate->run(
+            $resolved->files,
+            // @infection-ignore-all -- rootByFile is authoritative for the temp-workspace emit;
+            // this scalar base is an unused fallback, and PHPStan resolves by symbol not path.
+            is_string($sourceArg) ? $sourceArg : '',
+            $cwd,
+            $input->getOption('no-phpstan') !== true,
+            is_string($binOption) ? $binOption : null,
+            is_string($configOption) ? $configOption : null,
+            $resolved->rootByFile,
+        );
 
         $output->write($renderer->render($diagnostics->all()));
 
         return $diagnostics->hasErrors() ? self::FAILURE : self::SUCCESS;
-    }
-
-    private function rendererFor(string $format): ?DiagnosticRenderer
-    {
-        return match ($format) {
-            'text' => new TextRenderer(),
-            'json' => new JsonRenderer(),
-            'github' => new GithubRenderer(),
-            default => null,
-        };
     }
 }

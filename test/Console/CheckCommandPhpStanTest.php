@@ -15,6 +15,7 @@ use XPHP\Config\SourceResolver;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\StaticAnalysis\CheckGate;
 use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\SpecializedClassGenerator;
@@ -163,8 +164,7 @@ final class CheckCommandPhpStanTest extends TestCase
                     new NativeFileFinder(),
                     new ManifestResolver(new NativeFileReader(), new NativeFileFinder()),
                 ),
-                $compiler,
-                new StaticAnalysisGate($compiler),
+                new CheckGate($compiler, new StaticAnalysisGate($compiler)),
             ),
         );
     }
