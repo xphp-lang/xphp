@@ -78,6 +78,11 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'S-A array-sugar return: lowers to array and accepts an array literal' => [
             '<?php function m(): Closure(): int[] { return fn(): array => []; }',
         ];
+        yield 'S-A chained array-sugar parameter: still ONE param lowered to array' => [
+            // `U[][]` consumes the whole chain; a one-pair-only consume left
+            // `[`/`]` phantom params and false-rejected this correct literal.
+            '<?php function m(): Closure(U[][] $x): void { return fn(array $x): void => null; }',
+        ];
         yield 'S-A DNF group parameter: one param, gradual — matching arity accepted' => [
             // `(A&B)|C $x` is ONE parameter; a mis-scan that split the group into
             // extra params false-rejected this correct literal on arity.

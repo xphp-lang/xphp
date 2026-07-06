@@ -886,6 +886,34 @@ final class XphpSourceParser
     }
 
     /**
+     * Index of the LAST `]` of one-or-more chained EMPTY `[ ]` bracket pairs
+     * whose first `[` is the first significant token at or after `$idx`
+     * (whitespace/comments tolerated), or `null` when the next tokens are not
+     * array sugar. Chains (`T[][]`) are consumed whole, matching the global
+     * sugar's parseArraySuffix. A non-empty `[expr]` is expression syntax,
+     * never type sugar — the `]` check rejects it.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function arraySuffixEnd(array $tokens, int $idx): ?int
+    {
+        $n = count($tokens);
+        $end = null;
+        while (true) {
+            $open = self::skipWs($tokens, $idx);
+            if ($open >= $n || $tokens[$open]->text !== '[') {
+                return $end;
+            }
+            $close = self::skipWs($tokens, $open + 1);
+            if ($close >= $n || $tokens[$close]->text !== ']') {
+                return $end;
+            }
+            $end = $close;
+            $idx = $close + 1;
+        }
+    }
+
+    /**
      * Index of the matching `)` for a parenthesised DNF group whose `(` sits at
      * `$openIdx`, or `null` when the interior is not a complete type expression
      * ending exactly at that `)`. The interior reuses the full leaf machinery
@@ -895,26 +923,6 @@ final class XphpSourceParser
      *
      * @param list<PhpToken> $tokens
      */
-    /**
-     * Index of the `]` of an EMPTY `[ ]` bracket pair whose `[` is the first
-     * significant token at or after `$idx` (whitespace/comments tolerated,
-     * matching the global sugar's parseArraySuffix), or `null` when the next
-     * tokens are not array sugar. A non-empty `[expr]` is expression syntax,
-     * never type sugar — the `]` check rejects it.
-     *
-     * @param list<PhpToken> $tokens
-     */
-    private static function arraySuffixEnd(array $tokens, int $idx): ?int
-    {
-        $n = count($tokens);
-        $open = self::skipWs($tokens, $idx);
-        if ($open >= $n || $tokens[$open]->text !== '[') {
-            return null;
-        }
-        $close = self::skipWs($tokens, $open + 1);
-        return $close < $n && $tokens[$close]->text === ']' ? $close : null;
-    }
-
     private static function scanGroupEnd(array $tokens, int $openIdx): ?int
     {
         $inner = self::scanTypeExprEnd($tokens, self::skipWs($tokens, $openIdx + 1));

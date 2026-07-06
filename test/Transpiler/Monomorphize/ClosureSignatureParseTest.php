@@ -819,6 +819,32 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertSame(['array', 'null'], self::sigMemberNames($sig->params[0]->type));
     }
 
+    public function testChainedArraySugarIsConsumedWhole(): void
+    {
+        // `U[][]` — the global sugar consumes chains; the signature scanner
+        // must match it. One pair consumed out of two leaves `[`/`]` residue:
+        // phantom params at a checked site (a false reject) or a parse error
+        // in a return.
+        $source = '<?php function f(Closure(U[][] $x): int[][] $cb) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('array', self::refName($sig->params[0]->type));
+        self::assertSame('array', self::refName($sig->return));
+        self::assertStringNotContainsString('[]', self::strip($source));
+    }
+
+    public function testPartialChainAfterCompletePairStaysLoudResidue(): void
+    {
+        // `A[][0]` — the first pair is sugar, the `[0]` is expression junk;
+        // consume the sugar, leave the junk loud.
+        $stripped = self::strip('<?php function f(): Closure(): A[][0] {}');
+
+        self::assertStringContainsString('[0]', $stripped);
+        self::assertStringNotContainsString('[]', $stripped);
+    }
+
     public function testWhitespaceSeparatedArraySugarIsConsumed(): void
     {
         // The global sugar tolerates whitespace around the bracket pair; the
