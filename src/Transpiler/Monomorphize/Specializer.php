@@ -287,6 +287,19 @@ final class Specializer
 
             public function leaveNode(Node $node): ?Node
             {
+                // Ground a closure-signature target in place. The erased `\Closure`
+                // head that carries it is fully-qualified, so it never reaches the
+                // type-param swap below; substitute its type-parameter leaves here.
+                if ($node instanceof Name) {
+                    $sig = $node->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG);
+                    if ($sig instanceof ClosureSignature) {
+                        $node->setAttribute(
+                            XphpSourceParser::ATTR_CLOSURE_SIG,
+                            Specializer::substituteClosureSignature($sig, $this->substitution),
+                        );
+                    }
+                }
+
                 if ($node instanceof Name && !$node->isFullyQualified()) {
                     $parts = $node->getParts();
                     if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
@@ -370,6 +383,51 @@ final class Specializer
             $ref->args,
         );
         return new TypeRef($ref->name, $newArgs, $ref->isScalar, $ref->isTypeParam);
+    }
+
+    /**
+     * Ground a closure-signature target ({@see XphpSourceParser::ATTR_CLOSURE_SIG})
+     * by substituting its type-parameter leaves with their concrete types, so the
+     * conformance validator's post-specialization pass checks `Closure(int): int`
+     * (not `Closure(T): T`) against the likewise-substituted returned literal.
+     * Mirrors the parser's own signature-resolution walk.
+     *
+     * Public for the same reason as {@see substituteTypeRef} — the shared
+     * anonymous-class visitor calls back into Specializer.
+     *
+     * @param array<string, TypeRef> $subst
+     */
+    public static function substituteClosureSignature(ClosureSignature $sig, array $subst): ClosureSignature
+    {
+        $params = array_map(
+            static fn (ClosureSignatureParam $p): ClosureSignatureParam => new ClosureSignatureParam(
+                self::substituteSigType($p->type, $subst),
+                $p->byRef,
+                $p->variadic,
+                $p->optional,
+            ),
+            $sig->params,
+        );
+        $return = $sig->return === null ? null : self::substituteSigType($sig->return, $subst);
+
+        return new ClosureSignature($params, $return, $sig->nullable);
+    }
+
+    /**
+     * @param array<string, TypeRef> $subst
+     */
+    private static function substituteSigType(SigType $type, array $subst): SigType
+    {
+        if ($type instanceof SigTypeRef) {
+            return new SigTypeRef(self::substituteTypeRef($type->type, $subst));
+        }
+        if ($type instanceof SigClosure) {
+            return new SigClosure(self::substituteClosureSignature($type->signature, $subst));
+        }
+
+        // SigRaw (union / intersection / nullable) is gradual and unstructured;
+        // there is nothing to ground.
+        return $type;
     }
 
     /**

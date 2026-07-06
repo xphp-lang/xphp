@@ -188,6 +188,18 @@ final readonly class Compiler
             }
         }
 
+        // Phase 2.4: grounded closure-signature conformance. Each specialization's
+        // `Closure(...)` target now has its type parameters substituted, and the
+        // returned literal's types were substituted alongside it, so a mismatch
+        // that was gradual while the type parameter was abstract (e.g. a `string`
+        // literal parameter against a `Closure(T $x)` target grounded to `int`)
+        // becomes provable here. Fail-fast, like the pre-loop gate. Structural
+        // mismatches (arity / by-ref) don't depend on grounding and were already
+        // caught at the template pre-loop, which threw before reaching this point.
+        foreach ($specializedAsts as $generatedFqn => $classAst) {
+            $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", null);
+        }
+
         // Phase 2.5: emit subtype edges between specializations whose template
         // declares variance markers. Runs once after the fixed-point loop
         // (Phase 2) finishes -- pairwise variance comparisons can't run until
