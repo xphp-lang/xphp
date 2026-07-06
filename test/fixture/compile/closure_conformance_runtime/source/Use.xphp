@@ -1,0 +1,48 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureConformanceRuntime;
+
+// Closure-signature types at their one statically decidable literal site: a
+// `Closure(...)` RETURN handing back a closure literal (a typed-closure factory).
+// Every literal here CONFORMS; the emitted PHP erases each `Closure(...)` to a
+// bare `\Closure` and runs unchanged.
+class Factory
+{
+    // A `Closure(...)`-typed property, assigned (not defaulted — a closure is not
+    // a constant expression) in the constructor. The assignment is a gradual site
+    // (unchecked); it exists to exercise a stored typed closure at runtime.
+    public Closure(int $x): int $scale;
+
+    public function __construct()
+    {
+        $this->scale = fn(int $x): int => $x * 2;
+    }
+
+    // S-A, return position (method): the returned arrow conforms to the target.
+    public function adder(): Closure(int $x): int
+    {
+        return fn(int $x): int => $x + 40;
+    }
+
+    public function scaled(int $n): int
+    {
+        return ($this->scale)($n);
+    }
+}
+
+// S-A, return position (free function).
+function makeAdder(): Closure(int $x): int
+{
+    return fn(int $x): int => $x + 1;
+}
+
+// S-A, arrow body: the arrow's own body IS the returned literal.
+$mulFactory = fn(): Closure(int $x): int => fn(int $x): int => $x * 3;
+
+$f = new Factory();
+$scaled = $f->scaled(21);        // 21 * 2 = 42
+$added = ($f->adder())(2);       // 2 + 40 = 42
+$incremented = (makeAdder())(41); // 41 + 1 = 42
+$tripled = ($mulFactory())(14);  // 14 * 3 = 42

@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureConformanceReject;
+
+// The returned literal declares a `string` parameter where the target
+// `Closure(int $x): int` guarantees only `int` — a provable contravariance
+// violation. Compilation must fail; there is no valid runtime.
+function make(): Closure(int $x): int
+{
+    return fn(string $x): int => 0;
+}

@@ -486,6 +486,20 @@ final class CheckPassIntegrationTest extends TestCase
         }
     }
 
+    public function testClosureConformanceViolationIsCollectedByCheck(): void
+    {
+        // Exercises the ClosureConformanceValidator step of check(): a return-site
+        // closure literal whose parameter is narrower than the target guarantees.
+        $diagnostics = $this->check('closure_conformance');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertStringContainsString(
+            'parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));

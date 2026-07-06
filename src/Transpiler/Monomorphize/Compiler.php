@@ -119,6 +119,16 @@ final readonly class Compiler
         // Container's slot is invariant) fail here BEFORE instantiations
         // amplify the error.
         $registry->validateInnerVariance();
+        // Closure-signature conformance at the statically-visible literal site (a
+        // `return`/arrow body whose declared return type is `Closure(...)`).
+        // Fail-fast in compile mode (null collector ⇒ throw on the first provable
+        // mismatch), matching the other source-level gates. A target that
+        // references an enclosing type parameter is checked with those leaves
+        // still abstract here (⇒ gradually accepted).
+        $closureValidator = new ClosureConformanceValidator($hierarchy);
+        foreach ($astPerFile as $filepath => $ast) {
+            $closureValidator->validateFile($ast, $filepath, null);
+        }
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }
@@ -329,6 +339,14 @@ final readonly class Compiler
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);
         $registry->validateDefaultsAgainstBounds();
         $registry->validateInnerVariance();
+        // Closure-signature conformance at the statically-visible literal site
+        // (a `Closure(...)` return handing back a closure literal). In
+        // validate-only mode every violation is collected (parse-failed files were
+        // already skipped from $astPerFile above).
+        $closureValidator = new ClosureConformanceValidator($hierarchy);
+        foreach ($astPerFile as $filepath => $ast) {
+            $closureValidator->validateFile($ast, $filepath, $diagnostics);
+        }
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }
