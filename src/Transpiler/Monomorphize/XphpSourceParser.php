@@ -2135,14 +2135,17 @@ final class XphpSourceParser
                     || $node instanceof Node\Expr\ArrowFunction
                 ) {
                     // Named templates match by (line, name); anonymous templates
-                    // (closures + arrows) match by (line, bytePosition) -- the
-                    // bytePosition recorded at the `function` / `static` / `fn`
-                    // keyword aligns with nikic's `getStartFilePos()` for the
-                    // same AST node.
+                    // (closures + arrows) match by (kind, bytePosition). The marker
+                    // records the ORIGINAL-source byte of the `function` / `static` /
+                    // `fn` keyword, while getStartFilePos() reports the STRIPPED-source
+                    // byte -- a length-changing rewrite earlier in the file (e.g.
+                    // `LongName[]` -> `array`) shifts the two apart, so the stripped
+                    // position maps back through the byte-offset map before comparing
+                    // (same translation as attachClosureSig below).
                     $isAnonymous = $node instanceof Node\Expr\Closure
                         || $node instanceof Node\Expr\ArrowFunction;
                     $declName = $isAnonymous ? '' : $node->name->toString();
-                    $nodeStartByte = $node->getStartFilePos();
+                    $nodeStartByte = $this->byteOffsetMap->toOriginal($node->getStartFilePos());
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
                         // @infection-ignore-all -- markers are populated jointly with
