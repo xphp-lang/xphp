@@ -72,10 +72,15 @@ A mismatch is a compile error (`xphp compile` fails; `xphp check` reports
 The check is deliberately one-directional: it never rejects code it cannot
 prove wrong. A parameter or return that is untyped (⇒ `mixed`), a class the
 source set doesn't declare, a still-abstract generic type parameter, a
-`self`/`static`/`parent`/`object`/`iterable`/`callable` leaf, a nullable /
-union / intersection type, or a built-in supertype (returning a `\Exception`
-where a `\Throwable` is expected) is **accepted**. This mirrors the RFC's
-runtime leniency — lenient while unresolved, decide only when provable.
+`self`/`static`/`parent`/`object`/`iterable`/`callable` leaf, or a nullable /
+union / intersection type is **accepted**. A built-in supertype (a
+`Closure(): \Throwable` target) is accepted whenever the candidate could
+genuinely satisfy it — a subclass of a built-in (`\Exception`), an enum against
+an interface it implements, a `__toString` class against `\Stringable`, or any
+class with an unknown ancestor. Only a candidate whose **entire declared
+ancestry is user code with no built-in anywhere** is provably unrelated to a
+built-in target, and only that is rejected. This mirrors the RFC's runtime
+leniency — lenient while unresolved, decide only when provable.
 
 Only the return-position "factory" pattern above is checked, because that is
 the one place a closure literal statically meets a `Closure(...)` target: a
