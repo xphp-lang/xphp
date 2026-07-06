@@ -57,7 +57,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function contains<U : E>(U $value): bool { return true; }
             }
             PHP,
@@ -85,7 +85,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            abstract class Base<+E> {
+            abstract class Base<out E> {
                 public function contains<U : E>(U $value): bool { return true; }
             }
             PHP,
@@ -93,7 +93,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class ArrayList<+E> extends Base<E> {}
+            class ArrayList<out E> extends Base<E> {}
             PHP,
             'Use.xphp' => <<<'PHP'
             <?php
@@ -109,7 +109,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testMultiArgEnclosingParamBoundGroundsTheRightParameter(): void
     {
-        // `Pair<K, +V>::containsValue<U : V>` — grounding must pick V (index 1), not K. If it used
+        // `Pair<K, out V>::containsValue<U : V>` — grounding must pick V (index 1), not K. If it used
         // K (Food), `Banana <: Food` would also pass, so make K a type Banana is NOT a subtype of.
         $this->compile([
             'Models.xphp' => self::MODELS,
@@ -118,7 +118,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Pair<K, +V> {
+            class Pair<K, out V> {
                 public function containsValue<U : V>(U $value): bool { return true; }
             }
             PHP,
@@ -145,7 +145,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class Box<+E> {
+                class Box<out E> {
                     public function contains<U : E>(U $value): bool { return true; }
                 }
                 PHP,
@@ -174,7 +174,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function pick<U>(U $value): U { return $value; }
             }
             PHP,
@@ -204,7 +204,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function contains<U : E>(U $value): bool { return true; }
                 public function probe(): bool { return $this->contains::<Banana>(new Banana()); }
             }
@@ -422,7 +422,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function copy(): static { return $this; }
                 public function contains<U : E>(U $value): bool { return true; }
             }
@@ -482,7 +482,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function copy(): static { return $this; }
                 public function contains<U : E>(U $value): bool { return true; }
             }
@@ -575,7 +575,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public static function pick<U : E>(U $value): bool { return true; }
             }
             PHP,
@@ -600,7 +600,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function contains<U : E>(U $value): bool { return true; }
                 public function probe(): bool { return $this->contains::<Banana>(new Banana()); }
             }
@@ -690,7 +690,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     <?php
     declare(strict_types=1);
     namespace App;
-    class Box<+E> {
+    class Box<out E> {
         public function contains<U : E>(U $value): bool { return true; }
         public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
     }
@@ -754,7 +754,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testMultiClassParamErasureMangleKeysOnTheBoundsReferentAtRuntime(): void
     {
-        // `containsValue<U:V>` on `Map<K, +V>` mangles on V (Fruit), not K (string). Call-site and
+        // `containsValue<U:V>` on `Map<K, out V>` mangles on V (Fruit), not K (string). Call-site and
         // Specializer must agree on that key, or the call resolves to nothing. Executed.
         $fixture = CompiledFixture::compile(
             __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/source',
@@ -806,7 +806,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testErasureIsVarianceSafeOnTheCovariantChainAtRuntime(): void
     {
-        // The variance gate: Box<+E> builds a covariant extends-chain; the distinct E-mangled
+        // The variance gate: Box<out E> builds a covariant extends-chain; the distinct E-mangled
         // contains_<E> members coexist with no LSP fatal, and a Box<Banana> dispatches the inherited
         // contains_<Fruit>. Proven by executing the real compiled output.
         $fixture = CompiledFixture::compile(
@@ -844,7 +844,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testSubInterfaceMethodDirectEmittedUnderUpcastRunsAtRuntime(): void
     {
-        // The headline case: `indexOf` on the sub-interface `OrderedCollection<+E>`, body on
+        // The headline case: `indexOf` on the sub-interface `OrderedCollection<out E>`, body on
         // `ListColl extends AbstractColl` (a class with a parent). Upcast `ListColl<Book>` →
         // `OrderedCollection<Product>` can't inherit `indexOf_<Product>` through a covariant edge, so it's
         // emitted directly onto `ListColl<Book>` (reading its inherited Book-typed $items). `contains`
@@ -883,7 +883,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testMultiParamCovariantInterfaceUpcastResolvesAtRuntime(): void
     {
-        // Multi-param: `HashMap<Id, Book>` (K invariant, +V covariant) upcast to `MMap<Id, Product>`.
+        // Multi-param: `HashMap<Id, Book>` (K invariant, out V covariant) upcast to `MMap<Id, Product>`.
         // The closer must schedule `AbstractMap<Id, Product>` — keep K=Id, raise V to Product — and the
         // erased `containsValue` (mangled on V) must resolve through the covariant chain. Executed.
         $fixture = CompiledFixture::compile(
@@ -901,7 +901,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testVarianceEdgeDoesNotOverwriteASourceParentAtRuntime(): void
     {
-        // A covariant class with a SOURCE parent (`ListColl<+E> extends Base<E>`) instantiated at two
+        // A covariant class with a SOURCE parent (`ListColl<out E> extends Base<E>`) instantiated at two
         // args (Fruit, Banana). The variance edge emitter must keep each specialization's source
         // `extends Base<E>` rather than overwrite it with the same-template covariant super
         // (`ListColl<Banana> extends ListColl<Fruit>`) — overwriting would sever the inherited
@@ -924,7 +924,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         namespace App;
-        interface Collection<+E> {
+        interface Collection<out E> {
             public function contains<E2 : E>(E2 $value): bool;
         }
         PHP;
@@ -932,7 +932,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         namespace App;
-        abstract class AbstractColl<+E> implements Collection<E> {
+        abstract class AbstractColl<out E> implements Collection<E> {
             /** @var list<mixed> */
             protected array $items;
             public function __construct(E ...$items) { $this->items = $items; }
@@ -950,7 +950,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             'Book.xphp' => self::BOOK,
             'Collection.xphp' => self::COLLECTION_IFACE,
             'AbstractColl.xphp' => self::ABSTRACT_COLL,
-            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> {}\n",
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<out E> extends AbstractColl<E> {}\n",
             'Use.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
@@ -978,7 +978,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> implements Collection<E> {
+                class ListColl<out E> implements Collection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
@@ -1054,7 +1054,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface Collection<+E> {
+                interface Collection<out E> {
                     public function size(): int;
                     public function contains<E2 : E>(E2 $value): bool;
                 }
@@ -1063,7 +1063,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                abstract class AbstractColl<+E> implements Collection<E> {
+                abstract class AbstractColl<out E> implements Collection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
@@ -1071,7 +1071,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                     public function contains<E2 : E>(E2 $value): bool { return \in_array($value, $this->items, true); }
                 }
                 PHP,
-            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> {}\n",
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<out E> extends AbstractColl<E> {}\n",
             'Use.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
@@ -1095,7 +1095,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             'Book.xphp' => self::BOOK,
             'Collection.xphp' => self::COLLECTION_IFACE,
             'AbstractColl.xphp' => self::ABSTRACT_COLL,
-            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> {}\n",
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<out E> extends AbstractColl<E> {}\n",
             'Use.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
@@ -1125,14 +1125,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function firstKind<U : E>(U $value): bool; }
+                interface OrderedCollection<out E> extends Collection<E> { public function firstKind<U : E>(U $value): bool; }
                 PHP,
             'AbstractColl.xphp' => self::ABSTRACT_COLL,
             'ListColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                class ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {
                     public function firstKind<U : E>(U $value): bool { return $value instanceof E; }
                 }
                 PHP,
@@ -1178,14 +1178,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface BiColl<+E, F> { public function pick<U : E, V : F>(U $a, V $b): bool; }
+                interface BiColl<out E, F> { public function pick<U : E, V : F>(U $a, V $b): bool; }
                 PHP,
-            'Mid.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nabstract class Mid<+E, F> {}\n",
+            'Mid.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nabstract class Mid<out E, F> {}\n",
             'ListColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E, F> extends Mid<E, F> implements BiColl<E, F> {
+                class ListColl<out E, F> extends Mid<E, F> implements BiColl<E, F> {
                     public function pick<U : E, V : F>(U $a, V $b): bool { return true; }
                 }
                 PHP,
@@ -1223,14 +1223,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function firstOr<U : E>(U $fallback): E; }
+                interface OrderedCollection<out E> extends Collection<E> { public function firstOr<U : E>(U $fallback): E; }
                 PHP,
             'AbstractColl.xphp' => self::ABSTRACT_COLL,
             'ListColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                class ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {
                     public function firstOr<U : E>(U $fallback): E { return $this->items[0] ?? $fallback; }
                 }
                 PHP,
@@ -1248,7 +1248,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testNestedGenericDiamondCovariantUpcastCompilesAndRuns(): void
     {
-        // A covariant element type with two covariant slots (`Tuple<+A,+B>`) instantiated at
+        // A covariant element type with two covariant slots (`Tuple<out A,out B>`) instantiated at
         // all four Book/Product combos forms a DIAMOND, so `Lst<Tuple<Book,Book>>` is an instance of
         // `Collection` at several `Tuple` supertypes at once. Single inheritance carries the erased
         // `contains` for one diamond path only; the post-edge gap-fill supplies the incomparable siblings
@@ -1272,7 +1272,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         // The order-robustness gate. The minimal diamond reaches one concrete spec through one interface;
         // the real defect surfaced only when a spec is reached as an upcast implementer through SEVERAL
         // paths in a larger closure. Here two interfaces (`Collection::contains`, `Lookup::indexOf`) and two
-        // concretes (`Lst`, `Bag`) all converge on the same `Tuple<+A,+B>` element diamond, so each concrete
+        // concretes (`Lst`, `Bag`) all converge on the same `Tuple<out A,out B>` element diamond, so each concrete
         // spec carries eight erased obligations discovered along multiple routes. Single inheritance threads
         // one path per interface; the post-edge gap-fill — running after the chain is final — must supply
         // every remaining sibling on both concretes regardless of discovery order, or a spec loads
@@ -1311,7 +1311,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testReturnEnclosingParamUnderDiamondHardFails(): void
     {
-        // The same return-E method (`firstOr<S:E>(S): E`), but the element type is a covariant `Tuple<+A,+B>`
+        // The same return-E method (`firstOr<S:E>(S): E`), but the element type is a covariant `Tuple<out A,out B>`
         // instantiated at all four Book/Product combos — a DIAMOND. The primary `firstOr` is inherited, but
         // the incomparable sibling obligation cannot be carried by single inheritance AND cannot be
         // direct-emitted (return-E). The gap-fill must FAIL LOUDLY at compile time, never emit a spec that
@@ -1330,19 +1330,19 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface Collection<+E> { public function contains<S : E>(S $element): bool; }
+                interface Collection<out E> { public function contains<S : E>(S $element): bool; }
                 PHP,
             'OrderedCollection.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function firstOr<S : E>(S $fallback): E; }
+                interface OrderedCollection<out E> extends Collection<E> { public function firstOr<S : E>(S $fallback): E; }
                 PHP,
             'AbstractColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                abstract class AbstractColl<+E> implements OrderedCollection<E> {
+                abstract class AbstractColl<out E> implements OrderedCollection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
@@ -1354,19 +1354,19 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {}
+                class ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {}
                 PHP,
             'Tuple.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface Tuple<+A, +B> { public function first(): A; public function second(): B; }
+                interface Tuple<out A, out B> { public function first(): A; public function second(): B; }
                 PHP,
             'Couple.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class Couple<+A, +B> implements Tuple<A, B> {
+                class Couple<out A, out B> implements Tuple<A, B> {
                     public function __construct(private A $a, private B $b) {}
                     public function first(): A { return $this->a; }
                     public function second(): B { return $this->b; }
@@ -1399,26 +1399,26 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface Collection<+E> { public function contains<S : E>(S $element): bool; }
+                interface Collection<out E> { public function contains<S : E>(S $element): bool; }
                 PHP,
             'AbstractColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                abstract class AbstractColl<+E> implements Collection<E> {
+                abstract class AbstractColl<out E> implements Collection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
                     public function contains<S : E>(S $element): bool { return \in_array($element, $this->items, true); }
                 }
                 PHP,
-            'Lst.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Lst<+E> extends AbstractColl<E> implements Collection<E> {}\n",
-            'Tuple.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Tuple<+A, +B> { public function first(): A; public function second(): B; }\n",
+            'Lst.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Lst<out E> extends AbstractColl<E> implements Collection<E> {}\n",
+            'Tuple.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Tuple<out A, out B> { public function first(): A; public function second(): B; }\n",
             'Couple.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class Couple<+A, +B> implements Tuple<A, B> {
+                class Couple<out A, out B> implements Tuple<A, B> {
                     public function __construct(private A $a, private B $b) {}
                     public function first(): A { return $this->a; }
                     public function second(): B { return $this->b; }
@@ -1459,13 +1459,13 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function firstOr<S : E>(S $fallback): E; }
+                interface OrderedCollection<out E> extends Collection<E> { public function firstOr<S : E>(S $fallback): E; }
                 PHP,
             'AbstractColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                abstract class AbstractColl<+E> implements OrderedCollection<E> {
+                abstract class AbstractColl<out E> implements OrderedCollection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
@@ -1473,7 +1473,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                     public function firstOr<S : E>(S $fallback): E { return $this->items[0] ?? $fallback; }
                 }
                 PHP,
-            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {}\n",
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {}\n",
             'Use.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
@@ -1508,14 +1508,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function pairContains<U : E>(U $value, E $other): bool; }
+                interface OrderedCollection<out E> extends Collection<E> { public function pairContains<U : E>(U $value, E $other): bool; }
                 PHP,
             'AbstractColl.xphp' => self::ABSTRACT_COLL,
             'ListColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                class ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {
                     public function pairContains<U : E>(U $value, E $other): bool {
                         return \in_array($value, $this->items, true) && \in_array($other, $this->items, true);
                     }
@@ -1545,14 +1545,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function eitherIn<U : E, V : E>(U $a, V $b): bool; }
+                interface OrderedCollection<out E> extends Collection<E> { public function eitherIn<U : E, V : E>(U $a, V $b): bool; }
                 PHP,
             'AbstractColl.xphp' => self::ABSTRACT_COLL,
             'ListColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {
+                class ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {
                     public function eitherIn<U : E, V : E>(U $a, V $b): bool {
                         return \in_array($a, $this->items, true) || \in_array($b, $this->items, true);
                     }
@@ -1584,13 +1584,13 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface OrderedCollection<+E> extends Collection<E> { public function indexOf<U : E>(U $value): int; }
+                interface OrderedCollection<out E> extends Collection<E> { public function indexOf<U : E>(U $value): int; }
                 PHP,
             'AbstractColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                abstract class AbstractColl<+E> implements Collection<E> {
+                abstract class AbstractColl<out E> implements Collection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
@@ -1598,7 +1598,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                     public function indexOf<U : E>(U $value): int { return \count($this->items); }
                 }
                 PHP,
-            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<+E> extends AbstractColl<E> implements OrderedCollection<E> {}\n",
+            'ListColl.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E> {}\n",
             'Use.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
@@ -1625,12 +1625,12 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             'Product.xphp' => self::PRODUCT,
             'Book.xphp' => self::BOOK,
             'Collection.xphp' => self::COLLECTION_IFACE,
-            'Mid.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nabstract class Mid<+E> {}\n",
+            'Mid.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nabstract class Mid<out E> {}\n",
             'ListColl.xphp' => <<<'PHP'
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class ListColl<+E> extends Mid<E> implements Collection<E> {
+                class ListColl<out E> extends Mid<E> implements Collection<E> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(E ...$items) { $this->items = $items; }
@@ -1654,7 +1654,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
     public function testReorderedImplementsClauseEmitsTheMemberDirectly(): void
     {
         // The declaring class implements the interface with its parameters REORDERED
-        // (`class Holder<+A, B> implements Pair<B, A>`), so the implementing spec can't be derived by
+        // (`class Holder<out A, B> implements Pair<B, A>`), so the implementing spec can't be derived by
         // inversion for scheduling. Direct emission doesn't need to invert — it emits onto the
         // upcast-source class with the supertype's bound value — so this now compiles (no scheduled spec).
         $result = $this->compileResult([
@@ -1665,7 +1665,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                interface Pair<K, +V> {
+                interface Pair<K, out V> {
                     public function contains<U : V>(U $value): bool;
                 }
                 PHP,
@@ -1673,7 +1673,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 <?php
                 declare(strict_types=1);
                 namespace App;
-                class Holder<+A, B> implements Pair<B, A> {
+                class Holder<out A, B> implements Pair<B, A> {
                     /** @var list<mixed> */
                     protected array $items;
                     public function __construct(A ...$items) { $this->items = $items; }
@@ -1864,7 +1864,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function contains<U : E>(U $value): bool { return true; }
                 public function probe<U : E>(U $value): bool { return $this?->contains::<U>($value); }
             }
@@ -1936,7 +1936,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
             namespace App;
-            class Box<+E> {
+            class Box<out E> {
                 public function contains<U : E>(U $value): bool { return true; }
                 public function probe<U : E>(U $value): bool { return $this->contains::<U, U>($value); }
             }
@@ -1986,7 +1986,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         <?php
         declare(strict_types=1);
         namespace App;
-        class Box<+E> {
+        class Box<out E> {
             public function contains<U : E>(U $value): bool { return true; }
         }
         PHP;

@@ -39,7 +39,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testCovariantImmutableCollectionTakesTypedConstructorInput(): void
     {
-        // A covariant immutable collection `ImmutableList<+T>` with a `T`-typed
+        // A covariant immutable collection `ImmutableList<out T>` with a `T`-typed
         // constructor. The constructor param keeps its REAL element type on each
         // specialization (`Fruit ...` / `Banana ...`) — PHP exempts `__construct`
         // from LSP, so `ImmutableList<Banana>` extends `ImmutableList<Fruit>` with
@@ -93,7 +93,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testCovariantPrivatePropertyStoresRealTypeAndIsRuntimeChecked(): void
     {
-        // A covariant container `Box<+T>` that stores its element in a PRIVATE
+        // A covariant container `Box<out T>` that stores its element in a PRIVATE
         // promoted property of type `T`. Each specialization keeps the REAL slot
         // type (`private Banana $item` / `private Fruit $item`), the variance edge
         // `Box<Banana> extends Box<Fruit>` autoloads with NO fatal (PHP doesn't
@@ -144,7 +144,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testCrossTemplateGenericArgUpcastEmitsEdgeAndRunsAtRuntime(): void
     {
-        // A covariant `Couple<+A, +B> implements Tuple<A, B>` holding a covariant container
+        // A covariant `Couple<out A, out B> implements Tuple<A, B>` holding a covariant container
         // `ImmutableList<Book>` as its first type-argument is upcast to `Tuple<Collection<Product>,
         // Tag>`. That requires the covariant edge `Tuple<ImmutableList<Book>, Tag> ⊑
         // Tuple<Collection<Product>, Tag>`, whose per-argument check must recognize `ImmutableList<Book>
@@ -190,8 +190,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testComparatorParamOnCovariantClassCompilesAndRunsUnderUpcast(): void
     {
-        // A covariant `Box<+E>` with a `pick(Comparator<E> $c): ?E` consuming method — the sound shape
-        // where `E` sits in a contravariant slot (Comparator<-T>) inside a contravariant parameter
+        // A covariant `Box<out E>` with a `pick(Comparator<E> $c): ?E` consuming method — the sound shape
+        // where `E` sits in a contravariant slot (Comparator<in T>) inside a contravariant parameter
         // (contra ∘ contra = covariant). Previously rejected `xphp.variance_position` even though sound;
         // the composing variance pass now accepts it. A `Box<Book>` is upcast to `Box<Product>` and
         // `pick` is called with a `ById` (a Comparator<Product>, hence by contravariance a
@@ -220,7 +220,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testMixedVarianceConstructorKeepsConcreteTypes(): void
     {
-        // `Pair<+A, B>`: the covariant `A` constructor param keeps its concrete type, the
+        // `Pair<out A, B>`: the covariant `A` constructor param keeps its concrete type, the
         // invariant `B` param keeps its concrete substituted type, and a plain
         // scalar param (`int $tag`) is left untouched (it isn't a type-param).
         $generated = $this->compileFixtureAndReadGenerated('compile/generic_mixed_variance_constructor/source');
@@ -280,7 +280,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testCovariantSubtypeEdgeIsEmittedAsExtendsForClassSpecializations(): void
     {
-        // Fixture: `variance_covariant_happy/`. Producer<+T>, Banana <: Fruit.
+        // Fixture: `variance_covariant_happy/`. Producer<out T>, Banana <: Fruit.
         // Two specializations; Producer_Banana extends Producer_Fruit because
         // +T is covariant.
         $sourceDir = realpath(__DIR__ . '/../../fixture/compile/variance_covariant_happy/source')
@@ -318,7 +318,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testContravariantSubtypeEdgeFlipsDirection(): void
     {
-        // Fixture: `variance_contravariant_happy/`. Consumer<-T>, Dog <: Animal.
+        // Fixture: `variance_contravariant_happy/`. Consumer<in T>, Dog <: Animal.
         // With contravariance, the edge flips: Consumer_Animal extends
         // Consumer_Dog (not the other way around).
         $sourceDir = realpath(__DIR__ . '/../../fixture/compile/variance_contravariant_happy/source')
@@ -439,7 +439,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/Containers/Producer.xphp', <<<'PHP'
         <?php
         namespace App\Containers;
-        class Producer<+T>
+        class Producer<out T>
         {
             public function get(): T { throw new \LogicException; }
         }
@@ -493,7 +493,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testScalarArgsSkipVarianceEdgeEmission(): void
     {
-        // `Producer<+T>` instantiated with int and string -- no PHP-level
+        // `Producer<out T>` instantiated with int and string -- no PHP-level
         // subtype relationship between scalars, so no edge is emitted in
         // either direction.
         $sourceDir = $this->workDir . '/src-scalar';
@@ -501,7 +501,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/Producer.xphp', <<<'PHP'
         <?php
         namespace App;
-        class Producer<+T>
+        class Producer<out T>
         {
             public function get(): T { throw new \LogicException; }
         }
@@ -540,7 +540,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testTransitiveEdgesCollapseToDirectParent(): void
     {
-        // Banana <: Apple <: Fruit. Three specializations of Producer<+T>.
+        // Banana <: Apple <: Fruit. Three specializations of Producer<out T>.
         // The variance edges form a chain: Producer_Banana extends Producer_Apple,
         // Producer_Apple extends Producer_Fruit. Producer_Banana does NOT need a
         // direct edge to Producer_Fruit (PHP resolves it transitively).
@@ -549,7 +549,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/P.xphp', <<<'PHP'
         <?php
         namespace App;
-        class P<+T> { public function get(): T { throw new \LogicException; } }
+        class P<out T> { public function get(): T { throw new \LogicException; } }
         PHP);
         file_put_contents($sourceDir . '/Fruit.xphp', <<<'PHP'
         <?php
@@ -600,7 +600,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testAllThreeFeaturesCompose(): void
     {
-        // Fixture: `variance_with_defaults_and_bounds/`. `Cache<+K : Stringable
+        // Fixture: `variance_with_defaults_and_bounds/`. `Cache<out K : Stringable
         // & Countable, V = mixed>` composes covariance + intersection bound
         // + default. Verifies the integration: parse succeeds, bound is
         // checked, default pads, variance edges emit (single specialization
@@ -638,7 +638,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/IProducer.xphp', <<<'PHP'
         <?php
         namespace App;
-        interface IProducer<+T> { public function get(): T; }
+        interface IProducer<out T> { public function get(): T; }
         PHP);
         file_put_contents($sourceDir . '/Fruit.xphp', <<<'PHP'
         <?php

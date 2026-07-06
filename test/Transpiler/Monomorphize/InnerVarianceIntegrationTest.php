@@ -73,7 +73,7 @@ final class InnerVarianceIntegrationTest extends TestCase
         // +T appears only in output position (return), which the parse-time
         // validator accepts -- but Container's slot is invariant, so the
         // composed position is invariant-only and +T is illegal there.
-        class P<+T>
+        class P<out T>
         {
             private mixed $store = null;
 

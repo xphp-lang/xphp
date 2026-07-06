@@ -14,7 +14,7 @@ use PhpParser\NodeFinder;
 
 /**
  * Decides whether a generic method whose type parameter is bounded by an enclosing class type
- * parameter (`class Box<+E> { contains<U : E>(U $value): bool }`) can be lowered by **erasing `U`
+ * parameter (`class Box<out E> { contains<U : E>(U $value): bool }`) can be lowered by **erasing `U`
  * to its bound `E`** — i.e. specialized once per class instantiation (`contains_<Fruit>(Fruit)`)
  * instead of once per call-site turbofish (`contains_<Banana>(Banana)`).
  *
@@ -86,7 +86,7 @@ final class EnclosingBoundErasure
      * parameter widens to the supertype lets a supertype value escape through a subtype return (a runtime
      * `TypeError`). Such a shape can't be emitted directly and must fail loudly.
      *
-     * Only the return type is inspected: an enclosing parameter is covariant (`+E`), so variance checking
+     * Only the return type is inspected: an enclosing parameter is covariant (`out E`), so variance checking
      * forbids it from appearing in any method *parameter* position before this point — the return type is
      * the only signature position it can legally occupy. A bounded method parameter is typed by the
      * *method* generic (`U`), not by `E`, so it never matches here either.

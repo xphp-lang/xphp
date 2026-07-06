@@ -18,8 +18,8 @@ use XPHP\TestSupport\CompiledFixture;
  * failure into a hang, an OOM, or a silently-wrong build would be caught. A `dyn`-style erased seam that
  * would make the natural source compile is deferred (see ADR-0020).
  *
- * The fixture is a minimal two-template cycle (`Lst<+E>::toMap(): Mp<int, Lst<E>>` +
- * `Mp<K, +V>::values(): Lst<V>`) — small enough to reach the depth cap quickly under any memory config.
+ * The fixture is a minimal two-template cycle (`Lst<out E>::toMap(): Mp<int, Lst<E>>` +
+ * `Mp<K, out V>::values(): Lst<V>`) — small enough to reach the depth cap quickly under any memory config.
  */
 final class SpecializationTowerBoundaryTest extends TestCase
 {

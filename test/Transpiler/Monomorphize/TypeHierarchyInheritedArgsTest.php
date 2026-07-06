@@ -171,7 +171,7 @@ final class TypeHierarchyInheritedArgsTest extends TestCase
     public function testMultiArgClauseUsingOnlyOneParamThreadsTheRightArg(): void
     {
         // ImmutableMap<K,V> implements Collection<V> — only the index-1 param flows up (the
-        // `Map<K,+V>::containsValue<U:V>` shape). The dropped K must not leak into the grounding.
+        // `Map<K,out V>::containsValue<U:V>` shape). The dropped K must not leak into the grounding.
         $h = self::hierarchy(
             ['App\\ImmutableMap' => [self::ref('App\\Collection', [self::tp('V')])], 'App\\Collection' => []],
             ['App\\ImmutableMap' => ['K', 'V'], 'App\\Collection' => ['E']],

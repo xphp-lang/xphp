@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App;
 
-class ImmutableList<+E> implements Collection<E>
+class ImmutableList<out E> implements Collection<E>
 {
     /** @var list<E> */
     private array $items;

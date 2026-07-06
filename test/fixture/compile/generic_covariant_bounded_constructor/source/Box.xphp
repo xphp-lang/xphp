@@ -6,7 +6,7 @@ namespace App\BoundConstructor;
 
 // Bounded covariant constructor param: keeps its REAL substituted type (the
 // concrete arg), not the bound and not `mixed`.
-class Box<+T : \Stringable>
+class Box<out T : \Stringable>
 {
     private array $items;
 

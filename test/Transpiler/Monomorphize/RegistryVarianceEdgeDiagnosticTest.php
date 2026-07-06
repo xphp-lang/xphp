@@ -116,7 +116,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testTwoVariantPositionsEachUnprovableWarnTwice(): void
     {
-        // `Pair<+A, +B>` over two unprovable leaves → one warning per covariant position.
+        // `Pair<out A, out B>` over two unprovable leaves → one warning per covariant position.
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(
             'App\\Pair',
@@ -143,7 +143,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testEarlierInvariantPositionDoesNotShortCircuitLaterVariant(): void
     {
-        // `Mixed<A, +B>`: the invariant A is skipped, but the walk must continue to the
+        // `Mixed<A, out B>`: the invariant A is skipped, but the walk must continue to the
         // covariant B and still warn (pins `continue`, not `break`, on the invariant skip).
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(
@@ -157,7 +157,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testEarlierScalarPositionDoesNotShortCircuitLaterVariant(): void
     {
-        // `Pair<+A, +B>` with a scalar A: A is skipped, B still warns (pins `continue` on
+        // `Pair<out A, out B>` with a scalar A: A is skipped, B still warns (pins `continue` on
         // the scalar/type-param/generic skip).
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(
@@ -171,7 +171,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testEarlierDeclaredPositionDoesNotShortCircuitLaterVariant(): void
     {
-        // `Pair<+A, +B>` with a declared A: A is skipped (provable), B still warns (pins
+        // `Pair<out A, out B>` with a declared A: A is skipped (provable), B still warns (pins
         // `continue` on the isDeclared skip).
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(

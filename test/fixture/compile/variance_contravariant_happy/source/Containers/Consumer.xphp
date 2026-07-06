@@ -8,7 +8,7 @@ namespace App\VarianceContravariantHappy\Containers;
 // With Dog <: Animal, the emitter adds the FLIPPED edge:
 // Consumer_Animal extends Consumer_Dog (so anywhere a Consumer<Dog> is
 // expected, a Consumer<Animal> works -- it accepts a wider input).
-class Consumer<-T>
+class Consumer<in T>
 {
     public function consume(T $value): void
     {

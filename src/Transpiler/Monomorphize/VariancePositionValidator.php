@@ -43,7 +43,7 @@ use XPHP\Diagnostics\SourceLocation;
  *
  * Why public/protected properties are strict-invariant: PHP enforces invariant
  * property types across the `extends` chain regardless of `readonly`. A covariant
- * +T in a subtype property declaration would PHP-fatal at autoload when the
+ * `out T` in a subtype property declaration would PHP-fatal at autoload when the
  * variance edge `Producer_Banana extends Producer_Fruit` lands. The semantic
  * argument ("readonly = output-only") doesn't override PHP's static-type rule.
  *
@@ -55,7 +55,7 @@ use XPHP\Diagnostics\SourceLocation;
  * The Specializer emits the real substituted type there, and each specialization
  * re-emits its own field + accessor, so no inherited method ever reads a
  * divergent-typed private slot. This is what lets the covariant getter pattern
- * `class Producer<+T> { public function __construct(private T $item) {} … }` be
+ * `class Producer<out T> { public function __construct(private T $item) {} … }` be
  * both real-typed and sound.
  *
  * Why a non-promoted constructor parameter may carry any variance: a
@@ -67,8 +67,8 @@ use XPHP\Diagnostics\SourceLocation;
  * *promoted* constructor parameter is a property, so it falls under the property
  * rules above: strict-invariant when public/protected, any variance when private.
  *
- * F-bounded variance (`class Sortable<+T : Comparable<T>>`) is rejected
- * because `+T` appears inside its own bound (an invariant position).
+ * F-bounded variance (`class Sortable<out T : Comparable<T>>`) is rejected
+ * because `out T` appears inside its own bound (an invariant position).
  *
  * Errors include the param name, variance marker, and the position class
  * so the user sees what's wrong without reading the implementation.
@@ -229,8 +229,8 @@ final class VariancePositionValidator
             return;
         }
         // Public/protected: PHP enforces invariant property types across `extends`
-        // chains regardless of `readonly`. Even +T on a readonly property would
-        // PHP-fatal at autoload when the variance edge lands.
+        // chains regardless of `readonly`. Even `out T` on a readonly property
+        // would PHP-fatal at autoload when the variance edge lands.
         $position = $property->isReadonly() ? 'readonly property' : 'mutable property';
         $this->checkPhpType($type, [Variance::Invariant], $position);
     }
@@ -267,9 +267,9 @@ final class VariancePositionValidator
             }
             // A by-reference parameter is read AND written back through the
             // caller's variable, so it's an invariant position regardless of
-            // method vs constructor — neither +T nor -T is sound there. Checked
-            // before the variant-constructor any-variance branch so `-T &$x` in
-            // a constructor is rejected too.
+            // method vs constructor — neither `out T` nor `in T` is sound there.
+            // Checked before the variant-constructor any-variance branch so
+            // `in T &$x` in a constructor is rejected too.
             if ($param->byRef) {
                 $this->checkPhpType($param->type, [Variance::Invariant], 'by-reference parameter');
                 continue;
@@ -387,7 +387,7 @@ final class VariancePositionValidator
             // A type-param NESTED inside a type constructor (`Box<T>`, `Comparator<E>`) is NOT judged
             // here: its effective variance is the composition of this position with the referenced
             // type's slot variance, which only InnerVarianceValidator resolves. Descending with this
-            // (uncomposed) position would wrongly reject a sound `Comparator<E>` on a covariant `+E`
+            // (uncomposed) position would wrongly reject a sound `Comparator<E>` on a covariant `out E`
             // (contra ∘ contra = covariant) and wrongly pass an unsound one. This validator owns only
             // DIRECT occurrences; the composing pass owns the nested ones.
             return;

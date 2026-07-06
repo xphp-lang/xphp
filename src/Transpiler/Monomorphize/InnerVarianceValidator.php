@@ -23,7 +23,7 @@ use XPHP\Diagnostics\SourceLocation;
  * Inner-template variance composition check for one generic definition.
  *
  * When a variance-marked type-param appears inside another generic's type-arg
- * (e.g. `class P<+T> { f(): Container<T> }` where `Container`'s slot is
+ * (e.g. `class P<out T> { f(): Container<T> }` where `Container`'s slot is
  * invariant), the effective variance at that position is the composition of the
  * outer position and the inner slot's variance. This catches cases the
  * position validator can't, because the effective variance only resolves once

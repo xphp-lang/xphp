@@ -13,7 +13,7 @@ use RuntimeException;
  * Closes the specialization set under the covariant-upcast implementation requirement.
  *
  * A method whose type parameter is bounded by an enclosing class parameter
- * (`interface Collection<+E> { contains<E2 : E>(E2 $value): bool }`) is lowered by erasing `E2` to
+ * (`interface Collection<out E> { contains<E2 : E>(E2 $value): bool }`) is lowered by erasing `E2` to
  * its bound `E` — one member per class instantiation, mangled on that class's own `E`. So
  * `Collection<Book>` declares the abstract `contains_<Book>(Book)` and `Collection<Product>` declares
  * a DISTINCT abstract `contains_<Product>(Product)` (distinct names are required: a single shared
@@ -291,7 +291,7 @@ final readonly class SpecializationCloser
      * single-inheritance chain — a body for each erased member its covariant-upcast obligations expose.
      *
      * The fixpoint's schedule-and-inherit path supplies the ONE member the class chain threads. Under a
-     * covariant DIAMOND (a multi-parameter or nested covariant element type, e.g. `Tuple<+A,+B>` over
+     * covariant DIAMOND (a multi-parameter or nested covariant element type, e.g. `Tuple<out A,out B>` over
      * `Book <: Product`) the same concrete is, by per-argument covariance, an instance of SEVERAL supertype
      * specializations at once, and PHP single inheritance can carry only one of them — leaving the sibling
      * obligations' distinctly-mangled abstract members unimplemented (a class-load fatal). This pass walks

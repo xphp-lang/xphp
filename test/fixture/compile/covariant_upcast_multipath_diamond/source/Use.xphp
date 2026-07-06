@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace App;
 // Lst and Bag are TWO concrete implementers, each reached as a covariant-upcast implementer through TWO
-// interface ancestry chains (Collection's `contains`, Lookup's `indexOf`). The element type Tuple<+A,+B>
+// interface ancestry chains (Collection's `contains`, Lookup's `indexOf`). The element type Tuple<out A,out B>
 // over Book<:Product is a DIAMOND, so each concrete spec is obligated at four incomparable Tuple supertypes
 // per interface — eight erased members converging on one spec through several discovery paths. Single
 // inheritance threads one path per interface; the post-edge gap-fill must supply every remaining sibling on

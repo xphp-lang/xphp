@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /**
  * Runtime verify for `generic_covariant_immutable_constructor`:
- * a covariant immutable collection `ImmutableList<+T>` with a `T`-typed
+ * a covariant immutable collection `ImmutableList<out T>` with a `T`-typed
  * constructor. `ImmutableList<Banana>` is usable where `ImmutableList<Fruit>`
  * is expected (covariant `extends` edge), the constructor keeps its REAL element
  * type on each specialization (no erasure), and that real type is enforced by

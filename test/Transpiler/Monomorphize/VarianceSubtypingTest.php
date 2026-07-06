@@ -27,7 +27,7 @@ final class VarianceSubtypingTest extends TestCase
     private const BANANA = 'App\\Banana';
     private const BOX = 'App\\Box';
 
-    /** Banana <: Fruit; Box<+T> defined so the nested-generic recursion has a template to read. */
+    /** Banana <: Fruit; Box<out T> defined so the nested-generic recursion has a template to read. */
     private function subtyping(): VarianceSubtyping
     {
         return new VarianceSubtyping($this->hierarchy());
@@ -195,7 +195,7 @@ final class VarianceSubtypingTest extends TestCase
 
     // ---- Cross-template generic type-argument subtyping ----
     //
-    // `ImmutableList<+E> implements Collection<+E>`, `Book <: Product`. The hierarchy carries the
+    // `ImmutableList<out E> implements Collection<out E>`, `Book <: Product`. The hierarchy carries the
     // PARAMETERISED supertype edge so `resolveInheritedArgs` can thread `ImmutableList<Book>` up to
     // `Collection<Book>`. `Mid<X> implements Collection<X, X>` is the MALFORMED case — a 2-arg
     // parameterised super against a 1-param target — exercising the load-bearing count() arity guard.
@@ -235,7 +235,7 @@ final class VarianceSubtypingTest extends TestCase
     {
         $hierarchy = $this->crossHierarchy();
         $registry = new Registry(Registry::DEFAULT_HASH_HEX_LENGTH, $hierarchy);
-        // Only the PARENT template's definition is read (for its slot variance); Collection<+E>.
+        // Only the PARENT template's definition is read (for its slot variance); Collection<out E>.
         $registry->recordDefinition(
             self::COLLECTION,
             'Collection',

@@ -6,7 +6,7 @@ namespace App\ConstructorMixed;
 
 // Rejected: the allowed bare leading `T` must not stop the walk from reaching the
 // bad trailing `?T` (a non-bare shape) — the inner-variance check still rejects it.
-class P<+T>
+class P<out T>
 {
     public function __construct(T $a, ?T $b)
     {

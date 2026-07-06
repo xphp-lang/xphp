@@ -13,7 +13,7 @@ namespace App\VarianceCovariantHappy\Containers;
 // With Banana <: Fruit, the emitter adds
 // `Producer_Banana extends Producer_Fruit` (Class_ specializations get a
 // single `extends`, since PHP allows only one class inheritance).
-class Producer<+T>
+class Producer<out T>
 {
     private mixed $item = null;
 

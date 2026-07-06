@@ -13,7 +13,7 @@ use PhpParser\Node\Stmt\Interface_;
  * Emits subtype edges between specializations of the same generic template
  * based on each type-param's variance.
  *
- * For a template `Producer<+T>` with `Banana <: Fruit` at the PHP class level,
+ * For a template `Producer<out T>` with `Banana <: Fruit` at the PHP class level,
  * this adds `extends Producer_Fruit_<hash>` to the cloned `Producer_Banana`
  * Class_ node.
  *
@@ -176,7 +176,7 @@ final class VarianceEdgeEmitter
 
         if ($ast instanceof Class_) {
             // PHP allows a class exactly ONE parent. A specialized class that already carries a source
-            // `extends` (e.g. `class ListColl<+E> extends AbstractColl<E>` → `ListColl_Book extends
+            // `extends` (e.g. `class ListColl<out E> extends AbstractColl<E>` → `ListColl_Book extends
             // AbstractColl_Book`) must keep it: that parent carries the inherited member bodies and the
             // source-declared `is-a` relationships. A same-template covariant super
             // (`ListColl<Book> <: ListColl<Product>`) cannot ALSO be a direct parent under single

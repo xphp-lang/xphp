@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App;
 
-class Box<+E>
+class Box<out E>
 {
     // U must be BOTH `\Stringable` (have a `__toString`) AND a subtype of the element type E. The
     // `\Stringable` half is checkable with no knowledge of E; only the `E` half needs the receiver's

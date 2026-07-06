@@ -6,7 +6,7 @@ namespace App\TwoConstructor;
 
 // Two covariant params: BOTH `T`-typed constructor params keep their real
 // substituted types (nothing is erased for any variant constructor param).
-class Two<+A, +B>
+class Two<out A, out B>
 {
     private array $slots;
 

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace App;
 use function in_array;
-abstract class AbstractColl<+E> implements Collection<E>
+abstract class AbstractColl<out E> implements Collection<E>
 {
     /** @var list<mixed> */
     protected array $items;

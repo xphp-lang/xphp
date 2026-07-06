@@ -10,7 +10,7 @@ namespace App\CovariantConstructor;
 // `extends` chain (ImmutableList<Banana> extends ImmutableList<Fruit>) is
 // valid and construction is runtime-type-checked. Not `final` — a variant class
 // can't be (its specializations are linked by `extends` edges).
-class ImmutableList<+T>
+class ImmutableList<out T>
 {
     private array $items;
 

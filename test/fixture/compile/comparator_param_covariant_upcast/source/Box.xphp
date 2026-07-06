@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App;
 
 // A covariant container with a `Comparator<E>` CONSUMING method — the sound shape where `E` sits in a
-// contravariant slot (Comparator<-T>) inside a contravariant parameter position, so
+// contravariant slot (Comparator<in T>) inside a contravariant parameter position, so
 // contra ∘ contra = covariant, which a covariant `+E` may occupy.
-class Box<+E>
+class Box<out E>
 {
     /** @var list<E> */
     private array $items;

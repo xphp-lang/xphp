@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace App;
 
-class ArrayList<+E> extends Base<E>
+class ArrayList<out E> extends Base<E>
 {
 }

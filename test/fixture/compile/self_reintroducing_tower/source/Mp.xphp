@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App;
 
-class Mp<K, +V>
+class Mp<K, out V>
 {
     public function values(): Lst<V>
     {

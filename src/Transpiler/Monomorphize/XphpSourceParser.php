@@ -612,27 +612,46 @@ final class XphpSourceParser
         $sawDefault = false;
         $i = self::skipWs($tokens, $openIdx + 1);
         while ($i < $n) {
-            // Variance prefix `+` (covariant) or `-` (contravariant). Both are
-            // single-char tokens at this position. Class-level only -- methods,
-            // functions, closures, and arrow functions reject them because
-            // their specializations aren't keyed by stable identities that
-            // PHP would resolve via `extends` chains.
-            $variance = Variance::Invariant;
+            // The old Scala/Hack markers `+T` / `-T` were replaced by the
+            // Kotlin-style `out T` / `in T`. Reject the glyphs with a migration
+            // hint rather than letting them fall through to a bare `null` (which
+            // would surface downstream as an opaque PHP syntax error).
             if ($i < $n && ($tokens[$i]->text === '+' || $tokens[$i]->text === '-')) {
-                if (!$allowVariance) {
-                    throw new RuntimeException(
-                        'Variance markers `+T` / `-T` are not supported on methods, '
-                        . 'functions, closures, or arrow functions — variance is a '
-                        . 'class-level-only feature by design: a function or closure '
-                        . 'specialization has no stable class identity to anchor a '
-                        . 'subtype `extends` edge to. Move the generic to a class-level '
-                        . 'type parameter.',
-                    );
+                throw new RuntimeException(
+                    'The `+T` / `-T` variance syntax was replaced by `out T` / `in T`. '
+                    . 'Write `out` for covariance and `in` for contravariance, e.g. '
+                    . '`class Box<out T>` or `class Consumer<in T>`.',
+                );
+            }
+
+            // Kotlin-style variance markers `out` (covariant) / `in`
+            // (contravariant). They are contextual keywords: plain `T_STRING`
+            // tokens that act as a marker only when immediately followed (past
+            // whitespace) by the parameter name — a required space separates
+            // marker and name (`out T`, never `outT`, which is one token and an
+            // ordinary name). Class-level only: methods, functions, closures,
+            // and arrow functions reject variance because their specializations
+            // aren't keyed by stable identities that PHP would resolve via
+            // `extends` chains.
+            $variance = Variance::Invariant;
+            if ($i < $n && in_array($tokens[$i]->text, ['out', 'in'], true)) {
+                $afterMarker = self::skipWs($tokens, $i + 1);
+                if ($afterMarker < $n && self::isNameToken($tokens[$afterMarker])) {
+                    if (!$allowVariance) {
+                        throw new RuntimeException(
+                            'Variance markers `out T` / `in T` are not supported on methods, '
+                            . 'functions, closures, or arrow functions — variance is a '
+                            . 'class-level-only feature by design: a function or closure '
+                            . 'specialization has no stable class identity to anchor a '
+                            . 'subtype `extends` edge to. Move the generic to a class-level '
+                            . 'type parameter.',
+                        );
+                    }
+                    $variance = $tokens[$i]->text === 'out'
+                        ? Variance::Covariant
+                        : Variance::Contravariant;
+                    $i = $afterMarker;
                 }
-                $variance = $tokens[$i]->text === '+'
-                    ? Variance::Covariant
-                    : Variance::Contravariant;
-                $i++;
             }
 
             if (!self::isNameToken($tokens[$i])) {
@@ -640,6 +659,20 @@ final class XphpSourceParser
             }
             $paramName = ltrim($tokens[$i]->text, '\\');
             $i++;
+
+            // Reserve `out` / `in` as variance markers: they can never name a
+            // type parameter. This one check at the name slot catches every
+            // shape uniformly — `class Box<out>` (no following name, so `out`
+            // is read here as the name), `class Box<out out>` (marker consumed,
+            // second `out` read as the name), `class Pair<in, out>`,
+            // `class Box<in : Foo>` — all reject with a single diagnostic.
+            if (in_array($paramName, ['out', 'in'], true)) {
+                throw new RuntimeException(
+                    '`out` and `in` are variance markers and cannot name a type parameter. '
+                    . 'Use `out T` for covariance or `in T` for contravariance, and pick a '
+                    . 'different name for the parameter itself.',
+                );
+            }
 
             $bound = null;
             $afterName = self::skipWs($tokens, $i);
