@@ -69,8 +69,19 @@ final class ClosureLiteralSignature
         if ($type === null) {
             return null;
         }
-        if ($type instanceof NullableType || $type instanceof UnionType || $type instanceof IntersectionType) {
-            return new SigRaw(self::rawText($type));
+        // `?A` ≡ `A|null`: a union of the inner type and the `null` leaf.
+        if ($type instanceof NullableType) {
+            $inner = self::resolveType($type->type, $ctx);
+            if ($inner === null) {
+                return new SigRaw(self::rawText($type));
+            }
+            return new SigUnion([$inner, new SigTypeRef(new TypeRef('null', [], isScalar: true))]);
+        }
+        if ($type instanceof UnionType) {
+            return self::resolveUnion($type, $ctx);
+        }
+        if ($type instanceof IntersectionType) {
+            return self::resolveIntersection($type, $ctx);
         }
         // @infection-ignore-all — a param/return type node is only ever null, a
         // compound (handled above), or a simple Identifier/Name, so the negated
@@ -88,6 +99,44 @@ final class ClosureLiteralSignature
         // An unrecognized type-node shape (should not occur for a well-formed
         // literal) is treated as absent ⇒ gradual, never a false mismatch.
         return null;
+    }
+
+    /**
+     * Structure a `A|B` (possibly with a DNF `(A&B)` member, which nikic nests as
+     * an `IntersectionType` inside the union) into a {@see SigUnion}. If any member
+     * fails to resolve, the whole leaf falls back to a gradual {@see SigRaw} — never
+     * a partially-structured union that could false-decide.
+     */
+    private static function resolveUnion(UnionType $type, NamespaceContext $ctx): SigType
+    {
+        $members = [];
+        foreach ($type->types as $member) {
+            $resolved = self::resolveType($member, $ctx);
+            if ($resolved === null) {
+                return new SigRaw(self::rawText($type));
+            }
+            $members[] = $resolved;
+        }
+        return new SigUnion($members);
+    }
+
+    /**
+     * Structure an `A&B` into a {@see SigIntersection}. A member that fails to
+     * resolve, or a **scalar** member (PHP forbids scalars in an intersection, so it
+     * can only come from already-invalid source), falls the whole leaf back to a
+     * gradual {@see SigRaw}.
+     */
+    private static function resolveIntersection(IntersectionType $type, NamespaceContext $ctx): SigType
+    {
+        $members = [];
+        foreach ($type->types as $member) {
+            $resolved = self::resolveType($member, $ctx);
+            if ($resolved === null || ($resolved instanceof SigTypeRef && $resolved->type->isScalar)) {
+                return new SigRaw(self::rawText($type));
+            }
+            $members[] = $resolved;
+        }
+        return new SigIntersection($members);
     }
 
     /**

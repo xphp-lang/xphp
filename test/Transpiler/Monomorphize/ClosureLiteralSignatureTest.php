@@ -58,24 +58,51 @@ final class ClosureLiteralSignatureTest extends TestCase
         self::assertTrue($sig->params[2]->variadic);
     }
 
-    public function testNullableAndUnionTypesAreCarriedRaw(): void
+    public function testNullableAndUnionTypesAreStructured(): void
     {
         $sig = self::extract('<?php $f = function (?int $a, int|string $b): int|null { return 1; };', self::ctx());
 
-        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
-        self::assertSame('?int', $sig->params[0]->type->raw);
-        self::assertInstanceOf(SigRaw::class, $sig->params[1]->type);
-        self::assertSame('int|string', $sig->params[1]->type->raw);
-        self::assertInstanceOf(SigRaw::class, $sig->return);
-        self::assertSame('int|null', $sig->return->raw);
+        // ?int ≡ int|null
+        $a = $sig->params[0]->type;
+        self::assertInstanceOf(SigUnion::class, $a);
+        self::assertSame(['int', 'null'], self::memberNames($a));
+        // The synthesized `null` leaf is scalar-flagged, matching the SCALAR_TYPES
+        // leaf path (`null` ∈ SCALAR_TYPES).
+        self::assertTrue(self::refIsScalar($a->members[1]));
+
+        $b = $sig->params[1]->type;
+        self::assertInstanceOf(SigUnion::class, $b);
+        self::assertSame(['int', 'string'], self::memberNames($b));
+
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['int', 'null'], self::memberNames($sig->return));
     }
 
-    public function testIntersectionTypeIsCarriedRaw(): void
+    public function testIntersectionTypeIsStructured(): void
     {
         $sig = self::extract('<?php $f = function (): Countable&Traversable { return null; };', self::ctx('App'));
 
-        self::assertInstanceOf(SigRaw::class, $sig->return);
-        self::assertSame('Countable&Traversable', $sig->return->raw);
+        self::assertInstanceOf(SigIntersection::class, $sig->return);
+        self::assertSame(['App\\Countable', 'App\\Traversable'], self::memberNames($sig->return));
+    }
+
+    public function testIntersectionWithAScalarMemberFallsBackToRaw(): void
+    {
+        // Not valid PHP (a scalar can't be an intersection member); nikic still
+        // builds it, and the extractor keeps it gradual rather than structuring.
+        $sig = self::extract('<?php $f = function (int&Countable $a) {}; ', self::ctx('App'));
+
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+    }
+
+    public function testDnfUnionMemberIsStructuredRecursively(): void
+    {
+        $sig = self::extract('<?php $f = function (): (Countable&Traversable)|Stringable { return null; };', self::ctx('App'));
+
+        $ret = $sig->return;
+        self::assertInstanceOf(SigUnion::class, $ret);
+        self::assertInstanceOf(SigIntersection::class, $ret->members[0]);
+        self::assertInstanceOf(SigTypeRef::class, $ret->members[1]);
     }
 
     public function testArrowFunctionReturnIsExtracted(): void
@@ -137,6 +164,16 @@ final class ClosureLiteralSignatureTest extends TestCase
     private static function typeName(?SigType $type): ?string
     {
         return $type instanceof SigTypeRef ? $type->type->name : null;
+    }
+
+    /**
+     * The `TypeRef` names of a compound leaf's members, in order.
+     *
+     * @return list<?string>
+     */
+    private static function memberNames(SigUnion|SigIntersection $type): array
+    {
+        return array_map(self::typeName(...), $type->members);
     }
 
     private static function refIsScalar(SigType $type): bool
