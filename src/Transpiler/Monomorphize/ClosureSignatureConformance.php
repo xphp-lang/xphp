@@ -218,14 +218,22 @@ final readonly class ClosureSignatureConformance
             return self::normalizeScalar($sub->type->name) !== self::normalizeScalar($super->type->name);
         }
         if ($subKind === 'class' && $superKind === 'class') {
-            // Only provable when BOTH classes are known to the hierarchy: an
-            // undeclared class on either side leaves the relation unprovable, and
-            // `isSubtype(knownChild, undeclaredParent)` returns a hard `false`
-            // (the BFS simply never reaches the unknown) — which must NOT be read
-            // as a proven non-subtype, or valid code against an out-of-source class
-            // would be false-rejected.
+            // Provable only when BOTH classes are known to the hierarchy AND the
+            // target (super) is a user-declared class:
+            //  - An undeclared class on either side leaves the relation unprovable;
+            //    `isSubtype(knownChild, undeclaredParent)` returns a hard `false`
+            //    (the BFS never reaches the unknown), which must NOT read as a
+            //    proven non-subtype or out-of-source code would be false-rejected.
+            //  - A BUILT-IN target is equally unprovable-as-`false`: the hierarchy
+            //    models only ancestor edges scanned from source, not PHP's built-in
+            //    class graph, so `isSubtype` returns `false` for a real relation
+            //    like `Exception <: Throwable` (or any user class whose ancestry
+            //    passes through a built-in). Reaching a USER target, by contrast,
+            //    is possible only over user-declared edges — all modeled — so a
+            //    `false` there is a genuine proof. Accept when the target is built-in.
             if (!$this->hierarchy->isDeclared($sub->type->name)
                 || !$this->hierarchy->isDeclared($super->type->name)
+                || $this->hierarchy->isBuiltin($super->type->name)
             ) {
                 return false;
             }

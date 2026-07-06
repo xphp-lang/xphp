@@ -21,6 +21,15 @@ final class TypeHierarchyTest extends TestCase
         self::assertTrue($hierarchy->isSubtype('Stringable', 'Stringable'));
     }
 
+    public function testIsBuiltinRecognisesBuiltinsAndStripsLeadingBackslash(): void
+    {
+        $hierarchy = new TypeHierarchy([]);
+        self::assertTrue($hierarchy->isBuiltin('Throwable'));
+        self::assertTrue($hierarchy->isBuiltin('\\Throwable'), 'a leading-backslash builtin still matches');
+        self::assertFalse($hierarchy->isBuiltin('App\\Throwable'), 'a namespaced look-alike is not the builtin');
+        self::assertFalse($hierarchy->isBuiltin('App\\Fruit'));
+    }
+
     public function testUnknownConcreteTypeReturnsNull(): void
     {
         // Reject-by-uncertainty: caller can't prove SomeRandomClass satisfies anything because

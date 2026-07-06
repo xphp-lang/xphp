@@ -398,6 +398,39 @@ final class ClosureSignatureConformanceTest extends TestCase
         );
     }
 
+    public function testBuiltinReturnTargetIsAcceptedGradually(): void
+    {
+        // Regression (false-reject): the hierarchy models no ancestor edges for
+        // PHP built-ins, so isSubtype('Exception','Throwable') returns a hard false.
+        // A built-in target must NOT be read as a proven mismatch — Exception really
+        // IS a Throwable. Covariant return: candidate Exception, target Throwable.
+        self::assertConforms(
+            self::sig([], self::ref('Exception')),
+            self::sig([], self::ref('Throwable')),
+        );
+    }
+
+    public function testUserSubclassOfBuiltinAgainstBuiltinReturnTargetIsAccepted(): void
+    {
+        // App\MyExc extends the built-in Exception; its ancestry escapes into the
+        // unmodeled built-in graph, so it is really a Throwable but BFS can't prove it.
+        self::assertConforms(
+            self::sig([], self::ref('App\\MyExc')),
+            self::sig([], self::ref('Throwable')),
+        );
+    }
+
+    public function testBuiltinParameterTargetIsAcceptedGradually(): void
+    {
+        // Contravariant parameter: target Exception, candidate Throwable. Throwable
+        // is genuinely wider than Exception, but the relation runs through the
+        // built-in graph — accept rather than false-reject.
+        self::assertConforms(
+            self::sig([self::p(self::ref('Throwable'))], self::ref('void')),
+            self::sig([self::p(self::ref('Exception'))], self::ref('void')),
+        );
+    }
+
     public function testViolationDetailNamesThePositionAndBothTypes(): void
     {
         $violation = self::engine()->check(
@@ -441,11 +474,14 @@ final class ClosureSignatureConformanceTest extends TestCase
     private static function engine(): ClosureSignatureConformance
     {
         // App\Apple <: App\Fruit, App\Orange <: App\Fruit; App\Closurish is a bare class.
+        // App\MyExc extends the built-in Exception (its ancestry escapes into PHP's
+        // unmodeled built-in graph).
         $hierarchy = new TypeHierarchy([
             'App\\Apple' => ['App\\Fruit'],
             'App\\Orange' => ['App\\Fruit'],
             'App\\Fruit' => [],
             'App\\Closurish' => [],
+            'App\\MyExc' => ['Exception'],
         ]);
         return new ClosureSignatureConformance($hierarchy);
     }

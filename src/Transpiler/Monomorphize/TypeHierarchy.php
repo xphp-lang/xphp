@@ -154,6 +154,18 @@ final readonly class TypeHierarchy
     }
 
     /**
+     * Whether $fqn names a built-in PHP interface/class ({@see BUILTIN_TYPES}).
+     * These are `isDeclared`, but the hierarchy models none of their ancestor
+     * edges (it seeds edges only from scanned source), so an `isSubtype` verdict
+     * of `false` against a built-in target is unprovable — callers that treat a
+     * `false` as a proof must exclude a built-in target first.
+     */
+    public function isBuiltin(string $fqn): bool
+    {
+        return in_array(ltrim($fqn, '\\'), self::BUILTIN_TYPES, true);
+    }
+
+    /**
      * Transitive ancestors of $fqn, nearest-first and de-duplicated, excluding
      * $fqn itself. Breadth-first over the direct-ancestor map, so the closest
      * declaring class is visited before its grandparents.

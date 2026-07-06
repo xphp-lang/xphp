@@ -31,6 +31,24 @@ final class ClosureConformanceIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testExceptionFactoryAgainstBuiltinThrowableTargetCompilesAndRuns(): void
+    {
+        // Regression: a user subclass of the built-in \Exception returned against a
+        // Closure(): \Throwable target must not be false-rejected (the hierarchy
+        // models no built-in ancestor edges).
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_conformance_builtin_ok/source',
+            'closure-conformance-builtin',
+        );
+        $fixture->registerAutoload('App\\ClosureBuiltinOk\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_conformance_builtin_ok/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     public function testNonConformingClosureFailsCompilation(): void
     {
         $this->expectException(RuntimeException::class);
