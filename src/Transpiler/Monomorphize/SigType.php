@@ -16,14 +16,15 @@ namespace XPHP\Transpiler\Monomorphize;
  * and substitution machinery depend on, and the compound/nested shapes live here.
  *
  * Concrete arms:
- *   - `SigTypeRef`  — a scalar / class / type-parameter / pseudo-type leaf,
- *                     wrapping a `TypeRef` so the existing substitution +
- *                     `TypeHierarchy` machinery is reused unchanged.
- *   - `SigClosure`  — a nested `ClosureSignature`.
- *
- * A later work item adds `SigUnion` / `SigIntersection` for `A|B` / `A&B` leaves;
- * introducing the abstract base now keeps that a purely additive extension rather
- * than a schema break across the substitution visitor.
+ *   - `SigTypeRef`      — a scalar / class / type-parameter / pseudo-type leaf,
+ *                         wrapping a `TypeRef` so the existing substitution +
+ *                         `TypeHierarchy` machinery is reused unchanged.
+ *   - `SigClosure`      — a nested `ClosureSignature`.
+ *   - `SigUnion`        — an `A|B` (or nullable `?A` ≡ `A|null`) leaf.
+ *   - `SigIntersection` — an `A&B` leaf.
+ *   - `SigRaw`          — a defensive fallback for a leaf that couldn't be
+ *                         structured (a target-side DNF, an unresolved member, an
+ *                         intersection carrying a scalar); accepted gradually.
  */
 abstract readonly class SigType
 {

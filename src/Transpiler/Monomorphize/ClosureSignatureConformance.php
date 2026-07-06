@@ -177,12 +177,58 @@ final readonly class ClosureSignatureConformance
      */
     private function provablyNotSubtype(SigType $sub, SigType $super): bool
     {
-        // A raw (union/intersection) leaf on either side is not yet structured;
-        // treat as gradual until WI-03 gives it variance. (This is the intentional
-        // statement of that rule; a SigRaw would also fall through to the defensive
-        // non-SigTypeRef guard below, so mutating this line is caught there —
-        // @infection-ignore-all.)
+        // A raw (unstructured) leaf on either side stays gradual — a target-side DNF
+        // `(A&B)|C`, an unresolved member, or an intersection carrying a scalar all
+        // fall back to SigRaw and are accepted here.
         if ($sub instanceof SigRaw || $super instanceof SigRaw) {
+            return false;
+        }
+
+        // ---- Compound leaves. Decompose the SUB side FIRST: doing the super side
+        // first would false-reject `int|string <: string|int` (the resulting
+        // `∧ᵥ∨ᵤ` over-approximates the sound `∨ᵤ∧ᵥ`). ----
+
+        // sub = union: `A|B <: Y` ⟺ EVERY member <: Y ⇒ provably-not iff SOME member is.
+        if ($sub instanceof SigUnion) {
+            foreach ($sub->members as $member) {
+                if ($this->provablyNotSubtype($member, $super)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // sub = intersection: soundly `A&B <: Y` ⟺ `A<:Y ∨ B<:Y`, but an intersection
+        // of incompatible members is uninhabited (`never`, a subtype of everything)
+        // and there is no inhabitation check here — decomposing would false-reject.
+        // Kept gradual; the inhabited-intersection reject is a tracked follow-up.
+        // @infection-ignore-all — the explicit gradual return states the rule; a
+        // SigIntersection sub also falls through to the defensive non-SigTypeRef
+        // guard below, which returns the same false, so removing it is equivalent.
+        if ($sub instanceof SigIntersection) {
+            return false;
+        }
+
+        // super = union: `X <: A|B` ⟺ X <: SOME member ⇒ provably-not iff vs EVERY member.
+        if ($super instanceof SigUnion) {
+            foreach ($super->members as $member) {
+                if (!$this->provablyNotSubtype($sub, $member)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // super = intersection: `X <: A&B` ⟺ X <: EVERY member ⇒ provably-not iff vs SOME.
+        if ($super instanceof SigIntersection) {
+            foreach ($super->members as $member) {
+                if ($this->provablyNotSubtype($sub, $member)) {
+                    return true;
+                }
+            }
+            // @infection-ignore-all — no member proved a violation; the defensive
+            // non-SigTypeRef guard below returns the same false for this SigIntersection
+            // super, so removing this explicit gradual return is equivalent.
             return false;
         }
 
@@ -198,9 +244,9 @@ final readonly class ClosureSignatureConformance
             return $leaf !== null && $this->classify($leaf->type) === 'scalar';
         }
 
-        // @infection-ignore-all — defensive: SigRaw is handled above and both
-        // SigClosure cases too, so by here both operands are always SigTypeRef;
-        // this guard only exists for a future SigType arm and never fires.
+        // @infection-ignore-all — defensive: SigRaw, every compound (union/
+        // intersection), and both SigClosure cases are handled above, so by here
+        // both operands are always SigTypeRef; this guard never fires.
         if (!$sub instanceof SigTypeRef || !$super instanceof SigTypeRef) {
             return false;
         }
@@ -325,6 +371,12 @@ final readonly class ClosureSignatureConformance
         }
         if ($type instanceof SigClosure) {
             return 'Closure(...)';
+        }
+        if ($type instanceof SigUnion) {
+            return implode('|', array_map(self::display(...), $type->members));
+        }
+        if ($type instanceof SigIntersection) {
+            return implode('&', array_map(self::display(...), $type->members));
         }
         return $type instanceof SigRaw ? $type->raw : '?';
     }

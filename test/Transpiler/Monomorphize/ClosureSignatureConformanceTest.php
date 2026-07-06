@@ -431,6 +431,121 @@ final class ClosureSignatureConformanceTest extends TestCase
         );
     }
 
+    // ---- Union / intersection member variance (WI-03) --------------------
+
+    public function testUnionTargetParameterRejectsTooNarrowCandidate(): void
+    {
+        // target Closure(int|string $x); candidate fn(int $x) can't accept a string
+        // the target may pass — sub-union OR finds the string arm provably-not.
+        self::assertViolation(
+            ClosureConformanceViolation::KIND_PARAM_TYPE,
+            self::sig([self::p(self::ref('int'))], null),                                    // candidate
+            self::sig([self::p(self::union(self::ref('int'), self::ref('string')))], null),  // target
+        );
+    }
+
+    public function testUnionParameterAcceptsEqualUnionRegardlessOfMemberOrder(): void
+    {
+        // The order-independence case that a super-first decomposition would false-
+        // reject: candidate string|int vs target int|string must conform.
+        self::assertConforms(
+            self::sig([self::p(self::union(self::ref('string'), self::ref('int')))], null),
+            self::sig([self::p(self::union(self::ref('int'), self::ref('string')))], null),
+        );
+    }
+
+    public function testNarrowerReturnConformsToUnionReturn(): void
+    {
+        // candidate return int; target return int|string — int fits the union.
+        self::assertConforms(
+            self::sig([], self::ref('int')),
+            self::sig([], self::union(self::ref('int'), self::ref('string'))),
+        );
+    }
+
+    public function testReturnOutsideUnionIsRejected(): void
+    {
+        // candidate return float; target return int|string — provably neither.
+        self::assertViolation(
+            ClosureConformanceViolation::KIND_RETURN_TYPE,
+            self::sig([], self::ref('float')),
+            self::sig([], self::union(self::ref('int'), self::ref('string'))),
+        );
+    }
+
+    public function testUnionReturnWithGradualMemberStaysGradual(): void
+    {
+        // candidate return App\Apple; target return int|App\External\Thing. Apple is
+        // provably not an int, but the undeclared Thing arm can't be disproven — so
+        // the union stays gradual and accepts (no false reject). A scalar candidate
+        // would instead reject, since a scalar is provably no class at all.
+        self::assertConforms(
+            self::sig([], self::ref('App\\Apple')),
+            self::sig([], self::union(self::ref('int'), self::ref('App\\External\\Thing'))),
+        );
+    }
+
+    public function testNarrowerReturnConformsToNullableUnionReturn(): void
+    {
+        // ?int modelled as int|null; candidate return int is a subtype — accept.
+        self::assertConforms(
+            self::sig([], self::ref('int')),
+            self::sig([], self::union(self::ref('int'), self::ref('null'))),
+        );
+    }
+
+    public function testSuperIntersectionReturnRejectsNonMember(): void
+    {
+        // candidate return App\Fruit; target return App\Apple & App\Closurish —
+        // Fruit is provably not an Apple, so the intersection is not satisfied.
+        self::assertViolation(
+            ClosureConformanceViolation::KIND_RETURN_TYPE,
+            self::sig([], self::ref('App\\Fruit')),
+            self::sig([], self::intersection(self::ref('App\\Apple'), self::ref('App\\Closurish'))),
+        );
+    }
+
+    public function testSuperIntersectionWithUndeclaredMemberStaysGradual(): void
+    {
+        // One member undeclared ⇒ the whole intersection is unprovable ⇒ accept.
+        self::assertConforms(
+            self::sig([], self::ref('App\\Apple')),
+            self::sig([], self::intersection(self::ref('App\\Apple'), self::ref('App\\External\\Thing'))),
+        );
+    }
+
+    public function testSubIntersectionParameterIsAcceptedEvenWhenUninhabited(): void
+    {
+        // CRITICAL cardinal-rule guard: target Closure(Apple&Orange $x) is
+        // uninhabited (two concrete siblings ⇒ `never`), and `never` is a subtype of
+        // everything, so ANY candidate parameter is vacuously wide. The sub-side
+        // intersection must stay gradual, never decompose into a reject.
+        self::assertConforms(
+            self::sig([self::p(self::ref('App\\Closurish'))], null),
+            self::sig([self::p(self::intersection(self::ref('App\\Apple'), self::ref('App\\Orange')))], null),
+        );
+    }
+
+    public function testViolationDetailRendersUnionMembers(): void
+    {
+        $violation = self::engine()->check(
+            self::sig([], self::ref('float')),
+            self::sig([], self::union(self::ref('int'), self::ref('string'))),
+        );
+        self::assertNotNull($violation);
+        self::assertStringContainsString('int|string', $violation->detail);
+    }
+
+    public function testViolationDetailRendersIntersectionMembers(): void
+    {
+        $violation = self::engine()->check(
+            self::sig([], self::ref('App\\Fruit')),
+            self::sig([], self::intersection(self::ref('App\\Apple'), self::ref('App\\Closurish'))),
+        );
+        self::assertNotNull($violation);
+        self::assertStringContainsString('App\\Apple&App\\Closurish', $violation->detail);
+    }
+
     public function testViolationDetailNamesThePositionAndBothTypes(): void
     {
         $violation = self::engine()->check(
@@ -534,5 +649,15 @@ final class ClosureSignatureConformanceTest extends TestCase
     private static function cl(ClosureSignature $sig): SigClosure
     {
         return new SigClosure($sig);
+    }
+
+    private static function union(SigType ...$members): SigUnion
+    {
+        return new SigUnion(array_values($members));
+    }
+
+    private static function intersection(SigType ...$members): SigIntersection
+    {
+        return new SigIntersection(array_values($members));
     }
 }

@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 /**
- * A signature leaf that was scanned and erased but not yet structurally parsed —
- * currently a union (`A|B`) or intersection (`A&B`) member type. The raw source
- * text is retained so a later work item can build the proper `SigUnion` /
- * `SigIntersection` node; until then no conformance rule reads it, so the
- * placeholder only has to survive erasure without losing the bytes.
+ * A signature leaf that was scanned and erased but could NOT be structured into a
+ * {@see SigUnion} / {@see SigIntersection} / {@see SigTypeRef} — the defensive
+ * fallback. Flat unions/intersections/nullables now structure, so this remains
+ * only for the residual shapes: a target-side DNF `(A&B)|C` (the token scanner
+ * doesn't split nested parens), a member that fails to resolve, or an
+ * intersection carrying a scalar member. The engine treats it as gradual (accept),
+ * so it only has to survive erasure without losing the bytes for the diagnostic.
  */
 final readonly class SigRaw extends SigType
 {
