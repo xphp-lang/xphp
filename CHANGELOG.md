@@ -192,6 +192,12 @@ _In progress on this branch — content still accumulating; date set at tag time
   scans as one **gradual** leaf: the signature erases correctly, arity and the
   slots around the group are checked as usual, and the group itself is accepted
   rather than variance-checked member by member.
+- **Fully-qualified types in closure literals participate in conformance.** A
+  factory literal spelling its type fully qualified (`fn(): \App\Fruit`) had the
+  leading `\` dropped during extraction, mis-resolving the name relative to the
+  current namespace — an undeclared class, so the check silently went gradual and
+  provable violations were missed. FQ names now resolve absolutely (relative and
+  imported names are unchanged).
 - **Generic closures after array-sugar rewrites specialize correctly.** The
   `Name[]` → `array` rewrite shortens the source, and the byte-keyed marker that
   attaches type parameters to an anonymous `function<T>` / `fn<T>` was compared
