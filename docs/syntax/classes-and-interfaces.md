@@ -73,7 +73,7 @@ implementation detail.
 - **Traits don't get markers** — `instanceof SomeTrait` doesn't work
   in PHP, so generic traits are dropped from the emit after
   specialization.
-- **Variance edges** — when `+T` or `-T` is declared, specializations
+- **Variance edges** — when `out T` or `in T` is declared, specializations
   get real `extends` chains. See [variance](variance.md).
 
 ## See also

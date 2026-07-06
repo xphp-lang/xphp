@@ -4,7 +4,7 @@
 
 ## Context and Problem Statement
 
-Declaration-site variance (`+T` / `-T`) is realized as real `extends` edges between
+Declaration-site variance (`out T` / `in T`) is realized as real `extends` edges between
 *specialized classes*: `Producer<Banana>` extends `Producer<Fruit>`, and PHP's native type
 system carries the subtype relationship. That mechanism needs a stable, nominal class
 identity at each end of the edge.
@@ -13,7 +13,7 @@ Method-, function-, closure-, and arrow-scoped generics don't have one. Their
 specializations are *functions* — mangled methods appended to a class, or top-level
 functions, keyed by a call-site hash — not classes that can sit in an `extends` chain. So
 the question is what to do when a type parameter on one of those carries a variance marker
-(`function map<+U>(...)`, `$f = fn<-T>(...) => ...`): support it somehow, ignore it, or
+(`function map<out U>(...)`, `$f = fn<in T>(...) => ...`): support it somehow, ignore it, or
 reject it.
 
 ## Decision Drivers
@@ -29,7 +29,7 @@ reject it.
 - **Implement method-level variance** — synthesize some stable identity for function
   specializations so a subtype relationship can be expressed. Large, and there is no natural
   PHP construct for "one function is a subtype of another."
-- **Accept the markers and ignore them** — parse `+U` / `-U` on a function-scoped generic
+- **Accept the markers and ignore them** — parse `out U` / `in U` on a function-scoped generic
   but emit nothing. Silently unsound: the declared variance would have no effect.
 - **Reject them at parse time as a permanent boundary** — and document the rationale.
 

@@ -195,7 +195,7 @@ final class VarianceSubtypingTest extends TestCase
 
     // ---- Cross-template generic type-argument subtyping ----
     //
-    // `ImmutableList<out E> implements Collection<out E>`, `Book <: Product`. The hierarchy carries the
+    // `ImmutableList<out E> implements Collection<E>`, `Book <: Product`. The hierarchy carries the
     // PARAMETERISED supertype edge so `resolveInheritedArgs` can thread `ImmutableList<Book>` up to
     // `Collection<Book>`. `Mid<X> implements Collection<X, X>` is the MALFORMED case — a 2-arg
     // parameterised super against a 1-param target — exercising the load-bearing count() arity guard.

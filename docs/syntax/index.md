@@ -16,7 +16,7 @@ first.
 | [Methods and functions](methods-and-functions.md) | Generic methods (static + instance), generic free functions, bare top-level |
 | [Closures and arrows](closures-and-arrows.md) | `function<T>(...)`, `fn<T>(...) => ...`, captures incl. by-ref |
 | [Type bounds](type-bounds.md) | `T : Stringable`, `T : A & B`, `T : (A & B) \| C`, F-bounded `T : Box<T>` |
-| [Variance](variance.md) | `+T`, `-T`, position rules, subtype edges between specializations |
+| [Variance](variance.md) | `out T`, `in T`, position rules, subtype edges between specializations |
 | [Defaults](defaults.md) | `T = int`, forward refs `Pair<A, B = A>`, empty turbofish `$f::<>()` |
 | [Pseudo-types](pseudo-types.md) | `self<T>` / `static<T>` / `parent<T>` and the `new self::<T>(...)` form |
 | [Turbofish](turbofish.md) | All four call-site shapes plus variable and empty turbofish |
@@ -59,8 +59,8 @@ class Sortable<T : Comparable<T>> {}     // F-bounded
 class Pair<K : Stringable & Countable, V> {}
 
 // Variance
-abstract class Producer<+T> { abstract public function get(): T; }       // covariant
-abstract class Consumer<-T> { abstract public function set(T $x): void; } // contravariant
+abstract class Producer<out T> { abstract public function get(): T; }       // covariant
+abstract class Consumer<in T> { abstract public function set(T $x): void; } // contravariant
 
 // Default type params
 class Cache<K = string, V = mixed> {}

@@ -168,14 +168,14 @@ upcoming one.
 
 ### Variance
 
-- `+T` and `-T` markers on type parameters.
+- `out T` and `in T` markers on type parameters.
 - Position rules enforced at compile time (covariant in return,
   contravariant in param, any variance in a plain non-promoted
   constructor parameter or a *private* property — declared or promoted;
   both forbidden in public/protected properties — including
   public/protected promoted constructor params — by-reference params,
   bounds, and defaults).
-- Real-typed construction: a `+T`/`-T` constructor parameter keeps its
+- Real-typed construction: a `out T`/`in T` constructor parameter keeps its
   concrete type (nothing erased), so construction is runtime-type-checked.
 - A `final` variant class is rejected (a `final` class can't anchor the
   `extends` edge).

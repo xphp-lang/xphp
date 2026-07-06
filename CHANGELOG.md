@@ -21,7 +21,7 @@ _In progress on this branch — content still accumulating; date set at tag time
   manifest, and skips those that don't). See
   [getting started](docs/getting-started.md).
 - **Element-typed methods on covariant collections.** A method-level type parameter
-  bounded by an enclosing class type parameter — `class Box<+E> { public function
+  bounded by an enclosing class type parameter — `class Box<out E> { public function
   contains<U : E>(U $value): bool }` — has its bound **grounded** against the receiver's
   concrete type argument: `Box<Fruit>::contains<Banana>` is accepted when `Banana <: Fruit`,
   and a genuine violation (`Box<Fruit>::contains<Rock>`) is rejected with the bound shown as
@@ -32,7 +32,7 @@ _In progress on this branch — content still accumulating; date set at tag time
   chained call / `self`/`static` factory, and a branch whose arms agree on the same
   parameterised type. A bound that references a sibling parameter is grounded the same way,
   at the class level (`class Pair<T, U : T>`) and the method level (`<U, V : U>`). This is the
-  sound, element-typed alternative to a `mixed` parameter on a covariant `<+E>` collection
+  sound, element-typed alternative to a `mixed` parameter on a covariant `<out E>` collection
   (`U` is invariant — not method-level variance). **Ground or fail:** where the receiver's
   type argument genuinely can't be determined, the bound can't be proven, so it is a compile
   error (`xphp.bound_unprovable`) with an actionable remedy — bind the receiver to a typed
@@ -45,14 +45,14 @@ _In progress on this branch — content still accumulating; date set at tag time
   forward to a *non-erasable* method (parameter used nested, in the return, or structurally), and
   a direct concrete `$this->contains::<Banana>()`, remain compile errors
   (`xphp.unspecializable_self_call` / `xphp.bound_unprovable`) — never a runtime fault. **Covariant
-  interfaces:** the method may be declared on a covariant interface (`Collection<+E>`) and called
+  interfaces:** the method may be declared on a covariant interface (`Collection<out E>`) and called
   through an upcast (`ListColl<Book>` used as `Collection<Product>`) — the implementer specialization
   is scheduled and inherited down the covariant chain automatically. When inheritance can't carry it
   there — the implementing class has another `extends` parent, implements only a *parent* of the
   interface, or reorders the `implements` clause — the member is instead emitted **directly** onto the
   upcast source, with its bounded parameter widened to the supertype argument and its body read at the
   source's own element type (sound because the source's element is a subtype of the supertype). When the
-  element type is itself a covariant generic (e.g. a `Tuple<+A, +B>`), per-argument covariance makes the
+  element type is itself a covariant generic (e.g. a `Tuple<out A, out B>`), per-argument covariance makes the
   source an instance of the interface at *several* supertype arguments at once — a diamond that single
   inheritance can carry only one path of; the remaining obligations are supplied directly once the
   inheritance chain is final, so a covariant container of covariant containers upcasts soundly. The
@@ -86,7 +86,7 @@ _In progress on this branch — content still accumulating; date set at tag time
   override discovery with `--phpstan-bin` / `--phpstan-config`.
 - **Type-parameter-typed constructors on variant classes.** A covariant /
   contravariant class may take its type parameter in a (non-promoted) constructor
-  parameter — e.g. a covariant immutable `ImmutableList<+T>` built from
+  parameter — e.g. a covariant immutable `ImmutableList<out T>` built from
   `T ...$items`. The parameter keeps its **real** element type on every
   specialisation (`Book ...$items`, not `mixed`), so construction is
   **runtime-type-checked** while `ImmutableList<Book>` still extends
@@ -95,10 +95,10 @@ _In progress on this branch — content still accumulating; date set at tag time
   promoted constructor param remains a visible property (strictly invariant — PHP
   enforces property types across the edge for visible members), but a *private*
   one is exempt (see below). See [variance](docs/syntax/variance.md).
-- **Variance markers on private properties.** A `+T` / `-T` marker is now allowed
+- **Variance markers on private properties.** A `out T` / `in T` marker is now allowed
   on a **private** property — declared or promoted, mutable or readonly — so the
   natural covariant shape
-  `class Producer<+T> { public function __construct(private T $item) {} ... }`
+  `class Producer<out T> { public function __construct(private T $item) {} ... }`
   compiles, keeps its **real** substituted slot type (nothing erased), and stays
   runtime-type-checked. PHP does not type-check private property types across an
   `extends` chain (a private slot is per-declaring-scope and never inherited) and
@@ -107,14 +107,14 @@ _In progress on this branch — content still accumulating; date set at tag time
   and an externally-readable `public private(set)` property) stay strictly
   invariant. A covariant single-value getter over a `private T` field is also
   PHPStan-clean. See [variance](docs/syntax/variance.md).
-- **By-reference parameters are an invariant variance position.** A `+T` / `-T`
+- **By-reference parameters are an invariant variance position.** A `out T` / `in T`
   type parameter used in a by-reference parameter (`&$x`) is now rejected: a
   by-reference slot is both read and written through the caller's binding, so it is
   invariant — the same rule already applied to a mutable property. See
   [variance](docs/syntax/variance.md).
 - **Variance composes through a nested generic type-argument.** A covariant slot whose
   argument is itself a generic of a *different but related* template now emits its
-  `extends`/`implements` edge — so a covariant `Tuple<+A, +B>` holding a covariant
+  `extends`/`implements` edge — so a covariant `Tuple<out A, out B>` holding a covariant
   container relates by that container's element type (`Tuple<ImmutableList<Book>, Tag>`
   is usable where a `Tuple<Collection<Product>, Tag>` is required, because
   `ImmutableList<Book> ⊑ Collection<Product>`). The argument relationship is proven by
@@ -124,10 +124,10 @@ _In progress on this branch — content still accumulating; date set at tag time
   hints) and not only at `check`. Previously such an upcast passed `check` but fatal'd at
   load. See [variance](docs/syntax/variance.md).
 - **A contravariant generic may be consumed by a covariant class.** A method parameter typed
-  by a contravariant generic of the class's covariant parameter — `class Box<+E> { pick(
-  Comparator<E> $c): ?E }` where `Comparator<-T>` — is now accepted: `E` sits in a
+  by a contravariant generic of the class's covariant parameter — `class Box<out E> { pick(
+  Comparator<E> $c): ?E }` where `Comparator<in T>` — is now accepted: `E` sits in a
   contravariant slot inside a contravariant parameter position, which composes to a covariant
-  position a `+E` may occupy (sound under upcast — a `Comparator<Product>` compares the `Book`
+  position a `out E` may occupy (sound under upcast — a `Comparator<Product>` compares the `Book`
   elements of a `Box<Book>` viewed as `Box<Product>`). Variance validation now routes every
   type-constructor-nested type-parameter through the composing check (which already knew the
   inner slot's variance) instead of judging it by the bare outer position, so this sound,
@@ -137,6 +137,15 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Changed
 
+- **BREAKING — variance markers are now `out T` / `in T`.** Declaration-site variance
+  is written with the Kotlin-style keywords `out` (covariant) and `in` (contravariant)
+  instead of the previous `+T` / `-T`: `class Producer<out T>`, `class Consumer<in T>`.
+  The keywords are contextual — a leading `out`/`in` is a marker only when immediately
+  followed by the parameter name (`out T`, never `outT`), so ordinary parameters whose
+  names merely start with those letters are unaffected; the words are reserved and
+  cannot themselves name a parameter. Old `+T` / `-T` source now fails with a migration
+  error pointing at the new spelling. Variance semantics are unchanged — only the
+  surface syntax moves. See [Variance](docs/syntax/variance.md).
 - **`xphp compile` runs the validation gate by default.** Compile now runs the same
   gate as `xphp check` (the generic validators plus PHPStan over the compiled output)
   *before* emitting, and fails the build — emitting nothing — when the gate reports an
@@ -148,7 +157,7 @@ _In progress on this branch — content still accumulating; date set at tag time
   behavior). `--no-phpstan` runs only the generic validators; a missing PHPStan degrades
   to a non-failing warning.
   See [ADR-0021](docs/adr/0021-compile-runs-the-check-gate-by-default.md).
-- **BREAKING — a `final` variant class is now rejected.** A `final class Box<+T>`
+- **BREAKING — a `final` variant class is now rejected.** A `final class Box<out T>`
   previously compiled, with the generated specialization silently dropping `final`
   so the `extends` subtype edge between specializations could land — which made
   `ReflectionClass::isFinal()` disagree with the written source. A covariant /

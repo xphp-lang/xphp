@@ -39,7 +39,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.default_bound_violation` | a parameter's default doesn't satisfy its own bound |
 | `xphp.missing_type_argument` | a required type argument was omitted and has no default — including a **turbofish-less call** to a generic method, function, or closure (`$x->pick('a')` instead of `$x->pick::<string>('a')`): a method generic takes no inference, so the type argument must be supplied explicitly |
 | `xphp.too_many_type_arguments` | more type arguments were supplied than the template declares (e.g. `Box::<int, string>` for a one-parameter `Box`) |
-| `xphp.variance_position` | a `+T`/`-T` parameter appears in a position its variance forbids |
+| `xphp.variance_position` | an `out T` / `in T` parameter appears in a position its variance forbids |
 | `xphp.inner_variance` | variance is violated through another generic's slot (composition) |
 | `xphp.undefined_template` | a generic was instantiated but never declared |
 | `xphp.undeclared_type` | a generic member, bound, or default names a type that is neither a declared type parameter nor a known type — e.g. `interface Foo<Z> { add(T $x); }` or `class Box<T: Nonexistent>` where the name is a stray/typo'd parameter (would otherwise compile to a reference to a non-existent class). Imported (`use`) and fully-qualified names are never flagged. A real class referenced bare must be imported or fully-qualified — including a class in the *same namespace* that lives in a plain `.php` file (which `xphp check` doesn't scan), even though PHP itself wouldn't require the `use` |
@@ -110,7 +110,7 @@ In CI (GitHub Actions), one step gates the build and annotates the diff:
 |----------------------------|------|
 | `captures \`$this\`` | [Caveats — `$this`-capturing arrows and closures](caveats.md#this-capturing-arrows-and-closures-rejected) |
 | `static closures cannot yet be specialized` | [Caveats — `static` closures not supported](caveats.md#static-closures-not-supported) |
-| `Variance markers \`+T\` / \`-T\` are not yet supported` | [Caveats — variance markers are class-level only](caveats.md#variance-markers-are-class-level-only) |
+| `Variance markers \`out T\` / \`in T\` are not supported` | [Caveats — variance markers are class-level only](caveats.md#variance-markers-are-class-level-only) |
 | `Variance violation in template` | [Variance](syntax/variance.md) |
 | `Generic bound violated` | [Type bounds](syntax/type-bounds.md) |
 | `Default for generic parameter \`...\` violates the parameter's bound` | [Type bounds](syntax/type-bounds.md) + [Defaults](syntax/defaults.md) |
@@ -152,9 +152,11 @@ generic function at file scope.
 ### Variance markers on non-class templates
 
 ```
-Variance markers `+T` / `-T` are not yet supported on methods,
-functions, closures, or arrow functions; move the generic to a
-class-level type parameter.
+Variance markers `out T` / `in T` are not supported on methods,
+functions, closures, or arrow functions — variance is a
+class-level-only feature by design: a function or closure
+specialization has no stable class identity to anchor a subtype
+`extends` edge to. Move the generic to a class-level type parameter.
 ```
 
 ### Variance composition violation
@@ -178,7 +180,7 @@ allowed for <covariant|contravariant> variance.
 **public or protected**; a *private* property (declared or promoted) is exempt,
 because PHP doesn't type-check private slots across the `extends` chain. A
 **by-reference parameter** (`T &$x`) is invariant (it is read and written back),
-so neither `+T` nor `-T` is allowed there.
+so neither `out T` nor `in T` is allowed there.
 
 ### Variant class declared `final`
 
@@ -187,7 +189,7 @@ A variant class cannot be declared `final`: its specializations participate
 in `extends` subtype edges that a `final` class cannot anchor. Remove `final`.
 ```
 
-A `+T` / `-T` class is specialized into a chain of `extends`-linked classes; a
+A `out T` / `in T` class is specialized into a chain of `extends`-linked classes; a
 `final` class can't be a parent in that chain. Drop `final` from the declaration.
 
 ### Bound violations
@@ -217,7 +219,7 @@ build fails — ground or fail, never an unchecked call. See
 [type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail).
 
 ```php
-class Box<+E> {
+class Box<out E> {
     public function contains<U : E>(U $value): bool { /* ... */ }
 }
 
@@ -238,7 +240,7 @@ A `$this`-rooted self-call gets a variant of the message (the receiver is
 bound names a class parameter fails the same way (no instance to ground `E`):
 
 ```php
-class Box<+E> {
+class Box<out E> {
     public function contains<U : E>(U $value): bool { /* ... */ }
     public function probe(): bool {
         return $this->contains::<Banana>(new Banana());   // E is abstract here
@@ -270,7 +272,7 @@ to it. When the target is **not** erasable (the parameter appears nested, in the
 return, or structurally), the forward can't be specialized:
 
 ```php
-class Box<+E> {
+class Box<out E> {
     public function nested<U : E>(Box<U> $items): bool { /* ... */ } // not erasable (U nested)
     public function relay<U : E>(Box<U> $items): bool {
         return $this->nested::<U>($items);                           // forwards to a non-erasable target

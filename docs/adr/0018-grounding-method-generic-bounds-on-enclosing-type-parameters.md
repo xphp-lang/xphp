@@ -4,11 +4,11 @@
 
 ## Context and Problem Statement
 
-A covariant collection `class Box<+E>` cannot take `E` in a parameter position, so an
+A covariant collection `class Box<out E>` cannot take `E` in a parameter position, so an
 element-consuming method (`contains`, `indexOf`, an immutable `withAdded`) classically falls back to
 `mixed`. The *sound* spelling is a **method-level** type parameter bounded by the class parameter —
 `public function contains<U : E>(U $value): bool` — so the argument is constrained to a subtype of
-the element type while the covariant `+E` never enters a parameter position (the same shape Hack
+the element type while the covariant `out E` never enters a parameter position (the same shape Hack
 uses for the element-search methods on its covariant `ConstVector`). `U` is invariant, so this is **not** method-level
 variance ([ADR-0014](0014-variance-markers-are-class-level-only.md)) — it only needs the enclosing
 `E` to be resolved.
@@ -44,7 +44,7 @@ the emitted code carries nothing).
 
 - **Determination floor — maximise what's knowable first.** The receiver's type arguments are
   recovered from flow typing and threaded up the parameterized `extends`/`implements` chain to the
-  method's **declaring** class (so a method inherited from `Collection<+E>` grounds against an
+  method's **declaring** class (so a method inherited from `Collection<out E>` grounds against an
   `ArrayList<Fruit>` receiver). The covered receiver shapes:
   - a parameter or `$this->prop` of declared generic type (`Box<Fruit> $b`);
   - a `new Box::<Fruit>()` local (and a closure-`use` capture of one);
@@ -92,7 +92,7 @@ the emitted code carries nothing).
   element-consuming method from inside the class. The bound is still checked at the call site before
   erasure, so `Box<Fruit>::contains<Rock>` is still rejected.
 - **A covariant upcast to an interface schedules its implementer.** When the erasable method is declared
-  on a covariant *interface* (`Collection<+E>`) and a concrete `ListColl<Book>` is upcast to a supertype
+  on a covariant *interface* (`Collection<out E>`) and a concrete `ListColl<Book>` is upcast to a supertype
   specialization (`Collection<Product>`), that specialization declares a *distinct* abstract erased member
   (`contains_<Product>`, separate from `contains_<Book>` — distinct names keep the covariant edge from
   narrowing a parameter). The concrete implementation is carried down the covariant chain from the
@@ -113,23 +113,23 @@ the emitted code carries nothing).
   checking are unaffected.
 - Variance — making a bare-type-parameter bound leaf a first-class type-parameter reference also
   lets the variance phase see it: a covariant/contravariant class parameter used as the **bare** leaf
-  of a sibling class parameter's bound (`class Pair<+T, U : T>`) is now flagged, consistently with the
-  already-rejected inner-argument case (`Sortable<+T : Box<T>>`) and the documented rule that bounds
+  of a sibling class parameter's bound (`class Pair<out T, U : T>`) is now flagged, consistently with the
+  already-rejected inner-argument case (`Sortable<out T : Box<T>>`) and the documented rule that bounds
   are an invariant position. The supported method-level shape (`contains<U : E>`, where `U` is a
   *method* parameter) is unaffected.
 
 ### Confirmation
 
 The grounding, the inheritance threading, the determination floor, and the hard-fail are covered
-end-to-end: a direct and an **inherited** (`ArrayList<Fruit> extends Base<+E>`) accept, a
-multi-argument (`Pair<K, +V>::containsValue<U : V>`) accept that grounds the right parameter, a reject
+end-to-end: a direct and an **inherited** (`ArrayList<Fruit> extends Base<out E>`) accept, a
+multi-argument (`Pair<K, out V>::containsValue<U : V>`) accept that grounds the right parameter, a reject
 whose message shows the grounded bound, the determined-receiver cases (parameter / property /
 closure-`use` / method-return / chain / `self`-`static` / branch-arms-agree) accepting or rejecting on
 the grounded type, and the unprovable cases (a raw generic parameter, a branch whose arms disagree, a
 static class-parameter bound, and a *direct concrete* `$this` self-call) failing with
 `xphp.bound_unprovable` — both thrown in `compile` and collected in `check`. The erasure lowering is
 exercised by executing the compiled output (a forwarding self-call, an inherited member, a covariant
-chain, a multi-class-param `Map<K, +V>`), and a forward to a *non-erasable* method fails with
+chain, a multi-class-param `Map<K, out V>`), and a forward to a *non-erasable* method fails with
 `xphp.unspecializable_self_call`. A sibling-parameter bound (`class Pair<T, U : T>`) is
 unit-tested accept/reject with the grounded sibling shown, and a method-own sibling bound (`<U, V : U>`)
 is grounded against the turbofish arguments. The receiver-argument threading is unit-tested for chains,
