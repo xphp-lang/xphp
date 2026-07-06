@@ -83,6 +83,21 @@ final class ClosureConformanceValidatorTest extends TestCase
             // is closed-world built-in-free.
             '<?php class Str { public function __toString(): string { return "s"; } } function m(): Closure(): \Stringable { return fn(): Str => new Str(); }',
         ];
+        yield 'S-A builtin target: built-in CANDIDATE stays accepted' => [
+            // \Exception is itself a built-in — never closed-world; its real
+            // edge to \Throwable is unmodeled but genuine.
+            '<?php function m(): Closure(): \Throwable { return fn(): \Exception => new \Exception(); }',
+        ];
+        yield 'S-A builtin target: aliased Stringable carve-out still applies' => [
+            // The carve-out must compare POST-resolution names — an alias
+            // spelling of Stringable gets the same gradual treatment.
+            '<?php use Stringable as Str; class Text { public function __toString(): string { return "t"; } } function m(): Closure(): Str { return fn(): Text => new Text(); }',
+        ];
+        yield 'S-A builtin target: trait-provided __toString stays accepted' => [
+            // Stringable auto-implementation can come from a trait method —
+            // methods (trait or direct) are unmodeled either way.
+            '<?php trait Stringy { public function __toString(): string { return "s"; } } class Tagged2 { use Stringy; } function m(): Closure(): \Stringable { return fn(): Tagged2 => new Tagged2(); }',
+        ];
         yield 'S-A builtin target: unknown interface in the chain stays accepted' => [
             // The undeclared interface could extend \Throwable — open world.
             '<?php class Maybe implements SomeVendorInterface {} function m(): Closure(): \Throwable { return fn(): Maybe => new Maybe(); }',
