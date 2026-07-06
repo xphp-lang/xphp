@@ -183,6 +183,15 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **Parenthesised DNF types inside `Closure(...)` signatures are supported.** A
+  DNF group (`(A&B)|C`, `A|(B&C)`) anywhere in a signature previously broke the
+  type scanner: a leading group in a return position failed to compile, a
+  trailing group in a return hint silently mis-erased (emitting a wrong type and
+  a truncated recorded return), and a group in a parameter threw the signature's
+  arity off — wrongly rejecting a conforming factory literal. A DNF group now
+  scans as one **gradual** leaf: the signature erases correctly, arity and the
+  slots around the group are checked as usual, and the group itself is accepted
+  rather than variance-checked member by member.
 - **Generic closures after array-sugar rewrites specialize correctly.** The
   `Name[]` → `array` rewrite shortens the source, and the byte-keyed marker that
   attaches type parameters to an anonymous `function<T>` / `fn<T>` was compared

@@ -121,15 +121,10 @@ An intersection used as an incoming (parameter) type also stays gradual
 (accepted): an intersection of unrelated types is uninhabited, so rejecting it
 would be unsound.
 
-> **Known limitation — parenthesised DNF types are not fully supported.** A
-> **DNF** signature type (a parenthesised mix such as `(A&B)|C`) is not yet
-> parsed as a variance-checked type; avoid it inside a `Closure(...)` for now:
->
-> - in a **return** position (`Closure(): (A&B)|C`) it is not erased and fails
->   to compile — the leading `(` stops the type scanner;
-> - in a **parameter** position at a checked factory site the leading `(` is
->   mis-read, throwing the signature's arity off, which can wrongly reject an
->   otherwise conforming literal.
->
-> Write the type without the parentheses, or annotate the slot as a bare
-> `Closure`, until DNF signature types are supported.
+A **DNF** signature type (a parenthesised mix such as `(A&B)|C`) is accepted in
+every position — parameter, return, nested — and behaves like any other
+unresolvable leaf: it erases with the rest of the signature and stays
+**gradual** (never variance-checked member by member, never the cause of a
+rejection). Arity, by-ref-ness, and the other structured slots around a DNF
+leaf are still checked as usual. Structuring a DNF into variance-checked
+members is a possible future refinement.
