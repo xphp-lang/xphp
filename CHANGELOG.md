@@ -21,7 +21,11 @@ _In progress on this branch — content still accumulating; date set at tag time
   prove wrong (untyped ⇒ `mixed`, an unresolved or built-in supertype, a
   still-abstract type parameter, a union/intersection). A signature that references an
   enclosing type parameter is **grounded** per specialization, so `Registry<int>` and
-  `Registry<string>` check the same factory against different concrete targets. See
+  `Registry<string>` check the same factory against different concrete targets. A flat
+  union / intersection / nullable inside a signature (`Closure(int|string $x): void`,
+  `Closure(): A&B`, `?int`) is variance-checked member by member, following PHP's own
+  union/intersection subtyping; an intersection in a parameter position stays gradual
+  (an intersection of unrelated types is uninhabited). See
   [closure types](docs/syntax/closure-types.md).
 - **Multi-root builds via an `xphp.json` manifest.** A project declares its source
   roots, output directory, and hash length in an `xphp.json` at the project root;

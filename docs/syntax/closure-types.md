@@ -100,10 +100,32 @@ new Registry::<string>();  // target grounds to Closure(string): bool — the sa
                            //   is now rejected: int is not wider than string
 ```
 
-## Not yet checked
+## Union, intersection, and nullable members
 
-A union or intersection **member** inside a signature (`Closure(int|string
-$x): void`) is currently carried through and accepted gradually rather than
-variance-checked. Prefer a single type per slot where you want the check to
-apply.
+A flat union `A|B`, intersection `A&B`, or nullable `?A` inside a signature is
+variance-checked member by member, following PHP's own subtyping:
+
+- a union in a **return** conforms when the literal's return fits **some** member
+  (`Closure(): int|string` accepts a `fn(): int`);
+- a union in a **parameter** requires the literal to accept **every** member
+  (`Closure(int|string $x)` handed `fn(int $x)` fails — the literal can't take a
+  string);
+- an intersection is checked where it is the expected (super) type — a value must
+  satisfy **every** member.
+
+As everywhere, an unprovable member keeps the whole leaf gradual: a union or
+intersection that mentions an unresolved class, a type parameter, or a
+pseudo-type is accepted rather than falsely rejected.
+
+Two shapes stay gradual (accepted) for now: a **DNF** type — a parenthesised
+mix such as `Closure((A&B)|C $x): int` — is carried through without being
+variance-checked, and an intersection used as an incoming (parameter) type is
+too, because an intersection of unrelated types is uninhabited, so rejecting it
+would be unsound.
+
+> **Known limitation.** A parenthesised DNF in a signature's **return** position
+> (`Closure(): (A&B)|C`) is not yet erased and currently fails to compile — the
+> leading `(` stops the type scanner. Write the return without parentheses, or
+> annotate the slot as a bare `Closure` until this is supported. A DNF in a
+> *parameter* position erases and runs normally.
 ```
