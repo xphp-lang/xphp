@@ -183,6 +183,13 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **Generic closures after array-sugar rewrites specialize correctly.** The
+  `Name[]` → `array` rewrite shortens the source, and the byte-keyed marker that
+  attaches type parameters to an anonymous `function<T>` / `fn<T>` was compared
+  against the shifted position — so a generic closure appearing after such a
+  rewrite silently lost its type parameters, compiled unspecialized, and the
+  emitted code fataled at runtime despite a clean validation pass. Marker
+  positions are now translated through the byte-offset map before matching.
 - **Undeclared type parameters are now rejected** instead of silently compiling to
   a reference to a non-existent class. A bare, single-segment, non-imported type
   name used in a generic member, bound, or default that is neither a declared type
