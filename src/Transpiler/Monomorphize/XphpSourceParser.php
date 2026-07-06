@@ -849,7 +849,18 @@ final class XphpSourceParser
                     $last = $inner;
                     $i = $inner + 1;
                 } else {
-                    $i++;
+                    // `Name[]` array sugar: consume the bracket pair into the
+                    // leaf so it erases with the signature (the global `T[]` →
+                    // `array` rewrite never sees it). `Name<Args>[]` is NOT
+                    // consumed — the generic-sugar combination stays the same
+                    // loud pre-existing gap it is outside signatures.
+                    $suffix = self::arraySuffixEnd($tokens, $i + 1);
+                    if ($suffix !== null) {
+                        $last = $suffix;
+                        $i = $suffix + 1;
+                    } else {
+                        $i++;
+                    }
                 }
                 continue;
             }
@@ -884,6 +895,26 @@ final class XphpSourceParser
      *
      * @param list<PhpToken> $tokens
      */
+    /**
+     * Index of the `]` of an EMPTY `[ ]` bracket pair whose `[` is the first
+     * significant token at or after `$idx` (whitespace/comments tolerated,
+     * matching the global sugar's parseArraySuffix), or `null` when the next
+     * tokens are not array sugar. A non-empty `[expr]` is expression syntax,
+     * never type sugar — the `]` check rejects it.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function arraySuffixEnd(array $tokens, int $idx): ?int
+    {
+        $n = count($tokens);
+        $open = self::skipWs($tokens, $idx);
+        if ($open >= $n || $tokens[$open]->text !== '[') {
+            return null;
+        }
+        $close = self::skipWs($tokens, $open + 1);
+        return $close < $n && $tokens[$close]->text === ']' ? $close : null;
+    }
+
     private static function scanGroupEnd(array $tokens, int $openIdx): ?int
     {
         $inner = self::scanTypeExprEnd($tokens, self::skipWs($tokens, $openIdx + 1));
@@ -1128,6 +1159,15 @@ final class XphpSourceParser
         }
         [$typeRef, $afterLeaf] = $parsed;
 
+        // `Name[]` array sugar lowers to `array` — the same lowering the global
+        // rewrite applies outside signatures; as a gradual leaf it can never
+        // false-reject. `Name<Args>[]` is excluded (the pre-existing loud gap).
+        $suffix = self::arraySuffixEnd($tokens, $afterLeaf);
+        if ($suffix !== null && !$typeRef->isGeneric()) {
+            $typeRef = new TypeRef('array');
+            $afterLeaf = $suffix + 1;
+        }
+
         $peek = self::skipWs($tokens, $afterLeaf);
         $hasUnion = $peek < $n && $tokens[$peek]->text === '|';
         $hasIntersection = $peek < $n && $tokens[$peek]->text === '&'
@@ -1221,18 +1261,27 @@ final class XphpSourceParser
     private static function parseMemberLeaf(array $tokens, int $i): ?array
     {
         $parsed = self::parseTypeArg($tokens, $i);
-        if ($parsed !== null) {
-            return $parsed;
+        if ($parsed === null) {
+            // @infection-ignore-all LessThan UnwrapStrToLower — the `$i < count` bound
+            // is defensive (the caller only reaches here mid-span, never at
+            // end-of-input); `strtolower` matches the first-leaf keyword branch but
+            // the resolver re-lowercases, so it is redundant. (The `$i + 1` end index
+            // is NOT ignored — it is pinned by a keyword-member-followed-by-parameter
+            // test.)
+            if ($i < count($tokens) && self::isSigTypeToken($tokens[$i])) {
+                $parsed = [new TypeRef(strtolower($tokens[$i]->text)), $i + 1];
+            }
         }
-        // @infection-ignore-all LessThan UnwrapStrToLower — the `$i < count` bound is
-        // defensive (the caller only reaches here mid-span, never at end-of-input);
-        // `strtolower` matches the first-leaf keyword branch but the resolver
-        // re-lowercases, so it is redundant. (The `$i + 1` end index is NOT ignored —
-        // it is pinned by a keyword-member-followed-by-parameter test.)
-        if ($i < count($tokens) && self::isSigTypeToken($tokens[$i])) {
-            return [new TypeRef(strtolower($tokens[$i]->text)), $i + 1];
+        if ($parsed === null) {
+            return null;
         }
-        return null;
+        // Member-level `Name[]` sugar lowers to `array`, same as the first leaf.
+        [$ref, $next] = $parsed;
+        $suffix = self::arraySuffixEnd($tokens, $next);
+        if ($suffix !== null && !$ref->isGeneric()) {
+            return [new TypeRef('array'), $suffix + 1];
+        }
+        return $parsed;
     }
 
     /**
@@ -2435,6 +2484,10 @@ final class XphpSourceParser
              */
             private function attachClosureSig(Name $node): void
             {
+                // @infection-ignore-all ReturnRemoval — fast-path guard: a
+                // non-Closure name can never match a marker anyway (each
+                // recorded bytePosition holds the erased `\Closure` name
+                // itself), so falling through only wastes loop work.
                 if (ltrim($node->toString(), '\\') !== 'Closure') {
                     return;
                 }

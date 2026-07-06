@@ -70,6 +70,14 @@ final class ClosureConformanceValidatorTest extends TestCase
             // relative to the namespace (App\App\Apple, undeclared ⇒ gradual).
             '<?php function m(): Closure(): Fruit { return fn(): \App\Apple => new Apple(); }',
         ];
+        yield 'S-A array-sugar parameter: one param lowered to array — matching arity accepted' => [
+            // `U[] $x` is ONE parameter; the `[`/`]` mis-parse recorded three
+            // and false-rejected exactly this correct literal on arity.
+            '<?php function m(): Closure(U[] $x): void { return fn(array $x): void => null; }',
+        ];
+        yield 'S-A array-sugar return: lowers to array and accepts an array literal' => [
+            '<?php function m(): Closure(): int[] { return fn(): array => []; }',
+        ];
         yield 'S-A DNF group parameter: one param, gradual — matching arity accepted' => [
             // `(A&B)|C $x` is ONE parameter; a mis-scan that split the group into
             // extra params false-rejected this correct literal on arity.
@@ -167,6 +175,13 @@ final class ClosureConformanceValidatorTest extends TestCase
             "<?php function m(): Closure(): Apple {\n    return fn(): \\App\\Fruit => new Fruit();\n}",
             2,
             'App\\Fruit is not a subtype of App\\Apple',
+        ];
+        yield 'S-A array-sugar parameter: wrong arity still rejected' => [
+            // The lowered `array` leaf is gradual but the ARITY is not: the
+            // one-param target must reject a two-param literal.
+            "<?php function m(): Closure(int[] \$x): void {\n    return fn(array \$a, array \$b): void => null;\n}",
+            2,
+            'requires 2 parameter(s) but the target guarantees only 1',
         ];
         yield 'S-A DNF group parameter: wrong arity still rejected' => [
             // The DNF leaf is gradual but the ARITY is not: the one-param target

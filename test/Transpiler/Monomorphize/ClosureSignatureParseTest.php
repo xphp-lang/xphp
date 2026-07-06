@@ -748,8 +748,165 @@ final class ClosureSignatureParseTest extends TestCase
         // reaches the group scan with its interior running off the file end.
         self::assertIsString(self::strip('<?php function f(): Closure(): A|'));
         self::assertIsString(self::strip('<?php function f(): Closure(): (A'));
+        self::assertIsString(self::strip('<?php function f(): Closure(): A['));
         $truncatedGroup = '<?php function f(Closure((A';
         self::assertSame($truncatedGroup, self::strip($truncatedGroup));
+    }
+
+    // ===================================================================
+    // Array-sugar leaves — lowered to `array` inside signatures
+    // ===================================================================
+
+    public function testArraySugarReturnLowersToArrayAndErases(): void
+    {
+        // `int[]` in the signature's return: consumed into the blanked span
+        // (this shape used to leave `[]` residue → a raw PHP parse error) and
+        // lowered to `array`, the same lowering the global rewrite applies.
+        $source = '<?php function f(): Closure(): int[] {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertSame('array', self::refName($sig->return));
+        self::assertStringNotContainsString('[]', self::strip($source));
+    }
+
+    public function testArraySugarParameterIsOneParamLoweredToArray(): void
+    {
+        // `U[] $x` is ONE parameter lowered to `array` (it used to mis-parse
+        // as THREE — `U`, `[`, `]` — falsely rejecting a correct one-param
+        // literal on arity at a checked site).
+        $source = '<?php function f(Closure(U[] $x): void $cb) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('array', self::refName($sig->params[0]->type));
+        self::assertSame('void', self::refName($sig->return));
+        self::assertStringNotContainsString('[]', self::strip($source));
+    }
+
+    public function testArraySugarReturnBeforeParamVariableStillRecognizes(): void
+    {
+        // `Closure(): T[] $cb` — the recognition gate looks at the token after
+        // the span; with the `[]` inside the span the `$cb` is visible again
+        // (it used to see `[`, fail the gate, and let the global rewrite fire
+        // MID-signature → parse error).
+        $sig = self::firstSig('<?php function f(Closure(): T[] $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(0, $sig->params);
+        self::assertSame('array', self::refName($sig->return));
+    }
+
+    public function testArraySugarUnionMemberLowersToArray(): void
+    {
+        // Member-level sugar: `A|B[]` structures as a union of `A` and `array`.
+        $sig = self::firstSig('<?php function f(Closure(A|B[] $x): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['A', 'array'], self::sigMemberNames($sig->params[0]->type));
+    }
+
+    public function testNullableArraySugarLowersToArrayOrNull(): void
+    {
+        // `?int[]` ≡ array|null after lowering.
+        $sig = self::firstSig('<?php function f(Closure(?int[] $x): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['array', 'null'], self::sigMemberNames($sig->params[0]->type));
+    }
+
+    public function testWhitespaceSeparatedArraySugarIsConsumed(): void
+    {
+        // The global sugar tolerates whitespace around the bracket pair; the
+        // signature scanner must accept the same spelling.
+        $sig = self::firstSig('<?php function f(Closure(U [] $x): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('array', self::refName($sig->params[0]->type));
+    }
+
+    public function testArraySugarWithUnionContinuationErasesFully(): void
+    {
+        // `int[]|null` — the walk must resume exactly one token after the `]`
+        // so the `|null` continuation joins the span; resuming on (or before)
+        // the `]` truncates the span and leaves `|null` residue.
+        $source = '<?php function f(): Closure(): int[]|null {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['array', 'null'], self::sigMemberNames($sig->return));
+        self::assertStringNotContainsString('|null', self::strip($source));
+    }
+
+    public function testArraySugarWithGroupContinuationErasesFully(): void
+    {
+        // `int[]|(A&B)` — the token right after the `]` is the separator that
+        // carries the group; skipping it truncates the span.
+        $source = '<?php function f(): Closure(): int[]|(A&B) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('int[]|(A&B)', $sig->return->raw);
+        self::assertStringNotContainsString('|(', self::strip($source));
+    }
+
+    public function testNonEmptyBracketAfterReturnTypeStaysLoudResidue(): void
+    {
+        // `A[0]` is expression syntax, not array sugar — the bracket pair must
+        // NOT be absorbed into the type span; the junk survives loudly.
+        $stripped = self::strip('<?php function f(): Closure(): A[0] {}');
+
+        self::assertStringContainsString('[0]', $stripped);
+    }
+
+    public function testDoubledClosingBracketStaysLoudResidue(): void
+    {
+        // `A]]` — no opening `[` means no sugar; the sugar probe must bail on
+        // the first non-`[` token, never read on and match the second `]`.
+        $stripped = self::strip('<?php function f(): Closure(): A]] {}');
+
+        self::assertStringContainsString(']]', $stripped);
+    }
+
+    public function testVariadicMarkerDirectlyAfterMemberArraySugar(): void
+    {
+        // Tight `B[]...$rest` — the member leaf must end exactly one token
+        // after the `]` so the `...` is seen as the variadic marker, not
+        // skipped into the parameter variable.
+        $sig = self::firstSig('<?php function f(Closure(A|B[]...$rest): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['A', 'array'], self::sigMemberNames($sig->params[0]->type));
+        self::assertTrue($sig->params[0]->variadic);
+    }
+
+    public function testGenericArraySugarComboStaysLoud(): void
+    {
+        // `Foo<T>[]` — the generic + sugar combination is the pre-existing
+        // loud gap everywhere; inside a signature it must stay loud residue,
+        // not be silently absorbed or lowered.
+        $stripped = self::strip('<?php function f(): Closure(): Foo<T>[] {}');
+
+        self::assertStringContainsString('[]', $stripped);
+    }
+
+    public function testArrayAccessOfClosureCallIsUntouched(): void
+    {
+        // `$arr[Closure(1)]` — brackets in expression context around a call to
+        // a user symbol named `Closure`; nothing here is a type slot.
+        $source = '<?php $r = $arr[Closure(1)];';
+
+        self::assertNull(self::firstSig($source));
+        self::assertSame($source, self::strip($source));
     }
 
     // ===================================================================

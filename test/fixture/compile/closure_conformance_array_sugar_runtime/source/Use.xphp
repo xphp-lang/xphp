@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureConformanceArraySugarRuntime;
+
+// Array-sugar inside `Closure(...)` signatures: the sugared parameter and
+// return leaves lower to `array`, the signatures erase to a bare `\Closure`,
+// arity checking holds (the factory literals below conform), and the
+// compiled output executes.
+final class Item
+{
+    public function __construct(public int $v)
+    {
+    }
+}
+
+function makeSummer(): Closure(Item[] $items): int
+{
+    return fn(array $items): int => array_sum(array_map(fn(Item $i): int => $i->v, $items));
+}
+
+function makeLister(): Closure(): int[]
+{
+    return fn(): array => [40, 2];
+}
+
+$sum = (makeSummer())([new Item(40), new Item(2)]);
+$list = (makeLister())();

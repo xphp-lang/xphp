@@ -50,6 +50,23 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testArraySugarSignaturesCompileEraseAndRun(): void
+    {
+        // Array-sugar leaves in a signature's parameter and return lower to
+        // `array`: the arity stays correct (one sugared param is ONE param,
+        // not three), the signature fully erases, and the output executes.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_conformance_array_sugar_runtime/source',
+            'closure-conformance-sugar',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_conformance_array_sugar_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testExceptionFactoryAgainstBuiltinThrowableTargetCompilesAndRuns(): void
     {
         // Regression: a user subclass of the built-in \Exception returned against a
