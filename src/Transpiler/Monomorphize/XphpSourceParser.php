@@ -1021,9 +1021,11 @@ final class XphpSourceParser
             // (LessThan); and a reached T_USE always has preceding significant
             // tokens (`use` is never the first token after the open tag), so
             // h >= 0 always holds and the OR arms cannot disagree. The `)` test
-            // itself is load-bearing: a member CALL of a method named `use`
-            // (`$o->use($q) : …`) reaches this branch with a non-`)` token and
-            // must be rejected — pinned behaviorally.
+            // itself is load-bearing: a STATIC member call of a method named
+            // `use` (`C::use($q) : …` — after `->` the name lexes as a
+            // contextual T_STRING and never reaches here) arrives with `::`
+            // before the T_USE and must be rejected — pinned by the
+            // static-use-call provider entry.
             if ($h < 0 || $tokens[$h]->text !== ')') {
                 return false;
             }
@@ -1083,13 +1085,6 @@ final class XphpSourceParser
     }
 
     /**
-     * Index of the `(` matching the `)` at `$closeIdx`, scanning backwards, or
-     * `null` if unbalanced. Compares whole-token text, so parens INSIDE a
-     * string/comment/cast token never perturb the depth.
-     *
-     * @param list<PhpToken> $tokens
-     */
-    /**
      * Index of the `<` matching the `>` at `$closeIdx`, scanning backwards, or
      * `null` if unbalanced. Merged `>>` tokens are already split before any
      * signature scanning, so whole-token text compares suffice.
@@ -1115,6 +1110,13 @@ final class XphpSourceParser
         return null;
     }
 
+    /**
+     * Index of the `(` matching the `)` at `$closeIdx`, scanning backwards, or
+     * `null` if unbalanced. Compares whole-token text, so parens INSIDE a
+     * string/comment/cast token never perturb the depth.
+     *
+     * @param list<PhpToken> $tokens
+     */
     private static function matchParenBack(array $tokens, int $closeIdx): ?int
     {
         $depth = 0;

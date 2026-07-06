@@ -1042,6 +1042,11 @@ final class ClosureSignatureParseTest extends TestCase
             // as a return slot and erases the statement.
             $closureFn . 'function f() { Closure(A); }',
         ];
+        yield 'static call of a method named use' => [
+            // `C::use($q)` puts a real T_USE before the matched `(` — the
+            // use-layer hop must reject it (no `)` precedes the T_USE).
+            $closureFn . '$r = $c ? C::use($q) : Closure(A);',
+        ];
         yield 'static call of semi-reserved fn' => [$closureFn . '$r = $c ? C::fn() : Closure(A);'];
         yield 'static call of semi-reserved function' => [$closureFn . '$r = $c ? C::function() : Closure(A);'];
         yield 'instance call of semi-reserved fn' => [$closureFn . '$r = $c ? $o->fn() : Closure(A);'];
