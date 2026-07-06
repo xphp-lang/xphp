@@ -651,8 +651,9 @@ final class XphpSourceParser
         }
 
         // Position gate: a type slot is a param/property (a `$var` follows the whole
-        // signature) or a return type (the name sits just after `) :`, past an
-        // optional `?`). Anything else is expression-context `Closure(` — leave it.
+        // signature) or a return type (the name follows the `:` of a `function`/`fn`
+        // declaration header — see isClosureReturnSlot). Anything else is
+        // expression-context `Closure(` — leave it.
         $afterSpan = self::skipWs($tokens, $spanEnd + 1);
         $isParamOrProp = $afterSpan < $n && $tokens[$afterSpan]->id === T_VARIABLE;
         $isReturn = self::isClosureReturnSlot($tokens, $i);
@@ -742,6 +743,9 @@ final class XphpSourceParser
     private static function findClosureSigEnd(array $tokens, int $openIdx): ?int
     {
         $n = count($tokens);
+        // @infection-ignore-all GreaterThanOrEqualTo — every caller derives $openIdx
+        // from an existing token's lookahead, so $openIdx === $n is unreachable;
+        // the guard is defensive.
         if ($openIdx >= $n) {
             return null;
         }
@@ -967,30 +971,121 @@ final class XphpSourceParser
     }
 
     /**
-     * True iff the `Closure` at `$i` sits in a return-type slot: preceded (past an
-     * optional nullable `?` and whitespace) by `:` which is itself preceded by `)`.
-     * Keyed on `)`-then-`:` so a `case FOO: Closure($x);` label does not read as one.
+     * True iff the `Closure` at `$i` sits in a genuine RETURN-TYPE slot: preceded
+     * (past an optional nullable `?` and whitespace) by `:` which closes a
+     * parameter list (or a closure's `use (…)` clause) headed by `function` / `fn`.
      *
-     * @infection-ignore-all — flat backward token walk. The true/false behavior is
-     * pinned behaviorally (return-position signatures are recognized; an expression
-     * `Closure(Foo::class)` is left untouched); the residual mutants are the `$q >= 0`
-     * boundary guard (index 0 is always T_OPEN_TAG, so `>= 0` never differs from `> 0`)
-     * and the `)`-before-`:` requirement, which no valid PHP can falsify — a `:` that
-     * immediately precedes a `Closure(…)` type is only ever a return-type colon.
+     * `)`-then-`:` alone is NOT enough — a ternary's else (`$a ? b() : …`), a
+     * `case expr():` label, and every alt-syntax construct (`if/elseif/while/
+     * for/foreach/declare (…):`) produce the same pair; keying on them silently
+     * erased expression-context `Closure(…)` calls and hard-threw the
+     * only-Closure error on ordinary calls (`$a ? b() : g(FOO)`). The walk now
+     * matches the `)` back to its `(` and requires a declaration head, rejecting
+     * `C::fn()` / `$o->fn()` member CALLS whose head token is the semi-reserved
+     * `fn` / `function` after `::` / `->` / `?->`.
      *
      * @param list<PhpToken> $tokens
      */
     private static function isClosureReturnSlot(array $tokens, int $i): bool
     {
         $p = self::skipWsBack($tokens, $i - 1);
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 (open tag) is never
+        // `?`, so testing index 0 cannot change the outcome.
         if ($p >= 0 && $tokens[$p]->text === '?') {
             $p = self::skipWsBack($tokens, $p - 1);
         }
+        // @infection-ignore-all LessThan — token 0 (open tag) is never `:`, so
+        // testing index 0 cannot change the outcome.
         if ($p < 0 || $tokens[$p]->text !== ':') {
             return false;
         }
         $q = self::skipWsBack($tokens, $p - 1);
-        return $q >= 0 && $tokens[$q]->text === ')';
+        // @infection-ignore-all LessThan — token 0 is always the open tag, never
+        // `)`, so testing index 0 cannot change the outcome.
+        if ($q < 0 || $tokens[$q]->text !== ')') {
+            return false;
+        }
+        $open = self::matchParenBack($tokens, $q);
+        if ($open === null) {
+            return false;
+        }
+        $h = self::skipWsBack($tokens, $open - 1);
+        // One `use (…)` layer: `function () use ($a): R` — the `)` before the
+        // `:` closes the use clause; hop to the parameter list it follows.
+        // (Use clauses don't nest, so one layer suffices.)
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 (open tag) is never
+        // T_USE, so testing index 0 cannot change the outcome.
+        if ($h >= 0 && $tokens[$h]->id === T_USE) {
+            $h = self::skipWsBack($tokens, $h - 1);
+            // @infection-ignore-all LessThan LogicalOr — token 0 is never `)` (LessThan);
+            // a closure's `use` is the ONLY `use (…)` form PHP allows, so the token
+            // before a reached T_USE is always the param list's `)` and h >= 0 always
+            // holds (T_USE implies preceding tokens) — the OR arms cannot disagree.
+            if ($h < 0 || $tokens[$h]->text !== ')') {
+                return false;
+            }
+            $open = self::matchParenBack($tokens, $h);
+            if ($open === null) {
+                return false;
+            }
+            $h = self::skipWsBack($tokens, $open - 1);
+        }
+        // Optional declaration pieces between the head and the `(`: a function
+        // NAME, then a by-ref `&` (`function &f(…)`, `fn &(…)`). The `&` is
+        // matched by text — PHP 8.1 splits the ampersand token ids.
+        // @infection-ignore-all GreaterThanOrEqualTo IncrementInteger — token 0 (open
+        // tag) is never a name; and starting the back-skip one index earlier only
+        // matters when the skipped token is significant, which for the name slot is
+        // only the by-ref `&` — both routes then land on the same T_FUNCTION and
+        // accept identically.
+        if ($h >= 0 && self::isNameToken($tokens[$h])) {
+            $h = self::skipWsBack($tokens, $h - 1);
+        }
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is never `&`.
+        if ($h >= 0 && $tokens[$h]->text === '&') {
+            $h = self::skipWsBack($tokens, $h - 1);
+        }
+        // @infection-ignore-all LessThan — token 0 is never T_FUNCTION/T_FN, so
+        // testing index 0 cannot flip the head check.
+        if ($h < 0 || ($tokens[$h]->id !== T_FUNCTION && $tokens[$h]->id !== T_FN)) {
+            return false;
+        }
+        // `C::fn(…)` / `$o->function(…)` are member CALLS — `fn`/`function` are
+        // semi-reserved and lex as T_FN/T_FUNCTION even after `::`.
+        $before = self::skipWsBack($tokens, $h - 1);
+        // @infection-ignore-all LessThan — token 0 (open tag) is never `::`/`->`/`?->`,
+        // so testing index 0 cannot change the verdict.
+        return $before < 0 || !in_array(
+            $tokens[$before]->id,
+            [T_DOUBLE_COLON, T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR],
+            true,
+        );
+    }
+
+    /**
+     * Index of the `(` matching the `)` at `$closeIdx`, scanning backwards, or
+     * `null` if unbalanced. Compares whole-token text, so parens INSIDE a
+     * string/comment/cast token never perturb the depth.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function matchParenBack(array $tokens, int $closeIdx): ?int
+    {
+        $depth = 0;
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is the open tag, never
+        // `(` or `)`, so excluding it from the walk cannot change the result.
+        for ($i = $closeIdx; $i >= 0; $i--) {
+            $t = $tokens[$i]->text;
+            if ($t === ')') {
+                $depth++;
+            } elseif ($t === '(') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
     }
 
     /**

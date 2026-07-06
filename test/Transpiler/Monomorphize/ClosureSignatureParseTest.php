@@ -749,6 +749,7 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertIsString(self::strip('<?php function f(): Closure(): A|'));
         self::assertIsString(self::strip('<?php function f(): Closure(): (A'));
         self::assertIsString(self::strip('<?php function f(): Closure(): A['));
+        self::assertIsString(self::strip('<?php function f(): Closure()'));
         $truncatedGroup = '<?php function f(Closure((A';
         self::assertSame($truncatedGroup, self::strip($truncatedGroup));
     }
@@ -999,6 +1000,86 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertNull(self::firstSig($source));
         self::assertStringContainsString('Closure(Foo::class)', self::strip($source));
         self::assertStringNotContainsString('\\Closure', self::strip($source));
+    }
+
+    /**
+     * Expression-context `) :` producers — ternaries, case labels, alt-syntax
+     * blocks, member calls of the semi-reserved `fn`/`function` — must never be
+     * read as return-type slots: the source stays byte-identical and no
+     * only-Closure throw fires. (Keying on bare `) :` silently erased calls to
+     * a user function named `Closure` and hard-threw on ordinary `g(FOO)`.)
+     *
+     * @param non-empty-string $source
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('expressionColonShapes')]
+    public function testExpressionColonShapesAreNeverReturnSlots(string $source): void
+    {
+        self::assertNull(self::firstSig($source));
+        self::assertSame($source, self::strip($source));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function expressionColonShapes(): iterable
+    {
+        $closureFn = '<?php namespace App; function Closure($n) { return $n; } ';
+        yield 'ternary else: first-class callable' => [$closureFn . '$r = $a ? b() : Closure(...);'];
+        yield 'ternary else: const-arg call' => [$closureFn . '$r = $a ? b() : Closure(A);'];
+        yield 'ternary else: grouping parens' => [$closureFn . '$r = ($a) ? ($b) : Closure(A);'];
+        yield 'ternary else: new before the colon' => [$closureFn . '$r = $a ? new Foo() : Closure(A);'];
+        yield 'ternary else: ANY function name must not throw' => ['<?php namespace App; $r = $a ? b() : g(FOO);'];
+        yield 'alt-syntax if' => [$closureFn . 'if ($x): Closure(A); endif;'];
+        yield 'alt-syntax if: any name' => ['<?php namespace App; if ($x): g(FOO); endif;'];
+        yield 'alt-syntax elseif: any name' => ['<?php namespace App; if ($a): ; elseif (f()): g(FOO); endif;'];
+        yield 'alt-syntax while' => ['<?php namespace App; while (f()): g(FOO); endwhile;'];
+        yield 'alt-syntax foreach' => ['<?php namespace App; foreach (f() as $x): g(FOO); endforeach;'];
+        yield 'declare block colon' => ['<?php declare(ticks=1): g(FOO); enddeclare;'];
+        yield 'case label' => [$closureFn . 'switch ($a) { case f(): Closure(A); }'];
+        yield 'statement right after a body brace' => [
+            // `{ Closure(A); }` — the walk must REQUIRE the `:`; skipping that
+            // check makes the body's `)` (of the enclosing header) masquerade
+            // as a return slot and erases the statement.
+            $closureFn . 'function f() { Closure(A); }',
+        ];
+        yield 'static call of semi-reserved fn' => [$closureFn . '$r = $c ? C::fn() : Closure(A);'];
+        yield 'static call of semi-reserved function' => [$closureFn . '$r = $c ? C::function() : Closure(A);'];
+        yield 'instance call of semi-reserved fn' => [$closureFn . '$r = $c ? $o->fn() : Closure(A);'];
+        yield 'short ternary' => [$closureFn . '$r = b() ?: Closure(A);'];
+        yield 'goto label' => [$closureFn . 'lbl: Closure(A); goto lbl;'];
+    }
+
+    /**
+     * Genuine declaration-header return slots — every spelling of the
+     * `function`/`fn` head the discriminator must accept.
+     *
+     * @param non-empty-string $source
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('declarationReturnSlots')]
+    public function testDeclarationReturnSlotsKeepRecognizing(string $source): void
+    {
+        self::assertNotNull(self::firstSig($source), 'the return slot must recognize the signature');
+        self::assertStringContainsString('\\Closure', self::strip($source));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function declarationReturnSlots(): iterable
+    {
+        yield 'nullable return slot' => ['<?php function f(): ?Closure(int): int {}'];
+        yield 'tight colon return slot' => ['<?php function f():Closure(int): int {}'];
+        yield 'nullable return, tight colon' => ['<?php function f():?Closure(int): int {}'];
+        yield 'tight use clause (no space before use)' => ['<?php $f = function ()use ($a): Closure(int): int {};'];
+        yield 'tight by-ref arrow fn' => ['<?php $f = fn&(): Closure(int): int => fn(int $x): int => $x;'];
+        yield 'by-ref named function' => ['<?php function &f(): Closure(int): int {}'];
+        yield 'closure with use clause' => ['<?php $f = function () use ($a): Closure(int): int {};'];
+        yield 'by-ref closure with use clause' => ['<?php $f = function &() use ($a): Closure(int): int {};'];
+        yield 'by-ref arrow fn' => ['<?php $f = fn &(): Closure(int): int => fn(int $x): int => $x;'];
+        yield 'parenthesised default in params' => ['<?php function f($x = (1 + 2)): Closure(int): int {}'];
+        yield 'paren inside a string default' => ['<?php function f($s = "a)b"): Closure(int): int {}'];
+        yield 'comment between paren and colon' => ['<?php function f() /* c */ : Closure(int): int {}'];
+        yield 'abstract method' => ['<?php abstract class C { abstract protected function m(): Closure(int): int; }'];
     }
 
     public function testSourceWithoutAnyClosureSignatureIsReturnedUnchanged(): void

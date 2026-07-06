@@ -50,6 +50,24 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testUserFunctionNamedClosureInExpressionColonsExecutes(): void
+    {
+        // A user function named `Closure` called after a ternary `:`, inside an
+        // alt-syntax `if (...):` block, and after a `case expr():` label — the
+        // `) :` pairs those positions produce must not be read as return-type
+        // slots; the calls compile untouched and RUN.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_named_user_function_runtime/source',
+            'closure-named-user-fn',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_named_user_function_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testArraySugarSignaturesCompileEraseAndRun(): void
     {
         // Array-sugar leaves in a signature's parameter and return lower to
