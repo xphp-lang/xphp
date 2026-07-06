@@ -526,6 +526,38 @@ final class ClosureSignatureConformanceTest extends TestCase
         );
     }
 
+    public function testSubIntersectionParameterAcceptedAgainstUnionCandidate(): void
+    {
+        // Pins the sub-intersection-vs-union-super accept path: target parameter
+        // Apple&Orange (uninhabited ⇒ gradual sub side) checked contravariantly against
+        // a candidate parameter Apple|Orange. Decomposing the sub side would false-reject;
+        // it must stay gradual through the super-union arm.
+        self::assertConforms(
+            self::sig([self::p(self::union(self::ref('App\\Apple'), self::ref('App\\Orange')))], null),
+            self::sig([self::p(self::intersection(self::ref('App\\Apple'), self::ref('App\\Orange')))], null),
+        );
+    }
+
+    public function testSubIntersectionParameterAcceptedAgainstIntersectionCandidate(): void
+    {
+        // Sub-intersection-vs-intersection-super accept path: the sub-side intersection
+        // must stay gradual as the super-intersection arm recurses over each member.
+        self::assertConforms(
+            self::sig([self::p(self::intersection(self::ref('App\\Apple'), self::ref('App\\Closurish')))], null),
+            self::sig([self::p(self::intersection(self::ref('App\\Apple'), self::ref('App\\Orange')))], null),
+        );
+    }
+
+    public function testSubIntersectionReturnAcceptedAgainstUnionTarget(): void
+    {
+        // The return analog: candidate return Apple&Orange (gradual sub side) checked
+        // covariantly against a union target return Apple|Orange. Stays gradual.
+        self::assertConforms(
+            self::sig([], self::intersection(self::ref('App\\Apple'), self::ref('App\\Orange'))),
+            self::sig([], self::union(self::ref('App\\Apple'), self::ref('App\\Orange'))),
+        );
+    }
+
     public function testViolationDetailRendersUnionMembers(): void
     {
         $violation = self::engine()->check(
