@@ -65,6 +65,13 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'target references a type parameter ⇒ gradual here' => [
             '<?php class Box<T> { public function m(): Closure(T $x): T { return fn(string $x): int => 0; } }',
         ];
+        yield 'S-A return: relative-named TARGET type resolves and conforms' => [
+            // `namespace\Fruit` in the target must bind to App\Fruit — a
+            // mis-resolution to `App\namespace\Fruit` would be gradual, hiding
+            // the type from the check entirely (the conforming case must hold
+            // for the right reason: Apple <: Fruit, not "unknown class").
+            '<?php function m(): Closure(): namespace\Fruit { return fn(): Apple => new Apple(); }',
+        ];
         yield 'S-A return: fully-qualified literal type resolves and conforms' => [
             // `\App\Apple` must resolve absolutely (App\Apple <: App\Fruit), not
             // relative to the namespace (App\App\Apple, undeclared ⇒ gradual).
@@ -173,6 +180,13 @@ final class ClosureConformanceValidatorTest extends TestCase
             "<?php function m(): Closure(int|string \$x): void {\n    return fn(int \$x): void => null;\n}",
             2,
             'parameter 1: int is not wider than int|string',
+        ];
+        yield 'S-A return: relative-named TARGET violation is caught' => [
+            // Pre-fix, `namespace\Apple` resolved to `App\namespace\Apple`
+            // (undeclared ⇒ gradual) and this provable violation was missed.
+            "<?php function m(): Closure(): namespace\\Apple {\n    return fn(): Fruit => new Fruit();\n}",
+            2,
+            'App\\Fruit is not a subtype of App\\Apple',
         ];
         yield 'S-A return: fully-qualified literal violation is caught' => [
             // Pre-fix, `\App\Fruit` flattened to the relative `App\App\Fruit`

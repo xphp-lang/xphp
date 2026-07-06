@@ -46,6 +46,54 @@ final class NamespaceContextTest extends TestCase
         self::assertSame('Other\\Vendor\\LongName', $ctx->resolveAgainstContext('B'));
     }
 
+    public function testRelativeNamespaceNameBindsToCurrentNamespace(): void
+    {
+        // `namespace\Box` is PHP's explicit current-namespace reference; it
+        // must NOT fall into the bare-name path (which would produce the
+        // impossible `App\Containers\namespace\Box`).
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App\\Containers');
+
+        self::assertSame('App\\Containers\\Box', $ctx->resolveAgainstContext('namespace\\Box'));
+    }
+
+    public function testRelativeNamespaceNameIsNeverCapturedByAUseAlias(): void
+    {
+        // A colliding `use Other\Box` must not rewrite `namespace\Box` — PHP
+        // never applies aliases to relative references.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Other\\Box'));
+
+        self::assertSame('App\\Box', $ctx->resolveAgainstContext('namespace\\Box'));
+    }
+
+    public function testRelativeNamespaceNameInGlobalNamespace(): void
+    {
+        $ctx = new NamespaceContext();
+
+        self::assertSame('Box', $ctx->resolveAgainstContext('namespace\\Box'));
+    }
+
+    public function testRelativeNamespaceKeywordIsCaseInsensitive(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+
+        self::assertSame('App\\Box', $ctx->resolveAgainstContext('NAMESPACE\\Box'));
+    }
+
+    public function testNameMerelyStartingWithNamespaceIsNotRelative(): void
+    {
+        // Only the exact `namespace\` keyword segment is relative —
+        // `Namespaced\Utils` is an ordinary (legal) class path and must take
+        // the bare-name route, keyword-prefix match notwithstanding.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+
+        self::assertSame('App\\Namespaced\\Utils', $ctx->resolveAgainstContext('Namespaced\\Utils'));
+    }
+
     public function testUseMapResolutionPreservesTailSegments(): void
     {
         $ctx = new NamespaceContext();

@@ -69,6 +69,16 @@ final class NamespaceContext
         if (str_starts_with($name, '\\')) {
             return ltrim($name, '\\');
         }
+        // `namespace\Foo` binds to the CURRENT namespace by PHP's rules — never
+        // to a `use` alias, and never as a literal first segment (`namespace`
+        // is a reserved word, so no real class name can start with it). The
+        // keyword is case-insensitive.
+        if (strncasecmp($name, 'namespace\\', 10) === 0) {
+            $rest = substr($name, 10);
+            return $this->currentNamespace !== ''
+                ? $this->currentNamespace . '\\' . $rest
+                : $rest;
+        }
         $first = self::firstSegment($name);
         if (isset($this->useMap[$first])) {
             $rest = substr($name, strlen($first));
