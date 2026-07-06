@@ -1073,6 +1073,14 @@ final class ClosureSignatureParseTest extends TestCase
         yield 'tight use clause (no space before use)' => ['<?php $f = function ()use ($a): Closure(int): int {};'];
         yield 'tight by-ref arrow fn' => ['<?php $f = fn&(): Closure(int): int => fn(int $x): int => $x;'];
         yield 'by-ref named function' => ['<?php function &f(): Closure(int): int {}'];
+        yield 'keyword-named method (list)' => ['<?php class C { public function list(): Closure(int): int { return fn(int $x): int => $x; } }'];
+        yield 'keyword-named method (default)' => ['<?php class C { public function default(): Closure(int): int { return fn(int $x): int => $x; } }'];
+        yield 'by-ref keyword-named method' => ['<?php class C { public function &list(): Closure(int): int { return fn(int $x): int => $x; } }'];
+        yield 'generic closure' => ['<?php $f = function<T>(T $x): Closure(int): int { return fn(int $y): int => $y; };'];
+        yield 'generic method with bound' => ['<?php class C { public function m<T : Fruit>(T $x): Closure(int): int { return fn(int $y): int => $y; } }'];
+        // NOTE: `function list<T>(...)` (generic + keyword name) is NOT here —
+        // the generic-marker scanner itself rejects keyword method names (a
+        // separate pre-existing loud gap, unrelated to the return-slot walk).
         yield 'closure with use clause' => ['<?php $f = function () use ($a): Closure(int): int {};'];
         yield 'by-ref closure with use clause' => ['<?php $f = function &() use ($a): Closure(int): int {};'];
         yield 'by-ref arrow fn' => ['<?php $f = fn &(): Closure(int): int => fn(int $x): int => $x;'];

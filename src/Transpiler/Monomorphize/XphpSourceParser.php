@@ -1017,10 +1017,13 @@ final class XphpSourceParser
         // T_USE, so testing index 0 cannot change the outcome.
         if ($h >= 0 && $tokens[$h]->id === T_USE) {
             $h = self::skipWsBack($tokens, $h - 1);
-            // @infection-ignore-all LessThan LogicalOr — token 0 is never `)` (LessThan);
-            // a closure's `use` is the ONLY `use (…)` form PHP allows, so the token
-            // before a reached T_USE is always the param list's `)` and h >= 0 always
-            // holds (T_USE implies preceding tokens) — the OR arms cannot disagree.
+            // @infection-ignore-all LessThan LogicalOr — token 0 is never `)`
+            // (LessThan); and a reached T_USE always has preceding significant
+            // tokens (`use` is never the first token after the open tag), so
+            // h >= 0 always holds and the OR arms cannot disagree. The `)` test
+            // itself is load-bearing: a member CALL of a method named `use`
+            // (`$o->use($q) : …`) reaches this branch with a non-`)` token and
+            // must be rejected — pinned behaviorally.
             if ($h < 0 || $tokens[$h]->text !== ')') {
                 return false;
             }
@@ -1030,15 +1033,32 @@ final class XphpSourceParser
             }
             $h = self::skipWsBack($tokens, $open - 1);
         }
-        // Optional declaration pieces between the head and the `(`: a function
-        // NAME, then a by-ref `&` (`function &f(…)`, `fn &(…)`). The `&` is
-        // matched by text — PHP 8.1 splits the ampersand token ids.
-        // @infection-ignore-all GreaterThanOrEqualTo IncrementInteger — token 0 (open
-        // tag) is never a name; and starting the back-skip one index earlier only
-        // matters when the skipped token is significant, which for the name slot is
-        // only the by-ref `&` — both routes then land on the same T_FUNCTION and
-        // accept identically.
-        if ($h >= 0 && self::isNameToken($tokens[$h])) {
+        // Optional declaration pieces between the head and the `(`, walked
+        // backwards: a GENERIC clause (`function<T>(…)`, `function m<T : B>(…)`),
+        // then a NAME, then a by-ref `&` (`function &f(…)`, `fn &(…)`).
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 (open tag) is
+        // never `>`.
+        if ($h >= 0 && $tokens[$h]->text === '>') {
+            $angleOpen = self::matchAngleBack($tokens, $h);
+            if ($angleOpen === null) {
+                return false;
+            }
+            $h = self::skipWsBack($tokens, $angleOpen - 1);
+        }
+        // The name may be ANY single token: PHP allows every semi-reserved
+        // keyword as a METHOD name (`function list()`, `function default()`),
+        // and those lex as their own keyword tokens, not T_STRING — so no
+        // name-token test can enumerate them. The head check below is the real
+        // discriminator; the name slot just skips one token that is neither
+        // the by-ref marker nor the head itself.
+        // @infection-ignore-all GreaterThanOrEqualTo IncrementInteger — token 0
+        // (open tag) is never a name; and starting the back-skip one index
+        // earlier only matters when the skipped token is significant, which for
+        // the name slot is only the by-ref `&` — both routes then land on the
+        // same T_FUNCTION and accept identically.
+        if ($h >= 0 && $tokens[$h]->text !== '&'
+            && $tokens[$h]->id !== T_FUNCTION && $tokens[$h]->id !== T_FN
+        ) {
             $h = self::skipWsBack($tokens, $h - 1);
         }
         // @infection-ignore-all GreaterThanOrEqualTo — token 0 is never `&`.
@@ -1069,6 +1089,32 @@ final class XphpSourceParser
      *
      * @param list<PhpToken> $tokens
      */
+    /**
+     * Index of the `<` matching the `>` at `$closeIdx`, scanning backwards, or
+     * `null` if unbalanced. Merged `>>` tokens are already split before any
+     * signature scanning, so whole-token text compares suffice.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function matchAngleBack(array $tokens, int $closeIdx): ?int
+    {
+        $depth = 0;
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is the open tag, never
+        // `<` or `>`, so excluding it from the walk cannot change the result.
+        for ($i = $closeIdx; $i >= 0; $i--) {
+            $t = $tokens[$i]->text;
+            if ($t === '>') {
+                $depth++;
+            } elseif ($t === '<') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
+    }
+
     private static function matchParenBack(array $tokens, int $closeIdx): ?int
     {
         $depth = 0;
