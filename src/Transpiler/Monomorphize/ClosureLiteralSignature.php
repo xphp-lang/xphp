@@ -87,7 +87,15 @@ final class ClosureLiteralSignature
         // compound (handled above), or a simple Identifier/Name, so the negated
         // predicate is unreachable-different: nothing else reaches this line.
         if ($type instanceof Identifier || $type instanceof Name) {
-            $name = $type->toString();
+            // A fully-qualified `\App\Foo` must keep its leading `\` so the
+            // resolver treats it as absolute — toString() strips it, and the
+            // name would mis-resolve relative to the current namespace (a
+            // silent over-accept via the undeclared-class gradual path). A
+            // relative `namespace\Foo` stays on toString(), which resolves it
+            // correctly.
+            $name = $type instanceof Name && $type->isFullyQualified()
+                ? $type->toCodeString()
+                : $type->toString();
             // @infection-ignore-all UnwrapStrToLower is killed by a capital-cased
             // scalar test; the case-fold is load-bearing (`Int` ⇒ `int`).
             $lower = strtolower($name);

@@ -65,6 +65,11 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'target references a type parameter ⇒ gradual here' => [
             '<?php class Box<T> { public function m(): Closure(T $x): T { return fn(string $x): int => 0; } }',
         ];
+        yield 'S-A return: fully-qualified literal type resolves and conforms' => [
+            // `\App\Apple` must resolve absolutely (App\Apple <: App\Fruit), not
+            // relative to the namespace (App\App\Apple, undeclared ⇒ gradual).
+            '<?php function m(): Closure(): Fruit { return fn(): \App\Apple => new Apple(); }',
+        ];
         yield 'S-A DNF group parameter: one param, gradual — matching arity accepted' => [
             // `(A&B)|C $x` is ONE parameter; a mis-scan that split the group into
             // extra params false-rejected this correct literal on arity.
@@ -155,6 +160,13 @@ final class ClosureConformanceValidatorTest extends TestCase
             "<?php function m(): Closure(int|string \$x): void {\n    return fn(int \$x): void => null;\n}",
             2,
             'parameter 1: int is not wider than int|string',
+        ];
+        yield 'S-A return: fully-qualified literal violation is caught' => [
+            // Pre-fix, `\App\Fruit` flattened to the relative `App\App\Fruit`
+            // (undeclared ⇒ gradual) and this provable violation was missed.
+            "<?php function m(): Closure(): Apple {\n    return fn(): \\App\\Fruit => new Fruit();\n}",
+            2,
+            'App\\Fruit is not a subtype of App\\Apple',
         ];
         yield 'S-A DNF group parameter: wrong arity still rejected' => [
             // The DNF leaf is gradual but the ARITY is not: the one-param target

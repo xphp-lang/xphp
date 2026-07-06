@@ -32,6 +32,42 @@ final class ClosureLiteralSignatureTest extends TestCase
         self::assertSame('App\\Apple', self::typeName($sig->return), 'a bare class resolves against the current namespace');
     }
 
+    public function testFullyQualifiedTypesKeepTheirAbsoluteResolution(): void
+    {
+        // `\App\Foo` inside `namespace App` must resolve to `App\Foo` — not the
+        // namespace-relative `App\App\Foo` (toString() drops the leading `\`,
+        // and the mis-resolved name is undeclared ⇒ silently gradual).
+        $sig = self::extract(
+            '<?php $f = function (\App\Foo $x): \App\Bar { return new \App\Bar(); };',
+            self::ctx('App'),
+        );
+
+        self::assertSame('App\\Foo', self::typeName($sig->params[0]->type));
+        self::assertSame('App\\Bar', self::typeName($sig->return));
+    }
+
+    public function testRelativeNamespaceTypeStillResolvesAgainstCurrent(): void
+    {
+        // `namespace\Foo` (Name\Relative) resolves via toString() — the
+        // fully-qualified branch must not capture it (toCodeString() would
+        // yield `namespace\Foo` and mis-resolve to `App\namespace\Foo`).
+        $sig = self::extract(
+            '<?php $f = function (): namespace\Foo { return new namespace\Foo(); };',
+            self::ctx('App'),
+        );
+
+        self::assertSame('App\\Foo', self::typeName($sig->return));
+    }
+
+    public function testFullyQualifiedClosureTypeResolvesToClosure(): void
+    {
+        // `\Closure` is a class name, not a scalar — the FQ branch must hand it
+        // to the resolver, which strips the `\` to the plain `Closure` FQCN.
+        $sig = self::extract('<?php $f = function (): \Closure { return fn() => 1; };', self::ctx('App'));
+
+        self::assertSame('Closure', self::typeName($sig->return));
+    }
+
     public function testUntypedParameterBecomesMixed(): void
     {
         $sig = self::extract('<?php $f = fn($x) => $x;', self::ctx());
