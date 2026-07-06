@@ -236,6 +236,29 @@ final class ClosureConformanceValidatorTest extends TestCase
         );
     }
 
+    public function testRelativeNamespaceLiteralTypeIsNotCapturedByAUseAlias(): void
+    {
+        // PHP binds `namespace\Apple` to the CURRENT namespace regardless of the
+        // colliding `use Other\Apple`. Routing it through the alias-aware
+        // resolver captured `Other\Apple` (declared, unrelated to App\Fruit) and
+        // FALSE-REJECTED this conforming factory.
+        $source = <<<'X'
+        <?php
+        namespace Other { class Apple {} }
+        namespace App { class Fruit {} class Apple extends Fruit {} }
+        namespace App {
+            use Other\Apple;
+            function make(): Closure(): Fruit { return fn(): namespace\Apple => new \App\Apple(); }
+        }
+        X;
+        $ast = self::parseRaw($source);
+
+        $diagnostics = new DiagnosticCollector();
+        self::validator($ast)->validateFile($ast, 'test.xphp', $diagnostics);
+
+        self::assertCount(0, $diagnostics->all(), 'namespace\\RealApple must bind to App, not the use alias');
+    }
+
     public function testTargetUnionMembersAreResolvedForConformance(): void
     {
         // Both union members must resolve to `App\*` for the engine to prove `Fruit`

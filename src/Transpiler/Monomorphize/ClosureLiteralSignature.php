@@ -87,12 +87,21 @@ final class ClosureLiteralSignature
         // compound (handled above), or a simple Identifier/Name, so the negated
         // predicate is unreachable-different: nothing else reaches this line.
         if ($type instanceof Identifier || $type instanceof Name) {
+            // A relative `namespace\Foo` binds to the CURRENT namespace by PHP's
+            // rules — never to a `use` alias. toString() erases the `namespace\`
+            // prefix, so routing it through the alias-aware resolver would let a
+            // colliding `use Other\Foo` capture it and FALSE-REJECT a conforming
+            // literal. Resolve it against the namespace directly.
+            if ($type instanceof Name && $type->isRelative()) {
+                $ns = $ctx->currentNamespace();
+                return new SigTypeRef(new TypeRef(
+                    $ns === '' ? $type->toString() : $ns . '\\' . $type->toString(),
+                ));
+            }
             // A fully-qualified `\App\Foo` must keep its leading `\` so the
             // resolver treats it as absolute — toString() strips it, and the
             // name would mis-resolve relative to the current namespace (a
-            // silent over-accept via the undeclared-class gradual path). A
-            // relative `namespace\Foo` stays on toString(), which resolves it
-            // correctly.
+            // silent over-accept via the undeclared-class gradual path).
             $name = $type instanceof Name && $type->isFullyQualified()
                 ? $type->toCodeString()
                 : $type->toString();

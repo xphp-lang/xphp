@@ -48,15 +48,39 @@ final class ClosureLiteralSignatureTest extends TestCase
 
     public function testRelativeNamespaceTypeStillResolvesAgainstCurrent(): void
     {
-        // `namespace\Foo` (Name\Relative) resolves via toString() — the
-        // fully-qualified branch must not capture it (toCodeString() would
-        // yield `namespace\Foo` and mis-resolve to `App\namespace\Foo`).
+        // `namespace\Foo` (Name\Relative) resolves against the CURRENT
+        // namespace directly — never via the fully-qualified branch
+        // (toCodeString() would mis-resolve to `App\namespace\Foo`).
         $sig = self::extract(
             '<?php $f = function (): namespace\Foo { return new namespace\Foo(); };',
             self::ctx('App'),
         );
 
         self::assertSame('App\\Foo', self::typeName($sig->return));
+    }
+
+    public function testRelativeNamespaceTypeIsNeverCapturedByAUseAlias(): void
+    {
+        // PHP binds `namespace\Foo` to the current namespace regardless of any
+        // `use Other\Foo` in scope; routing it through the alias-aware resolver
+        // would resolve `Other\Foo` and could FALSE-REJECT a conforming literal.
+        $sig = self::extract(
+            '<?php $f = function (): namespace\Foo { return new namespace\Foo(); };',
+            self::ctx('App', ['Foo' => 'Other\\Foo']),
+        );
+
+        self::assertSame('App\\Foo', self::typeName($sig->return));
+    }
+
+    public function testRelativeNamespaceTypeInGlobalNamespace(): void
+    {
+        // `namespace\Foo` in the unnamed namespace is just `Foo`.
+        $sig = self::extract(
+            '<?php $f = function (): namespace\Foo { return new namespace\Foo(); };',
+            self::ctx(''),
+        );
+
+        self::assertSame('Foo', self::typeName($sig->return));
     }
 
     public function testFullyQualifiedClosureTypeResolvesToClosure(): void
