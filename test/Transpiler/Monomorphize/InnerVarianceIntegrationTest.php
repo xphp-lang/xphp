@@ -46,10 +46,10 @@ final class InnerVarianceIntegrationTest extends TestCase
     public function testCovariantOuterInInvariantInnerSlotFailsCompilation(): void
     {
         // The canonical case the parse-time validator CANNOT catch: at parse
-        // time we don't yet know Container's slot is invariant, so `+T` in a
+        // time we don't yet know Container's slot is invariant, so `out T` in a
         // covariant (return) position passes the surface check. The inner-
         // variance pass composes compose(Covariant, Invariant) = Invariant and
-        // rejects `+T`. If the `validateInnerVariance()` call is removed from
+        // rejects `out T`. If the `validateInnerVariance()` call is removed from
         // Compiler::compile, the violation slips through and compilation
         // succeeds -- so this test fails, killing the MethodCallRemoval mutant.
         $sourceDir = $this->workDir . '/src';
@@ -70,10 +70,10 @@ final class InnerVarianceIntegrationTest extends TestCase
         file_put_contents($pFile, <<<'PHP'
         <?php
         namespace App;
-        // +T appears only in output position (return), which the parse-time
+        // out T appears only in output position (return), which the parse-time
         // validator accepts -- but Container's slot is invariant, so the
-        // composed position is invariant-only and +T is illegal there.
-        class P<+T>
+        // composed position is invariant-only and out T is illegal there.
+        class P<out T>
         {
             private mixed $store = null;
 
@@ -89,7 +89,7 @@ final class InnerVarianceIntegrationTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Variance violation in template P');
-        $this->expectExceptionMessage('+T');
+        $this->expectExceptionMessage('out T');
         $this->expectExceptionMessage('invariant-only position');
         $this->expectExceptionMessage('Container');
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);

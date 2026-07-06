@@ -286,7 +286,7 @@ walks each pair of specializations of the same variant template and,
 where the type arguments are related the right way, adds the
 `extends` / `implements` link between them: `Producer<Banana>`
 actually `extends Producer<Fruit>` when `Banana extends Fruit` and
-`T` is covariant (`+T`), dually for contravariant (`-T`). The edges
+`T` is covariant (`out T`), dually for contravariant (`in T`). The edges
 are appended to the cloned specialization's `implements` / `extends`
 list and survive the next stage untouched -- the rewriter only
 rewrites *template* `Class_` / `Interface_` nodes, not specialized

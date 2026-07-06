@@ -130,7 +130,7 @@ final class EnclosingParamBoundLimitationTest extends TestCase
     <?php
     declare(strict_types=1);
     namespace App;
-    class Box<+E> {
+    class Box<out E> {
         public function contains<U : E>(U $value): bool { return true; }
     }
     PHP;
@@ -147,7 +147,7 @@ final class EnclosingParamBoundLimitationTest extends TestCase
     <?php
     declare(strict_types=1);
     namespace App;
-    class Box<+E> {
+    class Box<out E> {
         public function register<U : \Stringable & E>(U $value): void {}
     }
     PHP;

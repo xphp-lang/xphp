@@ -86,21 +86,21 @@ once it sees `public int $value`.
   source set. The same "not in the source set" condition on a
   *variance* type argument is a non-failing warning rather than an
   error — see [variance](variance.md#unprovable-variance-edges).
-- Bounds are an **invariant position** for variance markers — `+T`
-  or `-T` are rejected inside a bound expression (whether as a bare
-  leaf, `class Pair<+T, U : T>`, or nested, `Sortable<+T : Box<T>>`).
+- Bounds are an **invariant position** for variance markers — `out T`
+  or `in T` are rejected inside a bound expression (whether as a bare
+  leaf, `class Pair<out T, U : T>`, or nested, `Sortable<out T : Box<T>>`).
   See [variance](variance.md).
 
 ## Bounding a method type parameter by the enclosing class parameter
 
 A method-level type parameter may be bounded by one of the **enclosing
 class's** type parameters. This is the sound way to give a covariant
-`<+E>` collection an element-consuming method without dropping to
+`<out E>` collection an element-consuming method without dropping to
 `mixed`: the argument is constrained to a subtype of the element type,
-while the covariant `+E` never enters a parameter position.
+while the covariant `out E` never enters a parameter position.
 
 ```php
-class Box<+E> {
+class Box<out E> {
     // U is a method type parameter (invariant), bounded by the class's E.
     public function contains<U : E>(U $value): bool { /* ... */ }
 }
@@ -152,7 +152,7 @@ is instantiated, so for now it fails (the *forwarding* form below is the way to
 make it compile and run):
 
 ```php
-class Box<+E> {
+class Box<out E> {
     public function contains<U : E>(U $value): bool { /* ... */ }
 
     public function probe(): bool {
@@ -169,7 +169,7 @@ Move such a call to a context where the receiver has a concrete element type
 generic and forward the parameter:**
 
 ```php
-class Box<+E> {
+class Box<out E> {
     public function contains<U : E>(U $value): bool { /* ... */ }
 
     // ✅ Forwarding a method parameter compiles and runs: both methods take U
@@ -198,14 +198,14 @@ The method may be declared on a covariant **interface** and called through a
 covariant **upcast** — the shape a collections library uses:
 
 ```php
-interface Collection<+E> {
+interface Collection<out E> {
     public function contains<U : E>(U $value): bool;
 }
-abstract class AbstractColl<+E> implements Collection<E> {
+abstract class AbstractColl<out E> implements Collection<E> {
     public function __construct(private E ...$items) {}
     public function contains<U : E>(U $value): bool { /* ... */ }
 }
-class ListColl<+E> extends AbstractColl<E> {}
+class ListColl<out E> extends AbstractColl<E> {}
 
 function anyProduct(Collection<Product> $c): bool {
     return $c->contains::<Product>(new Product());
@@ -219,7 +219,7 @@ Each interface specialization declares its own erased member
 `contains_<Product>` — distinct, so the covariant edge never narrows a
 parameter). When the element-consuming body sits on a **parent-less covariant
 base** that passes its type parameters straight to the interface — the
-`AbstractColl<+E> implements Collection<E>` shape above — the implementation is
+`AbstractColl<out E> implements Collection<E>` shape above — the implementation is
 **inherited** through the covariant chain.
 
 When inheritance can't carry it — the implementing class has another `extends`

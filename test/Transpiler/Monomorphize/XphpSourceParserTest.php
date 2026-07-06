@@ -2141,7 +2141,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-class Producer<+T>
+class Producer<out T>
 {
     public function get(): T { throw new \LogicException; }
 }
@@ -2159,7 +2159,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-class Consumer<-T>
+class Consumer<in T>
 {
     public function set(T $x): void {}
 }
@@ -2190,7 +2190,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-interface Iter<K, +V>
+interface Iter<K, out V>
 {
     public function key(): K;
     public function current(): V;
@@ -2211,12 +2211,12 @@ PHP;
 namespace App;
 class C
 {
-    public function id<+T>(T $x): T { return $x; }
+    public function id<out T>(T $x): T { return $x; }
 }
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Variance markers `+T` / `-T` are not supported on methods, functions, closures, or arrow functions');
+        $this->expectExceptionMessage('Variance markers `out T` / `in T` are not supported on methods, functions, closures, or arrow functions');
         $parser->parse($source);
     }
 
@@ -2225,7 +2225,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-function id<-T>(T $x): T { return $x; }
+function id<in T>(T $x): T { return $x; }
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
@@ -2234,12 +2234,140 @@ PHP;
         $parser->parse($source);
     }
 
+    public function testOutMarkerParsesAsCovariant(): void
+    {
+        $class = self::parseSingleClass(<<<'PHP'
+<?php
+namespace App;
+class Producer<out T> {}
+PHP);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame('T', $params[0]->name);
+        self::assertSame(Variance::Covariant, $params[0]->variance);
+    }
+
+    public function testInMarkerParsesAsContravariant(): void
+    {
+        $class = self::parseSingleClass(<<<'PHP'
+<?php
+namespace App;
+class Consumer<in T> {}
+PHP);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame('T', $params[0]->name);
+        self::assertSame(Variance::Contravariant, $params[0]->variance);
+    }
+
+    public function testMultiParamVarianceMarkersParseIndependently(): void
+    {
+        // Both entries carry a marker; the second is comma-preceded — guards the
+        // migration blind spot where only the leading marker gets recognized.
+        $class = self::parseSingleClass(<<<'PHP'
+<?php
+namespace App;
+class Couple<out A, in B> {}
+PHP);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame(['A', 'B'], array_map(static fn (TypeParam $p): string => $p->name, $params));
+        self::assertSame(Variance::Covariant, $params[0]->variance);
+        self::assertSame(Variance::Contravariant, $params[1]->variance);
+    }
+
+    public function testBoundedCovariantMarkerParses(): void
+    {
+        $class = self::parseSingleClass(<<<'PHP'
+<?php
+namespace App;
+class Cache<out K : \Stringable> {}
+PHP);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame('K', $params[0]->name);
+        self::assertSame(Variance::Covariant, $params[0]->variance);
+        self::assertNotNull($params[0]->bound);
+    }
+
+    public function testOldPlusMarkerIsRejectedWithMigrationHint(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('The `+T` / `-T` variance syntax was replaced by `out T` / `in T`');
+        $parser->parse("<?php\nnamespace App;\nclass Box<+T> {}\n");
+    }
+
+    public function testOldMinusMarkerIsRejectedWithMigrationHint(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('was replaced by `out T` / `in T`');
+        $parser->parse("<?php\nnamespace App;\nclass Box<-T> {}\n");
+    }
+
+    public function testOutReservedAsTypeParamNameIsRejected(): void
+    {
+        // No name follows, so `out` lands in the name slot and the reserve check fires.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('`out` and `in` are variance markers and cannot name a type parameter');
+        $parser->parse("<?php\nnamespace App;\nclass Box<out> {}\n");
+    }
+
+    public function testOutFollowedByOutIsRejectedAtNameSlot(): void
+    {
+        // Marker `out` consumed, then `out` again as the name — the name-slot
+        // reserve closes the hole a marker-only lookahead would have accepted.
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot name a type parameter');
+        $parser->parse("<?php\nnamespace App;\nclass Box<out out> {}\n");
+    }
+
+    public function testReservedInAmongMultipleParamsIsRejected(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot name a type parameter');
+        $parser->parse("<?php\nnamespace App;\nclass Pair<in, out> {}\n");
+    }
+
+    public function testReservedInWithBoundIsRejected(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cannot name a type parameter');
+        $parser->parse("<?php\nnamespace App;\nclass Box<in : \\Stringable> {}\n");
+    }
+
+    public function testNamesStartingWithOutOrInAreValidInvariantParams(): void
+    {
+        // Only the exact lowercase tokens `out`/`in` are reserved; names that
+        // merely start with them stay ordinary invariant parameters.
+        $class = self::parseSingleClass(<<<'PHP'
+<?php
+namespace App;
+class Bag<outer, Input, outT> {}
+PHP);
+        $params = $class->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+        self::assertSame(['outer', 'Input', 'outT'], array_map(static fn (TypeParam $p): string => $p->name, $params));
+        foreach ($params as $p) {
+            self::assertSame(Variance::Invariant, $p->variance);
+        }
+    }
+
+    private static function parseSingleClass(string $source): Class_
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $class = self::findFirstClass($parser->parse($source));
+        self::assertNotNull($class);
+
+        return $class;
+    }
+
     public function testContravariantInInputPositionIsAccepted(): void
     {
         $source = <<<'PHP'
 <?php
 namespace App;
-class Consumer<-T>
+class Consumer<in T>
 {
     public function set(T $x): void {}
 }
@@ -2533,7 +2661,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-$f = function<+T>(T $x): T { return $x; };
+$f = function<out T>(T $x): T { return $x; };
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);
@@ -2547,7 +2675,7 @@ PHP;
         $source = <<<'PHP'
 <?php
 namespace App;
-$f = fn<+T>(T $x): T => $x;
+$f = fn<out T>(T $x): T => $x;
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $this->expectException(\RuntimeException::class);

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App;
 
-class Couple<+A, +B> implements Tuple<A, B>
+class Couple<out A, out B> implements Tuple<A, B>
 {
     public function __construct(private A $a, private B $b) {}
 

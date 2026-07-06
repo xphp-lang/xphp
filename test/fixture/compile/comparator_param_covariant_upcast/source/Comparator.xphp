@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App;
 
-interface Comparator<-T>
+interface Comparator<in T>
 {
     public function compare(T $a, T $b): int;
 }

@@ -48,7 +48,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
         $expected = <<<'TXT'
             Variance edge cannot be proven while instantiating App\Producer<App\Book>.
-              type parameter +T is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              type parameter out T is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
               so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
 
               Add App\Book to the source set the hierarchy is built from to enable the edge.
@@ -57,13 +57,13 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         self::assertSame($expected, $collector->all()[0]->message);
     }
 
-    public function testContravariantOverUnprovableLeafIsWarnedWithMinusMarker(): void
+    public function testContravariantOverUnprovableLeafIsWarnedWithInMarker(): void
     {
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation('App\\Consumer', [new TypeRef('App\\Book')]);
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('type parameter -T is contravariant', $collector->all()[0]->message);
+        self::assertStringContainsString('type parameter in T is contravariant', $collector->all()[0]->message);
     }
 
     public function testProvableDeclaredLeafIsSilent(): void
@@ -116,7 +116,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testTwoVariantPositionsEachUnprovableWarnTwice(): void
     {
-        // `Pair<+A, +B>` over two unprovable leaves → one warning per covariant position.
+        // `Pair<out A, out B>` over two unprovable leaves → one warning per covariant position.
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(
             'App\\Pair',
@@ -143,7 +143,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testEarlierInvariantPositionDoesNotShortCircuitLaterVariant(): void
     {
-        // `Mixed<A, +B>`: the invariant A is skipped, but the walk must continue to the
+        // `Mixed<A, out B>`: the invariant A is skipped, but the walk must continue to the
         // covariant B and still warn (pins `continue`, not `break`, on the invariant skip).
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(
@@ -157,7 +157,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testEarlierScalarPositionDoesNotShortCircuitLaterVariant(): void
     {
-        // `Pair<+A, +B>` with a scalar A: A is skipped, B still warns (pins `continue` on
+        // `Pair<out A, out B>` with a scalar A: A is skipped, B still warns (pins `continue` on
         // the scalar/type-param/generic skip).
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(
@@ -171,7 +171,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
     public function testEarlierDeclaredPositionDoesNotShortCircuitLaterVariant(): void
     {
-        // `Pair<+A, +B>` with a declared A: A is skipped (provable), B still warns (pins
+        // `Pair<out A, out B>` with a declared A: A is skipped (provable), B still warns (pins
         // `continue` on the isDeclared skip).
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation(

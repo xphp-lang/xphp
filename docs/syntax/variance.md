@@ -1,7 +1,7 @@
 # Variance
 
 Variance markers tell the compiler how subtyping flows through a
-generic parameter. `+T` declares the parameter covariant; `-T`
+generic parameter. `out T` declares the parameter covariant; `in T`
 declares it contravariant; unmarked is invariant. With markers in
 place, specializations get real `extends` chains and PHP's native
 LSP carries the subtype relationship.
@@ -18,13 +18,13 @@ namespace App;
 // A *private* `T` property is variance-exempt — PHP doesn't type-check private
 // slots across the `extends` chain — so the backing field keeps its real type
 // (a public/protected `T` property would be rejected; see the rules below).
-class Producer<+T> {
+class Producer<out T> {
     public function __construct(private T $item) {}
     public function get(): T { return $this->item; }
 }
 
 // Contravariant: T appears in parameter positions only
-class Consumer<-T> {
+class Consumer<in T> {
     public function accept(T $x): void { /* ... */ }
 }
 
@@ -37,7 +37,7 @@ class Box<T> {
 class Fruit {}
 class Banana extends Fruit {}
 
-// With +T, this is now a valid downcast at the type-system level:
+// With out T, this is now a valid downcast at the type-system level:
 function eat(Producer<Fruit> $p): Fruit {
     return $p->get();
 }
@@ -68,20 +68,20 @@ PHP's native LSP handles the relationship from there — passing a
 `Producer<Banana>` where a `Producer<Fruit>` is required Just Works,
 including reflection and `instanceof`.
 
-For contravariant `-T`, the edge flips: `Consumer<Fruit> extends Consumer<Banana>`.
+For contravariant `in T`, the edge flips: `Consumer<Fruit> extends Consumer<Banana>`.
 
 ### Nested type-arguments (a generic as a type-argument)
 
 A covariant slot can hold another generic as its argument, and the edge
 composes through it — including when the inner argument is a generic of a
-**different but related template**. A covariant `Tuple<+A, +B>` holding a
+**different but related template**. A covariant `Tuple<out A, out B>` holding a
 covariant container relates by *its* element relationship:
 
 ```php
-interface Collection<+E> { /* … */ }
-class ImmutableList<+E> implements Collection<E> { /* … */ }
-interface Tuple<+A, +B> { /* … */ }
-class Couple<+A, +B> implements Tuple<A, B> { /* … */ }
+interface Collection<out E> { /* … */ }
+class ImmutableList<out E> implements Collection<E> { /* … */ }
+interface Tuple<out A, out B> { /* … */ }
+class Couple<out A, out B> implements Tuple<A, B> { /* … */ }
 
 // Book <: Product, ImmutableList implements Collection, all covariant ⇒
 //   Tuple<ImmutableList<Book>, Tag> ⊑ Tuple<Collection<Product>, Tag>
@@ -120,7 +120,7 @@ source set the compiler builds its hierarchy from, so the edge can be proven and
 Position rules, enforced at compile time over the collected definitions
 (`Registry::validateVariancePositions`):
 
-| Position                              | `+T` allowed? | `-T` allowed? |
+| Position                              | `out T` allowed? | `in T` allowed? |
 |---------------------------------------|---------------|---------------|
 | Method return type                    | ✅            | ❌            |
 | Method parameter                      | ❌            | ✅            |
@@ -152,11 +152,11 @@ strictly invariant.)
 
 A **by-reference parameter** (`function f(T &$x)`) is likewise invariant: the
 caller's variable is both read and written back through the reference, so it acts
-as input *and* output — neither `+T` nor `-T` is sound. This holds in method,
+as input *and* output — neither `out T` nor `in T` is sound. This holds in method,
 constructor, and nested closure/arrow signatures.
 
 A **plain (non-promoted) constructor parameter** is the exception: it may
-carry `+T` / `-T` at any variance, and xphp emits it with its **real**
+carry `out T` / `in T` at any variance, and xphp emits it with its **real**
 substituted type. A constructor parameter isn't part of the externally-visible
 variance surface (a constructor is never reached through an upcast reference —
 the same reason Kotlin exempts constructor parameters from variance checks), and
@@ -166,7 +166,7 @@ covariant immutable collection take *type-checked* construction input (see
 below). A *promoted* constructor parameter is a property, so it follows the
 property rules above: a public/protected one stays strictly invariant, while a
 **private** one is exempt and keeps its real type — which is exactly what makes
-the covariant single-value `Producer<+T>` shape at the top of this page work.
+the covariant single-value `Producer<out T>` shape at the top of this page work.
 
 ### Covariant immutable collections (typed construction)
 
@@ -174,7 +174,7 @@ A covariant container can take its element type in its constructor — the
 backbone of a read-only `List<out T>`-style collection:
 
 ```php
-class ImmutableList<+T> {
+class ImmutableList<out T> {
     private array $items;
     public function __construct(T ...$items) { $this->items = $items; }
     public function get(int $i): T { return $this->items[$i]; }
@@ -194,7 +194,7 @@ The constructor parameter keeps its real element type on every specialisation
 ImmutableList<Product>` without a PHP fatal — PHP doesn't signature-check
 `__construct` across the chain. (A variant class **cannot be declared `final`**:
 its specializations are linked by `extends` edges, which a `final` class can't
-anchor, so `final` on a `+T`/`-T` class is rejected at compile time.)
+anchor, so `final` on a `out T`/`in T` class is rejected at compile time.)
 
 > ✅ **Construction is runtime-type-checked.** Because the constructor parameter
 > keeps its real type, PHP enforces it at construction: building an
@@ -203,7 +203,7 @@ anchor, so `final` on a `+T`/`-T` class is rejected at compile time.)
 > one property shape that can't carry a real `T` is a **non-private** (public or
 > protected) stored property — PHP enforces invariant property types across the
 > edge for visible members. A **private** stored property *can* hold a real `T`
-> (see the single-value `Producer<+T>` at the top), so a covariant single-value
+> (see the single-value `Producer<out T>` at the top), so a covariant single-value
 > container needs no `mixed` backing at all. A *multi-element* collection like
 > `ImmutableList` is different: many elements live in one `private array $items`
 > field, which xphp emits without a value-type annotation — so it compiles and
@@ -219,14 +219,14 @@ signatures, the bounds compose:
 ```php
 // Container's X is invariant, so Container<T> reads as invariant
 // regardless of T's outer variance.
-class P<+T> {
+class P<out T> {
     public function f(): Container<T> {}     // REJECTED
 }
 ```
 
 `T` appears in a covariant outer position (return), but the inner
 `Container<X>` has `X` as invariant — the composed position is
-invariant, so the outer `+T` is rejected. The validator walks every
+invariant, so the outer `out T` is rejected. The validator walks every
 generic class's method signatures, bounds, and defaults to apply this
 composition.
 
@@ -235,16 +235,16 @@ A consuming method that takes a **contravariant** generic is sound on a
 covariant class:
 
 ```php
-interface Comparator<-T> { public function compare(T $a, T $b): int; }
+interface Comparator<in T> { public function compare(T $a, T $b): int; }
 
-class Box<+E> {
+class Box<out E> {
     public function pick(Comparator<E> $c): ?E { /* … */ }   // ALLOWED
 }
 ```
 
-`E` is in a contravariant slot (`Comparator<-T>`) inside a contravariant
+`E` is in a contravariant slot (`Comparator<in T>`) inside a contravariant
 parameter position — contra ∘ contra = **covariant**, which a covariant
-`+E` may occupy. (Under an upcast, a `Box<Book>` viewed as `Box<Product>`
+`out E` may occupy. (Under an upcast, a `Box<Book>` viewed as `Box<Product>`
 takes a `Comparator<Product>`, which by contravariance compares the `Book`
 elements — sound.) This is the element-consuming counterpart to the
 covariant immutable constructor: a `mixed`-free, fluent

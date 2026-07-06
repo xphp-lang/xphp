@@ -11,10 +11,10 @@ own type family in a strictly larger form**. The canonical shape is a covariant
 collection with a grouping derivation:
 
 ```
-class ImmutableList<+E> {
+class ImmutableList<out E> {
     function groupBy<L>(callable $keyOf): ImmutableMap<L, ImmutableList<E>> { … }
 }
-class ImmutableMap<K, +V> implements Map<K, V> {
+class ImmutableMap<K, out V> implements Map<K, V> {
     function values(): OrderedCollection<V> {                 // re-exposes V — here, a list
         return new ImmutableList::<V>(...);
     }

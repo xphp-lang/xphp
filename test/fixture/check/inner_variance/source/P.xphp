@@ -7,7 +7,7 @@ namespace App\Check\InnerVariance;
 // Composition violation the position check MISSES: `+T` sits in a covariant
 // return position, but through Container's INVARIANT slot the effective position
 // is invariant — so `+T` is not allowed. Only the inner-variance pass catches it.
-class P<+T>
+class P<out T>
 {
     public function f(): Container<T>
     {

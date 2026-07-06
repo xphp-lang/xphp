@@ -4,7 +4,7 @@
 
 ## Context and Problem Statement
 
-Declaration-site variance (`+T` / `-T`) lowers to real `extends` edges between
+Declaration-site variance (`out T` / `in T`) lowers to real `extends` edges between
 specializations: `Producer<Banana>` extends `Producer<Fruit>` when `Banana` extends `Fruit`
 and `T` is covariant ([ADR-0001](0001-monomorphization-over-type-erasure.md)). A variant
 class therefore can't carry its type parameter in a position PHP would reject across that
@@ -15,7 +15,7 @@ mutable, `readonly`, or promoted — was rejected at compile time, justified by 
 invariant property types across an `extends` chain." So the natural covariant shape
 
 ```php
-class Producer<+T> {
+class Producer<out T> {
     public function __construct(private T $item) {}
     public function get(): T { return $this->item; }
 }

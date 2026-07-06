@@ -51,9 +51,9 @@ the class hierarchy already uses. That is a self-contained feature, not a tweak 
     *original* name and emitted under the *alias*:
 
     ```php
-    trait SearchOps<+E> { public function locate<U : E>(U $value): int { /* scan $this->items */ } }
-    interface OrderedCollection<+E> extends Collection<E> { public function indexOf<U : E>(U $value): int; }
-    class ListColl<+E> extends LinkedNode<E> implements OrderedCollection<E> {
+    trait SearchOps<out E> { public function locate<U : E>(U $value): int { /* scan $this->items */ } }
+    interface OrderedCollection<out E> extends Collection<E> { public function indexOf<U : E>(U $value): int; }
+    class ListColl<out E> extends LinkedNode<E> implements OrderedCollection<E> {
         use SearchOps<E> { locate as indexOf; }   // the alias is what satisfies indexOf
     }
     ```
@@ -67,9 +67,9 @@ the class hierarchy already uses. That is a self-contained feature, not a tweak 
     algorithm (a silent correctness bug) or a duplicate:
 
     ```php
-    trait LinearSearch<+E> { public function contains<U : E>(U $v): bool { /* O(n) scan */ } }
-    trait HashSearch<+E>   { public function contains<U : E>(U $v): bool { /* hash lookup */ } }
-    class FastColl<+E> extends RingBuffer<E> implements Collection<E> {
+    trait LinearSearch<out E> { public function contains<U : E>(U $v): bool { /* O(n) scan */ } }
+    trait HashSearch<out E>   { public function contains<U : E>(U $v): bool { /* hash lookup */ } }
+    class FastColl<out E> extends RingBuffer<E> implements Collection<E> {
         use LinearSearch<E>, HashSearch<E> { HashSearch::contains insteadof LinearSearch; }
     }
     ```

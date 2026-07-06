@@ -91,7 +91,7 @@ ref-ness is preserved end-to-end.
   generic function at file scope instead. See
   [caveats](../caveats.md#static-closures-not-supported).
 
-- > ⚠️ **Variance markers not allowed** — `+T` / `-T` are rejected on
+- > ⚠️ **Variance markers not allowed** — `out T` / `in T` are rejected on
   anonymous templates. They have no stable identity for an `extends`
   chain. See [caveats](../caveats.md#variance-markers-are-class-level-only).
 

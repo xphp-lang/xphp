@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 namespace App;
-interface Tuple<+A, +B>
+interface Tuple<out A, out B>
 {
     public function first(): A;
     public function second(): B;

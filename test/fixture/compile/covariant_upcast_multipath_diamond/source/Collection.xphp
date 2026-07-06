@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 namespace App;
-interface Collection<+E>
+interface Collection<out E>
 {
     public function contains<S : E>(S $element): bool;
 }

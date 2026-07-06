@@ -7,7 +7,7 @@ namespace App\ContravariantConstructor;
 // Contravariant constructor param: keeps its real type too. The edge flips —
 // `Consumer<Fruit>` extends `Consumer<Banana>` — and the chain still loads
 // because PHP exempts `__construct` from LSP.
-class Consumer<-T>
+class Consumer<in T>
 {
     private array $items;
 

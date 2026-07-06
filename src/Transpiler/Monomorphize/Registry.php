@@ -609,7 +609,7 @@ final class Registry
         Variance $variance,
         string $typeDisplay,
     ): string {
-        $marker = $variance === Variance::Covariant ? '+' : '-';
+        $marker = $variance === Variance::Covariant ? 'out ' : 'in ';
         return sprintf(
             "Variance edge cannot be proven while instantiating %s.\n"
             . "  type parameter %s%s is %s, but %s is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),\n"

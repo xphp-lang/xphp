@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 namespace App;
-abstract class AbstractColl<+E> implements Collection<E>, Lookup<E>
+abstract class AbstractColl<out E> implements Collection<E>, Lookup<E>
 {
     /** @var list<mixed> */
     protected array $items;

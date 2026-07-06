@@ -192,7 +192,7 @@ final readonly class TypeHierarchy
      *
      * Given a receiver of static type `$subFqn<$subArgs>` and a `$superFqn` reachable through its
      * `extends`/`implements` clauses, returns the type arguments that `$superFqn`'s OWN parameters
-     * are bound to as witnessed from that receiver. For `class ArrayList<+E> implements Collection<E>`,
+     * are bound to as witnessed from that receiver. For `class ArrayList<out E> implements Collection<E>`,
      * `resolveInheritedArgs('App\ArrayList', [Product], 'App\Collection')` yields `[Product]`. At each
      * hop the current class's parameters are substituted with the current arguments into the supertype
      * clause's arguments (so nested clauses like `implements Foo<Bar<E>>` ground throughout).

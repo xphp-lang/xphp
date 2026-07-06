@@ -12,7 +12,7 @@ namespace App\VarianceWithDefaultsAndBounds\Containers;
 // Properties are bound-typed (Stringable) because PHP enforces invariant
 // property types, so storing +K directly would PHP-fatal at autoload when
 // the variance edge lands.
-class Cache<+K : \Stringable & \Countable, V = mixed>
+class Cache<out K : \Stringable & \Countable, V = mixed>
 {
     private ?\Stringable $key = null;
     public V $value;

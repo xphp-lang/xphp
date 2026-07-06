@@ -115,7 +115,7 @@ final readonly class Compiler
         $registry->validateDefaultsAgainstBounds();
         // Inner-template variance composition: every template's variance
         // markers are known by now, so cases the parse-time validator
-        // couldn't catch (e.g. `class P<+T> { f(): Container<T> }` where
+        // couldn't catch (e.g. `class P<out T> { f(): Container<T> }` where
         // Container's slot is invariant) fail here BEFORE instantiations
         // amplify the error.
         $registry->validateInnerVariance();

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /**
  * Runtime verify for `generic_covariant_private_property`:
- * a covariant container `Box<+T>` that stores its element in a PRIVATE promoted
+ * a covariant container `Box<out T>` that stores its element in a PRIVATE promoted
  * property of type `T`. The variance edge `Box<Banana> extends Box<Fruit>`
  * autoloads with no PHP fatal even though each specialization declares a
  * divergent-typed private slot (PHP doesn't type-check private property types

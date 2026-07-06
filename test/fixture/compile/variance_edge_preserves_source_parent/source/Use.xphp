@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App;
 
 // Two covariant specializations of a class that has a SOURCE parent:
-// `ListColl<+E> extends Base<E>`. Because `ListColl<Banana> <: ListColl<Fruit>` (covariant E,
+// `ListColl<out E> extends Base<E>`. Because `ListColl<Banana> <: ListColl<Fruit>` (covariant E,
 // Banana extends Fruit), the variance edge emitter would, if it overwrote the source `extends`,
 // replace `ListColl<Banana> extends Base<Banana>` with `extends ListColl<Fruit>` — severing the
 // inherited `contains_<Banana>` member (its body lives on Base<Banana>). The direct call below

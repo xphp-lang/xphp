@@ -21,7 +21,7 @@ final class EnclosingBoundErasureTest extends TestCase
     <?php
     declare(strict_types=1);
     namespace App;
-    class Box<+E> {
+    class Box<out E> {
         public function contains<U : E>(U $value): bool { return true; }
         public function probe<U : E>(U $value): bool { return $this->contains::<U>($value); }
         public function pair<U : E, V : E>(U $a, V $b): bool { return true; }

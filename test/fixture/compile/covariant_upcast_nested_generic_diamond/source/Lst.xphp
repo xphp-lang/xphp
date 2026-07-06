@@ -1,4 +1,4 @@
 <?php
 declare(strict_types=1);
 namespace App;
-class Lst<+E> extends AbstractColl<E> implements Collection<E> {}
+class Lst<out E> extends AbstractColl<E> implements Collection<E> {}

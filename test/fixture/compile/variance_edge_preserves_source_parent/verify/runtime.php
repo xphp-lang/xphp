@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Runtime verify for `variance_edge_preserves_source_parent`.
  *
- * `ListColl<+E> extends Base<E>` is instantiated at two covariant args (Fruit, Banana). The variance
+ * `ListColl<out E> extends Base<E>` is instantiated at two covariant args (Fruit, Banana). The variance
  * edge emitter must NOT overwrite each specialization's source `extends Base<E>` with the same-template
  * covariant super (`ListColl<Banana> extends ListColl<Fruit>`): single inheritance allows one parent,
  * and the source parent carries the inherited `contains_<E>` member. Overwriting would drop

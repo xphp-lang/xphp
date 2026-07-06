@@ -128,16 +128,16 @@ id::<int>(42);                                    // works
 ### ❌ What doesn't work
 
 ```php
-function process<+T>(T $x): T { /* ... */ }     // free function
+function process<out T>(T $x): T { /* ... */ }     // free function
 class Box<T> {
-    public function map<+U>(callable $f): Box<U> { /* ... */ }     // method
+    public function map<out U>(callable $f): Box<U> { /* ... */ }     // method
 }
-$producer = function<+T>(): T { /* ... */ };     // closure
-$arrow    = fn<+T>(T $x): T => $x;               // arrow
+$producer = function<out T>(): T { /* ... */ };     // closure
+$arrow    = fn<out T>(T $x): T => $x;               // arrow
 ```
 
 ```
-Variance markers `+T` / `-T` are not supported on methods, functions,
+Variance markers `out T` / `in T` are not supported on methods, functions,
 closures, or arrow functions — variance is a class-level-only feature by
 design: a function or closure specialization has no stable class identity
 to anchor a subtype `extends` edge to. Move the generic to a class-level
@@ -160,7 +160,7 @@ parameters stay invariant.
 Put the template on a named class and use its method:
 
 ```php
-class Producer<+T> {
+class Producer<out T> {
     public function __invoke(): T { /* ... */ }
 }
 ```
@@ -343,7 +343,7 @@ trait HasItem<T> {
     public function set(T $item): void { /* ... */ }
 }
 
-class Container<+T> {     // covariant
+class Container<out T> {     // covariant
     use HasItem<T>;
     // The `set(T $item)` from the trait places T in a contravariant
     // position. The validator should reject -- but it doesn't, because
@@ -376,12 +376,12 @@ can see it.
 > container no longer hits this — store the element in a `private T` property (PHP
 > doesn't type-check private slots across the `extends` edge), and the emitted
 > `get(): T` over a real-typed `private T` field is PHPStan-clean at every level.
-> See the [`Producer<+T>`](syntax/variance.md#example) example.
+> See the [`Producer<out T>`](syntax/variance.md#example) example.
 
 ### ❌ What gets flagged
 
 ```php
-class ImmutableList<+T> {
+class ImmutableList<out T> {
     private array $items;                       // many elements → `array` backing, not `T`
     public function __construct(T ...$items) { $this->items = $items; }
     public function get(int $i): T { return $this->items[$i]; }
@@ -640,12 +640,12 @@ A derivation whose result type re-wraps the receiver's own type family in a
 *growing* form does not compile once that result is instantiated:
 
 ```php
-class ImmutableList<+E> {
+class ImmutableList<out E> {
     // Seeds a map of sub-lists: the result type reintroduces the receiver's own
     // family (ImmutableList) one level deeper.
     public function groupBy<L>(callable $keyOf): ImmutableMap<L, ImmutableList<E>> { /* ... */ }
 }
-class ImmutableMap<K, +V> {
+class ImmutableMap<K, out V> {
     public function values(): OrderedCollection<V> { /* ... */ }   // re-exposes the value as a list
 }
 

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App;
 
-// A concrete Comparator<Product>. By contravariance (Comparator<-T>), a Comparator<Product> is also a
+// A concrete Comparator<Product>. By contravariance (Comparator<in T>), a Comparator<Product> is also a
 // Comparator<Book>, so it can compare the Book elements of a Box<Book> upcast to Box<Product>.
 class ById implements Comparator<Product>
 {

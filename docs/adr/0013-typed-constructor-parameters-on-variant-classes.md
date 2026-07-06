@@ -6,11 +6,11 @@
 
 ## Context and Problem Statement
 
-Declaration-site variance (`+T` / `-T`) lowers to real `extends` edges between
+Declaration-site variance (`out T` / `in T`) lowers to real `extends` edges between
 specializations: `Producer<Banana>` actually extends `Producer<Fruit>` when `Banana`
 extends `Fruit` and `T` is covariant. A covariant immutable collection — Kotlin's
 `List<out T>`, the backbone of an immutability-first collections library — wants to take
-its element type as **construction input**: `class ImmutableList<+T> { public function
+its element type as **construction input**: `class ImmutableList<out T> { public function
 __construct(T ...$items) }`. The question is whether a variant class can accept its type
 parameter in a constructor across the variance `extends` edge, and with what type.
 
@@ -41,7 +41,7 @@ error. (Verified empirically, both directions.) So no erasure is needed.
 
 ## Decision Outcome
 
-Chosen: **permit a non-promoted constructor parameter to carry `+T` / `-T`, emitted with
+Chosen: **permit a non-promoted constructor parameter to carry `out T` / `in T`, emitted with
 its real substituted type.** A constructor parameter is *variance-position-exempt* — a
 constructor is never reached through an upcast reference, so it isn't part of the
 externally-visible variance surface (the same reason Kotlin allows `out T` in a
@@ -54,7 +54,7 @@ non-`Banana` throws a `TypeError`.
 A corollary about `final`: a `final` class can't be a parent in an `extends` edge, so a
 variant class cannot be `final`. Rather than silently strip `final` from the generated
 specializations (which would make `ReflectionClass::isFinal()` lie about them), xphp
-**rejects** `final` on a `+T`/`-T` class at compile time.
+**rejects** `final` on a `out T`/`in T` class at compile time.
 
 The relaxation is narrow. **Visible (public/protected) properties stay strictly
 invariant** — mutable, `readonly`, and public/protected *promoted* constructor parameters
@@ -87,7 +87,7 @@ class at any variance (a public/protected promoted one stays invariant; a privat
 one is exempt); `InnerVarianceValidator` skips a bare variance-marked constructor parameter
 (`isExemptVariantConstructorParam`) and still rejects the non-bare shapes. [`Specializer::specialize`](../../src/Transpiler/Monomorphize/Specializer.php)
 substitutes the real type into the constructor parameter — no erasure step. Tests compile a
-covariant `ImmutableList<+T>` and assert each specialization's constructor keeps its real
+covariant `ImmutableList<out T>` and assert each specialization's constructor keeps its real
 element type, that the chain autoloads with **no** fatal, that an `ImmutableList<Banana>`
 **throws** on a non-`Banana` element, and that the contravariant constructor chain
 autoloads and constructs equally cleanly.
