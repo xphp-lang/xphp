@@ -65,6 +65,20 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'target references a type parameter ⇒ gradual here' => [
             '<?php class Box<T> { public function m(): Closure(T $x): T { return fn(string $x): int => 0; } }',
         ];
+        yield 'S-A DNF group parameter: one param, gradual — matching arity accepted' => [
+            // `(A&B)|C $x` is ONE parameter; a mis-scan that split the group into
+            // extra params false-rejected this correct literal on arity.
+            '<?php function m(): Closure((A&B)|C $x): int { return fn($x): int => 0; }',
+        ];
+        yield 'S-A DNF group return: gradual leaf accepts any return' => [
+            '<?php function m(): Closure(): (A&B)|C { return fn(): int => 0; }',
+        ];
+        yield 'S-A trailing DNF group return: not truncated to its first member' => [
+            // A scan stopping mid-type recorded `return = A` and provably
+            // rejected a declared class that is no subtype of A; the full
+            // `A|(B&C)` leaf is gradual and must accept.
+            '<?php class A {} class Beta {} function m(): Closure(): A|(B&C) { return fn(): Beta => new Beta(); }',
+        ];
         // No `Closure(...)` return target ⇒ no site, even though a literal is
         // returned. A non-closure return type must not pair with the literal.
         yield 'return of a literal from a non-closure return type' => [
@@ -141,6 +155,14 @@ final class ClosureConformanceValidatorTest extends TestCase
             "<?php function m(): Closure(int|string \$x): void {\n    return fn(int \$x): void => null;\n}",
             2,
             'parameter 1: int is not wider than int|string',
+        ];
+        yield 'S-A DNF group parameter: wrong arity still rejected' => [
+            // The DNF leaf is gradual but the ARITY is not: the one-param target
+            // must reject a two-param literal (the group mis-scan used to record
+            // a phantom second parameter, false-accepting exactly this shape).
+            "<?php function m(): Closure((A&B)|C \$x): int {\n    return fn(int \$a, int \$b): int => 0;\n}",
+            2,
+            'requires 2 parameter(s) but the target guarantees only 1',
         ];
     }
 

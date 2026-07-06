@@ -763,6 +763,10 @@ final class XphpSourceParser
                 }
             }
             if ($closeIdx === null) {
+                // @infection-ignore-all ReturnRemoval — removing this early return
+                // sends `null + 1` into the skipWs below; the token near the file
+                // start it lands on is never a `:`, so the function still returns
+                // the null $closeIdx — equivalent, just accidental.
                 return null;
             }
         } else {
@@ -778,16 +782,16 @@ final class XphpSourceParser
 
     /**
      * Index of the last token of a type expression starting at `$idx` — a leaf
-     * (scalar / class / `Name<…>` generic / nested `Closure(…)` / nullable) plus
-     * any `|` / `&` union-or-intersection continuation. Stops before a top-level
-     * `$var` / `{` / `;` / `,` / `)` / `=`. `null` if nothing type-shaped is there.
+     * (scalar / class / `Name<…>` generic / nested `Closure(…)` / nullable /
+     * parenthesised DNF group) plus any `|` / `&` union-or-intersection
+     * continuation. Stops before a top-level `$var` / `{` / `;` / `,` / `)` /
+     * `=`. `null` if nothing type-shaped is there.
      *
-     * @infection-ignore-all — flat token walk. The span it returns is pinned
-     * behaviorally (a wrong end leaves invalid residue that fails to re-parse, and the
-     * generic / union / intersection / nested-closure tests assert the exact shape);
-     * the residual mutants are walk-boundary guards and whitespace-skip offsets plus a
-     * sub-expression negation of the continuation predicate that is equivalent for the
-     * only members the caller can pass here (a name, a `?`-name, or `static`).
+     * A `(` is a DNF group only where a LEAF may start (scan start, or right
+     * after a `|` / `&` continuation), and only when its interior is itself a
+     * valid type expression ending exactly at the matching `)` — an
+     * expression-context paren (`Closure(int) : ($flag ? …)`) fails that
+     * interior check and terminates the scan as before.
      *
      * @param list<PhpToken> $tokens
      */
@@ -796,6 +800,7 @@ final class XphpSourceParser
         $n = count($tokens);
         $last = null;
         $i = $idx;
+        $expectLeaf = true;
         while ($i < $n) {
             $t = $tokens[$i];
             if ($t->id === T_WHITESPACE || $t->id === T_COMMENT || $t->id === T_DOC_COMMENT) {
@@ -807,8 +812,19 @@ final class XphpSourceParser
                 $i++;
                 continue;
             }
+            if ($t->text === '(' && $expectLeaf) {
+                $close = self::scanGroupEnd($tokens, $i);
+                if ($close === null) {
+                    break;
+                }
+                $last = $close;
+                $i = $close + 1;
+                $expectLeaf = false;
+                continue;
+            }
             if (self::isSigTypeToken($t)) {
                 $last = $i;
+                $expectLeaf = false;
                 $la = self::skipWs($tokens, $i + 1);
                 if ($la < $n && ($tokens[$la]->text === '(' || self::isCastToken($tokens[$la])) && ltrim($t->text, '\\') === 'Closure') {
                     $inner = self::findClosureSigEnd($tokens, $la);
@@ -816,6 +832,12 @@ final class XphpSourceParser
                         return null;
                     }
                     $last = $inner;
+                    // @infection-ignore-all DecrementInteger Plus — re-entering the
+                    // walk AT (or one before) the consumed signature's last token only
+                    // revisits tokens that re-converge on the same `$last` (the walk is
+                    // confluent after a consumed leaf). Skipping a token forward (+2)
+                    // is NOT equivalent and is pinned by the group-with-nested-
+                    // signature test.
                     $i = $inner + 1;
                 } elseif ($la < $n && $tokens[$la]->text === '<') {
                     $inner = self::findAngleEnd($tokens, $la);
@@ -831,20 +853,50 @@ final class XphpSourceParser
             }
             if ($t->text === '|' || $t->text === '&') {
                 // `&` before a `$var` / `...` / `)` is a by-ref marker (belongs to
-                // the parameter, not the type) — stop. `&`/`|` before a Name is an
-                // intersection / union continuation.
+                // the parameter, not the type) — stop. `&`/`|` before a Name, `?`,
+                // or a `(` group is an intersection / union continuation.
                 $nx = self::skipWs($tokens, $i + 1);
+                // @infection-ignore-all LogicalOrAllSubExprNegation — negating the
+                // member predicates only moves WHERE the walk breaks (at the
+                // separator vs one non-type token later); `$last` is set only by
+                // leaf branches, so the returned span is identical for every input.
                 $continues = $nx < $n
-                    && (self::isSigTypeToken($tokens[$nx]) || $tokens[$nx]->text === '?');
+                    && (self::isSigTypeToken($tokens[$nx])
+                        || $tokens[$nx]->text === '?'
+                        || $tokens[$nx]->text === '(');
                 if (!$continues) {
                     break;
                 }
                 $i++;
+                $expectLeaf = true;
                 continue;
             }
             break;
         }
         return $last;
+    }
+
+    /**
+     * Index of the matching `)` for a parenthesised DNF group whose `(` sits at
+     * `$openIdx`, or `null` when the interior is not a complete type expression
+     * ending exactly at that `)`. The interior reuses the full leaf machinery
+     * (names, generics via `findAngleEnd`, nested `Closure(…)` recursion, nested
+     * groups), so an expression paren (`($flag ? a() : b())`, `($x)`) is rejected
+     * and never absorbed into a type span.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function scanGroupEnd(array $tokens, int $openIdx): ?int
+    {
+        $inner = self::scanTypeExprEnd($tokens, self::skipWs($tokens, $openIdx + 1));
+        if ($inner === null) {
+            // @infection-ignore-all ReturnRemoval — removing the early return sends
+            // `null + 1` into skipWs, whose result (a token near the file start) is
+            // never the group's `)`, so the ternary below still yields null.
+            return null;
+        }
+        $close = self::skipWs($tokens, $inner + 1);
+        return $close < count($tokens) && $tokens[$close]->text === ')' ? $close : null;
     }
 
     /**
@@ -922,6 +974,10 @@ final class XphpSourceParser
     /**
      * Skip whitespace/comments walking backwards from `$i`; returns the index of
      * the first significant token at or before `$i`, or -1.
+     *
+     * @infection-ignore-all GreaterThanOrEqualTo — `>= 0` vs `> 0` differs only in
+     * whether token 0 is tested for whitespace; token 0 is always the open tag
+     * (never T_WHITESPACE), so both stop at 0 with the same result.
      *
      * @param list<PhpToken> $tokens
      */

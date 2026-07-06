@@ -32,6 +32,24 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testDnfGroupedSignaturesCompileEraseAndRun(): void
+    {
+        // DNF groups (`(A&B)|C`) in a signature's parameter and return: the
+        // group scans as one gradual leaf, the arity stays correct (the factory
+        // literal is accepted, not arity-false-rejected), the signature fully
+        // erases, and the compiled output executes.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_conformance_dnf_runtime/source',
+            'closure-conformance-dnf',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_conformance_dnf_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testExceptionFactoryAgainstBuiltinThrowableTargetCompilesAndRuns(): void
     {
         // Regression: a user subclass of the built-in \Exception returned against a

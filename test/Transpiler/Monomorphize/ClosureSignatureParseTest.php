@@ -462,6 +462,262 @@ final class ClosureSignatureParseTest extends TestCase
     }
 
     // ===================================================================
+    // DNF groups — consumed as ONE gradual leaf, never mis-scanned
+    // ===================================================================
+
+    public function testLeadingDnfGroupReturnErasesAndStaysRaw(): void
+    {
+        // `(A&B)|C` in the signature's return: the group is consumed as one
+        // gradual leaf and the whole signature erases (this shape used to stop
+        // the type scanner cold — the signature was never recognized and the
+        // raw superset syntax reached PHP as a parse error).
+        $source = '<?php function g(): Closure(): (A&B)|C {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertCount(0, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('(A&B)|C', $sig->return->raw);
+        self::assertStringNotContainsString('(A&B)', self::strip($source));
+    }
+
+    public function testTrailingDnfGroupReturnErasesFullyNotMidType(): void
+    {
+        // `A|(B&C)` in the return: the scan must consume PAST the `|(` — a scan
+        // that stops mid-type erases only through `A` and emits the valid-but-
+        // wrong hint `\Closure    |(B&C)` with a truncated recorded return.
+        $source = "<?php function g(): Closure(): A|(B&C) {\n}";
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('A|(B&C)', $sig->return->raw);
+        self::assertStringNotContainsString('|(B&C)', self::strip($source));
+    }
+
+    public function testLeadingDnfGroupParameterIsOneParamAndKeepsReturn(): void
+    {
+        // `(A&B)|C $x` is ONE parameter (a single-token `(` leaf used to split
+        // it into two, throwing the arity off) and the `: int` return — which
+        // sat past the mis-scanned span — must survive.
+        $sig = self::firstSig('<?php function f(Closure((A&B)|C $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(A&B)|C', $sig->params[0]->type->raw);
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testTrailingDnfGroupParameterIsOneParamAndKeepsReturn(): void
+    {
+        // `A|(B&C) $x` — the trailing-group order mis-parsed as FOUR params.
+        $sig = self::firstSig('<?php function f(Closure(A|(B&C) $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('A|(B&C)', $sig->params[0]->type->raw);
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testDnfGroupWithGenericAndNestedSignatureMember(): void
+    {
+        // A group interior reuses the full leaf machinery: a generic member
+        // whose argument is itself a nested signature (with a cast-token param
+        // list) must all land inside the one raw leaf.
+        $sig = self::firstSig('<?php function f(Closure((A&B<Closure(int): C>)|D $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(A&B<Closure(int): C>)|D', $sig->params[0]->type->raw);
+    }
+
+    public function testNullableDnfGroupReturnStaysRawGradual(): void
+    {
+        // `?(A&B)` is not valid PHP, but signature types are erased before PHP
+        // sees them — the scanner keeps it one gradual raw leaf.
+        $sig = self::firstSig('<?php function f(Closure(): ?(A&B) $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('?(A&B)', $sig->return->raw);
+    }
+
+    public function testDnfGroupBesideFlatUnionParameter(): void
+    {
+        // A DNF leaf must not poison its neighbours: the flat union before it
+        // stays structured and the return stays typed.
+        $sig = self::firstSig('<?php function f(Closure(A|B $x, (C&D)|E $y): F $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['A', 'B'], self::sigMemberNames($sig->params[0]->type));
+        self::assertInstanceOf(SigRaw::class, $sig->params[1]->type);
+        self::assertSame('(C&D)|E', $sig->params[1]->type->raw);
+        self::assertSame('F', self::refName($sig->return));
+    }
+
+    public function testPlainPhpDnfHintOutsideSignatureIsUntouched(): void
+    {
+        // Ordinary PHP DNF hints don't involve the signature scanner at all.
+        $source = '<?php function f((A&B)|C $x) {}';
+
+        self::assertSame($source, self::strip($source));
+    }
+
+    public function testExpressionParenAfterTernaryColonIsNotAbsorbed(): void
+    {
+        // `($x)` after a ternary `:` is an expression paren — its interior is a
+        // variable, not a type, so the group-interior validation rejects it and
+        // the call to a user symbol named `Closure` stays untouched.
+        $source = '<?php $r = $a ? Closure(Foo::class) : ($x);';
+
+        self::assertNull(self::firstSig($source));
+        self::assertSame($source, self::strip($source));
+    }
+
+    public function testGroupedUseClauseIsUntouched(): void
+    {
+        // A closure `use (...)` group is nowhere near a signature slot; pin it
+        // against any future scanner change.
+        $source = '<?php $f = function () use ($a, &$b) { return $a; };';
+
+        self::assertSame($source, self::strip($source));
+    }
+
+    public function testUnionOfTwoDnfGroupsIsOneLeaf(): void
+    {
+        // `(A&B)|(C&D)` — the continuation after the FIRST group must consume
+        // the `|` and the second group into the same leaf; a walk that skips
+        // past the separator splits the leaf and corrupts the arity.
+        $sig = self::firstSig('<?php function f(Closure((A&B)|(C&D) $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(A&B)|(C&D)', $sig->params[0]->type->raw);
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testGroupWithNestedSignatureThenUnionMember(): void
+    {
+        // The walk must resume EXACTLY one token after the nested signature's
+        // end so the following `|A` continuation and the group's `)` are seen.
+        $sig = self::firstSig('<?php function f(Closure((Closure(int): int)|A $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(Closure(int): int)|A', $sig->params[0]->type->raw);
+    }
+
+    public function testGroupWithGenericMemberThenIntersectionMember(): void
+    {
+        // Same resume-offset pin for the ANGLE branch: after `A<T>` the `&B`
+        // continuation and the `)` must still be reached.
+        $sig = self::firstSig('<?php function f(Closure((A<T>&B)|C $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(A<T>&B)|C', $sig->params[0]->type->raw);
+    }
+
+    public function testSingleNameGroupIsConsumedFromItsFirstToken(): void
+    {
+        // `(A)|B` — a one-token interior; an interior scan that starts one
+        // token late sees only the `)` and wrongly rejects the group.
+        $sig = self::firstSig('<?php function f(Closure((A)|B $x): int $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(A)|B', $sig->params[0]->type->raw);
+    }
+
+    public function testNestedFullyQualifiedClosureSignatureInReturn(): void
+    {
+        // The nested-signature branch must recognize `\Closure` (leading `\`)
+        // — matching on the bare text would leave the nested tail unconsumed.
+        $sig = self::firstSig('<?php function f(): Closure(): \Closure(int): int {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigClosure::class, $sig->return);
+        self::assertSame('int', self::refName($sig->return->signature->return));
+    }
+
+    public function testAdjacentGroupsAreNotSilentlySwallowed(): void
+    {
+        // `(A&B)(C&D)` is not a type — the scan ends after the first group and
+        // the junk tail must survive as loud residue, never be absorbed.
+        $stripped = self::strip('<?php function f(): Closure(): (A&B)(C&D) {}');
+
+        self::assertStringContainsString('\\Closure', $stripped);
+        self::assertStringContainsString('(C&D)', $stripped);
+    }
+
+    public function testBodyOpeningBraceEndsTheReturnScan(): void
+    {
+        // A body whose first statement is a bare function call (`strlen(...)`)
+        // must never be absorbed into the return-type span: the `{` terminates
+        // the scan unconditionally.
+        $stripped = self::strip("<?php function f(): Closure(): int { strlen('x'); }");
+
+        self::assertStringContainsString("{ strlen('x'); }", $stripped);
+    }
+
+    public function testGroupInteriorMustReachTheClosingParen(): void
+    {
+        // `(A|B, C)` — the interior scan stops at the `,`, so the group is NOT
+        // a type leaf; the pre-existing raw fallback (a one-token `(` leaf and
+        // whatever follows) is preserved rather than a group ending mid-way.
+        $sig = self::firstSig('<?php function f(Closure((A|B, C) $x): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(3, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('(', $sig->params[0]->type->raw);
+    }
+
+    public function testBareClosureMemberInSignatureUnionReturn(): void
+    {
+        // A bare `Closure` (no paren) as a union member inside a signature's
+        // return: the nested-signature branch must require the name AND the
+        // following `(` together — keying on either alone sends the bare name
+        // into the nested scan, which fails and kills the whole recognition.
+        $sig = self::firstSig('<?php function f(): Closure(): Closure|null {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['Closure', 'null'], self::sigMemberNames($sig->return));
+    }
+
+    public function testTruncatedNestedSignatureFailsRecognitionCleanly(): void
+    {
+        // An unbalanced NESTED signature aborts recognition of the outer one —
+        // the whole file stays untouched. A scan that survives the nested
+        // failure restarts from the file start (where the leading bare name
+        // `A` would satisfy it) and corrupts the span.
+        $source = '<?php A::class; function f(): Closure(): Closure(int';
+
+        self::assertSame($source, self::strip($source));
+    }
+
+    public function testTruncatedSourceAtEofDoesNotFatal(): void
+    {
+        // A file ending mid-signature must degrade cleanly (the walk-boundary
+        // guards), never read past the token array. The return-slot variant
+        // reaches the group scan with its interior running off the file end.
+        self::assertIsString(self::strip('<?php function f(): Closure(): A|'));
+        self::assertIsString(self::strip('<?php function f(): Closure(): (A'));
+        $truncatedGroup = '<?php function f(Closure((A';
+        self::assertSame($truncatedGroup, self::strip($truncatedGroup));
+    }
+
+    // ===================================================================
     // Structural rejects
     // ===================================================================
 

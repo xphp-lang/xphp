@@ -1,0 +1,54 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureConformanceDnfRuntime;
+
+// DNF groups inside `Closure(...)` signatures: `(A&B)|C` leaves are gradual
+// (never checked for member variance) but the signature itself must scan,
+// erase to a bare `\Closure`, and keep its arity/return intact. Every literal
+// here conforms; the emitted PHP executes.
+interface Tagged
+{
+    public function tag(): string;
+}
+
+interface Counted
+{
+    public function count(): int;
+}
+
+final class Both implements Tagged, Counted
+{
+    public function tag(): string
+    {
+        return 'both';
+    }
+
+    public function count(): int
+    {
+        return 21;
+    }
+}
+
+final class Plain
+{
+}
+
+// S-A, leading DNF group in a PARAMETER: the grouped intersection-or-Plain
+// hint is ONE parameter — the factory's literal matches that arity.
+function makeCounter(): Closure((Tagged&Counted)|Plain $x): int
+{
+    return fn($x): int => $x instanceof Counted ? $x->count() * 2 : 0;
+}
+
+// S-A, trailing DNF group in the RETURN: the whole grouped union erases —
+// no residue may survive into the emitted return hint.
+function makeBoth(): Closure(): Plain|(Tagged&Counted)
+{
+    return fn(): Both => new Both();
+}
+
+$count = (makeCounter())(new Both());
+$made = (makeBoth())();
+$tag = $made->tag();
