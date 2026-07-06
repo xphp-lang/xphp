@@ -203,10 +203,11 @@ final readonly class ClosureSignatureConformance
         // and there is no inhabitation check here — decomposing would false-reject.
         // Kept gradual; the inhabited-intersection reject is a tracked follow-up.
         // @infection-ignore-all — equivalent: a SigIntersection sub yields false down
-        // EVERY downstream path anyway. A leaf/closure super reaches the defensive
-        // non-SigTypeRef guard below (false); a compound super's arms recurse on this
+        // EVERY downstream path anyway. A leaf super reaches the defensive non-SigTypeRef
+        // guard below (false); a closure super resolves false at the closure-vs-leaf branch
+        // (the intersection sub is no SigClosure); a compound super's arms recurse on this
         // same SigIntersection sub against each leaf member, and each of those recursions
-        // bottoms out at that same guard (false), so the union AND / intersection OR both
+        // bottoms out at one of those false results, so the union AND / intersection OR both
         // resolve to false too. The explicit early return only states the rule directly.
         // The accept BEHAVIOUR is pinned by the sub-intersection accept tests.
         if ($sub instanceof SigIntersection) {

@@ -117,15 +117,19 @@ As everywhere, an unprovable member keeps the whole leaf gradual: a union or
 intersection that mentions an unresolved class, a type parameter, or a
 pseudo-type is accepted rather than falsely rejected.
 
-Two shapes stay gradual (accepted) for now: a **DNF** type — a parenthesised
-mix such as `Closure((A&B)|C $x): int` — is carried through without being
-variance-checked, and an intersection used as an incoming (parameter) type is
-too, because an intersection of unrelated types is uninhabited, so rejecting it
+An intersection used as an incoming (parameter) type also stays gradual
+(accepted): an intersection of unrelated types is uninhabited, so rejecting it
 would be unsound.
 
-> **Known limitation.** A parenthesised DNF in a signature's **return** position
-> (`Closure(): (A&B)|C`) is not yet erased and currently fails to compile — the
-> leading `(` stops the type scanner. Write the return without parentheses, or
-> annotate the slot as a bare `Closure` until this is supported. A DNF in a
-> *parameter* position erases and runs normally.
-```
+> **Known limitation — parenthesised DNF types are not fully supported.** A
+> **DNF** signature type (a parenthesised mix such as `(A&B)|C`) is not yet
+> parsed as a variance-checked type; avoid it inside a `Closure(...)` for now:
+>
+> - in a **return** position (`Closure(): (A&B)|C`) it is not erased and fails
+>   to compile — the leading `(` stops the type scanner;
+> - in a **parameter** position at a checked factory site the leading `(` is
+>   mis-read, throwing the signature's arity off, which can wrongly reject an
+>   otherwise conforming literal.
+>
+> Write the type without the parentheses, or annotate the slot as a bare
+> `Closure`, until DNF signature types are supported.
