@@ -199,6 +199,13 @@ _In progress on this branch — content still accumulating; date set at tag time
   three parameters — wrongly rejecting a conforming factory literal on arity.
   The sugar now lowers to `array` inside signatures, the same lowering it gets
   everywhere else, and is checked as a gradual `array` leaf.
+- **Relative `namespace\Foo` types resolve correctly everywhere names are read
+  from tokens.** A relative reference bound to the wrong name (`App\namespace\Foo`,
+  or a colliding `use` alias) wherever the resolver worked on raw token text —
+  most visibly a `Closure(): namespace\D` target type, which silently skipped
+  conformance checking. Relative names now bind to the current namespace, exactly
+  as PHP does, for signature targets, bounds, defaults, and generic arguments
+  alike; only the exact `namespace\` keyword segment is affected.
 - **Fully-qualified types in closure literals participate in conformance.** A
   factory literal spelling its type fully qualified (`fn(): \App\Fruit`) had the
   leading `\` dropped during extraction, mis-resolving the name relative to the
