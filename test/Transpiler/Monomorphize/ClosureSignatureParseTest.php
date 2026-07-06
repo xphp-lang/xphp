@@ -682,6 +682,41 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertSame('(', $sig->params[0]->type->raw);
     }
 
+    public function testNestedSignatureWithoutReturnInScannedReturnPosition(): void
+    {
+        // `Closure(A)` — a nested signature whose last token is its own `)`
+        // (no return type). The walk must resume exactly ONE token after it;
+        // resuming a token early re-consumes the nested signature (or corrupts
+        // the span with a stray `)` residue).
+        $source = '<?php function f(): Closure(): Closure(A) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigClosure::class, $sig->return);
+        self::assertCount(1, $sig->return->signature->params);
+        self::assertNull($sig->return->signature->return);
+        self::assertSame('<?php function f(): \Closure              {}', self::strip($source));
+    }
+
+    public function testNameThenGroupInReturnStaysTheOnlyClosureThrow(): void
+    {
+        // `A (B)` — a name followed by a paren group is A trying to carry a
+        // call signature; the only-Closure structural throw must stay loud (a
+        // scan that treats `(B)` as a fresh group leaf silently swallows it).
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Only "Closure" may carry a call signature, "A" may not');
+        self::strip('<?php function f(Closure(): A (B) $x) {}');
+    }
+
+    public function testDoubleSeparatorLeavesLoudResidue(): void
+    {
+        // `A&|B` is malformed — the scan stops at the dangling `&` and the
+        // junk survives as loud residue, never silently swallowed.
+        $stripped = self::strip('<?php function f(): Closure(): A&|B {}');
+
+        self::assertStringContainsString('&|B', $stripped);
+    }
+
     public function testBareClosureMemberInSignatureUnionReturn(): void
     {
         // A bare `Closure` (no paren) as a union member inside a signature's

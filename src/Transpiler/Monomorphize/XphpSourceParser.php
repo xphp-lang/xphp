@@ -832,11 +832,13 @@ final class XphpSourceParser
                         return null;
                     }
                     $last = $inner;
-                    // @infection-ignore-all DecrementInteger Plus — re-entering the
-                    // walk AT (or one before) the consumed signature's last token only
-                    // revisits tokens that re-converge on the same `$last` (the walk is
-                    // confluent after a consumed leaf). Skipping a token forward (+2)
-                    // is NOT equivalent and is pinned by the group-with-nested-
+                    // @infection-ignore-all DecrementInteger — re-entering the walk AT
+                    // the consumed signature's last token (`+ 0`) only revisits a token
+                    // that cannot extend or shrink the span (it is never a name with a
+                    // consumable tail), so `$last` is unchanged. Re-entering BEFORE it
+                    // (`- 1`) is NOT equivalent (it can re-consume the nested signature
+                    // or overwrite `$last`) and is pinned by the nested-no-return test;
+                    // skipping forward (`+ 2`) is pinned by the group-with-nested-
                     // signature test.
                     $i = $inner + 1;
                 } elseif ($la < $n && $tokens[$la]->text === '<') {
@@ -856,10 +858,6 @@ final class XphpSourceParser
                 // the parameter, not the type) — stop. `&`/`|` before a Name, `?`,
                 // or a `(` group is an intersection / union continuation.
                 $nx = self::skipWs($tokens, $i + 1);
-                // @infection-ignore-all LogicalOrAllSubExprNegation — negating the
-                // member predicates only moves WHERE the walk breaks (at the
-                // separator vs one non-type token later); `$last` is set only by
-                // leaf branches, so the returned span is identical for every input.
                 $continues = $nx < $n
                     && (self::isSigTypeToken($tokens[$nx])
                         || $tokens[$nx]->text === '?'
