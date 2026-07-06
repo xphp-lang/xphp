@@ -199,6 +199,15 @@ _In progress on this branch — content still accumulating; date set at tag time
   three parameters — wrongly rejecting a conforming factory literal on arity.
   The sugar now lowers to `array` inside signatures, the same lowering it gets
   everywhere else, and is checked as a gradual `array` leaf.
+- **Expression-position `Closure(...)` calls are never mistaken for return types.**
+  The return-slot detector keyed on a bare `) :` pair — which ternaries,
+  `case expr():` labels, and alt-syntax blocks (`if/elseif/while/for/foreach/
+  declare (…):`) also produce. A call to a user function named `Closure` in
+  those positions was silently rewritten into a `\Closure` constant fetch, and a
+  call to ANY function there (`$a ? b() : g(FOO);`) failed the compile with the
+  only-Closure error. The detector now requires an actual `function`/`fn`
+  declaration header (including by-ref, `use (…)` clauses, and tight spellings)
+  and ignores member calls of the semi-reserved names (`C::fn()`).
 - **Relative `namespace\Foo` types resolve correctly everywhere names are read
   from tokens.** A relative reference bound to the wrong name (`App\namespace\Foo`,
   or a colliding `use` alias) wherever the resolver worked on raw token text —
