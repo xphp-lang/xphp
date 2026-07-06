@@ -48,7 +48,7 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
 
         $expected = <<<'TXT'
             Variance edge cannot be proven while instantiating App\Producer<App\Book>.
-              type parameter +T is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              type parameter out T is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
               so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
 
               Add App\Book to the source set the hierarchy is built from to enable the edge.
@@ -57,13 +57,13 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         self::assertSame($expected, $collector->all()[0]->message);
     }
 
-    public function testContravariantOverUnprovableLeafIsWarnedWithMinusMarker(): void
+    public function testContravariantOverUnprovableLeafIsWarnedWithInMarker(): void
     {
         $collector = new DiagnosticCollector();
         $this->registry($collector)->recordInstantiation('App\\Consumer', [new TypeRef('App\\Book')]);
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('type parameter -T is contravariant', $collector->all()[0]->message);
+        self::assertStringContainsString('type parameter in T is contravariant', $collector->all()[0]->message);
     }
 
     public function testProvableDeclaredLeafIsSilent(): void

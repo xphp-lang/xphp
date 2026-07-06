@@ -419,8 +419,8 @@ final class VariancePositionValidator
         ?string $hostParam,
     ): string {
         $marker = match ($variance) {
-            Variance::Covariant => '+',
-            Variance::Contravariant => '-',
+            Variance::Covariant => 'out ',
+            Variance::Contravariant => 'in ',
             Variance::Invariant => '',
         };
         $context = $hostParam !== null

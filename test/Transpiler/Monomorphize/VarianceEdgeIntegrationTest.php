@@ -230,7 +230,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testContravariantConstructorParamKeepsConcreteType(): void
     {
-        // Symmetry with the covariant case: a `-T` constructor param keeps its real type
+        // Symmetry with the covariant case: a `in T` constructor param keeps its real type
         // too, and the contravariant edge (Consumer<Fruit> extends Consumer<Banana>)
         // stays valid because constructors are LSP-exempt.
         $generated = $this->compileFixtureAndReadGenerated('compile/generic_contravariant_constructor/source');

@@ -341,7 +341,7 @@ final class InnerVarianceValidator
         }
         // $declared is Covariant or Contravariant at this point — the Invariant
         // case passes every allowed-list and early-returns above.
-        $sigil = $declared === Variance::Covariant ? '+' : '-';
+        $sigil = $declared === Variance::Covariant ? 'out ' : 'in ';
         $where = $innerLabel !== null
             ? sprintf(' (via slot %d of %s)', $innerSlot, $innerLabel)
             : '';

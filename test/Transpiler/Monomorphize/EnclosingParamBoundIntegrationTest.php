@@ -1493,12 +1493,12 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testEnclosingParamInParameterPositionIsRejectedByVarianceFirst(): void
     {
-        // Why the return-type guard need only inspect the return type: a covariant `+E` can never reach
-        // direct emission in a parameter position, because variance checking rejects `+E` in an input
+        // Why the return-type guard need only inspect the return type: a covariant `out E` can never reach
+        // direct emission in a parameter position, because variance checking rejects `out E` in an input
         // position long before the closer runs. This pins that ordering — the diagnostic is the variance
         // error, NOT the upcast hard-fail — so the return-type-only guard is provably complete.
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessageMatches('/`\+E` appears in method parameter position/');
+        $this->expectExceptionMessageMatches('/`out E` appears in method parameter position/');
 
         $this->compileResult([
             'Product.xphp' => self::PRODUCT,
