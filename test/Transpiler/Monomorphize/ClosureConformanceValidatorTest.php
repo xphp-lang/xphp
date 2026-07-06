@@ -65,6 +65,28 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'target references a type parameter ⇒ gradual here' => [
             '<?php class Box<T> { public function m(): Closure(T $x): T { return fn(string $x): int => 0; } }',
         ];
+        yield 'S-A builtin target: chain THROUGH a built-in stays gradual' => [
+            // MyErr's chain contains \Exception (a built-in), whose own edge to
+            // \Throwable is unmodeled — the world is open, so the relation is
+            // truly satisfied at runtime and must stay accepted.
+            '<?php class MyErr extends \Exception {} function m(): Closure(): \Throwable { return fn(): MyErr => new MyErr(); }',
+        ];
+        yield 'S-A builtin target: enum implementing the interface stays accepted' => [
+            // The enum's implements clause + implicit UnitEnum edge are modeled,
+            // so its world is OPEN (built-ins in chain) — never falsely proven
+            // unrelated to \Countable.
+            '<?php enum Sized implements \Countable { case One; public function count(): int { return 1; } } function m(): Closure(): \Countable { return fn(): Sized => Sized::One; }',
+        ];
+        yield 'S-A builtin target: __toString class vs \Stringable stays accepted' => [
+            // Stringable is auto-implemented at runtime; methods are unmodeled,
+            // so the carve-out must keep this gradual even though Str's chain
+            // is closed-world built-in-free.
+            '<?php class Str { public function __toString(): string { return "s"; } } function m(): Closure(): \Stringable { return fn(): Str => new Str(); }',
+        ];
+        yield 'S-A builtin target: unknown interface in the chain stays accepted' => [
+            // The undeclared interface could extend \Throwable — open world.
+            '<?php class Maybe implements SomeVendorInterface {} function m(): Closure(): \Throwable { return fn(): Maybe => new Maybe(); }',
+        ];
         yield 'S-A return: relative-named TARGET type resolves and conforms' => [
             // `namespace\Fruit` in the target must bind to App\Fruit — a
             // mis-resolution to `App\namespace\Fruit` would be gradual, hiding
@@ -180,6 +202,15 @@ final class ClosureConformanceValidatorTest extends TestCase
             "<?php function m(): Closure(int|string \$x): void {\n    return fn(int \$x): void => null;\n}",
             2,
             'parameter 1: int is not wider than int|string',
+        ];
+        yield 'S-A builtin target: closed-world candidate is provably rejected' => [
+            // Apple's whole ancestry (Fruit) is declared user code with no
+            // built-in anywhere — no unmodeled edge to \Throwable can exist, so
+            // the `false` is a real proof. (This was the guard's blind spot:
+            // ANY built-in target used to go gradual.)
+            "<?php function m(): Closure(): \\Throwable {\n    return fn(): Apple => new Apple();\n}",
+            2,
+            'App\\Apple is not a subtype of Throwable',
         ];
         yield 'S-A return: relative-named TARGET violation is caught' => [
             // Pre-fix, `namespace\Apple` resolved to `App\namespace\Apple`

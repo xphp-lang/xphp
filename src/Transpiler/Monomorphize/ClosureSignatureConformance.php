@@ -180,6 +180,13 @@ final readonly class ClosureSignatureConformance
         // A raw (unstructured) leaf on either side stays gradual — a target-side DNF
         // `(A&B)|C`, an unresolved member, or an intersection carrying a scalar all
         // fall back to SigRaw and are accepted here.
+        // @infection-ignore-all LogicalOr ReturnRemoval — equivalent: a SigRaw on
+        // either side yields false down EVERY downstream path anyway (the compound
+        // arms recurse to leaf pairings; a raw against a leaf bottoms out at the
+        // defensive non-SigTypeRef guard, against a closure super at the
+        // closure-vs-leaf mismatch — all false). The early return only states the
+        // gradual rule directly; the accept BEHAVIOUR is pinned by the DNF-group
+        // and raw-leaf accept tests.
         if ($sub instanceof SigRaw || $super instanceof SigRaw) {
             return false;
         }
@@ -269,24 +276,38 @@ final readonly class ClosureSignatureConformance
             return self::normalizeScalar($sub->type->name) !== self::normalizeScalar($super->type->name);
         }
         if ($subKind === 'class' && $superKind === 'class') {
-            // Provable only when BOTH classes are known to the hierarchy AND the
-            // target (super) is a user-declared class:
+            // Provable only when BOTH classes are known to the hierarchy:
             //  - An undeclared class on either side leaves the relation unprovable;
             //    `isSubtype(knownChild, undeclaredParent)` returns a hard `false`
             //    (the BFS never reaches the unknown), which must NOT read as a
             //    proven non-subtype or out-of-source code would be false-rejected.
-            //  - A BUILT-IN target is equally unprovable-as-`false`: the hierarchy
-            //    models only ancestor edges scanned from source, not PHP's built-in
-            //    class graph, so `isSubtype` returns `false` for a real relation
-            //    like `Exception <: Throwable` (or any user class whose ancestry
-            //    passes through a built-in). Reaching a USER target, by contrast,
-            //    is possible only over user-declared edges — all modeled — so a
-            //    `false` there is a genuine proof. Accept when the target is built-in.
             if (!$this->hierarchy->isDeclared($sub->type->name)
                 || !$this->hierarchy->isDeclared($super->type->name)
-                || $this->hierarchy->isBuiltin($super->type->name)
             ) {
                 return false;
+            }
+            // A BUILT-IN target is normally unprovable-as-`false`: the hierarchy
+            // models only ancestor edges scanned from source, so `isSubtype`
+            // returns `false` for a real relation like `Exception <: Throwable`
+            // (or any user class whose ancestry passes through a built-in).
+            // EXCEPTION — a candidate whose ENTIRE ancestry is closed-world user
+            // code cannot reach any built-in over unmodeled edges, so `false` IS
+            // a proof there... unless PHP adds the edge implicitly at runtime:
+            //  - `Stringable` is auto-implemented by any class with __toString()
+            //    (methods are not modeled — stay gradual);
+            //  - `UnitEnum` / `BackedEnum` are enum-implicit (enums carry these
+            //    edges explicitly since the collector models them, so their chain
+            //    is never built-in-free — this arm is a safety net).
+            if ($this->hierarchy->isBuiltin($super->type->name)) {
+                // @infection-ignore-all UnwrapLtrim — resolved TypeRef names arrive
+                // backslash-free from resolveAgainstContext on both sides; the trim
+                // is defensive parity with isBuiltin's own normalization.
+                $superName = ltrim($super->type->name, '\\');
+                if (in_array($superName, ['Stringable', 'UnitEnum', 'BackedEnum'], true)
+                    || !$this->hierarchy->hasClosedUserAncestry($sub->type->name)
+                ) {
+                    return false;
+                }
             }
             return $this->hierarchy->isSubtype($sub->type->name, $super->type->name) === false;
         }
