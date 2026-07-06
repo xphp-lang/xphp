@@ -2295,6 +2295,7 @@ final class XphpSourceParser
                         $this->resolveSigType($p->type),
                         $p->byRef,
                         $p->variadic,
+                        $p->optional,
                     ),
                     $sig->params,
                 );
