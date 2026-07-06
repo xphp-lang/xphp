@@ -51,6 +51,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.undetermined_receiver` | a turbofish method call's receiver has no statically-known type (an untyped `foreach` variable, a local whose type is ambiguous after a branch), so the call can't be specialized — it would emit a call to a stripped method that fatals at runtime. Give the receiver a declared type |
 | `xphp.unspecializable_self_call` | a `$this`-rooted self-call forwards a type parameter to a **non-erasable** generic method (one whose parameter is used nested, in the return, or structurally). Forwarding to an *erasable* method — parameter used only as a direct input — compiles and runs; otherwise move the call to a typed-receiver context |
 | `xphp.unschedulable_covariant_upcast` | a value is upcast to a covariant *interface* whose element-consuming method (`contains<U : E>`) needs a concrete implementation at the supertype argument that can neither be inherited through the covariant chain nor emitted directly onto the upcast source. Direct emission already covers the cases where inheritance can't carry it (the implementing class has another `extends` parent, implements only a parent of the interface, or reorders the clause); the upcast fails only when **no** emittable class body exists (a truly abstract or trait-only method), the method's **return type** names the element parameter (the widened argument would escape through a narrower return), or its parameters are bounded by **different** enclosing parameters (no single member can be derived). Provide a concrete implementation on a class — move a trait body onto the covariant base, or give the method a non-element return type |
+| `xphp.closure_conformance` | a closure literal returned against a `Closure(...)` type doesn't conform to it — its parameters aren't wide enough, its return isn't narrow enough, its by-reference-ness differs, or its arity is incompatible |
 | `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
 | `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`; a finding that carries no identifier falls back to the literal `phpstan.error`) — present only when the PHPStan pass runs |
 | `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
@@ -376,6 +377,24 @@ Generic template "<FQN>" was instantiated but never defined
 Nested generic specialization exceeded depth 16. Latest registry:
 <list>
 ```
+
+### Closure-signature conformance
+
+```
+Closure literal does not conform to the declared `Closure(...)` type:
+<detail>
+```
+
+Emitted when a closure literal is returned against a `Closure(...)` return
+type it doesn't satisfy. The `<detail>` names the exact mismatch, e.g.
+`parameter 1: string is not wider than int` (a parameter must be the same
+as or **wider** than the target's — contravariance), `return type: A is not
+a subtype of B` (the return must be the same as or **narrower** — covariance),
+`by-reference-ness must match exactly`, or an arity message. See
+[closure types](syntax/closure-types.md). The check only ever reports a
+*provable* mismatch: an unresolved class, a still-abstract type parameter, an
+untyped (⇒ `mixed`) slot, a union/intersection, or a built-in supertype is
+accepted rather than falsely rejected.
 
 ### Parse / AST
 

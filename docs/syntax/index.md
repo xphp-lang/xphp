@@ -15,6 +15,7 @@ first.
 | [Classes and interfaces](classes-and-interfaces.md) | `class Box<T> {}`, generic interfaces and traits, marker-interface runtime behavior |
 | [Methods and functions](methods-and-functions.md) | Generic methods (static + instance), generic free functions, bare top-level |
 | [Closures and arrows](closures-and-arrows.md) | `function<T>(...)`, `fn<T>(...) => ...`, captures incl. by-ref |
+| [Closure types](closure-types.md) | `Closure(int $x): bool` signature types, erasure to `\Closure`, return-position conformance |
 | [Type bounds](type-bounds.md) | `T : Stringable`, `T : A & B`, `T : (A & B) \| C`, F-bounded `T : Box<T>` |
 | [Variance](variance.md) | `out T`, `in T`, position rules, subtype edges between specializations |
 | [Defaults](defaults.md) | `T = int`, forward refs `Pair<A, B = A>`, empty turbofish `$f::<>()` |

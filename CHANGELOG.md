@@ -11,6 +11,18 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Added
 
+- **`Closure(...)` signature types.** A type hint such as `Closure(int $x, string $y):
+  bool` may appear in any parameter, return, or property position; it documents the
+  callable a slot expects and **erases to a bare `\Closure`** in the emitted PHP.
+  Where a closure literal is returned against a `Closure(...)` return type (a
+  typed-closure factory), xphp checks conformance — parameters contravariant, return
+  covariant, by-reference exact, arity compatible — and fails the build on a
+  **provable** mismatch (`xphp.closure_conformance`), while accepting anything it can't
+  prove wrong (untyped ⇒ `mixed`, an unresolved or built-in supertype, a
+  still-abstract type parameter, a union/intersection). A signature that references an
+  enclosing type parameter is **grounded** per specialization, so `Registry<int>` and
+  `Registry<string>` check the same factory against different concrete targets. See
+  [closure types](docs/syntax/closure-types.md).
 - **Multi-root builds via an `xphp.json` manifest.** A project declares its source
   roots, output directory, and hash length in an `xphp.json` at the project root;
   `xphp compile` and `xphp check` auto-detect it (or take an explicit `--config`).

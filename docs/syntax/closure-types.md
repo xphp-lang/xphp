@@ -1,0 +1,109 @@
+# `Closure(...)` signature types
+
+xphp accepts a **closure signature type** — `Closure(int $x, string $y):
+bool` — anywhere a type hint is allowed (a parameter, a return, a
+property). It documents the shape of the callable a slot expects, then
+**erases to a bare `\Closure`** at compile time, so the emitted PHP is
+ordinary code that any PHP runtime accepts.
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App;
+
+// A factory that returns an int-to-int closure.
+function adder(int $by): Closure(int $x): int {
+    return fn(int $x): int => $x + $by;
+}
+```
+
+compiles to:
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App;
+
+function adder(int $by): \Closure {
+    return fn(int $x): int => $x + $by;
+}
+```
+
+The parameter names inside the signature are documentation only (exactly
+like a real closure's parameter names); only the types, order, by-reference
+markers, and arity carry meaning.
+
+A signature may be nullable (`?Closure(int): int`), may omit the return
+(`Closure(int $x)` — any return accepted), and may nest
+(`Closure(Closure(int): int $f): int`).
+
+## Conformance checking
+
+Where a closure **literal** is returned against a `Closure(...)` return
+type, xphp checks that the literal actually conforms, using the same
+variance PHP enforces when an inherited method overrides its prototype:
+
+- **Parameters are contravariant** — each parameter of the literal must be
+  the same as or **wider** than the target's.
+- **The return is covariant** — the literal's return must be the same as or
+  **narrower** than the target's.
+- **By-reference-ness is exact**, and **arity must be compatible** (the
+  literal must accept every argument the target guarantees, and require no
+  more than the target guarantees).
+
+```php
+function makeAdder(): Closure(int $x): int {
+    return fn(int $x): int => $x + 1;      // ✓ conforms
+}
+
+function makeBroken(): Closure(int $x): int {
+    return fn(string $x): int => 0;        // ✗ compile error:
+                                           //   parameter 1 is not wider than int
+}
+```
+
+A mismatch is a compile error (`xphp compile` fails; `xphp check` reports
+`xphp.closure_conformance`). See [errors](../errors.md).
+
+### It only rejects a *provable* mismatch
+
+The check is deliberately one-directional: it never rejects code it cannot
+prove wrong. A parameter or return that is untyped (⇒ `mixed`), a class the
+source set doesn't declare, a still-abstract generic type parameter, a
+`self`/`static`/`parent`/`object`/`iterable`/`callable` leaf, a nullable /
+union / intersection type, or a built-in supertype (returning a `\Exception`
+where a `\Throwable` is expected) is **accepted**. This mirrors the RFC's
+runtime leniency — lenient while unresolved, decide only when provable.
+
+Only the return-position "factory" pattern above is checked, because that is
+the one place a closure literal statically meets a `Closure(...)` target: a
+default value cannot be a closure (PHP requires a constant expression), and a
+closure passed through a variable or a call argument is checked gradually
+(accepted).
+
+## Generic signatures
+
+A closure signature may reference the enclosing type parameters, and each is
+**grounded** against the concrete type argument when the class specializes:
+
+```php
+class Registry<T> {
+    public function factory(): Closure(T $value): bool {
+        return fn(int $value): bool => $value > 0;
+    }
+}
+
+new Registry::<int>();     // target grounds to Closure(int): bool — the literal conforms
+new Registry::<string>();  // target grounds to Closure(string): bool — the same literal
+                           //   is now rejected: int is not wider than string
+```
+
+## Not yet checked
+
+A union or intersection **member** inside a signature (`Closure(int|string
+$x): void`) is currently carried through and accepted gradually rather than
+variance-checked. Prefer a single type per slot where you want the check to
+apply.
+```
