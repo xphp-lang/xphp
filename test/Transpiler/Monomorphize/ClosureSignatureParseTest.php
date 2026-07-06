@@ -15,9 +15,10 @@ use PHPUnit\Framework\TestCase;
  * WI-01 scope: the scanner recognizes a `Closure(...)[: ret]` production in a
  * type slot, erases it to a bare `\Closure` (newline-preserving so line-keyed
  * markers stay aligned), and attaches the structured {@see ClosureSignature} as
- * an AST attribute for the later conformance validator. Union / intersection /
- * nullable leaf types are carried as raw text ({@see SigRaw}); their structured
- * form is a later work item. No conformance checking happens here.
+ * an AST attribute for the later conformance validator. A flat union / intersection
+ * / nullable leaf is structured into a {@see SigUnion} / {@see SigIntersection}; a
+ * shape the flat splitter doesn't own (a DNF group, an intersection with a scalar)
+ * stays raw ({@see SigRaw}). No conformance checking happens here.
  */
 final class ClosureSignatureParseTest extends TestCase
 {
@@ -340,20 +341,21 @@ final class ClosureSignatureParseTest extends TestCase
     }
 
     // ===================================================================
-    // Union / intersection leaves are erased but carried raw (WI-03)
+    // Flat union / intersection / nullable leaves are structured (WI-03)
     // ===================================================================
 
-    public function testUnionAndIntersectionLeavesAreErasedAndCarriedRaw(): void
+    public function testUnionAndIntersectionLeavesAreStructuredAndErased(): void
     {
         $source = '<?php function u(Closure(A&B): C|null $c) {}';
         $sig = self::firstSig($source);
 
         self::assertNotNull($sig);
         self::assertCount(1, $sig->params);
-        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
-        self::assertSame('A&B', $sig->params[0]->type->raw);
-        self::assertInstanceOf(SigRaw::class, $sig->return);
-        self::assertSame('C|null', $sig->return->raw);
+        $param = $sig->params[0]->type;
+        self::assertInstanceOf(SigIntersection::class, $param);
+        self::assertSame(['A', 'B'], self::sigMemberNames($param));
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['C', 'null'], self::sigMemberNames($sig->return));
 
         // Still fully erased to a bare \Closure.
         $stripped = self::strip($source);
@@ -362,15 +364,100 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertStringNotContainsString('C|null', $stripped);
     }
 
-    public function testNullableLeafInsideSignatureIsCarriedRaw(): void
+    public function testUnionParameterSpanEndsSoNextParameterParses(): void
     {
-        // A `?Type` leaf INSIDE the signature (distinct from an outer `?Closure`)
-        // is kept raw until the structured-union work item.
-        $sig = self::firstSig('<?php function f(Closure(?int): int $c) {}');
+        // The union's end index must be exact, or the following `bool $b` mis-parses.
+        $sig = self::firstSig('<?php function f(Closure(int|string $a, bool $b): void $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['int', 'string'], self::sigMemberNames($sig->params[0]->type));
+        self::assertSame('bool', self::refName($sig->params[1]->type));
+    }
+
+    public function testKeywordUnionMemberSpanEndsSoNextParameterParses(): void
+    {
+        // `array` is a reserved-word keyword member (parsed by the keyword branch, not
+        // parseTypeArg); its end index must land the following `bool $b` correctly.
+        $sig = self::firstSig('<?php function f(Closure(int|array $a, bool $b): void $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['int', 'array'], self::sigMemberNames($sig->params[0]->type));
+        self::assertSame('bool', self::refName($sig->params[1]->type));
+    }
+
+    public function testIntersectionParameterSpanEndsSoNextParameterParses(): void
+    {
+        $sig = self::firstSig('<?php function f(Closure(Countable&Traversable $a, int $b): void $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertInstanceOf(SigIntersection::class, $sig->params[0]->type);
+        self::assertSame(['Countable', 'Traversable'], self::sigMemberNames($sig->params[0]->type));
+        self::assertSame('int', self::refName($sig->params[1]->type));
+    }
+
+    public function testScalarIntersectionBailSpanEndsSoNextParameterParses(): void
+    {
+        // The bailed SigRaw's end index must also be exact so `bool $b` parses.
+        $sig = self::firstSig('<?php function f(Closure(int&Countable $a, bool $b): void $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('bool', self::refName($sig->params[1]->type));
+    }
+
+    public function testMixedTopLevelSeparatorsFallBackToRaw(): void
+    {
+        // `A|B&C` mixes union and intersection at top level (needs DNF parens) — the
+        // flat splitter must not structure it; keep it a gradual SigRaw.
+        $sig = self::firstSig('<?php function f(): Closure(): A|B&C {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('A|B&C', $sig->return->raw);
+    }
+
+    public function testUnionByReferenceParameterKeepsUnionAndMarker(): void
+    {
+        // `A|B &$r` — the trailing `&` is a by-ref marker (a `$var` follows), NOT an
+        // intersection continuation; the union stays structured and the param is by-ref.
+        $sig = self::firstSig('<?php function f(Closure(A|B &$r): void $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigUnion::class, $sig->params[0]->type);
+        self::assertSame(['A', 'B'], self::sigMemberNames($sig->params[0]->type));
+        self::assertTrue($sig->params[0]->byRef);
+    }
+
+    public function testIntersectionWithScalarMemberStaysRawAndErases(): void
+    {
+        // `int&Countable` is invalid PHP (scalars can't intersect); the splitter keeps
+        // it a gradual SigRaw rather than structuring, and it still fully erases.
+        $source = '<?php function f(Closure(int&Countable $x): void $c) {}';
+        $sig = self::firstSig($source);
 
         self::assertNotNull($sig);
         self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
-        self::assertSame('?int', $sig->params[0]->type->raw);
+        self::assertSame('int&Countable', $sig->params[0]->type->raw);
+        self::assertStringNotContainsString('int&Countable', self::strip($source));
+    }
+
+    public function testNullableLeafInsideSignatureIsStructuredAsUnionWithNull(): void
+    {
+        // A `?Type` leaf INSIDE the signature (distinct from an outer `?Closure`)
+        // structures to `Type|null`; the outer nullable flag stays false.
+        $sig = self::firstSig('<?php function f(Closure(?int): int $c) {}');
+
+        self::assertNotNull($sig);
+        $param = $sig->params[0]->type;
+        self::assertInstanceOf(SigUnion::class, $param);
+        self::assertSame(['int', 'null'], self::sigMemberNames($param));
         self::assertFalse($sig->nullable, 'the inner `?int` must not set the outer nullable flag');
     }
 
@@ -500,7 +587,7 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertStringNotContainsString('>', $stripped);
     }
 
-    public function testThreeMemberUnionReturnCarriesFullRawAndErases(): void
+    public function testThreeMemberUnionReturnIsStructuredAndErases(): void
     {
         // `A|B|C` drives scanTypeExprEnd's `|`-continuation loop twice. A span that
         // stops after the first `|` yields raw `A|B` and leaves `|C` residue.
@@ -508,8 +595,8 @@ final class ClosureSignatureParseTest extends TestCase
         $sig = self::firstSig($source);
 
         self::assertNotNull($sig);
-        self::assertInstanceOf(SigRaw::class, $sig->return);
-        self::assertSame('A|B|C', $sig->return->raw);
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['A', 'B', 'C'], self::sigMemberNames($sig->return));
         self::assertStringNotContainsString('A|B|C', self::strip($source));
     }
 
@@ -677,21 +764,21 @@ final class ClosureSignatureParseTest extends TestCase
         $sig = self::firstSig($source);
 
         self::assertNotNull($sig);
-        self::assertInstanceOf(SigRaw::class, $sig->return);
-        self::assertSame('int|array', $sig->return->raw);
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['int', 'array'], self::sigMemberNames($sig->return));
 
         $stripped = self::strip($source);
         self::assertStringNotContainsString('|array', $stripped);
         self::assertStringNotContainsString('|', $stripped);
     }
 
-    public function testNullableArrayLeafErasesAndIsCarriedRaw(): void
+    public function testNullableArrayLeafIsStructuredAsUnionWithNull(): void
     {
         $sig = self::firstSig('<?php function f(Closure(): ?array $cb) {}');
 
         self::assertNotNull($sig);
-        self::assertInstanceOf(SigRaw::class, $sig->return);
-        self::assertSame('?array', $sig->return->raw);
+        self::assertInstanceOf(SigUnion::class, $sig->return);
+        self::assertSame(['array', 'null'], self::sigMemberNames($sig->return));
     }
 
     // ===================================================================
@@ -894,6 +981,16 @@ final class ClosureSignatureParseTest extends TestCase
             return null;
         }
         return $type->type->name;
+    }
+
+    /**
+     * The (unresolved) member names of a compound leaf, in order.
+     *
+     * @return list<?string>
+     */
+    private static function sigMemberNames(SigUnion|SigIntersection $type): array
+    {
+        return array_map(self::refName(...), $type->members);
     }
 
     private static function isScalarRef(SigType $type): bool

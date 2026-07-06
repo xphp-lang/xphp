@@ -1024,15 +1024,18 @@ final class XphpSourceParser
     /**
      * Parse one signature leaf type beginning at `$i` → `[SigType, nextIdx]`.
      * A nested `Closure(…)` becomes a `SigClosure`; a plain scalar / class /
-     * type-parameter / `Name<…>` leaf becomes a `SigTypeRef` (unresolved — the
-     * resolver walks the tree later); a `?` / union / intersection leaf is kept
-     * as raw text in a `SigRaw` (structured form deferred).
+     * type-parameter / `Name<…>` leaf becomes a `SigTypeRef`; a flat `?A` / `A|B` /
+     * `A&B` is structured into a `SigUnion` / `SigIntersection` (the member-splitting
+     * lives in {@see parseFlatCompound}); a shape the flat splitter does not own (a
+     * DNF group, a mixed `|`/`&`, a scalar in an intersection) falls back to a
+     * gradual `SigRaw`. Members are left unresolved — the resolver walks the tree.
      *
-     * @infection-ignore-all — leaf-kind selection (nested `SigClosure`, compound
-     * `SigRaw`, plain `SigTypeRef`) is pinned by the nested / union / intersection /
-     * nullable-leaf tests; the residual mutants are `$i < $n` lookahead guards and
-     * whitespace-skip offsets, equivalent because every path is entered only for the
-     * balanced, type-shaped spans the caller passes.
+     * @infection-ignore-all — leaf-kind DISPATCH (nested `SigClosure`, nullable,
+     * union/intersection, plain `SigTypeRef`) is pinned behaviorally by the parser's
+     * accept/reject fixtures; the member-splitting logic it delegates to lives in
+     * {@see parseFlatCompound} / {@see parseMemberLeaf} (fully mutation-covered), and
+     * the residual mutants here are `$i < $n` lookahead guards and whitespace-skip
+     * offsets, equivalent for the balanced, type-shaped spans the caller passes.
      *
      * @param list<PhpToken> $tokens
      * @return array{0: SigType, 1: int}
@@ -1071,18 +1074,130 @@ final class XphpSourceParser
         }
         [$typeRef, $afterLeaf] = $parsed;
 
-        // Union / intersection continuation → raw (structured form is a later WI).
         $peek = self::skipWs($tokens, $afterLeaf);
-        $isCompound = $nullableLeaf
-            || ($peek < $n && ($tokens[$peek]->text === '|'
-                || ($tokens[$peek]->text === '&' && self::sigAmpersandIsIntersection($tokens, $peek))));
-        if ($isCompound) {
-            $end = self::scanTypeExprEnd($tokens, $start);
-            $end = $end ?? ($afterLeaf - 1);
-            return [new SigRaw(self::sliceTokens($tokens, $source, $start, $end)), $end + 1];
+        $hasUnion = $peek < $n && $tokens[$peek]->text === '|';
+        $hasIntersection = $peek < $n && $tokens[$peek]->text === '&'
+            && self::sigAmpersandIsIntersection($tokens, $peek);
+
+        // A leading `?` is `A|null`. `?A|B` / `?A&B` are invalid PHP; keep raw.
+        if ($nullableLeaf) {
+            if ($hasUnion || $hasIntersection) {
+                return self::rawSigLeaf($tokens, $source, $start, $afterLeaf);
+            }
+            return [new SigUnion([new SigTypeRef($typeRef), new SigTypeRef(new TypeRef('null'))]), $afterLeaf];
+        }
+
+        // A flat union / intersection continuation → structure it. A DNF paren, a
+        // mixed `|`/`&` at top level, or a scalar in an intersection falls back to a
+        // gradual SigRaw (structured DNF on the token side is a tracked follow-up).
+        if ($hasUnion || $hasIntersection) {
+            $compound = self::parseFlatCompound($tokens, $typeRef, $afterLeaf, $hasUnion ? '|' : '&');
+            return $compound ?? self::rawSigLeaf($tokens, $source, $start, $afterLeaf);
         }
 
         return [new SigTypeRef($typeRef), $afterLeaf];
+    }
+
+    /**
+     * Collect the remaining members of a FLAT union / intersection (the first is
+     * already parsed) into a {@see SigUnion} / {@see SigIntersection}. Returns null
+     * to fall back to a gradual {@see SigRaw} for a case the flat splitter does not
+     * own: a DNF group `(…)`, a mixed `|`/`&` at top level, an intersection member
+     * that is a scalar (invalid PHP), or a member that isn't a type leaf.
+     *
+     * @param list<PhpToken> $tokens
+     * @param string $sep '|' or '&'
+     * @return array{0: SigType, 1: int}|null
+     */
+    private static function parseFlatCompound(array $tokens, TypeRef $first, int $afterFirst, string $sep): ?array
+    {
+        $n = count($tokens);
+        $members = [$first];
+        $lastEnd = $afterFirst;
+        $i = self::skipWs($tokens, $afterFirst);
+        // @infection-ignore-all LessThan — `$i < $n` is a defensive bound; a well-formed
+        // signature always has a following `)` / `{`, so `$i` never reaches `$n` here.
+        while ($i < $n && $tokens[$i]->text === $sep) {
+            $j = self::skipWs($tokens, $i + 1);
+            // A member that isn't a type leaf — a DNF group `(…)`, a `?`-prefixed
+            // member, or end-of-input — bails the whole leaf to a gradual SigRaw.
+            $member = self::parseMemberLeaf($tokens, $j);
+            if ($member === null) {
+                return null;
+            }
+            [$ref, $lastEnd] = $member;
+            $members[] = $ref;
+            $i = self::skipWs($tokens, $lastEnd);
+        }
+
+        // A different separator still ahead ⇒ a mix that needs DNF parens ⇒ bail.
+        // @infection-ignore-all LessThan — `$i < $n` is a defensive bound (a following
+        // `)` / `{` always exists); the separator conditions are pinned behaviorally.
+        if ($i < $n && ($tokens[$i]->text === '|'
+            || ($tokens[$i]->text === '&' && self::sigAmpersandIsIntersection($tokens, $i)))
+        ) {
+            return null;
+        }
+
+        $leaves = array_map(static fn (TypeRef $r): SigTypeRef => new SigTypeRef($r), $members);
+        if ($sep === '|') {
+            return [new SigUnion($leaves), $lastEnd];
+        }
+        // A scalar member makes the intersection invalid PHP ⇒ stay gradual (raw).
+        foreach ($members as $member) {
+            // @infection-ignore-all UnwrapLtrim/UnwrapStrToLower — a scalar keyword is
+            // never fully-qualified and arrives lowercased from the grammar, so both
+            // normalizations are defensive (same rationale as resolveTypeRef's scalar guard).
+            if (in_array(strtolower(ltrim($member->name, '\\')), self::SCALAR_TYPES, true)) {
+                return null;
+            }
+        }
+        return [new SigIntersection($leaves), $lastEnd];
+    }
+
+    /**
+     * Parse one union / intersection MEMBER leaf → `[TypeRef, nextIdx]`, or null if
+     * the position isn't a type leaf. Mirrors the primary-leaf parse in
+     * {@see parseSigType}: a `Name` / `Name<…>` via {@see parseTypeArg}, or a
+     * reserved-word type keyword (`array` / `callable` / `static`).
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: TypeRef, 1: int}|null
+     */
+    private static function parseMemberLeaf(array $tokens, int $i): ?array
+    {
+        $parsed = self::parseTypeArg($tokens, $i);
+        if ($parsed !== null) {
+            return $parsed;
+        }
+        // @infection-ignore-all LessThan UnwrapStrToLower — the `$i < count` bound is
+        // defensive (the caller only reaches here mid-span, never at end-of-input);
+        // `strtolower` matches the first-leaf keyword branch but the resolver
+        // re-lowercases, so it is redundant. (The `$i + 1` end index is NOT ignored —
+        // it is pinned by a keyword-member-followed-by-parameter test.)
+        if ($i < count($tokens) && self::isSigTypeToken($tokens[$i])) {
+            return [new TypeRef(strtolower($tokens[$i]->text)), $i + 1];
+        }
+        return null;
+    }
+
+    /**
+     * The gradual {@see SigRaw} fallback for a compound leaf the flat splitter does
+     * not own — spans from `$start` to the end of the type expression.
+     *
+     * @infection-ignore-all — pure index plumbing: the `?? ($afterLeaf - 1)` arm is
+     * unreachable (scanTypeExprEnd returns non-null for the balanced spans that reach a
+     * bail), and the `$end + 1` next-index is the parser's shared convention, absorbed
+     * by every caller's `skipWs`, so a ±1 shift is unobservable. The raw text is
+     * display-only for a gradual leaf. Bail *detection* is pinned behaviorally.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: SigRaw, 1: int}
+     */
+    private static function rawSigLeaf(array $tokens, string $source, int $start, int $afterLeaf): array
+    {
+        $end = self::scanTypeExprEnd($tokens, $start) ?? ($afterLeaf - 1);
+        return [new SigRaw(self::sliceTokens($tokens, $source, $start, $end)), $end + 1];
     }
 
     /**
@@ -2312,9 +2427,15 @@ final class XphpSourceParser
                 if ($type instanceof SigClosure) {
                     return new SigClosure($this->resolveClosureSignature($type->signature));
                 }
+                if ($type instanceof SigUnion) {
+                    return new SigUnion(array_map($this->resolveSigType(...), $type->members));
+                }
+                if ($type instanceof SigIntersection) {
+                    return new SigIntersection(array_map($this->resolveSigType(...), $type->members));
+                }
 
-                // SigRaw (union / intersection / nullable leaf) — structured
-                // resolution is a later work item; carry the raw text through.
+                // SigRaw — a leaf the flat splitter could not structure (a DNF group,
+                // an intersection with a scalar); carry the raw text through gradual.
                 return $type;
             }
 

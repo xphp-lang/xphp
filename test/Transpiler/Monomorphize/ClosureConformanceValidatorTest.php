@@ -56,6 +56,12 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'S-A method return' => [
             '<?php class C { public function m(): Closure(int $x): int { return fn(int $x): int => $x; } }',
         ];
+        yield 'S-A union return: a narrower member conforms' => [
+            '<?php function m(): Closure(): int|string { return fn(): int => 0; }',
+        ];
+        yield 'S-A union parameter: candidate accepts the whole union' => [
+            '<?php function m(): Closure(int|string $x): void { return fn(int|string $x): void => null; }',
+        ];
         yield 'target references a type parameter ⇒ gradual here' => [
             '<?php class Box<T> { public function m(): Closure(T $x): T { return fn(string $x): int => 0; } }',
         ];
@@ -126,6 +132,16 @@ final class ClosureConformanceValidatorTest extends TestCase
             2,
             'by-reference-ness must match exactly',
         ];
+        yield 'S-A union return: outside the union' => [
+            "<?php function m(): Closure(): int|string {\n    return fn(): float => 0.0;\n}",
+            2,
+            'float is not a subtype of int|string',
+        ];
+        yield 'S-A union parameter: candidate too narrow' => [
+            "<?php function m(): Closure(int|string \$x): void {\n    return fn(int \$x): void => null;\n}",
+            2,
+            'parameter 1: int is not wider than int|string',
+        ];
     }
 
     /**
@@ -183,6 +199,55 @@ final class ClosureConformanceValidatorTest extends TestCase
         self::assertStringContainsString(
             'App\\Fruit is not a subtype of App\\Apple',
             $collected[0]->message,
+        );
+    }
+
+    public function testTargetUnionMembersAreResolvedForConformance(): void
+    {
+        // Both union members must resolve to `App\*` for the engine to prove `Fruit`
+        // is neither; if the resolver didn't recurse into union members they'd stay
+        // unqualified/undeclared and the violation would be silently lost.
+        $source = <<<'X'
+        <?php
+        namespace App;
+        class Fruit {}
+        class Apple extends Fruit {}
+        class Orange extends Fruit {}
+        function make(): Closure(): Apple|Orange { return fn(): Fruit => new Fruit(); }
+        X;
+        $ast = self::parseRaw($source);
+
+        $diagnostics = new DiagnosticCollector();
+        self::validator($ast)->validateFile($ast, 'test.xphp', $diagnostics);
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertStringContainsString(
+            'is not a subtype of App\\Apple|App\\Orange',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testTargetIntersectionMembersAreResolvedForConformance(): void
+    {
+        // The intersection members must resolve too — `Fruit` is provably not an
+        // `App\Apple`, so the `App\Apple&App\Orange` return target is unsatisfied.
+        $source = <<<'X'
+        <?php
+        namespace App;
+        class Fruit {}
+        class Apple extends Fruit {}
+        class Orange extends Fruit {}
+        function make(): Closure(): Apple&Orange { return fn(): Fruit => new Fruit(); }
+        X;
+        $ast = self::parseRaw($source);
+
+        $diagnostics = new DiagnosticCollector();
+        self::validator($ast)->validateFile($ast, 'test.xphp', $diagnostics);
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertStringContainsString(
+            'is not a subtype of App\\Apple&App\\Orange',
+            $diagnostics->all()[0]->message,
         );
     }
 
