@@ -76,6 +76,11 @@ final class XphpSourceParser
     public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
     public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
 
+    // A parsed closure signature type (`Closure(int $x): bool`) attached to the
+    // surviving `\Closure` type-hint Name after the `(…)[: ret]` span is erased.
+    // Carries a ClosureSignature; read by the compile-time conformance validator.
+    public const ATTR_CLOSURE_SIG = 'xphp:closureSig';
+
     // A bare, single-segment, non-imported class-name used inside a generic context
     // (a template or generic method/function/closure) that is NOT a declared type
     // parameter. Carries the resolved FQN. The undeclared-type-parameter validator
@@ -125,7 +130,7 @@ final class XphpSourceParser
      */
     public function parseWithMap(string $source): array
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers] = $this->scanAndStrip($source);
 
         $ast = $this->parser->parse($cleanedSource);
         if ($ast === null) {
@@ -133,7 +138,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers);
 
         return [$ast, $byteOffsetMap];
     }
@@ -163,7 +168,7 @@ final class XphpSourceParser
      */
     public function parseTolerantWithMap(string $source): ?ParseWithMapResult
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers] = $this->scanAndStrip($source);
 
         $errorHandler = new \PhpParser\ErrorHandler\Collecting();
         $ast = $this->parser->parse($cleanedSource, $errorHandler);
@@ -172,7 +177,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers);
 
         return new ParseWithMapResult($ast, $byteOffsetMap);
     }
@@ -197,7 +202,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{line:int, name:string, bytePosition:int, signature:ClosureSignature}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -209,6 +214,8 @@ final class XphpSourceParser
         $classMarkers = [];
         $nameMarkers = [];
         $methodMarkers = [];
+        /** @var list<array{line:int, name:string, bytePosition:int, signature:ClosureSignature}> $closureMarkers */
+        $closureMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
 
@@ -544,6 +551,35 @@ final class XphpSourceParser
                     }
                 }
 
+                // Closure signature type `Closure(params): return` in a type slot.
+                // Fires for any `Name(` not in a member-access / `new` context;
+                // `tryParseClosureSignature`'s position gate distinguishes a genuine
+                // type slot from an expression-context call (which falls through
+                // untouched), and throws the two structural errors. A signature-shaped
+                // production on a non-`Closure` name is the only-`Closure` compile error.
+                // @infection-ignore-all — the `(`/cast opener test is a fast-path guard:
+                // findClosureSigEnd re-validates the opener and returns null for anything
+                // that is not a `(` or a cast token, so negating this sub-expression only
+                // adds calls that bail to null — observably equivalent.
+                if ($j < $n && ($tokens[$j]->text === '(' || self::isCastToken($tokens[$j]))
+                    && !self::isMemberAccessContext($tokens, $i)
+                    && !self::isPrecededByNew($tokens, $i)
+                ) {
+                    $sig = self::tryParseClosureSignature($tokens, $i, $j, $source);
+                    if ($sig !== null) {
+                        [$signature, $endIdx, $spanStart, $spanLen, $replacement] = $sig;
+                        $closureMarkers[] = [
+                            'line' => $nameLine,
+                            'name' => 'Closure',
+                            'bytePosition' => $tok->pos,
+                            'signature' => $signature,
+                        ];
+                        $replacements[] = [$spanStart, $spanLen, $replacement];
+                        $i = $endIdx + 1;
+                        continue;
+                    }
+                }
+
                 // Skip the array-type sugar in member-access context (`$x->prop[]`,
                 // `$x?->prop[]`, `Foo::bar[]`) — there the trailing `[]` is array-append
                 // or array-deref syntax, never a type-hint.
@@ -567,7 +603,492 @@ final class XphpSourceParser
         $cleaned = self::applyReplacements($source, $replacements);
         $byteOffsetMap = ByteOffsetMap::fromReplacements($replacements);
 
-        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap, $closureMarkers];
+    }
+
+    /**
+     * Recognize + parse a closure signature type `Closure(params): return` that
+     * begins at the `Closure`/`\Closure` name token index `$i`, where `$j` is the
+     * index of the `(` immediately following the name (past whitespace).
+     *
+     * Returns `[ClosureSignature, spanEndIdx, spanStartByte, spanLen, replacement]`
+     * when the position is a genuine type slot, or `null` when it is an ordinary
+     * expression (e.g. a call to a user function named `Closure`) that must be left
+     * untouched. Throws for the two structural errors (only-`Closure`, variadic-last).
+     *
+     * @infection-ignore-all — the accept/reject behavior (type-slot vs. call, the two
+     * structural throws) and the newline-preserving erasure math are pinned by
+     * behavioral tests; the sole residual mutant is the defensive
+     * `findClosureSigEnd() === null` guard, unreachable once the pre-filter has matched
+     * a balanced `(…)` at a genuine type slot.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: ClosureSignature, 1: int, 2: int, 3: int, 4: string}|null
+     */
+    private static function tryParseClosureSignature(array $tokens, int $i, int $j, string $source): ?array
+    {
+        $n = count($tokens);
+
+        // Cheap pre-filter: a signature's first inner token is type-ish, never a
+        // `$var` or literal (which a real call `Closure($x)` / `Closure(5)` has).
+        // A cast token (`Closure(int)`) is itself the whole one-scalar param list.
+        if (!self::isCastToken($tokens[$j])) {
+            $firstInner = self::skipWs($tokens, $j + 1);
+            if ($firstInner >= $n) {
+                return null;
+            }
+            $ft = $tokens[$firstInner];
+            $firstOk = self::isNameToken($ft)
+                || $ft->id === T_STATIC
+                || $ft->id === T_ELLIPSIS
+                || in_array($ft->text, ['?', '(', ')', '&'], true);
+            if (!$firstOk) {
+                return null;
+            }
+        }
+
+        // Balanced end of `( … )` plus an optional `: return`.
+        $spanEnd = self::findClosureSigEnd($tokens, $j);
+        if ($spanEnd === null) {
+            return null;
+        }
+
+        // Position gate: a type slot is a param/property (a `$var` follows the whole
+        // signature) or a return type (the name sits just after `) :`, past an
+        // optional `?`). Anything else is expression-context `Closure(` — leave it.
+        $afterSpan = self::skipWs($tokens, $spanEnd + 1);
+        $isParamOrProp = $afterSpan < $n && $tokens[$afterSpan]->id === T_VARIABLE;
+        $isReturn = self::isClosureReturnSlot($tokens, $i);
+        if (!$isParamOrProp && !$isReturn) {
+            return null;
+        }
+
+        $name = ltrim($tokens[$i]->text, '\\');
+        if ($name !== 'Closure') {
+            throw new RuntimeException(sprintf(
+                'Only "Closure" may carry a call signature, "%s" may not',
+                $name,
+            ));
+        }
+
+        $nullable = self::isNullablePrefixed($tokens, $i);
+        $signature = self::buildClosureSignature($tokens, $j, $source, $nullable);
+
+        // Erase to `\Closure`, preserving newlines (line-matched markers rely on
+        // the newline count staying constant) and blanking the rest to spaces.
+        $spanStart = $tokens[$i]->pos;
+        $nameLen = strlen($tokens[$i]->text);
+        $spanEndByte = $tokens[$spanEnd]->pos + strlen($tokens[$spanEnd]->text);
+        $tail = substr($source, $spanStart + $nameLen, $spanEndByte - ($spanStart + $nameLen));
+        $blankedTail = preg_replace('/[^\r\n]/', ' ', $tail) ?? '';
+        $replacement = '\\Closure' . $blankedTail;
+
+        return [$signature, $spanEnd, $spanStart, $spanEndByte - $spanStart, $replacement];
+    }
+
+    /**
+     * The scalar-cast token ids (`(int)`, `(bool)`, `(float)`, `(string)`,
+     * `(array)`, `(object)`, `(unset)`). A bare single-scalar signature parameter
+     * — `Closure(int)` — is lexed by PHP as one cast token rather than
+     * `(` `int` `)`, so the scanner must accept a cast token where it expects the
+     * parameter-list parens (the same collision the engine RFC handles).
+     *
+     * @return array<int, string> token-id → canonical scalar name
+     */
+    private static function castTokenScalars(): array
+    {
+        return [
+            T_INT_CAST => 'int',
+            T_BOOL_CAST => 'bool',
+            T_DOUBLE_CAST => 'float',
+            T_STRING_CAST => 'string',
+            T_ARRAY_CAST => 'array',
+            T_OBJECT_CAST => 'object',
+            T_UNSET_CAST => 'void',
+        ];
+    }
+
+    private static function isCastToken(PhpToken $tok): bool
+    {
+        return array_key_exists($tok->id, self::castTokenScalars());
+    }
+
+    /**
+     * Index of the last token of a closure signature whose parameter list opens at
+     * `$openIdx` (a `(` OR a single cast token like `(int)`): the matching `)` (or
+     * the cast token itself), extended over an optional `: <returnType>`. `null` if
+     * the parens are unbalanced.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function findClosureSigEnd(array $tokens, int $openIdx): ?int
+    {
+        $n = count($tokens);
+        if ($openIdx >= $n) {
+            return null;
+        }
+        if (self::isCastToken($tokens[$openIdx])) {
+            $closeIdx = $openIdx;
+        } elseif ($tokens[$openIdx]->text === '(') {
+            $depth = 0;
+            $closeIdx = null;
+            for ($i = $openIdx; $i < $n; $i++) {
+                $t = $tokens[$i]->text;
+                if ($t === '(') {
+                    $depth++;
+                } elseif ($t === ')') {
+                    $depth--;
+                    if ($depth === 0) {
+                        $closeIdx = $i;
+                        break;
+                    }
+                }
+            }
+            if ($closeIdx === null) {
+                return null;
+            }
+        } else {
+            return null;
+        }
+        $k = self::skipWs($tokens, $closeIdx + 1);
+        if ($k < $n && $tokens[$k]->text === ':') {
+            $retStart = self::skipWs($tokens, $k + 1);
+            return self::scanTypeExprEnd($tokens, $retStart);
+        }
+        return $closeIdx;
+    }
+
+    /**
+     * Index of the last token of a type expression starting at `$idx` — a leaf
+     * (scalar / class / `Name<…>` generic / nested `Closure(…)` / nullable) plus
+     * any `|` / `&` union-or-intersection continuation. Stops before a top-level
+     * `$var` / `{` / `;` / `,` / `)` / `=`. `null` if nothing type-shaped is there.
+     *
+     * @infection-ignore-all — flat token walk. The span it returns is pinned
+     * behaviorally (a wrong end leaves invalid residue that fails to re-parse, and the
+     * generic / union / intersection / nested-closure tests assert the exact shape);
+     * the residual mutants are walk-boundary guards and whitespace-skip offsets plus a
+     * sub-expression negation of the continuation predicate that is equivalent for the
+     * only members the caller can pass here (a name, a `?`-name, or `static`).
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function scanTypeExprEnd(array $tokens, int $idx): ?int
+    {
+        $n = count($tokens);
+        $last = null;
+        $i = $idx;
+        while ($i < $n) {
+            $t = $tokens[$i];
+            if ($t->id === T_WHITESPACE || $t->id === T_COMMENT || $t->id === T_DOC_COMMENT) {
+                $i++;
+                continue;
+            }
+            if ($t->text === '?') {
+                $last = $i;
+                $i++;
+                continue;
+            }
+            if (self::isNameToken($t) || $t->id === T_STATIC) {
+                $last = $i;
+                $la = self::skipWs($tokens, $i + 1);
+                if ($la < $n && ($tokens[$la]->text === '(' || self::isCastToken($tokens[$la])) && ltrim($t->text, '\\') === 'Closure') {
+                    $inner = self::findClosureSigEnd($tokens, $la);
+                    if ($inner === null) {
+                        return null;
+                    }
+                    $last = $inner;
+                    $i = $inner + 1;
+                } elseif ($la < $n && $tokens[$la]->text === '<') {
+                    $inner = self::findAngleEnd($tokens, $la);
+                    if ($inner === null) {
+                        return null;
+                    }
+                    $last = $inner;
+                    $i = $inner + 1;
+                } else {
+                    $i++;
+                }
+                continue;
+            }
+            if ($t->text === '|' || $t->text === '&') {
+                // `&` before a `$var` / `...` / `)` is a by-ref marker (belongs to
+                // the parameter, not the type) — stop. `&`/`|` before a Name is an
+                // intersection / union continuation.
+                $nx = self::skipWs($tokens, $i + 1);
+                $continues = $nx < $n
+                    && (self::isNameToken($tokens[$nx]) || $tokens[$nx]->text === '?' || $tokens[$nx]->id === T_STATIC);
+                if (!$continues) {
+                    break;
+                }
+                $i++;
+                continue;
+            }
+            break;
+        }
+        return $last;
+    }
+
+    /**
+     * Index of the matching `>` for a `<` at `$openIdx` (generic arg clause).
+     * Assumes `splitMergedAngleTokens` has already split `>>` etc. `null` if
+     * unbalanced.
+     *
+     * @infection-ignore-all — flat balanced-angle scan; the depth logic is pinned by
+     * the nested-generic test (a broken counter leaves a stray `>` that fails to
+     * re-parse), and the sole residual mutant is the `$i < $n` loop-bound guard, which
+     * is defensive: the caller only passes a `<` that has a matching `>`.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function findAngleEnd(array $tokens, int $openIdx): ?int
+    {
+        $n = count($tokens);
+        $depth = 0;
+        for ($i = $openIdx; $i < $n; $i++) {
+            $t = $tokens[$i]->text;
+            if ($t === '<') {
+                $depth++;
+            } elseif ($t === '>') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True iff the `Closure` at `$i` sits in a return-type slot: preceded (past an
+     * optional nullable `?` and whitespace) by `:` which is itself preceded by `)`.
+     * Keyed on `)`-then-`:` so a `case FOO: Closure($x);` label does not read as one.
+     *
+     * @infection-ignore-all — flat backward token walk. The true/false behavior is
+     * pinned behaviorally (return-position signatures are recognized; an expression
+     * `Closure(Foo::class)` is left untouched); the residual mutants are the `$q >= 0`
+     * boundary guard (index 0 is always T_OPEN_TAG, so `>= 0` never differs from `> 0`)
+     * and the `)`-before-`:` requirement, which no valid PHP can falsify — a `:` that
+     * immediately precedes a `Closure(…)` type is only ever a return-type colon.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function isClosureReturnSlot(array $tokens, int $i): bool
+    {
+        $p = self::skipWsBack($tokens, $i - 1);
+        if ($p >= 0 && $tokens[$p]->text === '?') {
+            $p = self::skipWsBack($tokens, $p - 1);
+        }
+        if ($p < 0 || $tokens[$p]->text !== ':') {
+            return false;
+        }
+        $q = self::skipWsBack($tokens, $p - 1);
+        return $q >= 0 && $tokens[$q]->text === ')';
+    }
+
+    /**
+     * True iff a `?` (nullable) immediately precedes the `Closure` at `$i`.
+     *
+     * @infection-ignore-all — flat backward token walk; the nullable/non-nullable
+     * behavior is pinned by the `?Closure` tests, and the residual `$p >= 0` guard is
+     * defensive (index 0 is always T_OPEN_TAG, so a `?` can never sit at index 0).
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function isNullablePrefixed(array $tokens, int $i): bool
+    {
+        $p = self::skipWsBack($tokens, $i - 1);
+        return $p >= 0 && $tokens[$p]->text === '?';
+    }
+
+    /**
+     * Skip whitespace/comments walking backwards from `$i`; returns the index of
+     * the first significant token at or before `$i`, or -1.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function skipWsBack(array $tokens, int $i): int
+    {
+        while ($i >= 0
+            && ($tokens[$i]->id === T_WHITESPACE || $tokens[$i]->id === T_COMMENT || $tokens[$i]->id === T_DOC_COMMENT)) {
+            $i--;
+        }
+        return $i;
+    }
+
+    /**
+     * Build the structured `ClosureSignature` for a `(` at `$openIdx`. Throws the
+     * variadic-not-last structural error. Nested `Closure(…)` leaves recurse.
+     *
+     * @infection-ignore-all — structural correctness (param arity, the cast-token
+     * single-scalar param, absent-vs-present return, the variadic-not-last throw,
+     * nested recursion) is pinned by behavioral accept/reject tests; the residual
+     * mutants are all `$i < $n` loop/lookahead guards and whitespace-skip offsets,
+     * equivalent because the param loop is terminated by the closing `)` the caller
+     * guarantees and the tightly-packed / spaced fixtures both assert the same shape.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function buildClosureSignature(array $tokens, int $openIdx, string $source, bool $nullable): ClosureSignature
+    {
+        $n = count($tokens);
+
+        // `Closure(int)` — the whole one-scalar param list is a single cast token.
+        if (self::isCastToken($tokens[$openIdx])) {
+            $scalar = self::castTokenScalars()[$tokens[$openIdx]->id];
+            // No isScalar flag here: resolveTypeRef re-derives it from SCALAR_TYPES
+            // during resolution, so setting it at scan time would be dead.
+            $params = [new ClosureSignatureParam(new SigTypeRef(new TypeRef($scalar)))];
+            $return = null;
+            $k = self::skipWs($tokens, $openIdx + 1);
+            if ($k < $n && $tokens[$k]->text === ':') {
+                [$return] = self::parseSigType($tokens, self::skipWs($tokens, $k + 1), $source);
+            }
+            return new ClosureSignature($params, $return, $nullable);
+        }
+
+        $params = [];
+        $i = self::skipWs($tokens, $openIdx + 1);
+        $sawVariadic = false;
+        while ($i < $n && $tokens[$i]->text !== ')') {
+            if ($sawVariadic) {
+                throw new RuntimeException('Only the last parameter of a Closure signature can be variadic');
+            }
+            [$param, $i] = self::parseSigParam($tokens, $i, $source);
+            $params[] = $param;
+            $sawVariadic = $param->variadic;
+            $i = self::skipWs($tokens, $i);
+            if ($i < $n && $tokens[$i]->text === ',') {
+                $i = self::skipWs($tokens, $i + 1);
+            }
+        }
+        $return = null;
+        $k = self::skipWs($tokens, min($i, $n - 1) + 1);
+        if ($k < $n && $tokens[$k]->text === ':') {
+            $retStart = self::skipWs($tokens, $k + 1);
+            [$return] = self::parseSigType($tokens, $retStart, $source);
+        }
+        return new ClosureSignature($params, $return, $nullable);
+    }
+
+    /**
+     * Parse one signature parameter `type [&] [...] [$name]` beginning at `$i`.
+     *
+     * @infection-ignore-all — flat token walk reading the optional `&`, `...` and
+     * `$name` markers in order; the by-ref / variadic capture is pinned by the by-ref,
+     * variadic, and by-ref-variadic tests, and the residual mutants are `$i < $n`
+     * lookahead guards and whitespace-skip offsets equivalent under the same inputs.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: ClosureSignatureParam, 1: int}
+     */
+    private static function parseSigParam(array $tokens, int $i, string $source): array
+    {
+        $n = count($tokens);
+        [$type, $i] = self::parseSigType($tokens, $i, $source);
+        $i = self::skipWs($tokens, $i);
+        $byRef = false;
+        $variadic = false;
+        if ($i < $n && $tokens[$i]->text === '&') {
+            $byRef = true;
+            $i = self::skipWs($tokens, $i + 1);
+        }
+        if ($i < $n && $tokens[$i]->id === T_ELLIPSIS) {
+            $variadic = true;
+            $i = self::skipWs($tokens, $i + 1);
+        }
+        if ($i < $n && $tokens[$i]->id === T_VARIABLE) {
+            $i++;
+        }
+        return [new ClosureSignatureParam($type, $byRef, $variadic), $i];
+    }
+
+    /**
+     * Parse one signature leaf type beginning at `$i` → `[SigType, nextIdx]`.
+     * A nested `Closure(…)` becomes a `SigClosure`; a plain scalar / class /
+     * type-parameter / `Name<…>` leaf becomes a `SigTypeRef` (unresolved — the
+     * resolver walks the tree later); a `?` / union / intersection leaf is kept
+     * as raw text in a `SigRaw` (structured form deferred).
+     *
+     * @infection-ignore-all — leaf-kind selection (nested `SigClosure`, compound
+     * `SigRaw`, plain `SigTypeRef`) is pinned by the nested / union / intersection /
+     * nullable-leaf tests; the residual mutants are `$i < $n` lookahead guards and
+     * whitespace-skip offsets, equivalent because every path is entered only for the
+     * balanced, type-shaped spans the caller passes.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: SigType, 1: int}
+     */
+    private static function parseSigType(array $tokens, int $i, string $source): array
+    {
+        $n = count($tokens);
+        if ($i < $n && self::isNameToken($tokens[$i]) && ltrim($tokens[$i]->text, '\\') === 'Closure') {
+            $la = self::skipWs($tokens, $i + 1);
+            if ($la < $n && ($tokens[$la]->text === '(' || self::isCastToken($tokens[$la]))) {
+                $end = self::findClosureSigEnd($tokens, $la);
+                if ($end !== null) {
+                    return [new SigClosure(self::buildClosureSignature($tokens, $la, $source, false)), $end + 1];
+                }
+            }
+        }
+
+        // A leading `?` marks a nullable leaf — keep the whole leaf raw for now.
+        $nullableLeaf = $i < $n && $tokens[$i]->text === '?';
+        $start = $i;
+        if ($nullableLeaf) {
+            $i = self::skipWs($tokens, $i + 1);
+        }
+
+        $parsed = self::parseTypeArg($tokens, $i);
+        if ($parsed === null) {
+            $end = self::scanTypeExprEnd($tokens, $start);
+            $end = $end ?? $start;
+            return [new SigRaw(self::sliceTokens($tokens, $source, $start, $end)), $end + 1];
+        }
+        [$typeRef, $afterLeaf] = $parsed;
+
+        // Union / intersection continuation → raw (structured form is a later WI).
+        $peek = self::skipWs($tokens, $afterLeaf);
+        $isCompound = $nullableLeaf
+            || ($peek < $n && ($tokens[$peek]->text === '|'
+                || ($tokens[$peek]->text === '&' && self::sigAmpersandIsIntersection($tokens, $peek))));
+        if ($isCompound) {
+            $end = self::scanTypeExprEnd($tokens, $start);
+            $end = $end ?? ($afterLeaf - 1);
+            return [new SigRaw(self::sliceTokens($tokens, $source, $start, $end)), $end + 1];
+        }
+
+        return [new SigTypeRef($typeRef), $afterLeaf];
+    }
+
+    /**
+     * True iff the `&` at `$idx` continues an intersection type (a Name follows)
+     * rather than marking a by-reference parameter (a `$var` / `...` follows).
+     *
+     * @infection-ignore-all — flat one-token lookahead; the intersection-vs-by-ref
+     * discrimination is pinned by the intersection-by-ref and intersection-member
+     * tests, and the residual `$nx < count()` guard is defensive (a `&` is only reached
+     * mid-span, never at the token-array boundary).
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function sigAmpersandIsIntersection(array $tokens, int $idx): bool
+    {
+        $nx = self::skipWs($tokens, $idx + 1);
+        return $nx < count($tokens)
+            && (self::isNameToken($tokens[$nx]) || $tokens[$nx]->text === '?' || $tokens[$nx]->id === T_STATIC);
+    }
+
+    /**
+     * Source substring spanning token indices `$from`..`$to` inclusive.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function sliceTokens(array $tokens, string $source, int $from, int $to): string
+    {
+        $start = $tokens[$from]->pos;
+        $end = $tokens[$to]->pos + strlen($tokens[$to]->text);
+        return substr($source, $start, $end - $start);
     }
 
     /**
@@ -1364,14 +1885,14 @@ final class XphpSourceParser
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers): void
     {
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new
             /**
              * @phpstan-import-type BoundDict from XphpSourceParser
              */
-            class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
+            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers) extends NodeVisitorAbstract {
             private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
@@ -1385,11 +1906,13 @@ final class XphpSourceParser
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
              * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
+             * @param array<int, array{line:int, name:string, bytePosition:int, signature:ClosureSignature}> $closureMarkers
              */
             public function __construct(
                 private array $classMarkers,
                 private array $nameMarkers,
                 private array $methodMarkers,
+                private array $closureMarkers,
             ) {
                 $this->ctx = new NamespaceContext();
             }
@@ -1692,6 +2215,7 @@ final class XphpSourceParser
             private function markType(?Node $type): void
             {
                 if ($type instanceof Name) {
+                    $this->attachClosureSig($type);
                     $this->markName($type);
                 } elseif ($type instanceof Node\NullableType) {
                     $this->markType($type->type);
@@ -1700,6 +2224,59 @@ final class XphpSourceParser
                         $this->markType($inner);
                     }
                 }
+            }
+
+            /**
+             * If a `\Closure` type Name carries a parsed closure signature (the
+             * `(…)[: ret]` was erased at scan time, leaving this surviving Name),
+             * attach the resolved signature. Matched by (line, `Closure`) and
+             * consumed in insertion order so multiple signatures on one line map to
+             * the Name nodes in source order.
+             */
+            private function attachClosureSig(Name $node): void
+            {
+                if (ltrim($node->toString(), '\\') !== 'Closure') {
+                    return;
+                }
+                foreach ($this->closureMarkers as $i => $marker) {
+                    if ($marker['line'] === $node->getStartLine()) {
+                        $node->setAttribute(
+                            XphpSourceParser::ATTR_CLOSURE_SIG,
+                            $this->resolveClosureSignature($marker['signature']),
+                        );
+                        unset($this->closureMarkers[$i]);
+                        break;
+                    }
+                }
+            }
+
+            private function resolveClosureSignature(ClosureSignature $sig): ClosureSignature
+            {
+                $params = array_map(
+                    fn (ClosureSignatureParam $p): ClosureSignatureParam => new ClosureSignatureParam(
+                        $this->resolveSigType($p->type),
+                        $p->byRef,
+                        $p->variadic,
+                    ),
+                    $sig->params,
+                );
+                $return = $sig->return === null ? null : $this->resolveSigType($sig->return);
+
+                return new ClosureSignature($params, $return, $sig->nullable);
+            }
+
+            private function resolveSigType(SigType $type): SigType
+            {
+                if ($type instanceof SigTypeRef) {
+                    return new SigTypeRef($this->resolveTypeRef($type->type));
+                }
+                if ($type instanceof SigClosure) {
+                    return new SigClosure($this->resolveClosureSignature($type->signature));
+                }
+
+                // SigRaw (union / intersection / nullable leaf) — structured
+                // resolution is a later work item; carry the raw text through.
+                return $type;
             }
 
             private function markName(Name $node): void

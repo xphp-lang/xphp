@@ -1,0 +1,743 @@
+<?php
+
+declare(strict_types=1);
+
+namespace XPHP\Transpiler\Monomorphize;
+
+use PhpParser\Node;
+use PhpParser\Node\Name;
+use PhpParser\ParserFactory;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * Parsing + erasure of closure-signature types (`Closure(int $x): bool`).
+ *
+ * WI-01 scope: the scanner recognizes a `Closure(...)[: ret]` production in a
+ * type slot, erases it to a bare `\Closure` (newline-preserving so line-keyed
+ * markers stay aligned), and attaches the structured {@see ClosureSignature} as
+ * an AST attribute for the later conformance validator. Union / intersection /
+ * nullable leaf types are carried as raw text ({@see SigRaw}); their structured
+ * form is a later work item. No conformance checking happens here.
+ */
+final class ClosureSignatureParseTest extends TestCase
+{
+    // ===================================================================
+    // Shape: the attached ClosureSignature matches the source
+    // ===================================================================
+
+    public function testParsesNamedParametersAndReturn(): void
+    {
+        $sig = self::firstSig('<?php function f(Closure(int $x, string $y): bool $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertTrue(self::isScalarRef($sig->params[0]->type));
+        self::assertSame('string', self::refName($sig->params[1]->type));
+        self::assertSame('bool', self::refName($sig->return));
+        self::assertFalse($sig->nullable);
+    }
+
+    public function testParametersMayOmitNames(): void
+    {
+        // Names are insignificant to conformance; a bare `Closure(int, int): int`
+        // must parse to two params exactly like the named form.
+        $sig = self::firstSig('<?php class C { public Closure(int, int): int $op; }');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertSame('int', self::refName($sig->params[1]->type));
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testSingleScalarParameterLexedAsCastTokenIsParsed(): void
+    {
+        // `Closure(int)` — PHP lexes `(int)` as ONE T_INT_CAST token, not
+        // `(` `int` `)`. The scanner must accept the cast token as the whole
+        // one-scalar parameter list (the same collision the engine RFC handles).
+        $sig = self::firstSig('<?php function s(Closure(int): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertTrue(self::isScalarRef($sig->params[0]->type));
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testEachCastTokenScalarMapsToItsCanonicalName(): void
+    {
+        // Locks the castTokenScalars() id→name table: every single-scalar param
+        // spelled as a cast token resolves to the right scalar. `(unset)` has no
+        // matching scalar type, so it maps to `void` (the RFC's bottom return),
+        // exercised via the return slot below.
+        $cases = [
+            '(int): void' => 'int',
+            '(bool): void' => 'bool',
+            '(float): void' => 'float',
+            '(string): void' => 'string',
+            '(array): void' => 'array',
+            '(object): void' => 'object',
+        ];
+        foreach ($cases as $spelling => $expected) {
+            $sig = self::firstSig("<?php function f(Closure{$spelling} \$c) {}");
+            self::assertNotNull($sig, "sig for Closure{$spelling}");
+            self::assertCount(1, $sig->params, "one param for Closure{$spelling}");
+            self::assertSame($expected, self::refName($sig->params[0]->type), "Closure{$spelling}");
+        }
+    }
+
+    public function testUnsetCastTokenMapsToVoid(): void
+    {
+        // `(unset)` is a cast token with no scalar-type spelling; the table maps
+        // it to `void`. Kept as its own test so the assertion is unambiguous.
+        $sig = self::firstSig('<?php function f(Closure(unset): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('void', self::refName($sig->params[0]->type));
+    }
+
+    public function testReturnPositionSignatureIsRecognized(): void
+    {
+        // `Closure` in a return slot (`) : Closure(): int`) is a type, not a call.
+        $sig = self::firstSig('<?php function g(): Closure(): int {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(0, $sig->params);
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testNoParametersAndNoReturnIsDistinctFromMixed(): void
+    {
+        // An ABSENT return is `$return === null` — kept distinct from `: mixed`.
+        $sig = self::firstSig('<?php function h(Closure() $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(0, $sig->params);
+        self::assertNull($sig->return, 'absent return must stay null, not default to mixed');
+    }
+
+    public function testNullablePrefixSetsNullableFlag(): void
+    {
+        // `?Closure(int): int` — the `?` precedes the erased `\Closure`; nullable
+        // is captured on the signature (the emitted `?\Closure` carries the PHP
+        // nullability, the flag records it for conformance).
+        $sig = self::firstSig('<?php function h(?Closure(int): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertTrue($sig->nullable);
+        self::assertCount(1, $sig->params);
+    }
+
+    public function testByRefAndVariadicMarkersAreCaptured(): void
+    {
+        $sig = self::firstSig('<?php function m(Closure(int &$r, string ...$rest): void $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertTrue($sig->params[0]->byRef, 'first param is by-reference');
+        self::assertFalse($sig->params[0]->variadic);
+        self::assertFalse($sig->params[1]->byRef);
+        self::assertTrue($sig->params[1]->variadic, 'last param is variadic');
+        self::assertSame('void', self::refName($sig->return));
+    }
+
+    public function testNestedClosureParameterAndReturnRecurse(): void
+    {
+        // `Closure(Closure(int): int): Closure(): string` — the param type and the
+        // return type are themselves closure signatures (SigClosure), not TypeRefs.
+        $sig = self::firstSig('<?php function nn(Closure(Closure(int): int): Closure(): string $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        $inner = $sig->params[0]->type;
+        self::assertInstanceOf(SigClosure::class, $inner);
+        self::assertCount(1, $inner->signature->params);
+        self::assertSame('int', self::refName($inner->signature->params[0]->type));
+        self::assertSame('int', self::refName($inner->signature->return));
+        self::assertFalse($inner->signature->nullable, 'a nested closure is not nullable unless prefixed with `?`');
+
+        self::assertInstanceOf(SigClosure::class, $sig->return);
+        self::assertCount(0, $sig->return->signature->params);
+        self::assertSame('string', self::refName($sig->return->signature->return));
+        self::assertFalse($sig->return->signature->nullable);
+    }
+
+    public function testFullyQualifiedClosureNameCarriesSignature(): void
+    {
+        // A `\Closure(int): int` written fully-qualified must normalize to `Closure`
+        // (leading-`\` stripped) before the only-`Closure` check, so it is accepted
+        // and carries a signature — not rejected as a non-`Closure` name.
+        $sig = self::firstSig('<?php function f(\Closure(int): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testFullyQualifiedNestedClosureNameIsRecognized(): void
+    {
+        // Same leading-`\` normalization on a NESTED closure leaf.
+        $sig = self::firstSig('<?php function f(Closure(\Closure(int): int): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigClosure::class, $sig->params[0]->type);
+        self::assertSame('int', self::refName($sig->params[0]->type->signature->params[0]->type));
+    }
+
+    public function testUnionMembersIncludingNullableAndStaticContinueTheScan(): void
+    {
+        // `A|?B|static` — the scan's union continuation must accept a `?`-prefixed
+        // member AND a `static` member, not just plain names. A predicate that drops
+        // either would stop the span early and leave unparseable residue.
+        $source = '<?php function f(): Closure(): A|?B|static {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('A|?B|static', $sig->return->raw);
+    }
+
+    public function testIntersectionMembersIncludingNullableAndStaticAreDetected(): void
+    {
+        // The intersection-vs-by-ref discriminator must treat a `?`-prefixed name and
+        // a `static` after `&` as intersection continuations (not by-ref markers).
+        $nullableMember = self::firstSig('<?php function f(Closure(A&?B): void $c) {}');
+        self::assertNotNull($nullableMember);
+        self::assertInstanceOf(SigRaw::class, $nullableMember->params[0]->type);
+        self::assertSame('A&?B', $nullableMember->params[0]->type->raw);
+
+        $staticMember = self::firstSig('<?php function f(Closure(A&static): void $c) {}');
+        self::assertNotNull($staticMember);
+        self::assertInstanceOf(SigRaw::class, $staticMember->params[0]->type);
+        self::assertSame('A&static', $staticMember->params[0]->type->raw);
+    }
+
+    public function testTypeParametersInSignatureResolveAsTypeParamRefs(): void
+    {
+        // Generics in scope: a `Closure(T): U` inside a generic class must carry
+        // the enclosing type params as type-param TypeRefs so a later work item can
+        // substitute them per specialization.
+        $sig = self::firstSig(<<<'PHP'
+        <?php
+        namespace App;
+        class Mapper<T, U> {
+            public function make(Closure(T): U $fn): void {}
+        }
+        PHP);
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        $param = $sig->params[0]->type;
+        self::assertInstanceOf(SigTypeRef::class, $param);
+        self::assertSame('T', $param->type->name);
+        self::assertTrue($param->type->isTypeParam, 'T must resolve as an enclosing type-param, not a class');
+        self::assertInstanceOf(SigTypeRef::class, $sig->return);
+        self::assertTrue($sig->return->type->isTypeParam, 'U must resolve as an enclosing type-param');
+    }
+
+    public function testClassTypeParameterResolvesAgainstNamespace(): void
+    {
+        // A non-type-param class name in a signature resolves against the namespace
+        // like any other type reference (reusing resolveTypeRef).
+        $sig = self::firstSig(<<<'PHP'
+        <?php
+        namespace App;
+        function f(Closure(Widget): Gadget $c) {}
+        PHP);
+
+        self::assertNotNull($sig);
+        self::assertSame('App\\Widget', self::refName($sig->params[0]->type));
+        self::assertSame('App\\Gadget', self::refName($sig->return));
+    }
+
+    // ===================================================================
+    // Erasure: output is valid PHP, line-stable, and executes
+    // ===================================================================
+
+    public function testErasesToBareClosureLeavingNoSignatureResidue(): void
+    {
+        $stripped = self::strip('<?php function f(Closure(int $x, string $y): bool $c) {}');
+
+        self::assertStringContainsString('\\Closure', $stripped);
+        self::assertStringNotContainsString('int $x', $stripped);
+        self::assertStringNotContainsString('): bool', $stripped);
+        // The param variable that follows the whole signature must survive.
+        self::assertStringContainsString('$c', $stripped);
+    }
+
+    public function testErasurePreservesLineCountForLaterMarkers(): void
+    {
+        // A multi-line signature must not change the total line count — line-keyed
+        // markers on later lines rely on newline positions staying fixed.
+        $source = <<<'PHP'
+        <?php
+        namespace App;
+        class C<T> {
+            public function build(
+                Closure(
+                    int $x,
+                    string $y
+                ): bool $cb
+            ): void {}
+            public Box<T> $b;
+        }
+        PHP;
+        $stripped = self::strip($source);
+
+        self::assertSame(
+            substr_count($source, "\n"),
+            substr_count($stripped, "\n"),
+            'newline count must be identical before and after erasure',
+        );
+        // The Box<T> marker on a later line must still resolve after the multi-line
+        // erasure — proving the line counter stayed aligned.
+        $sig = self::firstSig($source);
+        self::assertNotNull($sig);
+    }
+
+    public function testErasureAtColumnZeroKeepsLaterMarkersAligned(): void
+    {
+        // A signature whose `Closure` sits at column 0 (start of its line) stresses the
+        // erasure byte math: the newline-preserving blank must span exactly the
+        // signature bytes and not shift the preceding newline. If it did, the `Box<T>`
+        // marker two lines below would desync and no longer resolve as a type param.
+        $source = "<?php\n"
+            . "namespace App;\n"
+            . "class C<T> {\n"
+            . "    public function f(\n"
+            . "Closure(int): int \$cb\n"
+            . "    ): void {}\n"
+            . "    public Box<T> \$b;\n"
+            . "}\n";
+
+        $args = self::genericArgs($source, 'Box');
+        self::assertCount(1, $args);
+        self::assertTrue(
+            $args[0]->isTypeParam,
+            'Box<T> below a column-0 closure signature must stay line-aligned to resolve as a type param',
+        );
+    }
+
+    public function testErasedSignatureCompilesAndExecutesInNamespace(): void
+    {
+        // A bare `Closure` in a namespace would fatal (`App\Closure` doesn't exist);
+        // erasure MUST emit the fully-qualified `\Closure`. Round-trip through PHP.
+        $source = <<<'PHP'
+        <?php
+        namespace App;
+        function apply(Closure(int): int $fn, int $n): int {
+            return $fn($n);
+        }
+        PHP;
+        $stripped = self::strip($source);
+
+        $harness = $stripped . "\n\$r = \\App\\apply(fn(int \$x): int => \$x + 1, 41);\necho \$r;";
+        $out = self::runPhp($harness);
+        self::assertSame('42', $out);
+    }
+
+    // ===================================================================
+    // Union / intersection leaves are erased but carried raw (WI-03)
+    // ===================================================================
+
+    public function testUnionAndIntersectionLeavesAreErasedAndCarriedRaw(): void
+    {
+        $source = '<?php function u(Closure(A&B): C|null $c) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('A&B', $sig->params[0]->type->raw);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('C|null', $sig->return->raw);
+
+        // Still fully erased to a bare \Closure.
+        $stripped = self::strip($source);
+        self::assertStringContainsString('\\Closure', $stripped);
+        self::assertStringNotContainsString('A&B', $stripped);
+        self::assertStringNotContainsString('C|null', $stripped);
+    }
+
+    public function testNullableLeafInsideSignatureIsCarriedRaw(): void
+    {
+        // A `?Type` leaf INSIDE the signature (distinct from an outer `?Closure`)
+        // is kept raw until the structured-union work item.
+        $sig = self::firstSig('<?php function f(Closure(?int): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('?int', $sig->params[0]->type->raw);
+        self::assertFalse($sig->nullable, 'the inner `?int` must not set the outer nullable flag');
+    }
+
+    // ===================================================================
+    // Structural rejects
+    // ===================================================================
+
+    public function testOnlyClosureMayCarryACallSignature(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Only "Closure" may carry a call signature, "Foo" may not');
+        self::strip('<?php function f(Foo(int): int $c) {}');
+    }
+
+    public function testVariadicParameterMustBeLast(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Only the last parameter of a Closure signature can be variadic');
+        self::strip('<?php function f(Closure(int ...$rest, string $tail): void $c) {}');
+    }
+
+    // ===================================================================
+    // No false positives — expression-context `Closure(` must be untouched
+    // ===================================================================
+
+    public function testCallToUserFunctionNamedClosureIsNotTreatedAsSignature(): void
+    {
+        $source = "<?php function Closure(\$n) { return \$n; }\n\$y = Closure(5);";
+
+        self::assertNull(self::firstSig($source), 'a call `Closure(5)` is not a type signature');
+        // Source is left intact (no erasure) so the call still works.
+        $stripped = self::strip($source);
+        self::assertStringContainsString('Closure(5)', $stripped);
+        self::assertStringNotContainsString('\\Closure', $stripped);
+    }
+
+    public function testInstanceofClosureIsNotTreatedAsSignature(): void
+    {
+        $source = '<?php $r = $c instanceof Closure;';
+
+        self::assertNull(self::firstSig($source));
+        self::assertSame(rtrim($source), rtrim(self::strip($source)), 'instanceof Closure must be untouched');
+    }
+
+    public function testPlainClosureTypeHintWithoutSignatureIsUntouched(): void
+    {
+        // A bare `Closure $c` hint (no `(`) is an ordinary type — no marker, and
+        // the scanner must not rewrite it.
+        $source = '<?php function f(Closure $c) {}';
+
+        self::assertNull(self::firstSig($source));
+        self::assertStringContainsString('Closure $c', self::strip($source));
+        self::assertStringNotContainsString('\\Closure', self::strip($source));
+    }
+
+    public function testSignatureShapedCallInExpressionContextIsNotErased(): void
+    {
+        // A call whose first argument is a NAME (`Closure(Foo::class)`) passes the
+        // cheap type-ish pre-filter, so only the POSITION GATE distinguishes it: the
+        // `)` is followed by `;`, not a `$var`, and it is not a return slot, so the
+        // production falls through untouched. Locks the gate independently of the
+        // pre-filter (which the literal-argument tests above cover).
+        $source = "<?php \$x = Closure(Foo::class);";
+
+        self::assertNull(self::firstSig($source));
+        self::assertStringContainsString('Closure(Foo::class)', self::strip($source));
+        self::assertStringNotContainsString('\\Closure', self::strip($source));
+    }
+
+    public function testSourceWithoutAnyClosureSignatureIsReturnedUnchanged(): void
+    {
+        $source = <<<'PHP'
+        <?php
+        namespace App;
+        class Box<T> {
+            public T $item;
+            public function get(): T { return $this->item; }
+        }
+        PHP;
+        // No closure signature anywhere → the strip output must be byte-identical
+        // to the generic-only erasure it would already produce (no closure marker
+        // interference). We only assert no \Closure was introduced.
+        self::assertStringNotContainsString('\\Closure', self::strip($source));
+    }
+
+    // ===================================================================
+    // Adversarial span / token-walk coverage. `parse()` runs the erasure
+    // through nikic, so a signature span that ends too early or too late
+    // leaves invalid residue and fails to parse — every assertion here both
+    // checks the parsed shape AND (implicitly, via firstSig calling parse())
+    // proves the erased output is still valid PHP.
+    // ===================================================================
+
+    public function testGenericTypeInReturnPositionIsParsedAndErased(): void
+    {
+        // A `Name<...>` return type: scanTypeExprEnd must extend the span across
+        // the angle clause (findAngleEnd), and parseSigType must keep the generic
+        // args. A span that stops at `Vec` would leave `<int>` as invalid residue.
+        $sig = self::firstSig('<?php function f(): Closure(): Vec<int> {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigTypeRef::class, $sig->return);
+        self::assertSame('Vec', $sig->return->type->name);
+        self::assertCount(1, $sig->return->type->args);
+        self::assertSame('int', $sig->return->type->args[0]->name);
+    }
+
+    public function testNestedGenericAnglesInSignatureEraseFully(): void
+    {
+        // `Map<K, Vec<V>>` — the `>>` is two levels of angle nesting. findAngleEnd's
+        // depth counter must reach zero only at the OUTER `>`; a broken counter
+        // ends the span at the inner `>` and leaves `>` residue (unparseable).
+        $source = '<?php function f(Closure(Map<K, Vec<V>>): bool $c) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        $paramType = $sig->params[0]->type;
+        self::assertInstanceOf(SigTypeRef::class, $paramType);
+        self::assertSame('Map', $paramType->type->name);
+        self::assertCount(2, $paramType->type->args);
+
+        // Fully erased: no fragment of the nested generic survives (and firstSig
+        // above already proved the erased output re-parses).
+        $stripped = self::strip($source);
+        self::assertStringNotContainsString('Map', $stripped);
+        self::assertStringNotContainsString('Vec', $stripped);
+        self::assertStringNotContainsString('>', $stripped);
+    }
+
+    public function testThreeMemberUnionReturnCarriesFullRawAndErases(): void
+    {
+        // `A|B|C` drives scanTypeExprEnd's `|`-continuation loop twice. A span that
+        // stops after the first `|` yields raw `A|B` and leaves `|C` residue.
+        $source = '<?php function f(): Closure(): A|B|C {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('A|B|C', $sig->return->raw);
+        self::assertStringNotContainsString('A|B|C', self::strip($source));
+    }
+
+    public function testIntersectionByReferenceParameterSeparatesTypeFromMarker(): void
+    {
+        // `A&B &$r` — the FIRST `&` is an intersection continuation (a Name follows),
+        // the SECOND `&` is the by-ref marker (a `$var` follows). scanTypeExprEnd must
+        // consume the first and STOP at the second (its non-continuing-`&` break);
+        // parseSigParam then reads the by-ref marker.
+        $source = '<?php function f(Closure(A&B &$r): void $c) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertInstanceOf(SigRaw::class, $sig->params[0]->type);
+        self::assertSame('A&B', $sig->params[0]->type->raw);
+        self::assertTrue($sig->params[0]->byRef, 'the second `&` is the by-ref marker');
+        self::assertSame('void', self::refName($sig->return));
+    }
+
+    public function testWhitespaceAndCommentsWithinSignatureAreSkipped(): void
+    {
+        // Spaces around every token and a comment between params — exercises the
+        // forward whitespace/comment skips in the param/return walk.
+        $source = '<?php function f(Closure( int $x , /* c */ string $y ) : bool $c) {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertSame('string', self::refName($sig->params[1]->type));
+        self::assertSame('bool', self::refName($sig->return));
+    }
+
+    public function testCommentBetweenNullableAndClosureStillMarksNullable(): void
+    {
+        // The backward walk (skipWsBack) that finds a leading `?` must skip a comment
+        // sitting between the `?` and `Closure`.
+        $sig = self::firstSig('<?php function f(?/* n */Closure(int): int $c) {}');
+
+        self::assertNotNull($sig);
+        self::assertTrue($sig->nullable);
+    }
+
+    public function testTightlyPackedSignatureIsParsed(): void
+    {
+        // No whitespace anywhere — the token walks must advance to the next
+        // SIGNIFICANT token, not blindly by one index (which coincides only when a
+        // whitespace token happens to sit between). Locks the comma / colon skips.
+        $sig = self::firstSig('<?php function f(Closure(int,string):bool $c){}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertSame('string', self::refName($sig->params[1]->type));
+        self::assertSame('bool', self::refName($sig->return));
+    }
+
+    public function testTightlyPackedCastParamAndReturn(): void
+    {
+        // `Closure(int):int` — cast-token param list immediately followed by `:int`
+        // with no surrounding whitespace.
+        $sig = self::firstSig('<?php function f(Closure(int):int $c){}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+        self::assertSame('int', self::refName($sig->return));
+    }
+
+    public function testByReferenceVariadicParameterCapturesBothMarkers(): void
+    {
+        // `int&...$rest` — a by-reference variadic. The `&` (by-ref) and `...`
+        // (variadic) must both be read, in order, off the same parameter; a skip that
+        // overshoots the `&` would miss the `...` and drop the variadic flag.
+        $sig = self::firstSig('<?php function f(Closure(int&...$rest):void $c){}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertTrue($sig->params[0]->byRef);
+        self::assertTrue($sig->params[0]->variadic);
+        self::assertSame('int', self::refName($sig->params[0]->type));
+    }
+
+    public function testNestedClosureInnerTypeIsResolvedAgainstNamespace(): void
+    {
+        // The resolver must recurse INTO a nested closure: an inner class name is
+        // namespace-resolved (`Widget` → `App\Widget`). Without the recursion the
+        // inner leaf would stay the bare, unresolved `Widget`.
+        $sig = self::firstSig(<<<'PHP'
+        <?php
+        namespace App;
+        function f(Closure(Closure(Widget): int): int $c) {}
+        PHP);
+
+        self::assertNotNull($sig);
+        $inner = $sig->params[0]->type;
+        self::assertInstanceOf(SigClosure::class, $inner);
+        self::assertSame('App\\Widget', self::refName($inner->signature->params[0]->type));
+    }
+
+    // ===================================================================
+    // Multiple signatures on one line map to Name nodes in source order
+    // ===================================================================
+
+    public function testTwoSignaturesOnOneLineMapToNamesInSourceOrder(): void
+    {
+        $sigs = self::allSigs('<?php function f(Closure(int): int $a, Closure(string): bool $b) {}');
+
+        self::assertCount(2, $sigs);
+        self::assertSame('int', self::refName($sigs[0]->params[0]->type));
+        self::assertSame('int', self::refName($sigs[0]->return));
+        self::assertSame('string', self::refName($sigs[1]->params[0]->type));
+        self::assertSame('bool', self::refName($sigs[1]->return));
+    }
+
+    // ===================================================================
+    // Helpers
+    // ===================================================================
+
+    private static function parser(): XphpSourceParser
+    {
+        return new XphpSourceParser((new ParserFactory())->createForHostVersion());
+    }
+
+    private static function strip(string $source): string
+    {
+        return self::parser()->strip($source);
+    }
+
+    /** The ClosureSignature attached to the first `\Closure` Name, or null. */
+    private static function firstSig(string $source): ?ClosureSignature
+    {
+        return self::allSigs($source)[0] ?? null;
+    }
+
+    /**
+     * Every attached ClosureSignature in source (traversal) order.
+     *
+     * @return list<ClosureSignature>
+     */
+    private static function allSigs(string $source): array
+    {
+        $ast = self::parser()->parse($source);
+        $found = [];
+        $walker = function ($nodes) use (&$walker, &$found): void {
+            foreach ($nodes as $node) {
+                if ($node instanceof Name) {
+                    $sig = $node->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG);
+                    if ($sig instanceof ClosureSignature) {
+                        $found[] = $sig;
+                    }
+                }
+                if (is_object($node) && method_exists($node, 'getSubNodeNames')) {
+                    foreach ($node->getSubNodeNames() as $name) {
+                        $value = $node->$name;
+                        if (is_array($value)) {
+                            $walker($value);
+                        } elseif (is_object($value)) {
+                            $walker([$value]);
+                        }
+                    }
+                }
+            }
+        };
+        $walker($ast);
+        return $found;
+    }
+
+    /**
+     * The ATTR_GENERIC_ARGS attached to the first Name matching $nameLookup.
+     *
+     * @return list<TypeRef>
+     */
+    private static function genericArgs(string $source, string $nameLookup): array
+    {
+        $ast = self::parser()->parse($source);
+        $found = [];
+        $walker = function ($nodes) use (&$walker, &$found, $nameLookup): void {
+            foreach ($nodes as $node) {
+                if ($found) {
+                    return;
+                }
+                if ($node instanceof Name && $node->toString() === $nameLookup) {
+                    $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                    if (is_array($args)) {
+                        $found = $args;
+                        return;
+                    }
+                }
+                if (is_object($node) && method_exists($node, 'getSubNodeNames')) {
+                    foreach ($node->getSubNodeNames() as $name) {
+                        $value = $node->$name;
+                        if (is_array($value)) {
+                            $walker($value);
+                        } elseif (is_object($value)) {
+                            $walker([$value]);
+                        }
+                    }
+                }
+            }
+        };
+        $walker($ast);
+        return $found;
+    }
+
+    private static function refName(?SigType $type): ?string
+    {
+        if (!$type instanceof SigTypeRef) {
+            return null;
+        }
+        return $type->type->name;
+    }
+
+    private static function isScalarRef(SigType $type): bool
+    {
+        return $type instanceof SigTypeRef && $type->type->isScalar;
+    }
+
+    private static function runPhp(string $code): string
+    {
+        $file = tempnam(sys_get_temp_dir(), 'xphp_closure_sig_') ?: throw new \RuntimeException('tempnam failed');
+        try {
+            file_put_contents($file, $code);
+            $output = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($file) . ' 2>&1');
+            return trim((string) $output);
+        } finally {
+            @unlink($file);
+        }
+    }
+}
