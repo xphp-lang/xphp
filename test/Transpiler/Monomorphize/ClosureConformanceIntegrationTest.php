@@ -77,6 +77,20 @@ final class ClosureConformanceIntegrationTest extends TestCase
         }
     }
 
+    public function testGroundedUnionMemberFailsWhenTypeParameterResolvesToAConflict(): void
+    {
+        // `Closure(): T|int` grounds to `string|int` under `Box<string>`; the class
+        // return literal is provably neither member, so the union member grounding
+        // turns a gradual accept at the template into a build failure.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('is not a subtype of string|int');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_conformance_grounded_union_reject/source',
+            'closure-conformance-grounded-union',
+        );
+    }
+
     public function testGroundedGenericClosureFailsWhenTypeParameterResolvesToAConflict(): void
     {
         // Gradually accepted at the abstract template, but once `Box<int>` grounds

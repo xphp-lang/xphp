@@ -59,6 +59,40 @@ final class SpecializerClosureSignatureTest extends TestCase
         self::assertSame('int', self::leafName($outerParam->signature->return));
     }
 
+    public function testTypeParameterInsideUnionMemberIsSubstituted(): void
+    {
+        // Closure(T|int $x) grounds the T member alongside the concrete int member.
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigUnion([
+                new SigTypeRef(self::typeParam('T')),
+                new SigTypeRef(self::scalar('int')),
+            ]))],
+            null,
+        );
+
+        $grounded = Specializer::substituteClosureSignature($sig, ['T' => new TypeRef('App\\Apple')]);
+
+        $param = $grounded->params[0]->type;
+        self::assertInstanceOf(SigUnion::class, $param);
+        self::assertSame('App\\Apple', self::leafName($param->members[0]));
+        self::assertSame('int', self::leafName($param->members[1]));
+    }
+
+    public function testTypeParameterInsideIntersectionMemberIsSubstituted(): void
+    {
+        $sig = new ClosureSignature([], new SigIntersection([
+            new SigTypeRef(self::typeParam('T')),
+            new SigTypeRef(new TypeRef('App\\Countable')),
+        ]));
+
+        $grounded = Specializer::substituteClosureSignature($sig, ['T' => new TypeRef('App\\Apple')]);
+
+        $ret = $grounded->return;
+        self::assertInstanceOf(SigIntersection::class, $ret);
+        self::assertSame('App\\Apple', self::leafName($ret->members[0]));
+        self::assertSame('App\\Countable', self::leafName($ret->members[1]));
+    }
+
     public function testRawLeafIsCarriedThroughUnchanged(): void
     {
         $raw = new SigRaw('int|string');

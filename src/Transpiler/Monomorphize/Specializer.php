@@ -424,8 +424,20 @@ final class Specializer
         if ($type instanceof SigClosure) {
             return new SigClosure(self::substituteClosureSignature($type->signature, $subst));
         }
+        if ($type instanceof SigUnion) {
+            return new SigUnion(array_map(
+                static fn (SigType $m): SigType => self::substituteSigType($m, $subst),
+                $type->members,
+            ));
+        }
+        if ($type instanceof SigIntersection) {
+            return new SigIntersection(array_map(
+                static fn (SigType $m): SigType => self::substituteSigType($m, $subst),
+                $type->members,
+            ));
+        }
 
-        // SigRaw (union / intersection / nullable) is gradual and unstructured;
+        // SigRaw (an unstructured DNF / scalar-bearing intersection) is gradual;
         // there is nothing to ground.
         return $type;
     }

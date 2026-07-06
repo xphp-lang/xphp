@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureUnionGround;
+
+class Fruit
+{
+}
+
+// At the template, `Closure(): T|int` has a gradual `T` member, so the class
+// return literal is accepted. Specialized as `Box<string>`, the union grounds to
+// `string|int` — the `Fruit` literal is provably neither, so compilation fails.
+class Box<T>
+{
+    public function make(): Closure(): T|int
+    {
+        return fn(): Fruit => new Fruit();
+    }
+}
+
+$box = new Box::<string>();
