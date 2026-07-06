@@ -199,6 +199,18 @@ _In progress on this branch — content still accumulating; date set at tag time
   three parameters — wrongly rejecting a conforming factory literal on arity.
   The sugar now lowers to `array` inside signatures, the same lowering it gets
   everywhere else, and is checked as a gradual `array` leaf.
+- **Provable violations against built-in target types are now caught.** A factory
+  whose literal returns a class with fully-known, built-in-free ancestry checked
+  against a built-in target (`Closure(): \Throwable` returning a plain user
+  class) was silently accepted — the guard treated EVERY built-in target as
+  unprovable. When the candidate's whole ancestry is declared user code, the
+  non-relation is provable and now fails the build. Everything genuinely
+  satisfiable at runtime keeps compiling: subclasses of built-ins
+  (`extends \Exception` vs `\Throwable`), enums against interfaces they
+  implement (enum `implements` clauses and the implicit `UnitEnum`/`BackedEnum`
+  edges are now modeled — which also lets `T : UnitEnum` bounds accept enum
+  arguments), `__toString` classes against `\Stringable`, and candidates with
+  any unknown ancestor.
 - **Expression-position `Closure(...)` calls are never mistaken for return types.**
   The return-slot detector keyed on a bare `) :` pair — which ternaries,
   `case expr():` labels, and alt-syntax blocks (`if/elseif/while/for/foreach/
