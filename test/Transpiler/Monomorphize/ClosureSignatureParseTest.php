@@ -627,7 +627,179 @@ final class ClosureSignatureParseTest extends TestCase
     }
 
     // ===================================================================
+    // Reserved-word type keywords: `array` / `callable` / `static` lex as their
+    // own tokens (T_ARRAY / T_CALLABLE / T_STATIC), not T_STRING, so they must be
+    // recognized as type names — otherwise the signature fails to erase.
+    // ===================================================================
+
+    public function testArrayAsFirstParameterErasesAndParses(): void
+    {
+        $sig = self::firstSig('<?php function f(Closure(array $a): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(1, $sig->params);
+        self::assertSame('array', self::refName($sig->params[0]->type));
+        self::assertSame('void', self::refName($sig->return));
+    }
+
+    public function testCallableAsReturnTypeErasesAndParses(): void
+    {
+        $sig = self::firstSig('<?php function f(): Closure(): callable {}');
+
+        self::assertNotNull($sig);
+        self::assertSame('callable', self::refName($sig->return));
+    }
+
+    public function testArrayAsNonFirstParameterIsAStructuredLeaf(): void
+    {
+        // Not just erased — represented as a SigTypeRef, not raw text.
+        $sig = self::firstSig('<?php function f(Closure(int $a, array $b): void $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertCount(2, $sig->params);
+        self::assertSame('array', self::refName($sig->params[1]->type));
+    }
+
+    public function testStaticAsReturnTypeIsAStructuredLeaf(): void
+    {
+        $sig = self::firstSig('<?php function f(Closure(): static $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertSame('static', self::refName($sig->return));
+    }
+
+    public function testUnionWithArrayMemberErasesFullyWithoutResidue(): void
+    {
+        // Regression: `int|array` once stopped the span at `int`, leaving `|array`
+        // which re-parsed into a bogus `\Closure|array` return type (unsound). The
+        // whole union must erase and be carried raw.
+        $source = '<?php function f(): Closure(): int|array {}';
+        $sig = self::firstSig($source);
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('int|array', $sig->return->raw);
+
+        $stripped = self::strip($source);
+        self::assertStringNotContainsString('|array', $stripped);
+        self::assertStringNotContainsString('|', $stripped);
+    }
+
+    public function testNullableArrayLeafErasesAndIsCarriedRaw(): void
+    {
+        $sig = self::firstSig('<?php function f(Closure(): ?array $cb) {}');
+
+        self::assertNotNull($sig);
+        self::assertInstanceOf(SigRaw::class, $sig->return);
+        self::assertSame('?array', $sig->return->raw);
+    }
+
+    // ===================================================================
+    // Marker attaches to the exact Name it belongs to — a plain `Closure`
+    // hint sharing a line with a real signature must not steal the marker.
+    // ===================================================================
+
+    public function testPlainClosureHintDoesNotStealASiblingSignature(): void
+    {
+        // param $a is a plain `Closure`; param $b carries the signature. The marker
+        // must land on $b, not the earlier plain $a.
+        $names = self::closureTypeNamesInOrder('<?php function f(Closure $a, Closure(int): int $b) {}');
+
+        self::assertCount(2, $names);
+        self::assertNull($names[0], 'the plain `Closure $a` hint must carry no signature');
+        self::assertNotNull($names[1], 'the signature must attach to `Closure(int): int $b`');
+        self::assertSame('int', self::refName($names[1]->return));
+    }
+
+    public function testSignatureParamDoesNotLeakToPlainClosureReturn(): void
+    {
+        // param $a carries the signature; the bare `Closure` return type is plain.
+        $names = self::closureTypeNamesInOrder('<?php function f(Closure(int): int $a): Closure {}');
+
+        self::assertCount(2, $names);
+        self::assertNotNull($names[0], 'the signature must attach to the `Closure(int): int $a` param');
+        self::assertNull($names[1], 'the bare `Closure` return type must carry no signature');
+    }
+
+    // ===================================================================
+    // Byte-length preservation: erasure must not shift positions of later
+    // byte-keyed markers (anonymous-closure generics).
+    // ===================================================================
+
+    public function testErasureDoesNotShiftLaterByteKeyedMarkers(): void
+    {
+        // An anonymous generic closure is matched by BYTE POSITION. A closure
+        // signature earlier in the file must erase to an equal-length span so the
+        // later closure's `<T>` marker still aligns and attaches.
+        $source = "<?php\n"
+            . "function outer(Closure(int): int \$cb) {}\n"
+            . "\$f = function <T>(T \$x): T { return \$x; };\n";
+
+        $ast = self::parser()->parse($source);
+        $params = null;
+        $walker = function ($nodes) use (&$walker, &$params): void {
+            foreach ($nodes as $node) {
+                if ($node instanceof Node\Expr\Closure) {
+                    $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                }
+                if (is_object($node) && method_exists($node, 'getSubNodeNames')) {
+                    foreach ($node->getSubNodeNames() as $name) {
+                        $value = $node->$name;
+                        if (is_array($value)) {
+                            $walker($value);
+                        } elseif (is_object($value)) {
+                            $walker([$value]);
+                        }
+                    }
+                }
+            }
+        };
+        $walker($ast);
+
+        self::assertIsArray($params, 'the anonymous closure generic marker must still attach after a closure-sig erasure');
+        self::assertCount(1, $params);
+        self::assertSame('T', $params[0]->name);
+    }
+
+    // ===================================================================
     // Helpers
+    // ===================================================================
+
+    /**
+     * The signature (or null) attached to each `Closure`/`\Closure` type Name in
+     * the source, in traversal order — one entry per Name, so a plain hint shows
+     * up as a null slot.
+     *
+     * @return list<?ClosureSignature>
+     */
+    private static function closureTypeNamesInOrder(string $source): array
+    {
+        $ast = self::parser()->parse($source);
+        $out = [];
+        $walker = function ($nodes) use (&$walker, &$out): void {
+            foreach ($nodes as $node) {
+                if ($node instanceof Name && ltrim($node->toString(), '\\') === 'Closure') {
+                    $sig = $node->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG);
+                    $out[] = $sig instanceof ClosureSignature ? $sig : null;
+                }
+                if (is_object($node) && method_exists($node, 'getSubNodeNames')) {
+                    foreach ($node->getSubNodeNames() as $name) {
+                        $value = $node->$name;
+                        if (is_array($value)) {
+                            $walker($value);
+                        } elseif (is_object($value)) {
+                            $walker([$value]);
+                        }
+                    }
+                }
+            }
+        };
+        $walker($ast);
+        return $out;
+    }
+
+    // ===================================================================
+    // Base helpers
     // ===================================================================
 
     private static function parser(): XphpSourceParser

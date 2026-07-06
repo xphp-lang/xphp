@@ -138,7 +138,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
 
         return [$ast, $byteOffsetMap];
     }
@@ -177,7 +177,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
 
         return new ParseWithMapResult($ast, $byteOffsetMap);
     }
@@ -202,7 +202,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{line:int, name:string, bytePosition:int, signature:ClosureSignature}>}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -214,7 +214,7 @@ final class XphpSourceParser
         $classMarkers = [];
         $nameMarkers = [];
         $methodMarkers = [];
-        /** @var list<array{line:int, name:string, bytePosition:int, signature:ClosureSignature}> $closureMarkers */
+        /** @var list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers */
         $closureMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
@@ -569,8 +569,6 @@ final class XphpSourceParser
                     if ($sig !== null) {
                         [$signature, $endIdx, $spanStart, $spanLen, $replacement] = $sig;
                         $closureMarkers[] = [
-                            'line' => $nameLine,
-                            'name' => 'Closure',
                             'bytePosition' => $tok->pos,
                             'signature' => $signature,
                         ];
@@ -638,8 +636,7 @@ final class XphpSourceParser
                 return null;
             }
             $ft = $tokens[$firstInner];
-            $firstOk = self::isNameToken($ft)
-                || $ft->id === T_STATIC
+            $firstOk = self::isSigTypeToken($ft)
                 || $ft->id === T_ELLIPSIS
                 || in_array($ft->text, ['?', '(', ')', '&'], true);
             if (!$firstOk) {
@@ -674,12 +671,17 @@ final class XphpSourceParser
         $nullable = self::isNullablePrefixed($tokens, $i);
         $signature = self::buildClosureSignature($tokens, $j, $source, $nullable);
 
-        // Erase to `\Closure`, preserving newlines (line-matched markers rely on
-        // the newline count staying constant) and blanking the rest to spaces.
+        // Erase to `\Closure`, preserving both the newline count (line-keyed
+        // markers depend on it) and the total byte length (byte-keyed markers —
+        // e.g. anonymous-closure generics — depend on positions after the span not
+        // shifting). `\Closure` is 8 bytes; a bare `Closure` name is only 7, so the
+        // extra `\` reclaims one blank byte from the tail (which always begins with
+        // `(`, never a newline). A fully-qualified `\Closure` name is already 8.
         $spanStart = $tokens[$i]->pos;
         $nameLen = strlen($tokens[$i]->text);
         $spanEndByte = $tokens[$spanEnd]->pos + strlen($tokens[$spanEnd]->text);
-        $tail = substr($source, $spanStart + $nameLen, $spanEndByte - ($spanStart + $nameLen));
+        $drop = strlen('\\Closure') - $nameLen;
+        $tail = substr($source, $spanStart + $nameLen + $drop, $spanEndByte - ($spanStart + $nameLen + $drop));
         $blankedTail = preg_replace('/[^\r\n]/', ' ', $tail) ?? '';
         $replacement = '\\Closure' . $blankedTail;
 
@@ -711,6 +713,22 @@ final class XphpSourceParser
     private static function isCastToken(PhpToken $tok): bool
     {
         return array_key_exists($tok->id, self::castTokenScalars());
+    }
+
+    /**
+     * True for a token that can lead a signature type leaf: an ordinary name
+     * ({@see isNameToken}) plus the reserved-word type keywords `array`,
+     * `callable`, and `static`, which PHP lexes as their own tokens
+     * (T_ARRAY / T_CALLABLE / T_STATIC) rather than T_STRING — so `isNameToken`
+     * alone would miss them and a signature like `Closure(array $a): callable`
+     * would fail to erase.
+     */
+    private static function isSigTypeToken(PhpToken $tok): bool
+    {
+        return self::isNameToken($tok)
+            || $tok->id === T_ARRAY
+            || $tok->id === T_CALLABLE
+            || $tok->id === T_STATIC;
     }
 
     /**
@@ -789,7 +807,7 @@ final class XphpSourceParser
                 $i++;
                 continue;
             }
-            if (self::isNameToken($t) || $t->id === T_STATIC) {
+            if (self::isSigTypeToken($t)) {
                 $last = $i;
                 $la = self::skipWs($tokens, $i + 1);
                 if ($la < $n && ($tokens[$la]->text === '(' || self::isCastToken($tokens[$la])) && ltrim($t->text, '\\') === 'Closure') {
@@ -817,7 +835,7 @@ final class XphpSourceParser
                 // intersection / union continuation.
                 $nx = self::skipWs($tokens, $i + 1);
                 $continues = $nx < $n
-                    && (self::isNameToken($tokens[$nx]) || $tokens[$nx]->text === '?' || $tokens[$nx]->id === T_STATIC);
+                    && (self::isSigTypeToken($tokens[$nx]) || $tokens[$nx]->text === '?');
                 if (!$continues) {
                     break;
                 }
@@ -1040,6 +1058,12 @@ final class XphpSourceParser
         }
 
         $parsed = self::parseTypeArg($tokens, $i);
+        if ($parsed === null && $i < $n && self::isSigTypeToken($tokens[$i])) {
+            // `array` / `callable` / `static` — reserved-word type keywords that
+            // parseTypeArg (T_STRING / T_NAME only) does not recognize. Build the
+            // leaf directly; resolveTypeRef treats them as built-ins via SCALAR_TYPES.
+            $parsed = [new TypeRef(strtolower($tokens[$i]->text)), $i + 1];
+        }
         if ($parsed === null) {
             $end = self::scanTypeExprEnd($tokens, $start);
             $end = $end ?? $start;
@@ -1076,7 +1100,7 @@ final class XphpSourceParser
     {
         $nx = self::skipWs($tokens, $idx + 1);
         return $nx < count($tokens)
-            && (self::isNameToken($tokens[$nx]) || $tokens[$nx]->text === '?' || $tokens[$nx]->id === T_STATIC);
+            && (self::isSigTypeToken($tokens[$nx]) || $tokens[$nx]->text === '?');
     }
 
     /**
@@ -1884,15 +1908,16 @@ final class XphpSourceParser
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
+     * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers): void
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap): void
     {
         $traverser = new NodeTraverser();
         $traverser->addVisitor(new
             /**
              * @phpstan-import-type BoundDict from XphpSourceParser
              */
-            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers) extends NodeVisitorAbstract {
+            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap) extends NodeVisitorAbstract {
             private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
@@ -1906,13 +1931,14 @@ final class XphpSourceParser
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
              * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
-             * @param array<int, array{line:int, name:string, bytePosition:int, signature:ClosureSignature}> $closureMarkers
+             * @param array<int, array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
              */
             public function __construct(
                 private array $classMarkers,
                 private array $nameMarkers,
                 private array $methodMarkers,
                 private array $closureMarkers,
+                private ByteOffsetMap $byteOffsetMap,
             ) {
                 $this->ctx = new NamespaceContext();
             }
@@ -2227,24 +2253,36 @@ final class XphpSourceParser
             }
 
             /**
-             * If a `\Closure` type Name carries a parsed closure signature (the
-             * `(…)[: ret]` was erased at scan time, leaving this surviving Name),
-             * attach the resolved signature. Matched by (line, `Closure`) and
-             * consumed in insertion order so multiple signatures on one line map to
-             * the Name nodes in source order.
+             * If a `\Closure` type Name is the erased head of a closure signature
+             * (the `(…)[: ret]` was blanked at scan time, leaving this surviving
+             * `\Closure`), attach the resolved signature. Matched by BYTE POSITION,
+             * not by line: a plain `Closure` type hint sharing a line with a real
+             * signature (`Closure $a, Closure(int): int $b`) would otherwise steal the
+             * marker. The node's stripped-source start position maps back through the
+             * byte-offset map to the original `Closure` position the marker recorded.
              */
             private function attachClosureSig(Name $node): void
             {
                 if (ltrim($node->toString(), '\\') !== 'Closure') {
                     return;
                 }
+                $startPos = $node->getStartFilePos();
+                // @infection-ignore-all — defensive: getStartFilePos() only returns < 0
+                // when positions are unrecorded; a real Name never sits at byte 0 (the
+                // open tag), so shifting this boundary is unreachable with valid input.
+                if ($startPos < 0) {
+                    return;
+                }
+                $originalPos = $this->byteOffsetMap->toOriginal($startPos);
                 foreach ($this->closureMarkers as $i => $marker) {
-                    if ($marker['line'] === $node->getStartLine()) {
+                    if ($marker['bytePosition'] === $originalPos) {
                         $node->setAttribute(
                             XphpSourceParser::ATTR_CLOSURE_SIG,
                             $this->resolveClosureSignature($marker['signature']),
                         );
                         unset($this->closureMarkers[$i]);
+                        // @infection-ignore-all — break vs continue is equivalent after unset:
+                        // bytePosition is unique, so no later marker can match again.
                         break;
                     }
                 }
