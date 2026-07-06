@@ -192,6 +192,13 @@ _In progress on this branch — content still accumulating; date set at tag time
   scans as one **gradual** leaf: the signature erases correctly, arity and the
   slots around the group are checked as usual, and the group itself is accepted
   rather than variance-checked member by member.
+- **Array-sugar types inside `Closure(...)` signatures are supported.** A
+  sugared leaf (`Closure(Item[] $items): int`, `Closure(): int[]`) previously
+  broke the signature scanner: in a return position the bracket pair survived
+  erasure as a raw parse error, and in a parameter position it mis-parsed as
+  three parameters — wrongly rejecting a conforming factory literal on arity.
+  The sugar now lowers to `array` inside signatures, the same lowering it gets
+  everywhere else, and is checked as a gradual `array` leaf.
 - **Fully-qualified types in closure literals participate in conformance.** A
   factory literal spelling its type fully qualified (`fn(): \App\Fruit`) had the
   leading `\` dropped during extraction, mis-resolving the name relative to the

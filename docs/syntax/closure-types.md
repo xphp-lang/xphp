@@ -128,3 +128,9 @@ unresolvable leaf: it erases with the rest of the signature and stays
 rejection). Arity, by-ref-ness, and the other structured slots around a DNF
 leaf are still checked as usual. Structuring a DNF into variance-checked
 members is a possible future refinement.
+
+An **array-sugar** leaf (`Closure(Item[] $items): int`, `Closure(): int[]`)
+lowers to `array` inside a signature — the same lowering `T[]` gets everywhere
+else in xphp — and participates in conformance as `array` (a gradual leaf, so
+it can only ever widen acceptance; the arity around it is still checked). The
+`Name<Args>[]` combination remains unsupported, in signatures as elsewhere.
