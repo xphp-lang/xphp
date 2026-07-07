@@ -31,3 +31,10 @@ $twice = fn<T>(T $x): T => $x;
 $direct = $twice::<int>(4);                 // 4
 $fcc = $twice::<int>(...);
 $viaFcc = $fcc(8);                          // 8
+
+// Collision guard: the dispatcher variable is literally named like the reserved
+// forwarding param. The forwarding param must be suffixed so it does not shadow the
+// captured dispatcher inside the closure body.
+$__xphp_fcc_args = fn<T>(T $x): T => $x;
+$collide = $__xphp_fcc_args::<int>(...);
+$collided = $collide(9);                     // 9

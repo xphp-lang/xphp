@@ -20,3 +20,4 @@ Assert::assertSame(42, $named);
 Assert::assertSame(7, $defaulted);
 Assert::assertSame(4, $direct);
 Assert::assertSame(8, $viaFcc);
+Assert::assertSame(9, $collided);
