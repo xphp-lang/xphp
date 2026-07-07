@@ -20,6 +20,39 @@ final class NamespaceContextTest extends TestCase
         self::assertSame('App\\Containers\\Box', $ctx->resolveAgainstContext('Box'));
     }
 
+    public function testResolveNameHonorsAFullyQualifiedNodeDespiteAnAlias(): void
+    {
+        // A `\App\Box` node must resolve to `App\Box` — never alias-captured,
+        // never doubled with the current namespace (both are what flattening
+        // it with `toString()` used to produce).
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Other\\Box'));
+
+        self::assertSame('App\\Box', $ctx->resolveName(new Name\FullyQualified('App\\Box')));
+    }
+
+    public function testResolveNameBindsARelativeNodeToTheCurrentNamespaceDespiteAnAlias(): void
+    {
+        // `namespace\Box` binds to the CURRENT namespace by PHP's rules; the
+        // `use Other\Box` alias never applies to a relative name.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Other\\Box'));
+
+        self::assertSame('App\\Box', $ctx->resolveName(new Name\Relative('Box')));
+    }
+
+    public function testResolveNamePlainNodeStillUsesTheAliasMap(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Other\\Box'));
+
+        self::assertSame('Other\\Box', $ctx->resolveName(new Name('Box')));
+        self::assertSame('Other\\Box', $ctx->resolveName(new Identifier('Box')));
+    }
+
     public function testLeadingBackslashStripsAndShortCircuits(): void
     {
         $ctx = new NamespaceContext();

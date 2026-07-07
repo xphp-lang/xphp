@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Node\Identifier;
+use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
 
@@ -87,6 +89,23 @@ final class NamespaceContext
         return $this->currentNamespace !== ''
             ? $this->currentNamespace . '\\' . $name
             : $name;
+    }
+
+    /**
+     * Resolve a php-parser Name (or Identifier) honoring the node's own
+     * qualification: `toCodeString()` yields `\App\Box` for a fully-qualified
+     * name (the leading-backslash branch), `namespace\Box` for a relative name
+     * (the relative-binding branch — a `use` alias NEVER applies to either,
+     * per PHP's rules), and the plain spelling otherwise. Flattening a Name
+     * with `toString()` before resolving is exactly the bug this seam removes:
+     * it drops both prefixes, doubling the namespace on fully-qualified names
+     * and letting the alias map capture relative ones.
+     */
+    public function resolveName(Name|Identifier $name): string
+    {
+        return $this->resolveAgainstContext(
+            $name instanceof Name ? $name->toCodeString() : $name->toString(),
+        );
     }
 
     public function currentNamespace(): string
