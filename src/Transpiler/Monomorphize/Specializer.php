@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
 use PhpParser\Node\Expr\Variable;
@@ -287,6 +288,28 @@ final class Specializer
 
             public function leaveNode(Node $node): ?Node
             {
+                // Ground a variable-turbofish call's type arguments in place. An inner
+                // `$inner::<S>(...)` inside a generic template body parses as a FuncCall on
+                // a Variable whose type args live in ATTR_METHOD_GENERIC_ARGS; when the
+                // enclosing generic specializes (`S → int`) those args must ground too, so
+                // the per-specialization closure-grounding pass sees `$inner::<int>` and can
+                // dispatch it. Left un-substituted the closure keeps a raw `I` hint and
+                // fatals at runtime. (This substitution is e2e-inert until that grounding
+                // pass runs — it only rewrites the recorded type args, never emits.)
+                if ($node instanceof FuncCall) {
+                    $methodArgs = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+                    if (is_array($methodArgs) && $methodArgs !== []) {
+                        /** @var list<TypeRef> $methodArgs — ATTR_METHOD_GENERIC_ARGS is a TypeRef list (set by XphpSourceParser). */
+                        $node->setAttribute(
+                            XphpSourceParser::ATTR_METHOD_GENERIC_ARGS,
+                            array_map(
+                                fn (TypeRef $a): TypeRef => Specializer::substituteTypeRef($a, $this->substitution),
+                                $methodArgs,
+                            ),
+                        );
+                    }
+                }
+
                 // Ground a closure-signature target in place. The erased `\Closure`
                 // head that carries it is fully-qualified, so it never reaches the
                 // type-param swap below; substitute its type-parameter leaves here.
