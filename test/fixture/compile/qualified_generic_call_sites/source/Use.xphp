@@ -43,8 +43,10 @@ function make<T>(T $x): T
     return $x;
 }
 
-// Relative generic return type and a bare turbofish on ONE line: each
-// keeps its own marker (the return type must not steal the body's).
+// Relative generic return type and a bare turbofish on ONE line: both
+// markers must bind (the relative one used to be silently dropped).
+// The wrong-site STEAL variant — distinct type args per site — is pinned
+// at the parser level, where a mismatched program can still be observed.
 function build(): namespace\Box<int> { return new Box::<int>(9); }
 
 $a = new \App\QualifiedCalls\Box::<int>(1);

@@ -326,10 +326,15 @@ final class Specializer
                         );
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $substituted);
 
-                        // @infection-ignore-all ReturnRemoval — falling through can't change
-                        // anything: ATTR_RESOLVED_FQN and ATTR_GENERIC_ARGS are mutually
-                        // exclusive by construction (shouldQualify tags only arg-less names),
-                        // so the branch below never fires for an args-bearing node.
+                        // @infection-ignore-all ReturnRemoval — falling through is
+                        // observationally equivalent, but NOT because the attributes are
+                        // exclusive: markName runs from the PARENT node's enterNode before
+                        // the child Name's own attach sets ATTR_GENERIC_ARGS, so a generic
+                        // reference in a marked position carries BOTH. Equivalence holds
+                        // because the fallen-through swap yields a FullyQualified that still
+                        // carries the (substituted, concrete) generic attributes, which the
+                        // call-site rewriter now admits and rewrites to the same
+                        // specialization the normal path reaches.
                         return null;
                     }
                 }

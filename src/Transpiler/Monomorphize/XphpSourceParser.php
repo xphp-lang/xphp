@@ -282,6 +282,10 @@ final class XphpSourceParser
             // bind `$this` by construction, which is the only thing the
             // dispatcher rewrite cannot carry; static CLOSURES stay gated
             // (kind `staticClosure` hard-fails at the call-site rewrite).
+            // Known drift: the emitted dispatcher closure is non-static, so
+            // `Closure::bind` succeeds and `ReflectionFunction::isStatic()`
+            // is false where PHP's own static arrow would refuse/report —
+            // invisible to normal calls, which never carry a `$this`.
             if ($tok->id === T_STATIC) {
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && ($tokens[$j]->id === T_FUNCTION || $tokens[$j]->id === T_FN)) {
@@ -332,19 +336,31 @@ final class XphpSourceParser
                         );
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
-                            $methodMarkers[] = [
-                                'line' => $methodLine,
-                                'name' => $methodName,
-                                'kind' => 'named',
-                                'bytePosition' => $methodAnchorByte,
-                                'params' => $paramEntries,
-                            ];
-                            $startByte = $tokens[$k]->pos;
-                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
-                            $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
-                            $i = $endIdx + 1;
-                            continue;
+                            // A function/method DECLARATION always opens its
+                            // param list right after the clause; a
+                            // `use function b<T>;` import does not. Without
+                            // this check the import's clause was recorded and
+                            // stripped, leaving a marker no AST node can ever
+                            // bind — misreported as a transpiler bug by the
+                            // unbound-marker backstop. Left unstripped, PHP
+                            // reports its own syntax error on the `<`, blaming
+                            // the right party.
+                            $afterClause = self::skipWs($tokens, $endIdx + 1);
+                            if ($afterClause < $n && $tokens[$afterClause]->text === '(') {
+                                $methodMarkers[] = [
+                                    'line' => $methodLine,
+                                    'name' => $methodName,
+                                    'kind' => 'named',
+                                    'bytePosition' => $methodAnchorByte,
+                                    'params' => $paramEntries,
+                                ];
+                                $startByte = $tokens[$k]->pos;
+                                $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                                $length = $endByte - $startByte;
+                                $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
+                                $i = $endIdx + 1;
+                                continue;
+                            }
                         }
                     }
                 }
@@ -529,7 +545,14 @@ final class XphpSourceParser
                 // the Name is preceded by `new` (catches the parenless `new Foo<T>;`
                 // and `new Foo<T>` shapes that PHP accepts but the RFC turbofish
                 // requirement refuses). Type-hint sites match neither check.
-                if ($j < $n && $tokens[$j]->text === '<') {
+                // A name directly after the `function` keyword is a DECLARATION
+                // name, never a type hint — when the declaration arm declined it
+                // (a `use function b<T>;` import has no param list), the clause
+                // must survive so PHP reports its own syntax error instead of the
+                // import being silently swallowed.
+                $prevSig = self::skipWsBack($tokens, $i - 1);
+                $isDeclarationName = $prevSig >= 0 && $tokens[$prevSig]->id === T_FUNCTION;
+                if (!$isDeclarationName && $j < $n && $tokens[$j]->text === '<') {
                     $parsed = self::parseTypeArgList($tokens, $j);
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;

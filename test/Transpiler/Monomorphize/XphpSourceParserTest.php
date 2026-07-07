@@ -3122,6 +3122,37 @@ PHP;
         self::assertSame(['T'], self::paramNames($trait));
     }
 
+    public function testUseFunctionImportNeverBecomesAGenericMarker(): void
+    {
+        // `use function b<T>;` is invalid code, but it must fail as PHP's own
+        // syntax error on the un-stripped `<` — not be silently swallowed
+        // (the clause used to strip, emitting `use function b ;`), and not be
+        // misreported as a transpiler bug by the unbound-marker backstop
+        // (an import never produces the Function_ node the marker binds to).
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        foreach (['use function b<T>;', 'use function b<T> as c;', 'use Foo\{function a<T>};'] as $import) {
+            $source = "<?php\nnamespace App;\n{$import}\n";
+            $stripped = $parser->strip($source);
+            self::assertMatchesRegularExpression(
+                '/<T>/',
+                $stripped,
+                "the clause in `{$import}` must survive into the cleaned source",
+            );
+            try {
+                $parser->parse($source);
+                self::fail("expected PHP's own parse error for `{$import}`");
+            } catch (\PhpParser\Error) {
+                // PHP's syntax error — the right blame, in both modes.
+            }
+        }
+
+        // Plain function imports keep compiling, including next to a genuine
+        // generic declaration.
+        $ast = $parser->parse("<?php\nnamespace App;\nuse function strlen;\nfunction f<T>(T \$x): T { return \$x; }\n");
+        self::assertNotEmpty($ast);
+    }
+
     public function testUnboundDeclarationMarkerMessageIsNullWhenEverythingBound(): void
     {
         self::assertNull(XphpSourceParser::unboundDeclarationMarkerMessage([], []));
