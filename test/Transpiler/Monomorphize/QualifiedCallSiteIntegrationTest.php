@@ -1,0 +1,34 @@
+<?php
+
+declare(strict_types=1);
+
+namespace XPHP\Transpiler\Monomorphize;
+
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use PHPUnit\Framework\TestCase;
+use XPHP\TestSupport\CompiledFixture;
+
+/**
+ * End-to-end pins for fully-qualified (`\App\Box`) and relative
+ * (`namespace\Box`) spellings at generic call sites — turbofish, empty
+ * turbofish, bare generic type hints, in-template references, and generic
+ * function calls. Every spelling must reach the same specialization as the
+ * bare form and the emitted program must run.
+ */
+final class QualifiedCallSiteIntegrationTest extends TestCase
+{
+    #[RunInSeparateProcess]
+    public function testQualifiedSpellingsSpecializeAndRun(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/qualified_generic_call_sites/source',
+            'qualified-generic-call-sites',
+        );
+        $fixture->registerAutoload('App\\QualifiedCalls');
+        try {
+            require __DIR__ . '/../../fixture/compile/qualified_generic_call_sites/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+}

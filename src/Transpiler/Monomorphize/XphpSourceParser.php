@@ -503,7 +503,7 @@ final class XphpSourceParser
                             $nameMarkers[] = [
                                 'line' => $nameLine,
                                 'anchorLine' => $anchorLine,
-                                'name' => ltrim($nameText, '\\'),
+                                'name' => self::markerNameSpelling($nameText),
                                 'kind' => 'named',
                                 'bytePosition' => $tok->pos,
                                 'args' => $args,
@@ -553,7 +553,7 @@ final class XphpSourceParser
                                 $nameMarkers[] = [
                                     'line' => $nameLine,
                                     'anchorLine' => $anchorLine,
-                                    'name' => ltrim($nameText, '\\'),
+                                    'name' => self::markerNameSpelling($nameText),
                                     'kind' => 'named',
                                     'bytePosition' => $tok->pos,
                                     'args' => $args,
@@ -1193,6 +1193,24 @@ final class XphpSourceParser
             $i--;
         }
         return $i;
+    }
+
+    /**
+     * Canonical marker spelling for a name token: the raw source text with
+     * only the case-insensitive `namespace\` keyword prefix folded to
+     * lowercase, so it compares equal to `Name::toCodeString()` (which always
+     * emits the keyword lowercase). The leading `\` of a fully-qualified name
+     * and the `namespace\` prefix are deliberately KEPT: stripping them
+     * conflated `\App\Box` with a qualified `App\Box`, and let a bare aliased
+     * `Box` on the same line steal a `namespace\Box` marker (or vice versa) —
+     * specializing the wrong site.
+     */
+    private static function markerNameSpelling(string $nameText): string
+    {
+        if (strncasecmp($nameText, 'namespace\\', 10) === 0) {
+            return 'namespace\\' . substr($nameText, 10);
+        }
+        return $nameText;
     }
 
     /**
@@ -2616,7 +2634,10 @@ final class XphpSourceParser
                 if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Name) {
                     // Claim the marker on FuncCall enter (parent fires before children) so the
                     // inner Name doesn't pick it up and trigger the class-rewrite path.
-                    $funcName = $node->name->toString();
+                    // toCodeString(): markers record the raw source spelling, so a
+                    // `\App\make` / `namespace\make` marker must compare against the
+                    // node's own qualified spelling, not the prefix-erased toString().
+                    $funcName = $node->name->toCodeString();
                     $startLine = $node->getStartLine();
                     foreach ($this->nameMarkers as $i => $marker) {
                         // @infection-ignore-all -- the three `&&` clauses are jointly
@@ -2667,7 +2688,12 @@ final class XphpSourceParser
                 }
 
                 if ($node instanceof Name) {
-                    $nameStr = $node->toString();
+                    // toCodeString(): a Relative node's toString() erases the
+                    // `namespace\` prefix, so a bare `Box` node on the same line
+                    // could steal a `namespace\Box` marker (and the relative
+                    // node's own marker never matched at all — silently dropping
+                    // its type args). The marker records the source spelling.
+                    $nameStr = $node->toCodeString();
                     foreach ($this->nameMarkers as $i => $marker) {
                         if ($marker['line'] === $node->getStartLine() && $marker['name'] === $nameStr) {
                             $resolved = $this->resolveTypeRefList($marker['args']);
@@ -2887,9 +2913,9 @@ final class XphpSourceParser
 
             private function resolveNameOnly(string $name): string
             {
-                if (str_starts_with($name, '\\')) {
-                    return ltrim($name, '\\');
-                }
+                // A prefixed spelling (`\App\Box`, `namespace\Box`) can never
+                // name a type param and resolves in resolveAgainstContext's own
+                // leading-backslash / relative branches.
                 if ($this->isEnclosingTypeParam($name)) {
                     return $name;
                 }

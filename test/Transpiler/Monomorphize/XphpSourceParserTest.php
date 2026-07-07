@@ -1975,10 +1975,10 @@ PHP;
 
     public function testTypeHintPositionAcceptsFullyQualifiedOuterName(): void
     {
-        // Locks the ltrim('\\') on the bare-`<…>` (type-hint) branch: when the
-        // outer Name is fully qualified (`\App\Containers\Box`), the marker
-        // must be keyed by the trimmed form so the resolver -- which sees the
-        // AST Name's `toString()` (no leading backslash) -- can match.
+        // A fully-qualified outer Name (`\App\Containers\Box<Plastic>`) in a
+        // type-hint slot: the marker records the raw source spelling (leading
+        // `\` kept) and the resolver compares the node's `toCodeString()`, so
+        // the two agree and the generic args attach.
         $source = <<<'PHP'
 <?php
 namespace App;
@@ -1992,6 +1992,137 @@ PHP;
         $args = self::parseAndGetArgs($source, 'App\\Containers\\Box');
         self::assertCount(1, $args);
         self::assertSame('App\\Models\\Plastic', $args[0]->name);
+    }
+
+    public function testFullyQualifiedTurbofishResolvesWithoutDoublingTheNamespace(): void
+    {
+        // `new \App\Box::<int>` used to record ATTR_TEMPLATE_FQN = `App\App\Box`
+        // (the leading `\` was trimmed before namespace resolution), which
+        // hard-failed as an undefined template.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+$b = new \App\Box::<int>(1);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $fq = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isFullyQualified()) {
+                $fq = $n;
+            }
+        }
+        self::assertNotNull($fq);
+        self::assertSame('App\\Box', $fq->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $args = $fq->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testSameLineRelativeReturnAndBareTurbofishKeepTheirOwnMarkers(): void
+    {
+        // On ONE line, the relative return type's marker and the body
+        // turbofish's marker both spell a bare `Box` after toString() — the
+        // return-type node used to steal the body's marker (specializing the
+        // wrong site) while its own `namespace\Box` marker never bound.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+function f(): namespace\Box<int> { return new Box::<string>('s'); }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        $bare = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            } elseif (!$n->isFullyQualified() && $n->toString() === 'Box'
+                && $n->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) !== null
+            ) {
+                $bare = $n;
+            }
+        }
+
+        self::assertNotNull($relative, 'relative return-type Name missing');
+        self::assertSame('App\\Box', $relative->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $relArgs = $relative->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($relArgs);
+        self::assertSame('int', $relArgs[0]->name, 'the return type must keep its OWN args');
+
+        self::assertNotNull($bare, 'body turbofish Name missing its args');
+        $bareArgs = $bare->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($bareArgs);
+        self::assertSame('string', $bareArgs[0]->name, 'the body turbofish must keep its OWN args');
+    }
+
+    public function testUppercaseRelativePrefixStillMatchesItsMarker(): void
+    {
+        // The `namespace` keyword is case-insensitive in source, but
+        // `toCodeString()` always emits it lowercase — the marker spelling
+        // must fold the prefix or `NAMESPACE\Box::<int>` silently loses
+        // its marker.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+$b = new NAMESPACE\Box::<int>(1);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            }
+        }
+        self::assertNotNull($relative);
+        self::assertSame('App\\Box', $relative->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $args = $relative->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testQualifiedFunctionTurbofishesResolveAndAttach(): void
+    {
+        // `\App\make::<int>(…)` used to double the namespace in
+        // ATTR_TEMPLATE_FQN (stripping the generic function with no dispatcher
+        // emitted — a silent undefined-function fatal); `namespace\make::<…>`
+        // never matched its marker at all and false-rejected as a
+        // missing-type-argument call.
+        $source = <<<'PHP'
+<?php
+namespace App;
+function make<T>(T $x): T { return $x; }
+$a = \App\make::<int>(1);
+$b = namespace\make::<string>('s');
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $calls = $finder->findInstanceOf($ast, Node\Expr\FuncCall::class);
+        self::assertCount(2, $calls);
+
+        $fqCall = $calls[0];
+        self::assertSame('App\\make', $fqCall->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $fqArgs = $fqCall->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($fqArgs);
+        self::assertSame('int', $fqArgs[0]->name);
+
+        $relCall = $calls[1];
+        self::assertSame('App\\make', $relCall->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $relArgs = $relCall->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($relArgs);
+        self::assertSame('string', $relArgs[0]->name);
     }
 
     public function testTypeHintPositionStillAcceptsBareGenericArgs(): void

@@ -31,17 +31,28 @@ final class VisitorGuardsTest extends TestCase
     // CallSiteRewriter
     // =====================================================================
 
-    public function testCallSiteRewriterIgnoresFullyQualifiedNames(): void
+    public function testCallSiteRewriterRewritesFullyQualifiedGenericNamesExactlyOnce(): void
     {
+        // A fully-qualified name carrying generic attributes is a real call
+        // site (`new \App\Box::<int>` after stripping) and MUST rewrite —
+        // skipping it would leave the emitted code newing the stripped marker
+        // interface. Idempotence across the specialized-AST re-rewrite comes
+        // from stripping the generic attributes off the replacement node, not
+        // from skipping FullyQualified names.
         $registry = new Registry();
-        $fq = new FullyQualified('App\\Models\\Plastic');
+        $fq = new FullyQualified('App\\Containers\\Box');
         $fq->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, [new TypeRef('App\\Plastic')]);
         $fq->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'App\\Containers\\Box');
 
         $ast = self::wrapNameInStmt($fq);
-        (new CallSiteRewriter($registry))->rewrite($ast);
+        $result = (new CallSiteRewriter($registry))->rewrite($ast);
 
-        self::assertSame([], $registry->instantiations(), 'already-FullyQualified nodes must not be re-rewritten');
+        self::assertCount(1, $registry->instantiations(), 'the FQ call site must record its instantiation');
+
+        // The replacement must carry no generic attributes, so a second pass
+        // (the Phase-3.5 re-rewrite of specialized ASTs) records nothing new.
+        (new CallSiteRewriter($registry))->rewrite($result);
+        self::assertCount(1, $registry->instantiations(), 'the rewrite must be idempotent');
     }
 
     public function testCallSiteRewriterIgnoresNameWithoutGenericArgs(): void

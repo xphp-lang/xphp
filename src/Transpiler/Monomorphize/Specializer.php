@@ -300,13 +300,19 @@ final class Specializer
                     }
                 }
 
-                if ($node instanceof Name && !$node->isFullyQualified()) {
-                    $parts = $node->getParts();
-                    if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
-                        $concrete = $this->substitution[$parts[0]];
-                        return Specializer::typeRefToNode($concrete, $node->getAttributes());
+                if ($node instanceof Name) {
+                    if (!$node->isFullyQualified()) {
+                        $parts = $node->getParts();
+                        if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
+                            $concrete = $this->substitution[$parts[0]];
+                            return Specializer::typeRefToNode($concrete, $node->getAttributes());
+                        }
                     }
 
+                    // Generic-args substitution runs for FULLY-QUALIFIED names
+                    // too: `\App\Box<T>` inside a template body carries the same
+                    // attributes as the bare form and its `T` must ground when
+                    // the class specializes.
                     $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
                     if (is_array($args) && $args !== []) {
                         /** @var list<TypeRef> $args — ATTR_GENERIC_ARGS is a TypeRef list (set by XphpSourceParser); the type-hint lets array_map infer the callback's parameter as TypeRef. */
@@ -316,9 +322,15 @@ final class Specializer
                         );
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $substituted);
 
+                        // @infection-ignore-all ReturnRemoval — falling through can't change
+                        // anything: ATTR_RESOLVED_FQN and ATTR_GENERIC_ARGS are mutually
+                        // exclusive by construction (shouldQualify tags only arg-less names),
+                        // so the branch below never fires for an args-bearing node.
                         return null;
                     }
+                }
 
+                if ($node instanceof Name && !$node->isFullyQualified()) {
                     // Bare, non-generic class/interface name carried over from the
                     // template (extends Countable, new ArrayIterator, ...). The parser
                     // tagged it with the FQN resolved against the source file's
