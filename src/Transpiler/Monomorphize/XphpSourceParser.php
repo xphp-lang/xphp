@@ -2375,9 +2375,6 @@ final class XphpSourceParser
     }
 
     /**
-     * @param list<array{int, int, string}> $replacements [byte offset, original length, replacement text]
-     */
-    /**
      * Equal-length whitespace for a stripped span, keeping every newline byte
      * in place: byte-keyed markers after the span rely on the length, and
      * line-keyed (class / method / name) markers rely on the line count — a
@@ -2400,6 +2397,9 @@ final class XphpSourceParser
         return preg_replace('/[^\r\n]/', '', $span) ?? '';
     }
 
+    /**
+     * @param list<array{int, int, string}> $replacements [byte offset, original length, replacement text]
+     */
     private static function applyReplacements(string $source, array $replacements): string
     {
         usort($replacements, static fn (array $a, array $b): int => $b[0] <=> $a[0]);

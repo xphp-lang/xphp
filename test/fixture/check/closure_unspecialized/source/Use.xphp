@@ -32,3 +32,11 @@ if ($w > 0) { $c = fn<Q>(Q $a): Q => $a; $c::<int>(1); } else { $c = fn<R>(R $b)
 // Called — must NOT be flagged.
 $ok = fn<Z>(Z $v): Z => $v;
 $ok::<int>(1);
+
+// Turbofish with a NON-CONCRETE argument (the enclosing template's own
+// parameter): the author wrote a call, so this is not an orphan either.
+function relay<S>(S $v): S
+{
+    $inner = fn<I>(I $x): I => $x;
+    return $inner::<S>($v);
+}

@@ -2070,6 +2070,17 @@ final class GenericMethodCompiler
                     return null;
                 }
                 if ($isVarTurbofish && $args !== [] && !self::allConcrete($args)) {
+                    // The author DID write a turbofish for this template — its
+                    // args just aren't concrete at this point (`$f::<T>($v)`
+                    // inside a still-abstract enclosing template). Mark it
+                    // attempted so the unspecialized-closure orphan check does
+                    // not misdiagnose it as never-called; how such a call
+                    // grounds when the enclosing template specializes is that
+                    // pipeline's own (tracked, pre-existing) concern.
+                    $template = $this->currentScopeClosureTemplates[$node->name->name] ?? null;
+                    if ($template !== null) {
+                        $this->attemptedClosureTemplates[spl_object_id($template)] = true;
+                    }
                     return null;
                 }
                 // Variable turbofish `$var::<T>(...)` / `$var::<>(...)`:
@@ -2459,7 +2470,6 @@ final class GenericMethodCompiler
 
         // Runs BEFORE the emit gate: check mode must collect the orphan
         // diagnostics too (this is a validation, not an emission side-effect).
-        // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
         $this->rejectUnspecializedClosureTemplates($ast, $visitor->attemptedClosureTemplates, $currentFile);
 
         // Validate-only (check) skips all emission: no dispatcher materialization, no buffered

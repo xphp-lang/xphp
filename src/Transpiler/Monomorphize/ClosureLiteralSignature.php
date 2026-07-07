@@ -22,15 +22,15 @@ use PhpParser\Node\UnionType;
  * file's {@see NamespaceContext}.
  *
  * Gradual by construction: an untyped parameter becomes `mixed` (the top type,
- * always conforms), an absent return stays absent (gradual), and a
- * nullable / union / intersection leaf is carried as {@see SigRaw} (gradual until
- * WI-03) — so extraction never manufactures a false mismatch.
+ * always conforms), an absent return stays absent (gradual), and a leaf the
+ * splitter can't structure is carried as {@see SigRaw} (gradual) — so
+ * extraction never manufactures a false mismatch.
  */
 final class ClosureLiteralSignature
 {
     public static function extract(Closure|ArrowFunction $literal, NamespaceContext $ctx): ClosureSignature
     {
-        $params = array_map(
+        $params = array_values(array_map(
             static fn (Param $p): ClosureSignatureParam => new ClosureSignatureParam(
                 self::resolveParamType($p->type, $ctx),
                 $p->byRef,
@@ -38,7 +38,7 @@ final class ClosureLiteralSignature
                 $p->default !== null,
             ),
             $literal->params,
-        );
+        ));
 
         // Candidate closures are never nullable (a `?Closure` is a target concept);
         // the flag defaults false and is not read for a candidate.
