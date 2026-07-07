@@ -2922,6 +2922,53 @@ PHP;
         self::assertSame(['T'], self::paramNames($trait));
     }
 
+    public function testUnboundDeclarationMarkerMessageIsNullWhenEverythingBound(): void
+    {
+        self::assertNull(XphpSourceParser::unboundDeclarationMarkerMessage([], []));
+    }
+
+    public function testUnboundClassMarkerProducesTheLoudBackstopError(): void
+    {
+        $msg = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [['line' => 7, 'name' => 'Box']],
+            [],
+        );
+        self::assertSame(
+            'The generic type-parameter clause for `Box` (line 7) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $msg,
+        );
+    }
+
+    public function testUnboundMethodAndClosureMarkersProduceTheLoudBackstopError(): void
+    {
+        $named = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [],
+            [['line' => 3, 'name' => 'wrap']],
+        );
+        self::assertNotNull($named);
+        self::assertStringContainsString('`wrap`', $named);
+        self::assertStringContainsString('line 3', $named);
+
+        $anonymous = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [],
+            [['line' => 9, 'name' => '']],
+        );
+        self::assertNotNull($anonymous);
+        self::assertStringContainsString('an anonymous closure', $anonymous);
+        self::assertStringContainsString('line 9', $anonymous);
+
+        // Class markers are reported first when both kinds survive.
+        $both = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [['line' => 1, 'name' => 'A']],
+            [['line' => 2, 'name' => 'b']],
+        );
+        self::assertNotNull($both);
+        self::assertStringContainsString('`A`', $both);
+    }
+
     public function testGenericClosureDefaultIsAccepted(): void
     {
         // P5.7: defaults now allowed on anonymous closures; GMC pads

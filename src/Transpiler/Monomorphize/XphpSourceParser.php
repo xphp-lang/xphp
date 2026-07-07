@@ -138,7 +138,15 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
+        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
+        // @infection-ignore-all — defensive backstop, unreachable from valid input by
+        // construction (see unboundDeclarationMarkerMessage): no test can reach a
+        // mutant here. The message builder is pinned by direct unit tests; this
+        // wiring exists to turn any FUTURE marker-alignment bug into a loud compile
+        // error instead of a silent de-generification of the declaration.
+        if ($unbound !== null) {
+            throw new RuntimeException($unbound);
+        }
 
         return [$ast, $byteOffsetMap];
     }
@@ -2373,16 +2381,22 @@ final class XphpSourceParser
      * recognition (closures / arrows, Phase 4) can dispatch to a different
      * matcher without having to peek at the rest of the marker shape.
      *
+     * Returns the loud-backstop error for the first class/method marker left
+     * unbound after the walk (always a transpiler alignment bug), or null when
+     * every declaration marker attached. The strict parse path throws it; the
+     * tolerant (LSP) path ignores it — half-typed code legitimately strands
+     * markers there.
+     *
      * @param list<Node\Stmt> $ast
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap): void
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap): ?string
     {
         $traverser = new NodeTraverser();
-        $traverser->addVisitor(new
+        $visitor = new
             /**
              * @phpstan-import-type BoundDict from XphpSourceParser
              */
@@ -3061,8 +3075,68 @@ final class XphpSourceParser
                 }
                 return false;
             }
-        });
+
+            /**
+             * Diagnostic for a class/method marker that survived the walk
+             * unbound, or null when every one attached. Valid input can never
+             * leave one behind — once parsing succeeded, every recognized
+             * declaration clause hangs off a real AST node — so a survivor is
+             * a marker/AST alignment bug that would otherwise silently drop
+             * the clause's type parameters from the emitted code. Name markers
+             * are deliberately excluded: their attachment is lax by design
+             * (pseudo-type type-args are skipped, gradual call shapes pass
+             * through unclaimed).
+             */
+            public function firstUnboundDeclarationMarker(): ?string
+            {
+                return XphpSourceParser::unboundDeclarationMarkerMessage(
+                    $this->classMarkers,
+                    $this->methodMarkers,
+                );
+            }
+        };
+        $traverser->addVisitor($visitor);
 
         $traverser->traverse($ast);
+
+        return $visitor->firstUnboundDeclarationMarker();
+    }
+
+    /**
+     * Build the loud error for the first unbound class/method generic marker,
+     * or null when none survived. See the visitor's
+     * `firstUnboundDeclarationMarker` for why a survivor is always a
+     * transpiler bug: the strict parse path throws it rather than compiling
+     * on and silently de-generifying the declaration.
+     *
+     * @internal exposed for direct testing; not part of the public API.
+     *
+     * @param array<int, array{line: int, name: string}> $classMarkers
+     * @param array<int, array{line: int, name: string}> $methodMarkers
+     */
+    public static function unboundDeclarationMarkerMessage(array $classMarkers, array $methodMarkers): ?string
+    {
+        foreach ($classMarkers as $marker) {
+            return self::unboundMarkerMessage(sprintf('`%s`', $marker['name']), $marker['line']);
+        }
+        foreach ($methodMarkers as $marker) {
+            $subject = $marker['name'] !== ''
+                ? sprintf('`%s`', $marker['name'])
+                : 'an anonymous closure';
+            return self::unboundMarkerMessage($subject, $marker['line']);
+        }
+        return null;
+    }
+
+    private static function unboundMarkerMessage(string $subject, int $line): string
+    {
+        return sprintf(
+            'The generic type-parameter clause for %s (line %d) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $subject,
+            $line,
+        );
     }
 }
