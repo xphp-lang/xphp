@@ -183,6 +183,17 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **`check` reports parse-stage rejections at their real source line.** Syntax
+  the scanner rejects before the AST exists — a variance marker on a method or
+  closure (`out T` / `in T`), the legacy `+T` / `-T` glyphs, a malformed or
+  misordered generic default (`T = ?int`, `T = Foo | Bar`, a required parameter
+  after a defaulted one), or a call signature on a non-`Closure` name — was
+  reported by `check` at line 1 regardless of where it occurred, so an editor
+  could not navigate to it (the real location survived only in the message text).
+  These now carry the offending token's line. A few structural rejections raised
+  after parsing (a self-referential bound, a default referencing a later
+  parameter) still fall back to line 1, where no token position is available.
+  `compile` behaviour is unchanged.
 - **A bare `new` of a generic without all-defaults is rejected instead of
   silently emitting an uninstantiable marker.** `new Box(...)` where `Box<T>`
   has a required type parameter and no turbofish was skipped by the
