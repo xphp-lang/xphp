@@ -563,6 +563,161 @@ PHP;
         self::assertStringContainsString('class<T>', $stripped, 'anon-class `<T>` must be left un-stripped');
     }
 
+    public function testMultiLineTypeParamClauseKeepsLaterLineKeyedMarkersAligned(): void
+    {
+        // The `<…>` strip used to collapse newlines to spaces, shifting every
+        // later LINE-KEYED marker: `class Wide<\n T\n>` before `class Box<T>`
+        // left Box un-generic — raw `T` hints in the emitted code, a silent
+        // runtime fatal. Blanking must preserve BOTH byte length and line count.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Wide<
+    T
+> {
+    public function __construct(public T $v) {}
+}
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped), 'blanking must preserve byte length');
+        self::assertSame(
+            substr_count($source, "\n"),
+            substr_count($stripped, "\n"),
+            'blanking must preserve line count',
+        );
+
+        $ast = $parser->parse($source);
+        $byName = self::classesByName($ast);
+        self::assertSame(['T'], self::paramNames($byName['Wide']));
+        self::assertSame(
+            ['T'],
+            self::paramNames($byName['Box']),
+            'the class declared AFTER a multi-line clause must keep its type params',
+        );
+    }
+
+    public function testMultiLineTurbofishArgListKeepsLaterMarkersAligned(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+
+$b = new Box::<
+    int
+>(1);
+
+class Pair<U> {
+    public function __construct(public U $u) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped));
+        self::assertSame(substr_count($source, "\n"), substr_count($stripped, "\n"));
+
+        $ast = $parser->parse($source);
+        self::assertNotNull(
+            self::firstNameAttr($ast, 'Box', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'the multi-line turbofish itself must still attach',
+        );
+        self::assertSame(
+            ['U'],
+            self::paramNames(self::classesByName($ast)['Pair']),
+            'the class declared AFTER a multi-line turbofish must keep its type params',
+        );
+    }
+
+    public function testMultibyteInsideStrippedClauseBlanksPerByte(): void
+    {
+        // A multibyte character inside the blanked span (here in a comment the
+        // clause tolerates) must blank to one space PER BYTE — a /u-flagged
+        // blanking would shrink the file and shift every later byte-keyed marker.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Wide<
+    T // café
+> {}
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped), 'multibyte spans must blank per byte');
+
+        $ast = $parser->parse($source);
+        self::assertSame(['T'], self::paramNames(self::classesByName($ast)['Box']));
+    }
+
+    public function testCrlfInsideStrippedClauseIsPreserved(): void
+    {
+        $source = "<?php\r\nnamespace App;\r\nclass Wide<\r\n    T\r\n> {}\r\nclass Box<T> {\r\n"
+            . "    public function __construct(public T \$v) {}\r\n}\r\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped));
+        self::assertSame(substr_count($source, "\r\n"), substr_count($stripped, "\r\n"));
+
+        $ast = $parser->parse($source);
+        self::assertSame(['T'], self::paramNames(self::classesByName($ast)['Box']));
+    }
+
+    public function testArraySugarSpanWithNewlineKeepsLineCount(): void
+    {
+        // The sugar rewrite is length-CHANGING (`Rec[\n]` -> `array`), so byte
+        // length cannot be preserved — but the span's newlines must be
+        // re-appended or every later line-keyed marker shifts.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Rec {}
+
+function tally(Rec[
+] $rs): int {
+    return \count($rs);
+}
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertStringContainsString('array', $stripped);
+        self::assertSame(
+            substr_count($source, "\n"),
+            substr_count($stripped, "\n"),
+            'a length-changing sugar rewrite must still keep the line count',
+        );
+        self::assertSame(
+            strpos($source, 'Rec['),
+            strpos($stripped, 'array'),
+            'the lowered type must start where the original type started — the '
+            . 'span\'s newlines belong AFTER it, or positions stop rounding-trip',
+        );
+
+        $ast = $parser->parse($source);
+        self::assertSame(
+            ['T'],
+            self::paramNames(self::classesByName($ast)['Box']),
+            'the class declared AFTER a newline-bearing sugar span must keep its type params',
+        );
+    }
+
     public function testForwardReferenceToEarlierTypeParamAsBoundIsAllowed(): void
     {
         // `class C<T, U : T>` is NOT a self-reference -- U's bound references
@@ -2757,6 +2912,19 @@ PHP;
         };
         $walker($ast);
         return $found;
+    }
+
+    /**
+     * @param array<int, mixed> $ast
+     * @return array<string, Class_>
+     */
+    private static function classesByName(array $ast): array
+    {
+        $byName = [];
+        foreach (self::collectClasses($ast) as $class) {
+            $byName[$class->name?->toString() ?? ''] = $class;
+        }
+        return $byName;
     }
 
     /**

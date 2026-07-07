@@ -255,7 +255,7 @@ final class XphpSourceParser
                         $startByte = $tokens[$j]->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                         $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                         $i = $endIdx + 1;
                         continue;
                     }
@@ -289,7 +289,7 @@ final class XphpSourceParser
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -324,7 +324,7 @@ final class XphpSourceParser
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -360,7 +360,7 @@ final class XphpSourceParser
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -406,7 +406,7 @@ final class XphpSourceParser
                         $startByte = $dcTok->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                         $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                         $i = $endIdx + 1;
                         continue;
                     }
@@ -497,7 +497,7 @@ final class XphpSourceParser
                         $startByte = $dcTok->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                         $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                         $i = $endIdx + 1;
                         continue;
                     }
@@ -544,7 +544,7 @@ final class XphpSourceParser
                             $startByte = $tokens[$j]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -586,7 +586,15 @@ final class XphpSourceParser
                     if ($arraySuffixEnd !== null) {
                         $startByte = $tok->pos;
                         $endByte = $tokens[$arraySuffixEnd]->pos + strlen($tokens[$arraySuffixEnd]->text);
-                        $replacements[] = [$startByte, $endByte - $startByte, 'array'];
+                        // `array` is shorter than most sugar spans, so byte length
+                        // can't be preserved here — but the span's newlines must be
+                        // (line-keyed markers after it depend on the line count).
+                        // ByteOffsetMap::fromReplacements absorbs the length delta.
+                        $replacements[] = [
+                            $startByte,
+                            $endByte - $startByte,
+                            'array' . self::newlinesOf(substr($source, $startByte, $endByte - $startByte)),
+                        ];
                         $i = $arraySuffixEnd + 1;
                         continue;
                     }
@@ -683,8 +691,7 @@ final class XphpSourceParser
         $spanEndByte = $tokens[$spanEnd]->pos + strlen($tokens[$spanEnd]->text);
         $drop = strlen('\\Closure') - $nameLen;
         $tail = substr($source, $spanStart + $nameLen + $drop, $spanEndByte - ($spanStart + $nameLen + $drop));
-        $blankedTail = preg_replace('/[^\r\n]/', ' ', $tail) ?? '';
-        $replacement = '\\Closure' . $blankedTail;
+        $replacement = '\\Closure' . self::blank($tail);
 
         return [$signature, $spanEnd, $spanStart, $spanEndByte - $spanStart, $replacement];
     }
@@ -2253,6 +2260,29 @@ final class XphpSourceParser
     /**
      * @param list<array{int, int, string}> $replacements [byte offset, original length, replacement text]
      */
+    /**
+     * Equal-length whitespace for a stripped span, keeping every newline byte
+     * in place: byte-keyed markers after the span rely on the length, and
+     * line-keyed (class / method / name) markers rely on the line count — a
+     * multi-line `<…>` clause, turbofish arg list, or sugar span collapsed to
+     * spaces would shift every later marker off its node. Deliberately
+     * byte-wise (no `/u`): a multibyte character inside the span must blank
+     * to one space PER BYTE or the length invariant breaks.
+     */
+    private static function blank(string $span): string
+    {
+        return preg_replace('/[^\r\n]/', ' ', $span) ?? '';
+    }
+
+    /**
+     * Just the newline bytes of a span, for length-CHANGING rewrites (the
+     * `T[]` -> `array` sugar) that still must not swallow line breaks.
+     */
+    private static function newlinesOf(string $span): string
+    {
+        return preg_replace('/[^\r\n]/', '', $span) ?? '';
+    }
+
     private static function applyReplacements(string $source, array $replacements): string
     {
         usort($replacements, static fn (array $a, array $b): int => $b[0] <=> $a[0]);
