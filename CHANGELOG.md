@@ -341,6 +341,32 @@ _In progress on this branch — content still accumulating; date set at tag time
   (case-folding only the `namespace` keyword), every resolver honors the node's
   own qualification, fully-qualified call sites rewrite to their specializations,
   and relative names bind to the current namespace — exactly as PHP does.
+- **Generic markers bind byte-exact — two same-spelling sites on one line can no
+  longer steal each other's markers.** Marker matching was line-keyed
+  (first-traversed-wins), so `f(Box $a, Box<int> $b)` emitted the specialization
+  on the **wrong parameter**; a plain return hint could steal a
+  `new Box::<int>(...)` marker, leaving a raw `new` against the marker interface;
+  one-line same-name conditional classes handed the generic clause to the plain
+  class — rewriting it into an uninstantiable marker interface; and
+  `Plain::pick(5) + Util::pick::<int>(4)` on one line **false-rejected both
+  calls** (the plain call's line-range claimed the generic call's marker). Every
+  marker now matches on the byte of the token it anchors at, translated through
+  the byte-offset map — exact across multi-line member chains, length-changing
+  `T[]` rewrites, interpolated-string turbofish, and multibyte identifiers.
+- **A generic closure that nothing specializes is now rejected**
+  (`xphp.unspecialized_generic_closure`) instead of silently emitting raw
+  type-parameter hints. Specialization is call-site-driven, so a generic
+  closure/arrow with no in-scope grounding `$var::<...>(...)` call kept hints
+  naming the non-existent class `App\T` in the emitted output — a `TypeError` on
+  first invocation behind a clean compile and a clean `check`, including when the
+  value was only handed away as a callable (`array_map($f, ...)`, a returned
+  factory) — which cannot ground it. Both modes reject every such shape:
+  assigned-but-uncalled, return-position, argument-position, `use (...)`-
+  capturing, defaulted, conditional arms, and — uniformly — a clause whose
+  parameters are never referenced (dead syntax; delete it). A template whose
+  call sites drew their own rejection (static closure, `$this` capture, missing
+  turbofish) is not double-reported, and a turbofish with still-abstract type
+  arguments counts as a real call.
 
 ## [0.2.1] - 2026-06-17
 
