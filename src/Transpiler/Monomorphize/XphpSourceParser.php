@@ -7,6 +7,7 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeTraverser;
@@ -2471,6 +2472,16 @@ final class XphpSourceParser
 
             public function enterNode(Node $node): null
             {
+                if ($node instanceof Use_ || $node instanceof GroupUse) {
+                    // Reject a generic clause on a namespace-import BEFORE the blanket
+                    // Name branch below resolves its marker (which mis-qualifies the
+                    // already-absolute import name) or CallSiteRewriter emits an
+                    // absolute specialized name inside a `use N\{…}` prefix group
+                    // (unparseable PHP). A generic TRAIT-use is a Stmt\TraitUse — a
+                    // different node that never reaches here and keeps specializing.
+                    $this->rejectGenericClauseOnImport($node);
+                }
+
                 if ($node instanceof Namespace_) {
                     // @infection-ignore-all — bare `namespace { ... }` (no name) isn't used in any
                     // fixture; the null-coalesce branch never observably differs from a missing name.
@@ -2899,6 +2910,53 @@ final class XphpSourceParser
              * (matching no marker) for a position-less node — never produced
              * by parsing real source, defensive only.
              */
+            /**
+             * A generic clause on a namespace-import `use` — single (`use App\Box<int>;`),
+             * aliased (`… as B`), `use const`, or grouped (`use App\{Box<int>, …}`, and the
+             * clause-on-prefix shape `use App<int>\{…}`) — has no valid xphp meaning: imports
+             * name a symbol, they don't instantiate one. Left alone, the single/aliased/const
+             * forms mis-blame a double-qualified phantom template, and the grouped form emits
+             * an absolute specialized name inside a `use N\{…}` prefix group, which is
+             * unparseable PHP produced silently. Reject it here — before the blanket Name
+             * branch consumes the marker — so both `check` (collected) and `compile` (thrown)
+             * report the right symbol at the import's line. `use function …<…>` never reaches
+             * this stage (its clause is left unstripped, so php-parser rejects it first).
+             *
+             * @param Use_|GroupUse $node
+             */
+            private function rejectGenericClauseOnImport(Node $node): void
+            {
+                $prefix = $node instanceof GroupUse ? $node->prefix->toCodeString() : null;
+                /** @var list<array{Name, string}> $candidates [name node, display symbol] */
+                $candidates = [];
+                if ($node instanceof GroupUse) {
+                    $candidates[] = [$node->prefix, $prefix];
+                }
+                foreach ($node->uses as $use) {
+                    $spelling = $use->name->toCodeString();
+                    $candidates[] = [
+                        $use->name,
+                        $prefix !== null ? $prefix . '\\' . $spelling : $spelling,
+                    ];
+                }
+                foreach ($candidates as [$name, $symbol]) {
+                    $byte = $this->originalByteOf($name);
+                    $spelling = $name->toCodeString();
+                    foreach ($this->nameMarkers as $marker) {
+                        if ($marker['bytePosition'] === $byte && $marker['name'] === $spelling) {
+                            throw new XphpParseException(sprintf(
+                                'A generic clause is not allowed on a `use` import. Import the '
+                                . 'template with a plain `use %s;` and apply the type arguments '
+                                . 'at the use site (the hint `%s<...>` or the call `%s::<...>()`).',
+                                $symbol,
+                                $symbol,
+                                $symbol,
+                            ), $name->getStartLine());
+                        }
+                    }
+                }
+            }
+
             private function originalByteOf(Node $node): int
             {
                 $pos = $node->getStartFilePos();

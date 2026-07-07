@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Main;
+
+use App\Box as B1;
+
+use App\Box<int> as B2;
+
+class C {}
