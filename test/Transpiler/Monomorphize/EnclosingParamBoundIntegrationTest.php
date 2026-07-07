@@ -1847,7 +1847,7 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
                 declare(strict_types=1);
                 namespace App;
                 class C {
-                    public function a(): void { $f = function<T>(T $x): T { return $x; }; }
+                    public function a(): void { $f = function<T>(T $x): T { return $x; }; $f::<int>(1); }
                     public function b(callable $f): mixed { return $f('x'); }
                 }
                 PHP,

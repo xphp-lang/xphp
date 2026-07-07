@@ -92,6 +92,13 @@ ref-ness is preserved end-to-end.
   an arrow or a named generic function at file scope instead. See
   [caveats](../caveats.md#static-closures-not-supported).
 
+- > ⚠️ **Declared-but-never-called rejected** — a generic closure that no
+  `$var::<...>(...)` call grounds is a compile error
+  (`xphp.unspecialized_generic_closure`): specialization is call-site
+  driven, so the value would otherwise keep raw type-parameter hints and
+  fatal on first invocation — including when handed away as a plain
+  callable. Call it with a turbofish, or drop the `<...>` clause.
+
 - > ⚠️ **Variance markers not allowed** — `out T` / `in T` are rejected on
   anonymous templates. They have no stable identity for an `extends`
   chain. See [caveats](../caveats.md#variance-markers-are-class-level-only).

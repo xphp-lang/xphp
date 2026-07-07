@@ -195,10 +195,12 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
-    public function testEmptyArgSetsLeavesOriginalAssignUntouched(): void
+    public function testTemplateNeverCalledViaTurbofishIsRejected(): void
     {
-        // Template declared but never called via turbofish. The Assign
-        // RHS stays as the original closure body; no dispatcher emitted.
+        // Template declared but never called via turbofish. It used to keep
+        // its original Assign untouched — emitting raw `T` hints that name
+        // the non-existent class App\T and fatal on first invocation. It is
+        // now rejected loudly instead.
         $dir = $this->mkdir('disp-empty');
         file_put_contents($dir . '/Use.xphp', <<<'PHP'
         <?php
@@ -206,19 +208,13 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $id = function<T>(T $x): T { return $x; };
         PHP);
 
-        $this->compile($dir);
-        $out = file_get_contents($dir . '/dist/Use.php');
-        self::assertIsString($out);
-        // Negative invariants kept: no dispatcher tag-parameter and no
-        // specialized function emitted when the template is never called.
-        self::assertStringNotContainsString('__xphp_tag', $out);
-        self::assertStringNotContainsString('closure_id_T_', $out);
-        SnapshotHash::assertMatches(
-            __DIR__ . '/ClosureDispatcherIntegrationTest/testEmptyArgSetsLeavesOriginalAssignUntouched/Use.expected.php',
-            $out,
-        );
-
-        $this->rrmdir(dirname($dir));
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('never specialized');
+            $this->compile($dir);
+        } finally {
+            $this->rrmdir(dirname($dir));
+        }
     }
 
     public function testNestedScopeCallsShareDispatcher(): void

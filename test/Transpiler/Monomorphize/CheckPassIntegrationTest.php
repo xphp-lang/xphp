@@ -241,6 +241,41 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('closure_static_attributed');
     }
 
+    public function testUnspecializedGenericClosuresAreCollectedByCheck(): void
+    {
+        // Declared-but-never-turbofish-called generic closures across every
+        // position (assigned, return, argument, use-capturing, defaulted,
+        // unused-param, conditional else-arm) each draw ONE diagnostic; the
+        // called twins draw none. Note the eager static/$this rejects also
+        // stay single diagnostics (their templates count as attempted) —
+        // pinned by the closure_static / closure_this_capture tests' counts.
+        $diagnostics = $this->check('closure_unspecialized');
+
+        $all = $diagnostics->all();
+        self::assertCount(7, $all);
+        $byLine = [];
+        foreach ($all as $d) {
+            self::assertSame(GenericMethodCompiler::CODE_UNSPECIALIZED_GENERIC_CLOSURE, $d->code);
+            self::assertStringContainsString('never specialized', $d->message);
+            self::assertNotNull($d->location);
+            $byLine[$d->location->line] = $d->message;
+        }
+        ksort($byLine);
+        // The static arrow, return-position arrow, argument-position closure,
+        // use-capturing closure, defaulted closure, unused-param arrow, and
+        // the conditional else-arm arrow — NOT the called twins.
+        self::assertSame([12, 16, 19, 22, 24, 27, 30], array_keys($byLine));
+        self::assertStringContainsString('Generic arrow function', $byLine[12]);
+        self::assertStringContainsString('Generic closure', $byLine[19]);
+    }
+
+    public function testCompileThrowsOnUnspecializedGenericClosure(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('never specialized');
+        $this->compileFixture('closure_unspecialized');
+    }
+
     public function testUnresolvedGenericMethodTurbofishIsCollectedByCheck(): void
     {
         // A turbofish call to a generic method that exists nowhere on the receiver
