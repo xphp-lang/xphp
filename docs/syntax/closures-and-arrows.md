@@ -87,8 +87,9 @@ ref-ness is preserved end-to-end.
 
 - > ⚠️ **`static` closures rejected** — `static function<T>(...)` is
   rejected because generic static closures can't yet be specialized at
-  the call site (a capability gap, not a binding one). Use a named
-  generic function at file scope instead. See
+  the call site (a capability gap, not a binding one). A `static`
+  **arrow** (`static fn<T>(...)`) specializes like a plain arrow. Use
+  an arrow or a named generic function at file scope instead. See
   [caveats](../caveats.md#static-closures-not-supported).
 
 - > ⚠️ **Variance markers not allowed** — `out T` / `in T` are rejected on

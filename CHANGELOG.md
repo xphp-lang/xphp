@@ -294,6 +294,53 @@ _In progress on this branch — content still accumulating; date set at tag time
   scalars (`int`, `string`, `bool`, `float`, and case variants like `Int`) are unchanged;
   an undeclared `Double` member is now reported as `xphp.undeclared_type` instead of being
   silently absorbed as a scalar.
+- **Generic declarations keep their type parameters regardless of header layout.**
+  Four marker-alignment defects silently de-generified declarations — clean compile,
+  clean `check`, raw `T` hints in the emitted code, `TypeError` at runtime: any
+  **multi-line** generic clause, turbofish argument list, or `T[]` sugar span
+  collapsed its newlines when stripped, shifting every later declaration off its
+  marker (`class Wide<\n T\n>` before `class Box<T>` left `Box` raw); `static
+  fn<T>(...)` anchored its marker at `fn` while the node starts at `static`; an
+  attribute before a generic closure (`#[A] function<T>`, `#[A] static fn<T>`)
+  moved the node start to `#[`; and an attribute or modifier on its own line before
+  a **named** generic declaration (`#[Override]` above `public function wrap<T>`,
+  `final` above `class Pair<T>`) lost the marker too — or false-rejected the class
+  as "instantiated but never defined". Stripping now preserves newlines
+  byte-for-byte (multibyte- and CRLF-safe; the `T[]` lowering re-appends its span's
+  newlines), anonymous markers anchor at the node's true start (walking back over
+  attribute groups and `static`), and named markers match on the declaration
+  name's line. A `static fn<T>` now simply **specializes** like any arrow — it can
+  never bind `$this`; the rewritten dispatcher closure is technically non-static,
+  observable only via `Closure::bind`/reflection — while `static function<T>`
+  keeps its loud not-yet-supported error, which now also fires when an attribute
+  precedes it.
+- **A generic clause that fails to bind to its declaration is now a loud compile
+  error.** Every defect in the family above was silent for the same structural
+  reason: an unbound marker simply evaporated and the compiler carried on. The
+  strict compile path now reports it (as a transpiler bug to report), instead of
+  emitting silently de-generified code; the tolerant LSP path is exempt —
+  half-typed editor buffers legitimately strand markers. A `use function b<T>;`
+  typo gets PHP's own syntax error on the `<` rather than being swallowed.
+- **Fully-qualified and `namespace\`-relative spellings work at every generic
+  site.** Names were resolved from prefix-erased strings, losing the author's
+  qualification: `new \App\Box::<int>` hard-failed as the undefined, doubled
+  `App\App\Box` — and an FQ generic **function** call (`\App\make::<int>(...)`)
+  silently lost its dispatcher, an undefined-function fatal at runtime;
+  `new \App\Box("hi")` on an all-defaults generic silently emitted the stripped
+  marker interface plus the kept `new` — "Cannot instantiate interface" at
+  runtime; `new namespace\Box::<int>` never bound its marker and silently emitted
+  the same fatal shape; on one line, a relative generic return type could steal
+  the body turbofish's marker, specializing the wrong site; `class Gen<T> extends
+  namespace\Base` with a colliding `use Other\Base` in scope emitted the generated
+  class extending `\Other\Base` — a `use` alias never applies to a relative name —
+  and the same capture hit every marked type position, generic-method receiver
+  typing, and the conformance hierarchy (where a wrong parent edge could
+  false-reject a valid factory); and `namespace\Thing` colliding with a type
+  parameter was substituted like one, emitting `int $x` where the author wrote an
+  explicit class reference. Markers now record the raw source spelling
+  (case-folding only the `namespace` keyword), every resolver honors the node's
+  own qualification, fully-qualified call sites rewrite to their specializations,
+  and relative names bind to the current namespace — exactly as PHP does.
 
 ## [0.2.1] - 2026-06-17
 

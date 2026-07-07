@@ -73,6 +73,12 @@ class Holder {
 
 ## `static` closures not supported
 
+`static` **arrows** work: `static fn<T>(T $x): T => $x` specializes
+exactly like a plain arrow (an arrow can never bind `$this`, so the
+`static` is inert; note the rewritten dispatcher closure is technically
+non-static — observable only through `Closure::bind` or reflection).
+The gap below is specific to the `static function` (closure) syntax.
+
 ### ❌ What doesn't work
 
 ```php
@@ -112,9 +118,11 @@ file-scope generic function side-steps it.
 
 ### ✅ Workaround
 
-Drop the `static` modifier, or lift the body to a named function:
+Use an arrow, drop the `static` modifier, or lift the body to a named
+function:
 
 ```php
+$f = static fn<T>(T $x): T => $x;               // works
 $f = function<T>(T $x): T { return $x; };       // works
 // or
 function id<T>(T $x): T { return $x; }
