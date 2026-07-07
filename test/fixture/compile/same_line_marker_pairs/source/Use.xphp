@@ -16,7 +16,7 @@ class Box<T>
     }
 }
 
-class Rec
+class R
 {
 }
 
@@ -59,7 +59,7 @@ function pair(): array { return [new Box::<int>(2), new Box::<string>('s')]; }
 
 // Length-changing sugar and a generic hint on the SAME line — byte
 // positions must round-trip through the offset map.
-function tally(Rec[] $rs, Box<int> $c): int { return \count($rs) + $c->v; }
+function tally(R[] $rs, Box<int> $c): int { return \count($rs) + $c->v; }
 
 // One-line same-name conditional classes — the plain class must stay a
 // class (it used to become an uninstantiable marker interface).
@@ -70,7 +70,7 @@ $a = f(new Box::<string>('p'), new Box::<int>(7));
 $b = g(new Box::<int>(8), new Box::<string>('q'));
 $k = mk();
 [$p1, $p2] = pair();
-$t = tally([new Rec()], new Box::<int>(10));
+$t = tally([new R()], new Box::<int>(10));
 $bb = new B();
 
 // Same variable turbofish twice on one line, and a member turbofish
