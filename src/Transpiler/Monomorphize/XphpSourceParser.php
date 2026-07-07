@@ -223,14 +223,17 @@ final class XphpSourceParser
         while ($i < $n) {
             $tok = $tokens[$i];
 
-            // Anonymous closure: `function<T>(...){}` or
-            // `static function<T>(...){}`. Recognized by T_FUNCTION followed
-            // immediately by `<` (no T_STRING name). For `static function<T>`
-            // the leading T_STATIC was consumed in the same arm.
+            // Anonymous closure: `function<T>(...){}` / `fn<T>(...)`.
+            // Recognized by T_FUNCTION/T_FN followed immediately by `<` (no
+            // T_STRING name). `static`-prefixed shapes are consumed by the
+            // T_STATIC arm below before the loop ever reaches the keyword.
             if ($tok->id === T_FUNCTION || $tok->id === T_FN) {
                 $isArrow = $tok->id === T_FN;
-                $anchorByte = $tok->pos;
-                $anchorLine = $tok->line;
+                // An attributed closure's node starts at its first `#[`, not at
+                // the keyword — anchor the (byte-matched) marker there.
+                $anchorIdx = self::anchorPastAttributeGroups($tokens, $i);
+                $anchorByte = $tokens[$anchorIdx]->pos;
+                $anchorLine = $tokens[$anchorIdx]->line;
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->text === '<') {
                     // P5.7: defaults allowed on anonymous closures + arrows
@@ -264,26 +267,33 @@ final class XphpSourceParser
                 // named-function path (T_FUNCTION) or skip the token (T_FN).
             }
 
-            // `static function<T>(...)` -- the leading T_STATIC must be
-            // recognized so we can include it in the anchor byte position.
+            // `static function<T>(...)` / `static fn<T>(...)` -- the leading
+            // T_STATIC must be recognized so the anchor covers it (the node
+            // starts at `static`, or at a preceding attribute group). A static
+            // ARROW takes the ordinary arrow specialization path — it cannot
+            // bind `$this` by construction, which is the only thing the
+            // dispatcher rewrite cannot carry; static CLOSURES stay gated
+            // (kind `staticClosure` hard-fails at the call-site rewrite).
             if ($tok->id === T_STATIC) {
                 $j = self::skipWs($tokens, $i + 1);
-                if ($j < $n && $tokens[$j]->id === T_FUNCTION) {
+                if ($j < $n && ($tokens[$j]->id === T_FUNCTION || $tokens[$j]->id === T_FN)) {
+                    $isArrow = $tokens[$j]->id === T_FN;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
                         $parsed = self::parseTypeParamList(
                             $tokens,
                             $k,
-                            allowDefaults: false,
+                            allowDefaults: $isArrow,
                             allowVariance: false,
                         );
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
+                            $anchorIdx = self::anchorPastAttributeGroups($tokens, $i);
                             $methodMarkers[] = [
-                                'line' => $tok->line,
+                                'line' => $tokens[$anchorIdx]->line,
                                 'name' => '',
-                                'kind' => 'staticClosure',
-                                'bytePosition' => $tok->pos,
+                                'kind' => $isArrow ? 'arrow' : 'staticClosure',
+                                'bytePosition' => $tokens[$anchorIdx]->pos,
                                 'params' => $paramEntries,
                             ];
                             $startByte = $tokens[$k]->pos;
@@ -1175,6 +1185,66 @@ final class XphpSourceParser
             $i--;
         }
         return $i;
+    }
+
+    /**
+     * The true start of an anonymous closure/arrow node whose keyword sits at
+     * `$keywordIdx`: php-parser starts the node at its FIRST token — the first
+     * attribute group when the closure is attributed — while the scanner sits
+     * on the `function` / `fn` / `static` keyword. Anonymous markers are
+     * matched byte-exact against the node start, so walk back over any number
+     * of complete `#[ … ]` groups (and the whitespace/comments between them)
+     * to the token the node actually starts at. Anything that is not a
+     * complete attribute group ends the walk.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function anchorPastAttributeGroups(array $tokens, int $keywordIdx): int
+    {
+        $anchor = $keywordIdx;
+        $i = self::skipWsBack($tokens, $keywordIdx - 1);
+        while ($i >= 0 && $tokens[$i]->text === ']') {
+            $open = self::matchAttributeGroupBack($tokens, $i);
+            if ($open === null) {
+                break;
+            }
+            $anchor = $open;
+            $i = self::skipWsBack($tokens, $open - 1);
+        }
+        return $anchor;
+    }
+
+    /**
+     * Match a `]` at `$closeIdx` back to the `#[` (T_ATTRIBUTE) that opens its
+     * attribute group, tracking square-bracket balance so attribute arguments
+     * containing array literals (`#[A([1, 2])]`) don't derail the walk.
+     * Returns null when the balance lands on a plain `[` instead — the `]`
+     * closed ordinary array syntax, not an attribute group.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function matchAttributeGroupBack(array $tokens, int $closeIdx): ?int
+    {
+        $depth = 0;
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is the open tag, never
+        // `]`, `[`, or `#[`, so excluding it from the walk cannot change the result.
+        for ($i = $closeIdx; $i >= 0; $i--) {
+            $t = $tokens[$i];
+            if ($t->text === ']') {
+                $depth++;
+            } elseif ($t->id === T_ATTRIBUTE) {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            } elseif ($t->text === '[') {
+                $depth--;
+                if ($depth === 0) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     /**

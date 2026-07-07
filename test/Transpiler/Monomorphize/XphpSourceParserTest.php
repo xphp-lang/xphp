@@ -2770,6 +2770,65 @@ PHP;
         self::assertSame('T', $params[0]->name);
     }
 
+    public function testGenericStaticArrowAttachesItsMarker(): void
+    {
+        // The node starts at `static`, not at `fn` — the marker must anchor
+        // there or the arrow silently loses its params (raw `T` in the output).
+        $source = <<<'PHP'
+<?php
+namespace App;
+$id = static fn<T>(T $x): T => $x;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $arrow = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\ArrowFunction::class);
+        self::assertNotNull($arrow);
+        self::assertTrue($arrow->static);
+        $params = $arrow->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('T', $params[0]->name);
+    }
+
+    public function testAttributedGenericClosureAttachesItsMarker(): void
+    {
+        // The node starts at the first `#[`, not at `function`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = #[Marked] function<T>(T $x): T {
+    return $x;
+};
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $closure = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\Closure::class);
+        self::assertNotNull($closure);
+        $params = $closure->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('T', $params[0]->name);
+    }
+
+    public function testAttributedStaticGenericArrowAttachesItsMarker(): void
+    {
+        // Two ADJACENT attribute groups (no whitespace between them) — one
+        // with an array argument, so the walk back to the node start must
+        // balance the inner brackets AND resume exactly one token before
+        // each consumed group — plus `static`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$g = #[Marked]#[Tagged([1, 2])] static fn<U>(U $y): U => $y;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $arrow = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\ArrowFunction::class);
+        self::assertNotNull($arrow);
+        self::assertTrue($arrow->static);
+        $params = $arrow->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('U', $params[0]->name);
+    }
+
     public function testGenericClosureDefaultIsAccepted(): void
     {
         // P5.7: defaults now allowed on anonymous closures; GMC pads

@@ -31,4 +31,19 @@ final class MarkerAlignmentIntegrationTest extends TestCase
             $fixture->cleanup();
         }
     }
+
+    #[RunInSeparateProcess]
+    public function testAttributedAndStaticGenericClosuresSpecializeAndRun(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/attributed_generic_closures/source',
+            'attributed-generic-closures',
+        );
+        $fixture->registerAutoload('App\\AttributedClosures');
+        try {
+            require __DIR__ . '/../../fixture/compile/attributed_generic_closures/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
 }

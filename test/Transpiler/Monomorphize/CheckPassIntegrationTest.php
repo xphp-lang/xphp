@@ -220,6 +220,27 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('closure_static');
     }
 
+    public function testAttributedStaticGenericClosureIsCollectedByCheck(): void
+    {
+        // The attribute moves the closure node's start to `#[`; the generic
+        // marker must still bind there, so the static-closure reject FIRES —
+        // before, the marker was lost and the closure silently compiled raw.
+        $diagnostics = $this->check('closure_static_attributed');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(GenericMethodCompiler::CODE_UNSUPPORTED_STATIC_CLOSURE, $d->code);
+        self::assertNotNull($d->location);
+        self::assertSame(19, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnAttributedStaticGenericClosure(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('static closures cannot yet be specialized');
+        $this->compileFixture('closure_static_attributed');
+    }
+
     public function testUnresolvedGenericMethodTurbofishIsCollectedByCheck(): void
     {
         // A turbofish call to a generic method that exists nowhere on the receiver
