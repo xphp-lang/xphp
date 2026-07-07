@@ -15,6 +15,8 @@ use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Property;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
+use XPHP\Diagnostics\DiagnosticCollector;
 
 /**
  * Targets the LogicalAnd → LogicalOr guard-condition mutations in the three Monomorphize
@@ -194,23 +196,53 @@ final class VisitorGuardsTest extends TestCase
         self::assertSame([], $registry->instantiations());
     }
 
-    public function testCollectorBareNewSynthesisSkipsTemplatesWithRequiredParams(): void
+    public function testCollectorBareNewOnNonDefaultsTemplateThrowsInCompileMode(): void
     {
-        // `class Box<T>` (no default) -- a bare `new Box;` must NOT synthesize
-        // a zero-arg instantiation. Only all-defaults templates are eligible.
+        // `class Box<T>` (no default) -- a bare `new Box;` cannot pad from defaults, so it
+        // is a hard error, NOT a silent skip (the old behavior left the site pointing at
+        // the stripped marker interface -> a runtime fatal). Compile mode (no collector)
+        // throws, and nothing is recorded.
         $registry = new Registry();
+
+        try {
+            (new RegistryCollector($registry))->collect(self::classAndBareNew(), '/x.xphp');
+            self::fail('expected a RuntimeException for a bare new of a non-defaults generic');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('has no default', $e->getMessage());
+        }
+
+        self::assertSame([], $registry->instantiations(), 'a rejected bare new records no instantiation');
+    }
+
+    public function testCollectorBareNewOnNonDefaultsTemplateCollectsInCheckMode(): void
+    {
+        // Check mode (with a collector) reports the missing-type-argument diagnostic and
+        // continues -- still recording no instantiation for the rejected site.
+        $diagnostics = new DiagnosticCollector();
+        $registry = new Registry(Registry::DEFAULT_HASH_HEX_LENGTH, null, $diagnostics);
+
+        (new RegistryCollector($registry))->collect(self::classAndBareNew(), '/x.xphp');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $diagnostics->all()[0]->code);
+        self::assertSame([], $registry->instantiations());
+    }
+
+    /**
+     * `class Box<T>` (required param, no default) followed by a bare `new Box;`.
+     *
+     * @return list<Node\Stmt>
+     */
+    private static function classAndBareNew(): array
+    {
         $class = new Class_(new Identifier('Box'));
         $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, [new TypeParam('T')]);
         $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Box');
-        $bareNew = new \PhpParser\Node\Expr\New_(new Name('Box'));
-        $ast = [
+
+        return [
             $class,
-            new \PhpParser\Node\Stmt\Expression($bareNew),
+            new \PhpParser\Node\Stmt\Expression(new \PhpParser\Node\Expr\New_(new Name('Box'))),
         ];
-
-        (new RegistryCollector($registry))->collect($ast, '/x.xphp');
-
-        self::assertSame([], $registry->instantiations(), 'bare new on a non-defaulted template must not synthesize an instantiation');
     }
 
     public function testCollectorBareNewSynthesisRecordsAllDefaultsTemplate(): void

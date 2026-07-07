@@ -113,9 +113,10 @@ final class RegistryCollector extends NodeVisitorAbstract
             && $node instanceof ClassLike && $node->name !== null) {
             $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
             $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-            if (is_array($params)) {
+            $isGenericTemplate = is_array($params) && $params !== [] && is_string($fqn);
+            if ($isGenericTemplate) {
                 /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
-                if ($params !== [] && is_string($fqn) && !$this->isAlreadyRecorded($fqn)) {
+                if (!$this->isAlreadyRecorded($fqn)) {
                     $this->registry->recordDefinition(
                         $fqn,
                         $node->name->toString(),
@@ -124,6 +125,14 @@ final class RegistryCollector extends NodeVisitorAbstract
                         $this->currentFile,
                     );
                 }
+            } else {
+                // A NON-generic class/interface/trait. Record its FQN so the bare-new guard does
+                // not reject a `new B` when a plain `class B` coexists with a generic `class B<T>`
+                // (conditional same-name declarations). ATTR_TEMPLATE_FQN is only attached to
+                // generic templates, so compute the declaration FQN from the namespace context.
+                $ns = $this->ctx->currentNamespace();
+                $plainFqn = $ns !== '' ? $ns . '\\' . $node->name->toString() : $node->name->toString();
+                $this->registry->recordNonGenericClass($plainFqn);
             }
         }
 
@@ -178,6 +187,15 @@ final class RegistryCollector extends NodeVisitorAbstract
         }
         foreach ($definition->typeParams as $param) {
             if ($param->default === null) {
+                // A generic template with a required (non-defaulted) parameter, used as a bare
+                // `new` with no turbofish. It cannot be padded from defaults, so it was silently
+                // skipped -- leaving the call site pointing at the stripped marker `interface`,
+                // a guaranteed runtime fatal behind a clean gate. Report it loudly instead,
+                // matching the function/method call path (`xphp.missing_type_argument`).
+                $this->registry->reportMissingTypeArgumentsForBareNew(
+                    $resolved,
+                    new SourceLocation($this->currentFile, $name->getStartLine()),
+                );
                 return;
             }
         }

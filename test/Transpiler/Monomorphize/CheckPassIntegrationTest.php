@@ -145,6 +145,49 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertNotNull($diagnostics->all()[0]->location);
     }
 
+    public function testBareNewOfNonDefaultsGenericIsCollectedByCheck(): void
+    {
+        // `new Box(5)` where `Box<T>` has a required (non-defaulted) param and no
+        // turbofish: cannot pad from defaults, so it is a missing-type-argument error
+        // — same code and message as the call path, routed through padArgsWithDefaults.
+        $diagnostics = $this->check('bare_new_missing_arg');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+        self::assertSame(10, $d->location->line);
+    }
+
+    public function testBareNewQualifiedAndRelativeSpellingsAreBothCollected(): void
+    {
+        // FQ `new \…\Box(5)` and relative `new namespace\Box(6)` reject with the same
+        // verdict as the bare spelling, and BOTH are collected in one run (check does
+        // not throw-on-first).
+        $diagnostics = $this->check('bare_new_missing_arg_qualified');
+
+        self::assertCount(2, $diagnostics->all());
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $d->code);
+            self::assertNotNull($d->location);
+        }
+        self::assertSame([10, 11], array_map(
+            static fn ($d): ?int => $d->location?->line,
+            $diagnostics->all(),
+        ));
+    }
+
+    public function testBareNewOfConditionalSameNamePlainClassIsNotRejected(): void
+    {
+        // False-reject guard: a plain `class B` (live branch) coexists with a generic `class B<T>`
+        // (dead branch). `new B` resolves to the instantiable plain class, so the bare-new guard
+        // must stay silent — rejecting the generic twin's name here would be a false reject.
+        $diagnostics = $this->check('bare_new_conditional_same_name');
+
+        self::assertSame([], $diagnostics->all());
+    }
+
     public function testUndefinedTemplateIsCollectedByCheck(): void
     {
         // Exercises the collectUndefinedTemplates() step of check().
@@ -499,6 +542,15 @@ final class CheckPassIntegrationTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('has no default');
         $this->compileFixture('generic_method_missing_arg');
+    }
+
+    public function testCompileThrowsOnBareNewOfNonDefaultsGeneric(): void
+    {
+        // Compile mode (no collector) throws the identical missing-type-argument message
+        // the call path throws — confirms the shared reporter keeps the throw path intact.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('has no default');
+        $this->compileFixture('bare_new_missing_arg');
     }
 
     public function testCompileStillThrowsOnDuplicateGenericFunction(): void

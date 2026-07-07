@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\BareNewConditionalSameName;
+
+// A plain `class B` (live branch) coexists with a generic `class B<T>` (dead branch).
+// A bare `new B` resolves to the instantiable plain class at runtime, so the bare-new
+// guard must NOT reject it -- rejecting would be a false reject. Expect 0 diagnostics.
+if (true) {
+    class B
+    {
+    }
+} else {
+    class B<T>
+    {
+        public T $v;
+    }
+}
+
+$b = new B();

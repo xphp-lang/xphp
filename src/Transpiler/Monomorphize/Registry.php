@@ -48,6 +48,16 @@ final class Registry
     /** @var array<string, GenericDefinition> Keyed by template FQN. */
     private array $definitions = [];
 
+    /**
+     * FQNs that also have a NON-generic class/interface/trait declaration (a plain `class B {}`
+     * alongside a generic `class B<T> {}`, e.g. in mutually exclusive conditional branches). A
+     * bare `new B` on such a name resolves to the plain class at runtime, so the bare-new guard
+     * must NOT reject it. Keyed by the namespace-normalized FQN (no leading `\`); value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $nonGenericClassNames = [];
+
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
@@ -178,6 +188,50 @@ final class Registry
             $definition->typeParams,
             $args,
             ltrim($templateFqn, '\\'),
+            $this->diagnostics,
+            $callSite,
+        );
+    }
+
+    /**
+     * Record that `$fqn` has a non-generic class/interface/trait declaration. See
+     * {@see $nonGenericClassNames}. `$fqn` is already namespace-normalized (no leading `\`) by
+     * every caller, and is looked up verbatim in {@see reportMissingTypeArgumentsForBareNew}.
+     */
+    public function recordNonGenericClass(string $fqn): void
+    {
+        $this->nonGenericClassNames[$fqn] = true;
+    }
+
+    /**
+     * Report a bare `new` of a generic template that supplies no type arguments and cannot pad
+     * entirely from defaults (some parameter is required). Routes through the canonical
+     * `padArgsWithDefaults`, so the code (`xphp.missing_type_argument`), message, and
+     * throw-vs-collect duality match the function/method call path exactly. The padded result is
+     * discarded — a bare `new` of a non-all-defaults generic is a hard error, not an instantiation,
+     * so nothing is recorded (recording the partial tuple would store a bogus specialization and
+     * draw spurious secondary diagnostics). A no-op when the template isn't recorded, or when a
+     * non-generic class of the same name also exists (the bare `new` resolves to that at runtime).
+     *
+     * `$templateFqn` is the resolveName-normalized name (no leading `\`), matching the keys of both
+     * `$definitions` and `$nonGenericClassNames`.
+     */
+    public function reportMissingTypeArgumentsForBareNew(string $templateFqn, ?SourceLocation $callSite): void
+    {
+        $definition = $this->definitions[$templateFqn] ?? null;
+        if ($definition === null) {
+            return;
+        }
+        // A plain class of the same name also exists (conditional same-name declaration): the bare
+        // `new` resolves to the instantiable class at runtime, so rejecting it would be a false
+        // reject. The generic twin is emitted as a marker interface; the plain class is what runs.
+        if (($this->nonGenericClassNames[$templateFqn] ?? false) === true) {
+            return;
+        }
+        self::padArgsWithDefaults(
+            $definition->typeParams,
+            [],
+            $templateFqn,
             $this->diagnostics,
             $callSite,
         );

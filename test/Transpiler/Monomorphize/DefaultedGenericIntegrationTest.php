@@ -6,12 +6,14 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\CompiledFixture;
 use XPHP\TestSupport\SnapshotHash;
 
 final class DefaultedGenericIntegrationTest extends TestCase
@@ -85,6 +87,25 @@ final class DefaultedGenericIntegrationTest extends TestCase
             $snapshotDir . '/Cache_explicit.expected.php',
             file_get_contents($this->fqnToPath($fqnExplicit)),
         );
+    }
+
+    #[RunInSeparateProcess]
+    public function testBareNewSelfInNonDefaultsGenericBodyIsNotRejectedAndRuns(): void
+    {
+        // WI-06 false-reject guard: the bare-new reject fires only on a bare `new` of the
+        // *template name*. A bare `new self` inside a non-defaults generic body must NOT be
+        // rejected -- `self` resolves to no template and the Specializer rewrites it per
+        // instantiation. Compiled and executed end-to-end.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/bare_new_self_in_generic_body/source',
+            'bare-new-self',
+        );
+        try {
+            $fixture->registerAutoload('App\\BareNewSelfInGenericBody');
+            require __DIR__ . '/../../fixture/compile/bare_new_self_in_generic_body/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
     }
 
     public function testEmptyTurbofishAndBareNewProduceSameSpecialization(): void
