@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Other;
+
+class Box<T = int>
+{
+    public function __construct(public T $n)
+    {
+    }
+}

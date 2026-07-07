@@ -7,7 +7,6 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Name;
-use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
@@ -143,10 +142,13 @@ final class RegistryCollector extends NodeVisitorAbstract
             }
         }
 
+        // Fully-qualified bare news are included: `new \App\Box("hi")` on an
+        // all-defaults generic used to be skipped here, so compile emitted the
+        // stripped `interface Box {}` and KEPT the call site — a guaranteed
+        // runtime fatal behind a clean gate.
         if ($this->mode !== self::MODE_DEFINITIONS
             && $node instanceof New_
             && $node->class instanceof Name
-            && !$node->class instanceof FullyQualified
             && $node->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) === null
         ) {
             $this->synthesizeBareNewIfAllDefaults($node->class);
@@ -164,7 +166,12 @@ final class RegistryCollector extends NodeVisitorAbstract
      */
     private function synthesizeBareNewIfAllDefaults(Name $name): void
     {
-        $resolved = $this->ctx->resolveAgainstContext($name->toString());
+        // resolveName (not a flattened toString()): the spelling decides the
+        // template — `\App\Box` must not double the namespace, and a relative
+        // `namespace\Box` must bind to the current namespace even when a
+        // colliding `use` alias is in scope (otherwise synthesis targets the
+        // WRONG template, or silently skips).
+        $resolved = $this->ctx->resolveName($name);
         $definition = $this->registry->definition($resolved);
         if ($definition === null || $definition->typeParams === []) {
             return;

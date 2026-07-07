@@ -31,4 +31,19 @@ final class QualifiedCallSiteIntegrationTest extends TestCase
             $fixture->cleanup();
         }
     }
+
+    #[RunInSeparateProcess]
+    public function testQualifiedBareNewsSynthesizeDefaultsAndRun(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/qualified_bare_new_defaults/source',
+            'qualified-bare-new-defaults',
+        );
+        $fixture->registerAutoload('App\\QualifiedDefaults', 'Other');
+        try {
+            require __DIR__ . '/../../fixture/compile/qualified_bare_new_defaults/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
 }

@@ -270,11 +270,13 @@ final class VisitorGuardsTest extends TestCase
         self::assertTrue($only->concreteTypes[0]->isScalar);
     }
 
-    public function testCollectorBareNewSynthesisSkipsFullyQualifiedName(): void
+    public function testCollectorBareNewSynthesisIncludesFullyQualifiedName(): void
     {
-        // FullyQualified Name nodes already point at an explicit class -- no
-        // namespace + use-map resolution needed, and they're not a synthesis
-        // target. Pin that the collector ignores them.
+        // A FullyQualified bare new of an all-defaults generic is a real
+        // instantiation: skipping it emitted the stripped marker interface
+        // and KEPT the `new \Cache(...)` call site — a guaranteed runtime
+        // fatal behind a clean gate. It must synthesize the defaults tuple
+        // exactly like the bare spelling (without doubling the namespace).
         $registry = new Registry();
         $class = new Class_(new Identifier('Cache'));
         $class->setAttribute(
@@ -290,7 +292,14 @@ final class VisitorGuardsTest extends TestCase
 
         (new RegistryCollector($registry))->collect($ast, '/x.xphp');
 
-        self::assertSame([], $registry->instantiations(), 'FullyQualified bare new must not be synthesized');
+        $instantiations = $registry->instantiations();
+        self::assertCount(1, $instantiations, 'FQ bare new of an all-defaults generic must synthesize');
+        self::assertSame('Cache', reset($instantiations)->templateFqn);
+        self::assertSame(
+            [],
+            $bareNew->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS),
+            'the synthesized marker must attach so the call-site rewriter fires',
+        );
     }
 
     // =====================================================================
