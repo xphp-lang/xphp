@@ -183,6 +183,24 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **A bare `new` of a generic without all-defaults is rejected instead of
+  silently emitting an uninstantiable marker.** `new Box(...)` where `Box<T>`
+  has a required type parameter and no turbofish was skipped by the
+  instantiation collector, leaving the call site pointing at the stripped marker
+  `interface Box {}` — so the emitted code fatalled with "Cannot instantiate
+  interface" behind a clean compile and a clean `check`. It now fails with
+  `xphp.missing_type_argument` (throwing in `compile`, collected in `check`),
+  exactly as a turbofish-less generic call does. All-defaults generics still
+  instantiate from a bare `new`, and a bare `new B` still works when a plain
+  `class B` coexists with a generic `class B<T>` (conditional same-name
+  declarations resolve to the plain class at runtime).
+- **A first-class callable of a turbofish specialization emits valid PHP.**
+  `$g = $f::<int>(...)` on a generic closure emitted `$f('T_…', ...)` — the
+  specialization tag prepended beside the `...` placeholder, which does not
+  parse, so the output failed to load. It now emits a forwarding closure that
+  routes through the dispatcher, preserving callable semantics (positional,
+  variadic, and named arguments and the closure's captures); empty-turbofish
+  all-defaults FCCs (`$f::<>(...)`) work the same way.
 - **Parenthesised DNF types inside `Closure(...)` signatures are supported.** A
   DNF group (`(A&B)|C`, `A|(B&C)`) anywhere in a signature previously broke the
   type scanner: a leading group in a return position failed to compile, a

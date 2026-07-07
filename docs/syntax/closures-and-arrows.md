@@ -76,6 +76,12 @@ ref-ness is preserved end-to-end.
   dispatcher, including `&` byref captures.
 - The variable receiver stays unchanged at call sites — `$f::<int>(...)`
   becomes `$f('T_<hash>', ...)`, not a renamed call.
+- A **first-class callable** of a specialization (`$g = $f::<int>(...)`)
+  becomes a forwarding closure `fn(...$a) => $f('T_<hash>', ...$a)` that
+  routes through the dispatcher, so `$g` stays a callable with the
+  specialization bound (positional, variadic, and named arguments and the
+  closure's captures are all preserved). Empty-turbofish all-defaults FCCs
+  (`$f::<>(...)`) work the same way.
 
 ## Caveats
 
