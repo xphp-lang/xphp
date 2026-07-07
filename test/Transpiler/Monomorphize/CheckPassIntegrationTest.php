@@ -626,6 +626,34 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(9, $d->location->line);
     }
 
+    public function testParseTimeInvalidDefaultReportsRealLine(): void
+    {
+        // An invalid default shape (`T = ?int`) rejects from the `$tokens[$afterBound]`
+        // (the `=`) throw site — a distinct index from the variance sites. Line 7.
+        $diagnostics = $this->check('parse_line_invalid_default');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('has an invalid default', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(7, $d->location->line);
+    }
+
+    public function testParseTimeUnionDefaultReportsRealLine(): void
+    {
+        // A union default (`T = Foo | Bar`) rejects from the `$tokens[$afterDefault]`
+        // (the `|`) throw site — again a distinct index. `class Slot<...>` on line 9.
+        $diagnostics = $this->check('parse_line_union_default');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('has an invalid default', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
     public function testParseTimePositionlessRejectionFallsBackToLineOne(): void
     {
         // A structural rejection raised over parsed entries (a self-bound `T : T`) carries

@@ -336,11 +336,12 @@ final readonly class Compiler
                     Severity::Error,
                     self::CODE_PARSE_ERROR,
                     $e->getMessage(),
-                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- the
-                    // scanner supplies a real line (>= 1) or 0 when no token position was
-                    // available; every `> 0` boundary variant routes 0 to the same `?: 1`
-                    // fallback, so the mutants are equivalent. The real-line path is pinned by
-                    // CheckPassIntegrationTest's testParseTime* cases.
+                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- every
+                    // current throw site supplies a real token line (>= 1), so this `> 0` guard is
+                    // a defensive floor for the exception's documented 0 ("no position") contract.
+                    // The fallback value equals the boundary (1), so shifting or flipping the `> 0`
+                    // test routes to the same result — the mutants are equivalent. The real-line
+                    // path is pinned by CheckPassIntegrationTest's testParseTime* cases.
                     new SourceLocation($filepath, $line > 0 ? $line : 1),
                 ));
             } catch (RuntimeException $e) {
