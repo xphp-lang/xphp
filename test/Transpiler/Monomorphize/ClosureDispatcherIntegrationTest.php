@@ -255,6 +255,51 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
+    #[RunInSeparateProcess]
+    public function testFirstClassCallableTurbofishClosureEmitsValidForwardingClosureAndRuns(): void
+    {
+        // `$g = $f::<int>(...)` used to emit `$f('T_…', ...)` — a tag arg beside the FCC
+        // placeholder, which does not parse. It now emits a forwarding closure that routes
+        // through the dispatcher, preserving captures / variadics / named args. The require
+        // below both parses (else it fatals) and executes the emitted output.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/turbofish_fcc_closure/source',
+            'fcc-closure',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/turbofish_fcc_closure/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testFirstClassCallableOfThisCapturingClosureIsRejected(): void
+    {
+        // The eager `$this`-capture reject fires for an FCC too (it sits before the FCC
+        // handling): an FCC of a `$this`-capturing generic closure draws the loud
+        // capture error, not a broken forwarding closure.
+        $dir = $this->mkdir('fcc-this');
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        class Widget {
+            public int $n = 3;
+            public function make(): callable {
+                $f = fn<T>(T $x): T => $x + $this->n;
+                return $f::<int>(...);
+            }
+        }
+        PHP);
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('captures `$this`');
+            $this->compile($dir);
+        } finally {
+            $this->rrmdir(dirname($dir));
+        }
+    }
+
     // ----- helpers ---------------------------------------------------------
 
     private function mkdir(string $tag): string

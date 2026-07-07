@@ -22,6 +22,7 @@ use PhpParser\Node\MatchArm;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Param;
 use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\Stmt\Case_;
 use PhpParser\Node\Stmt\Catch_;
@@ -2175,7 +2176,7 @@ final class GenericMethodCompiler
              *
              * @param list<TypeRef> $args
              */
-            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): null
+            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): ?Node
             {
                 assert($node->name instanceof Variable && is_string($node->name->name));
                 $varName = $node->name->name;
@@ -2302,6 +2303,21 @@ final class GenericMethodCompiler
                     $entry['seenTagSet'][$tag] = true;
                     $entry['argSets'][] = $args;
                 }
+                unset($entry);
+
+                // First-class callable of a turbofish specialization (`$g = $f::<int>(...)`).
+                // The call site's args are just the `...` placeholder, so prepending the tag arg
+                // (the direct-call path below) would emit `$f('T_…', ...)` — illegal PHP that does
+                // not parse. Instead return a forwarding closure that binds the tag and forwards
+                // through the dispatcher `$varName` (materialized by finalize from the argSet just
+                // recorded), preserving callable semantics (arity, variadics, named args, and the
+                // captures the dispatcher already carries). It is NOT added to `callSites`, so
+                // finalize leaves it alone.
+                if ($node->isFirstClassCallable()) {
+                    return $this->buildForwardingFccClosure($varName, $tag, $node);
+                }
+
+                $entry = &$this->closureDispatchPlan[$planKey];
                 // Pair each call site with its PADDED tag so finalize doesn't
                 // recompute from the original `ATTR_METHOD_GENERIC_ARGS` (which
                 // may be empty for the `$f::<>()` default-padding shape).
@@ -2310,6 +2326,35 @@ final class GenericMethodCompiler
                 // Do NOT mutate the call site yet -- pass 2 prepends the tag arg
                 // once the dispatcher's specializations are known.
                 return null;
+            }
+
+            /**
+             * Build the forwarding closure that replaces a first-class-callable turbofish
+             * (`$f::<int>(...)`): `fn(...$p) => $f('<tag>', ...$p)`. Calling it routes through the
+             * dispatcher `$varName` (which finalize installs in that variable) to the specialization
+             * named by `$tag`. The variadic param name is guaranteed distinct from `$varName` so it
+             * never shadows the captured dispatcher inside the body.
+             */
+            private function buildForwardingFccClosure(string $varName, string $tag, FuncCall $node): ArrowFunction
+            {
+                $paramName = '__xphp_fcc_args';
+                while ($paramName === $varName) {
+                    $paramName .= '_';
+                }
+                $forward = new FuncCall(
+                    new Variable($varName),
+                    [
+                        new Arg(new String_($tag)),
+                        new Arg(new Variable($paramName), false, true),
+                    ],
+                );
+                return new ArrowFunction(
+                    [
+                        'params' => [new Param(new Variable($paramName), null, null, false, true)],
+                        'expr'   => $forward,
+                    ],
+                    $node->getAttributes(),
+                );
             }
 
             private function resolveClassName(Name $name): string
