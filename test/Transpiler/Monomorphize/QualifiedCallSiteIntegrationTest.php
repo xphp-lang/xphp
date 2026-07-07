@@ -33,6 +33,21 @@ final class QualifiedCallSiteIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testRelativeNamesInTemplatesBindToTheCurrentNamespaceAndRun(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/relative_names_in_templates/source',
+            'relative-names-in-templates',
+        );
+        $fixture->registerAutoload('App\\RelativeTemplates', 'Other');
+        try {
+            require __DIR__ . '/../../fixture/compile/relative_names_in_templates/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testQualifiedBareNewsSynthesizeDefaultsAndRun(): void
     {
         $fixture = CompiledFixture::compile(

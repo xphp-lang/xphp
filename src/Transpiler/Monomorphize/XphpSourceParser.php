@@ -2857,8 +2857,12 @@ final class XphpSourceParser
                 if (!$this->shouldQualify($node)) {
                     return;
                 }
-                $name = $node->toString();
-                $resolved = $this->ctx->resolveAgainstContext($name);
+                // resolveName (not a flattened toString()): a relative
+                // `namespace\Base` must bind to the current namespace — a
+                // `use Other\Base` alias never applies to it, and resolving
+                // the bare tail through the alias map emitted generated code
+                // extending/typing the WRONG class.
+                $resolved = $this->ctx->resolveName($node);
                 $node->setAttribute(XphpSourceParser::ATTR_RESOLVED_FQN, $resolved);
 
                 // Flag a bare, single-segment, non-imported class reference used inside a
@@ -2867,9 +2871,12 @@ final class XphpSourceParser
                 // a real (in-project / built-in) type or a stray/undeclared type parameter
                 // like the `T` in `interface Foo<Z> { add(T $x): void; }`. The validator
                 // resolves which using the declared-set; here we only record the suspicion.
-                if (count($node->getParts()) === 1
+                // Relative names are excluded: `namespace\Thing` is as explicit a class
+                // reference as an import or a FQ spelling.
+                if (!$node->isRelative()
+                    && count($node->getParts()) === 1
                     && $this->hasEnclosingTypeParams()
-                    && !$this->ctx->isImported($name)
+                    && !$this->ctx->isImported($node->toString())
                 ) {
                     $node->setAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE, $resolved);
                 }
@@ -2895,11 +2902,14 @@ final class XphpSourceParser
                     return false;
                 }
                 $name = $node->toString();
+                // A RELATIVE spelling is never a type param (`namespace\T` is an
+                // explicit class reference), so only a plain name defers to the
+                // enclosing scope here.
                 // @infection-ignore-all — defensive only: an enclosing type-param is a single
                 // segment that the Specializer substitutes (returning early via typeRefToNode)
                 // before the resolved-FQN swap can ever read the attribute, so tagging it is
                 // likewise unobservable.
-                if ($this->isEnclosingTypeParam($name)) {
+                if (!$node->isRelative() && $this->isEnclosingTypeParam($name)) {
                     return false;
                 }
                 $parts = $node->getParts();

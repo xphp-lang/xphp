@@ -2308,6 +2308,15 @@ final class GenericMethodCompiler
                 if (str_starts_with($raw, '\\')) {
                     return ltrim($raw, '\\');
                 }
+                // `namespace\Svc` binds to the current namespace — never to a
+                // `use` alias (toString() erased the prefix, so ask the node).
+                // Alias capture here made the receiver's method-template lookup
+                // land on the wrong class.
+                if ($name->isRelative()) {
+                    return $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $raw
+                        : $raw;
+                }
                 $first = self::firstSegment($raw);
                 if (isset($this->useMap[$first])) {
                     $rest = substr($raw, strlen($first));

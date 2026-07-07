@@ -432,6 +432,13 @@ final readonly class TypeHierarchy
                 if ($name->isFullyQualified() || str_starts_with($raw, '\\')) {
                     return ltrim($raw, '\\');
                 }
+                // `namespace\Base` binds to the current namespace — never to a
+                // `use` alias. An alias-captured hierarchy edge here recorded
+                // the wrong parent, which conformance then treated as a
+                // PROVABLE mismatch — a false reject of valid code.
+                if ($name->isRelative()) {
+                    return $this->qualify($raw);
+                }
                 $first = self::firstSegment($raw);
                 if (isset($this->useMap[$first])) {
                     $rest = substr($raw, strlen($first));

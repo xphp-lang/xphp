@@ -2091,6 +2091,75 @@ PHP;
         self::assertSame('int', $args[0]->name);
     }
 
+    public function testRelativeNamesResolveToTheCurrentNamespaceNotTheAliasMap(): void
+    {
+        // `namespace\Thing` binds to App\Thing even with `use Other\Thing` in
+        // scope, and — being an explicit class reference — is never flagged as
+        // a suspect undeclared type parameter.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use Other\Thing;
+
+class Gen<T> {
+    public function m(namespace\Thing $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            }
+        }
+        self::assertNotNull($relative);
+        self::assertSame(
+            'App\\Thing',
+            $relative->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN),
+            'the alias must not capture a relative name',
+        );
+        self::assertNull(
+            $relative->getAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE),
+            'a relative name is an explicit class reference, never a suspect type param',
+        );
+    }
+
+    public function testRelativeNameCollidingWithATypeParamIsStillAClassReference(): void
+    {
+        // Inside `Gen<T>`, `namespace\T` spells the CLASS App\T — it must get
+        // a resolved FQN (so the specializer swaps it to `\App\T`), never be
+        // treated as the type parameter.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Gen<T> {
+    public function m(namespace\T $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            }
+        }
+        self::assertNotNull($relative);
+        self::assertSame('App\\T', $relative->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN));
+        self::assertNull(
+            $relative->getAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE),
+            'an explicit relative reference must not be flagged as a suspect type param'
+            . ' — here there is no alias, so only the relative exclusion protects it',
+        );
+    }
+
     public function testQualifiedFunctionTurbofishesResolveAndAttach(): void
     {
         // `\App\make::<int>(…)` used to double the namespace in

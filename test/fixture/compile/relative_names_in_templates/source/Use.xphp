@@ -1,0 +1,61 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\RelativeTemplates;
+
+use Other\Base;
+use Other\Svc;
+use Other\Thing;
+
+// `namespace\Name` binds to the CURRENT namespace by PHP's rules — a
+// `use` alias never applies to it, and it is never a type parameter.
+// Every shape here used to alias-capture (emitting code against the
+// wrong class) or substitute a type param into an explicit class
+// reference.
+
+class Gen<T> extends namespace\Base
+{
+    public function __construct(public T $v)
+    {
+    }
+}
+
+class Keep<Thing>
+{
+    // Bare `Thing` IS the type param; `namespace\Thing` is an explicit
+    // reference to the App\RelativeTemplates\Thing class.
+    public function __construct(public Thing $generic)
+    {
+    }
+
+    public function label(namespace\Thing $t): string
+    {
+        return $t->tag;
+    }
+}
+
+// Generic-method receiver typed with a relative name: the method
+// template lookup must resolve `namespace\Svc` to THIS namespace's Svc.
+function relay(namespace\Svc $s): int
+{
+    return $s->id::<int>(5);
+}
+
+// Conformance target + candidate hierarchy through a relative parent:
+// Cat extends THIS namespace's Base, so the literal conforms.
+class Cat extends namespace\Base
+{
+}
+
+function factory(): Closure(): namespace\Base
+{
+    return fn(): Cat => new Cat();
+}
+
+$g = new Gen::<int>(4);
+$k = new Keep::<int>(1);
+$lbl = $k->label(new namespace\Thing('ok'));
+$r = relay(new namespace\Svc());
+$make = factory();
+$cat = $make();

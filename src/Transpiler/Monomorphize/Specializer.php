@@ -301,7 +301,11 @@ final class Specializer
                 }
 
                 if ($node instanceof Name) {
-                    if (!$node->isFullyQualified()) {
+                    // The type-param swap applies only to a PLAIN single-segment
+                    // name: `\T` and `namespace\T` are explicit class references
+                    // by spelling — substituting a type param into them emitted
+                    // wrong signatures (`namespace\Thing $x` becoming `int $x`).
+                    if (!$node->isFullyQualified() && !$node->isRelative()) {
                         $parts = $node->getParts();
                         if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
                             $concrete = $this->substitution[$parts[0]];
