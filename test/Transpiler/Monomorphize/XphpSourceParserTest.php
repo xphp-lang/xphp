@@ -3122,6 +3122,123 @@ PHP;
         self::assertSame(['T'], self::paramNames($trait));
     }
 
+    public function testVariableTurbofishStripPreservesByteLength(): void
+    {
+        // The `$var::<…>` strip must blank exactly its own span — byte length
+        // and line count of the whole file preserved.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$id = fn<T>(T $x): T => $x;
+$r = $id::<int>(1) + $id::<int>(2);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped));
+        self::assertSame(substr_count($source, "\n"), substr_count($stripped, "\n"));
+    }
+
+    public function testSameLinePlainAndGenericHintsKeepTheirOwnMarkers(): void
+    {
+        // Line-keyed matching let the first-traversed same-spelling Name steal
+        // the generic hint's marker — specializing the WRONG parameter.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+function f(Box $a, Box<int> $b): int { return $b->v; }
+function g(Box<int> $a, Box $b): int { return $a->v; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $hints = [];
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->toString() === 'Box') {
+                $hints[] = $n->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) !== null;
+            }
+        }
+        self::assertSame(
+            [false, true, true, false],
+            $hints,
+            'each generic hint must keep its own marker regardless of same-line order',
+        );
+    }
+
+    public function testSameLineSameNameStaticCallsDoNotCrossClaim(): void
+    {
+        // `Plain::pick(5) + Util::pick::<int>(4)` on one line: the line-range
+        // match let the PLAIN call steal the generic call's marker — both then
+        // rejected (bogus unresolved-call + missing-type-argument errors).
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Util { public static function pick<T>(T $x): T { return $x; } }
+class Plain { public static function pick(int $x): int { return $x; } }
+$r = Plain::pick(5) + Util::pick::<int>(4);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $byClass = [];
+        foreach ($finder->findInstanceOf($ast, Node\Expr\StaticCall::class) as $call) {
+            assert($call->class instanceof Name);
+            $byClass[$call->class->toString()] =
+                $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        }
+        self::assertNull($byClass['Plain'], 'the plain call must not claim the marker');
+        self::assertIsArray($byClass['Util'], 'the generic call must keep its marker');
+        self::assertSame('int', $byClass['Util'][0]->name);
+    }
+
+    public function testReturnHintDoesNotStealANewTurbofishMarker(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+function mk(): Box { return new Box::<int>(1); }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $fn = $finder->findFirstInstanceOf($ast, \PhpParser\Node\Stmt\Function_::class);
+        self::assertNotNull($fn);
+        assert($fn->returnType instanceof Name);
+        self::assertNull(
+            $fn->returnType->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS),
+            'the plain return hint must not claim the instantiation marker',
+        );
+        $new = $finder->findFirstInstanceOf($ast, Node\Expr\New_::class);
+        self::assertNotNull($new);
+        assert($new->class instanceof Name);
+        $args = $new->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testOneLineConditionalSameNameClassesBindTheRightMarker(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+if ($flag) { class B { } } else { class B<T> { public T $v; } }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $classes = self::collectClasses($ast);
+        self::assertCount(2, $classes);
+        self::assertNull(
+            $classes[0]->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS),
+            'the plain class must not claim the generic clause',
+        );
+        self::assertSame(['T'], self::paramNames($classes[1]));
+    }
+
     public function testUseFunctionImportNeverBecomesAGenericMarker(): void
     {
         // `use function b<T>;` is invalid code, but it must fail as PHP's own

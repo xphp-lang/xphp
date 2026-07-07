@@ -459,11 +459,9 @@ final class XphpSourceParser
                 $nameLine = $tok->line;
                 // For member-access call sites (`Foo::method::<…>`, `$x->method::<…>`,
                 // `$x?->method::<…>`), walk back past the operator to the receiver and
-                // record its line as the marker's anchor. nikic sets a MethodCall /
-                // StaticCall's getStartLine() to the leftmost token in the chain — so
-                // matching against just the identifier's line breaks the moment the
-                // operator+name are split across lines, e.g. `Foo::\n    method::<int>`.
-                // The resolver matches if startLine ∈ [anchorLine, line].
+                // record its line as the marker's anchor. Matching is byte-exact
+                // against the method-name Identifier, so anchorLine is
+                // informational (diagnostics/debugging) rather than a match key.
                 $anchorLine = self::memberAccessReceiverLine($tokens, $i) ?? $nameLine;
                 $j = self::skipWs($tokens, $i + 1);
 
@@ -2488,14 +2486,17 @@ final class XphpSourceParser
 
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $shortName = $node->name->toString();
+                    // Match on the NAME Identifier's BYTE (mapped back to the
+                    // original source): the node starts at its first attribute
+                    // group or modifier, and line-keyed matching let two
+                    // same-name declarations on ONE line steal each other's
+                    // markers (`if(){class B}else{class B<T>}` handed the
+                    // clause to the plain class). The marker records the name
+                    // token's byte, which is unique per declaration.
+                    $classNameByte = $this->originalByteOf($node->name);
                     $paramEntries = null;
                     foreach ($this->classMarkers as $i => $marker) {
-                        // Match on the NAME Identifier's line, not the node's:
-                        // the node starts at its first attribute group or
-                        // modifier, which can sit on an earlier line
-                        // (`#[Attr]\nfinal class Box<T>`), while the marker
-                        // records the name token's line.
-                        if ($marker['line'] === $node->name->getStartLine() && $marker['name'] === $shortName) {
+                        if ($marker['bytePosition'] === $classNameByte && $marker['name'] === $shortName) {
                             $paramEntries = $marker['params'];
                             unset($this->classMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
@@ -2560,22 +2561,23 @@ final class XphpSourceParser
                     $isAnonymous = $node instanceof Node\Expr\Closure
                         || $node instanceof Node\Expr\ArrowFunction;
                     $declName = $isAnonymous ? '' : $node->name->toString();
-                    // Named declarations match on the NAME Identifier's line —
-                    // the node itself starts at its first attribute group or
-                    // modifier, which can sit on an earlier line
-                    // (`#[Attr]\npublic function wrap<T>`), while the marker
-                    // records the name token's line.
-                    $declLine = $isAnonymous ? -1 : $node->name->getStartLine();
+                    // Named declarations match on the NAME Identifier's BYTE
+                    // (the node itself starts at its first attribute group or
+                    // modifier; a shared line no longer conflates two
+                    // declarations). Anonymous ones match the node's own start
+                    // byte — the marker anchored at the first attribute group,
+                    // `static`, or the keyword.
+                    $declByte = $isAnonymous ? -1 : $this->originalByteOf($node->name);
                     $nodeStartByte = $this->byteOffsetMap->toOriginal($node->getStartFilePos());
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
                         // @infection-ignore-all -- markers are populated jointly with
-                        // both halves of the (line, name) or (kind, bytePosition) pair;
-                        // any single-clause-only input is unreachable from the scanner.
+                        // both halves of the (name byte, name) or (kind, bytePosition)
+                        // pair; any single-clause-only input is unreachable from the scanner.
                         $isMatch = $isAnonymous
                             ? ($marker['kind'] !== 'named'
                                 && $marker['bytePosition'] === $nodeStartByte)
-                            : ($marker['line'] === $declLine
+                            : ($marker['bytePosition'] === $declByte
                                 && $marker['name'] === $declName);
                         if ($isMatch) {
                             // Same two-pass scope-push-before-bound-build pattern
@@ -2632,18 +2634,17 @@ final class XphpSourceParser
                     && $node->name instanceof Node\Identifier
                 ) {
                     $callMethodName = $node->name->toString();
-                    $startLine = $node->getStartLine();
+                    // Match by the method-name Identifier's BYTE — the marker
+                    // anchored at the method token, so this is exact for
+                    // multi-line chains (`Foo::\n method::<int>`) AND for two
+                    // same-name calls sharing a line (the old line-range match
+                    // let `Plain::pick(5) + Util::pick::<int>(4)` cross-claim,
+                    // false-rejecting both). Covers static, instance, and
+                    // nullsafe calls alike.
+                    $methodNameByte = $this->originalByteOf($node->name);
                     foreach ($this->nameMarkers as $i => $marker) {
-                        // Match by name + line-range overlap. The Call node's
-                        // getStartLine() is the receiver's line; the marker's anchorLine
-                        // is the same, and its (later) line is the identifier's line.
-                        // Both can differ on multi-line `Foo::\n    method::<int>` or
-                        // `$obj->\n    method::<int>` constructs. The same logic now
-                        // covers static, instance, and nullsafe method calls -- the
-                        // GenericMethodCompiler distinguishes them later by AST type.
                         if ($marker['name'] === $callMethodName
-                            && $startLine >= $marker['anchorLine']
-                            && $startLine <= $marker['line']
+                            && $marker['bytePosition'] === $methodNameByte
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
@@ -2661,14 +2662,17 @@ final class XphpSourceParser
                     // `\App\make` / `namespace\make` marker must compare against the
                     // node's own qualified spelling, not the prefix-erased toString().
                     $funcName = $node->name->toCodeString();
-                    $startLine = $node->getStartLine();
+                    // Byte of the callee Name node — exact even for two
+                    // same-name turbofish calls sharing a line. The
+                    // variableTurbofish kind-guard is belt-and-braces (a
+                    // Variable marker's byte is a `$`, never a name byte).
+                    $calleeByte = $this->originalByteOf($node->name);
                     foreach ($this->nameMarkers as $i => $marker) {
-                        // @infection-ignore-all -- the three `&&` clauses are jointly
+                        // @infection-ignore-all -- the clauses are jointly
                         // populated when a marker is created; any single-clause-only
                         // input is unreachable from XphpSourceParser's own scanner.
                         if ($marker['name'] === $funcName
-                            && $startLine >= $marker['anchorLine']
-                            && $startLine <= $marker['line']
+                            && $marker['bytePosition'] === $calleeByte
                             && $marker['kind'] !== 'variableTurbofish'
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
@@ -2690,16 +2694,18 @@ final class XphpSourceParser
                     && is_string($node->name->name)
                 ) {
                     $varName = $node->name->name;
-                    $startLine = $node->getStartLine();
+                    // Byte of the Variable node's `$` — equals the recorded
+                    // T_VARIABLE position; exact for repeated `$f::<…>` calls
+                    // of the same variable on one line.
+                    $varByte = $this->originalByteOf($node->name);
                     foreach ($this->nameMarkers as $i => $marker) {
                         // @infection-ignore-all -- markers are populated jointly:
-                        // kind/name/anchorLine/line are all set together by the
+                        // kind/name/bytePosition are all set together by the
                         // scanner's variable-turbofish arm, so single-clause
                         // dropouts are unreachable.
                         if ($marker['kind'] === 'variableTurbofish'
                             && $marker['name'] === $varName
-                            && $startLine >= $marker['anchorLine']
-                            && $startLine <= $marker['line']
+                            && $marker['bytePosition'] === $varByte
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
@@ -2717,8 +2723,14 @@ final class XphpSourceParser
                     // node's own marker never matched at all — silently dropping
                     // its type args). The marker records the source spelling.
                     $nameStr = $node->toCodeString();
+                    // Byte of the Name node itself — the old line match let a
+                    // plain same-spelling hint on the same line steal a generic
+                    // hint's marker (`f(Box $a, Box<int> $b)` specialized the
+                    // wrong parameter), and a return hint could steal a `new`
+                    // turbofish's marker.
+                    $nameByte = $this->originalByteOf($node);
                     foreach ($this->nameMarkers as $i => $marker) {
-                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $nameStr) {
+                        if ($marker['bytePosition'] === $nameByte && $marker['name'] === $nameStr) {
                             $resolved = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $resolved);
                             $templateFqn = $this->resolveNameOnly($nameStr);
@@ -2873,6 +2885,26 @@ final class XphpSourceParser
                 // SigRaw — a leaf the flat splitter could not structure (a DNF group,
                 // an intersection with a scalar); carry the raw text through gradual.
                 return $type;
+            }
+
+            /**
+             * A node's start byte in the ORIGINAL source: getStartFilePos()
+             * reports the STRIPPED-source byte, so a length-changing rewrite
+             * earlier in the file (the `T[]` -> `array` lowering) shifts the
+             * two apart; the byte-offset map translates back. Returns -1
+             * (matching no marker) for a position-less node — never produced
+             * by parsing real source, defensive only.
+             */
+            private function originalByteOf(Node $node): int
+            {
+                $pos = $node->getStartFilePos();
+                // @infection-ignore-all — defensive: php-parser records positions on
+                // every node parsed from source; -1 only occurs for synthesized nodes,
+                // which never reach the marker matchers.
+                if ($pos < 0) {
+                    return -1;
+                }
+                return $this->byteOffsetMap->toOriginal($pos);
             }
 
             private function markName(Name $node): void

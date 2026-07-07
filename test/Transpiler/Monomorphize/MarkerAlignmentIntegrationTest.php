@@ -48,6 +48,21 @@ final class MarkerAlignmentIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testSameLineSameSpellingPairsBindTheirOwnMarkersAndRun(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/same_line_marker_pairs/source',
+            'same-line-marker-pairs',
+        );
+        $fixture->registerAutoload('App\\SameLinePairs');
+        try {
+            require __DIR__ . '/../../fixture/compile/same_line_marker_pairs/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testSplitDeclarationHeadersSpecializeAndRun(): void
     {
         $fixture = CompiledFixture::compile(

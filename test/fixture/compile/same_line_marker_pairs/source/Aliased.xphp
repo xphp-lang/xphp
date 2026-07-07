@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\SameLinePairs\Sub;
+
+use App\SameLinePairs\Box as B;
+
+// Aliased plain + generic hints of the same spelling on one line.
+function h(B $plain, B<string> $gen): string
+{
+    return $gen->v;
+}
+
+$hv = h(new B::<int>(3), new B::<string>('al'));
