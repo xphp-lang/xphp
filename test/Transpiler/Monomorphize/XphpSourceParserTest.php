@@ -2829,6 +2829,99 @@ PHP;
         self::assertSame('U', $params[0]->name);
     }
 
+    public function testSplitDeclarationHeadersKeepTheirMarkers(): void
+    {
+        // php-parser starts a node at its first attribute group or modifier —
+        // when that sits on a DIFFERENT line than the declaration's name, the
+        // marker (recorded at the name token's line) must still bind. Every
+        // shape here either silently lost its type params or false-rejected
+        // with "instantiated but never defined" when matched on the node line.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+#[Note]
+final class Box<T> {
+    public function __construct(public T $v) {}
+}
+
+final
+class Pair<U> {
+    public function __construct(public U $u) {}
+}
+
+class Wrap {
+    #[Note]
+    public function lift<T>(T $x): T { return $x; }
+
+    public static
+    function pick<T>(T $x): T { return $x; }
+}
+
+#[Note]
+function ident<T>(T $x): T { return $x; }
+
+function
+double<T>(T $x): array { return [$x, $x]; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $byName = self::classesByName($ast);
+        self::assertSame(['T'], self::paramNames($byName['Box']));
+        self::assertSame(['U'], self::paramNames($byName['Pair']));
+
+        foreach ($byName['Wrap']->getMethods() as $method) {
+            $params = $method->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+            self::assertIsArray($params, "method {$method->name->toString()} lost its marker");
+            self::assertCount(1, $params);
+        }
+
+        $functions = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                foreach ($stmt->stmts as $s) {
+                    if ($s instanceof \PhpParser\Node\Stmt\Function_) {
+                        $functions[$s->name->toString()] = $s;
+                    }
+                }
+            }
+        }
+        self::assertSame(['ident', 'double'], array_keys($functions));
+        foreach ($functions as $name => $fn) {
+            $params = $fn->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+            self::assertIsArray($params, "function {$name} lost its marker");
+            self::assertCount(1, $params);
+        }
+    }
+
+    public function testSplitInterfaceAndTraitHeadersKeepTheirMarkers(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+#[Note]
+interface Keeper<T> {
+    public function get(): T;
+}
+
+#[Note]
+trait Mixin<T> {
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        self::assertNotNull($iface);
+        self::assertSame(['T'], self::paramNames($iface));
+
+        $trait = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Trait_::class);
+        self::assertNotNull($trait);
+        self::assertSame(['T'], self::paramNames($trait));
+    }
+
     public function testGenericClosureDefaultIsAccepted(): void
     {
         // P5.7: defaults now allowed on anonymous closures; GMC pads

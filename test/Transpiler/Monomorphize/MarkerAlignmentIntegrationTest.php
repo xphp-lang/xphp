@@ -46,4 +46,19 @@ final class MarkerAlignmentIntegrationTest extends TestCase
             $fixture->cleanup();
         }
     }
+
+    #[RunInSeparateProcess]
+    public function testSplitDeclarationHeadersSpecializeAndRun(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/split_declaration_headers/source',
+            'split-declaration-headers',
+        );
+        $fixture->registerAutoload('App\\SplitHeaders');
+        try {
+            require __DIR__ . '/../../fixture/compile/split_declaration_headers/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
 }

@@ -2435,7 +2435,12 @@ final class XphpSourceParser
                     $shortName = $node->name->toString();
                     $paramEntries = null;
                     foreach ($this->classMarkers as $i => $marker) {
-                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $shortName) {
+                        // Match on the NAME Identifier's line, not the node's:
+                        // the node starts at its first attribute group or
+                        // modifier, which can sit on an earlier line
+                        // (`#[Attr]\nfinal class Box<T>`), while the marker
+                        // records the name token's line.
+                        if ($marker['line'] === $node->name->getStartLine() && $marker['name'] === $shortName) {
                             $paramEntries = $marker['params'];
                             unset($this->classMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
@@ -2488,10 +2493,11 @@ final class XphpSourceParser
                     || $node instanceof Node\Expr\Closure
                     || $node instanceof Node\Expr\ArrowFunction
                 ) {
-                    // Named templates match by (line, name); anonymous templates
+                    // Named templates match by (name line, name); anonymous templates
                     // (closures + arrows) match by (kind, bytePosition). The marker
-                    // records the ORIGINAL-source byte of the `function` / `static` /
-                    // `fn` keyword, while getStartFilePos() reports the STRIPPED-source
+                    // records the ORIGINAL-source byte of the node's first token (the
+                    // first attribute group, `static`, or the keyword itself),
+                    // while getStartFilePos() reports the STRIPPED-source
                     // byte -- a length-changing rewrite earlier in the file (e.g.
                     // `LongName[]` -> `array`) shifts the two apart, so the stripped
                     // position maps back through the byte-offset map before comparing
@@ -2499,6 +2505,12 @@ final class XphpSourceParser
                     $isAnonymous = $node instanceof Node\Expr\Closure
                         || $node instanceof Node\Expr\ArrowFunction;
                     $declName = $isAnonymous ? '' : $node->name->toString();
+                    // Named declarations match on the NAME Identifier's line —
+                    // the node itself starts at its first attribute group or
+                    // modifier, which can sit on an earlier line
+                    // (`#[Attr]\npublic function wrap<T>`), while the marker
+                    // records the name token's line.
+                    $declLine = $isAnonymous ? -1 : $node->name->getStartLine();
                     $nodeStartByte = $this->byteOffsetMap->toOriginal($node->getStartFilePos());
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
@@ -2508,7 +2520,7 @@ final class XphpSourceParser
                         $isMatch = $isAnonymous
                             ? ($marker['kind'] !== 'named'
                                 && $marker['bytePosition'] === $nodeStartByte)
-                            : ($marker['line'] === $node->getStartLine()
+                            : ($marker['line'] === $declLine
                                 && $marker['name'] === $declName);
                         if ($isMatch) {
                             // Same two-pass scope-push-before-bound-build pattern
