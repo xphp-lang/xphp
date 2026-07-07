@@ -583,6 +583,74 @@ final class CheckPassIntegrationTest extends TestCase
         }
     }
 
+    public function testParseTimeVarianceOnMethodReportsRealLine(): void
+    {
+        // A parser-stage rejection (variance marker on a method) is caught in check mode
+        // and must report the offending token's real source line, not the line-1 fallback
+        // used for position-less parse failures. `eat<out T>` sits on line 9.
+        $diagnostics = $this->check('parse_line_variance_method');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('Variance markers', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testParseTimeLegacyVarianceGlyphReportsRealLine(): void
+    {
+        // The `+T` legacy-variance rejection fires from a different throw site; it too
+        // carries its token line. `class Box<+T>` sits on line 7.
+        $diagnostics = $this->check('parse_line_legacy_variance');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('`+T` / `-T` variance syntax', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(7, $d->location->line);
+    }
+
+    public function testParseTimeDefaultOrderingReportsRealLine(): void
+    {
+        // The required-after-defaulted rejection anchors to the offending parameter's
+        // name line (`class Pair<T = int, U>` on line 9), proving the name-line path.
+        $diagnostics = $this->check('parse_line_default_ordering');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('Required type parameters must precede', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testParseTimePositionlessRejectionFallsBackToLineOne(): void
+    {
+        // A structural rejection raised over parsed entries (a self-bound `T : T`) carries
+        // no token position, so check mode collects it via the fallback catch at line 1 —
+        // and it is collected, not propagated (the file is still reported, exit stays clean
+        // of a fatal).
+        $diagnostics = $this->check('parse_self_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('cannot use itself as a bound', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(1, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnVarianceOnMethod(): void
+    {
+        // Compile mode catches the same rejection as a RuntimeException (XphpParseException
+        // extends it) — the message path is unchanged; only check mode reads the line.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Variance markers');
+        $this->compileFixture('parse_line_variance_method');
+    }
+
     private function compileFixture(string $fixture): void
     {
         $work = sys_get_temp_dir() . '/xphp-check-compile-' . uniqid('', true);

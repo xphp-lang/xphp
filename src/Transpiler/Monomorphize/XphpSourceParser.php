@@ -710,10 +710,10 @@ final class XphpSourceParser
 
         $name = ltrim($tokens[$i]->text, '\\');
         if ($name !== 'Closure') {
-            throw new RuntimeException(sprintf(
+            throw new XphpParseException(sprintf(
                 'Only "Closure" may carry a call signature, "%s" may not',
                 $name,
-            ));
+            ), $tokens[$i]->line);
         }
 
         $nullable = self::isNullablePrefixed($tokens, $i);
@@ -1330,7 +1330,7 @@ final class XphpSourceParser
         $sawVariadic = false;
         while ($i < $n && $tokens[$i]->text !== ')') {
             if ($sawVariadic) {
-                throw new RuntimeException('Only the last parameter of a Closure signature can be variadic');
+                throw new XphpParseException('Only the last parameter of a Closure signature can be variadic', $tokens[$i]->line);
             }
             [$param, $i] = self::parseSigParam($tokens, $i, $source);
             $params[] = $param;
@@ -1655,10 +1655,11 @@ final class XphpSourceParser
             // hint rather than letting them fall through to a bare `null` (which
             // would surface downstream as an opaque PHP syntax error).
             if ($i < $n && ($tokens[$i]->text === '+' || $tokens[$i]->text === '-')) {
-                throw new RuntimeException(
+                throw new XphpParseException(
                     'The `+T` / `-T` variance syntax was replaced by `out T` / `in T`. '
                     . 'Write `out` for covariance and `in` for contravariance, e.g. '
                     . '`class Box<out T>` or `class Consumer<in T>`.',
+                    $tokens[$i]->line,
                 );
             }
 
@@ -1676,13 +1677,14 @@ final class XphpSourceParser
                 $afterMarker = self::skipWs($tokens, $i + 1);
                 if ($afterMarker < $n && self::isNameToken($tokens[$afterMarker])) {
                     if (!$allowVariance) {
-                        throw new RuntimeException(
+                        throw new XphpParseException(
                             'Variance markers `out T` / `in T` are not supported on methods, '
                             . 'functions, closures, or arrow functions — variance is a '
                             . 'class-level-only feature by design: a function or closure '
                             . 'specialization has no stable class identity to anchor a '
                             . 'subtype `extends` edge to. Move the generic to a class-level '
                             . 'type parameter.',
+                            $tokens[$i]->line,
                         );
                     }
                     $variance = $tokens[$i]->text === 'out'
@@ -1696,6 +1698,7 @@ final class XphpSourceParser
                 return null;
             }
             $paramName = ltrim($tokens[$i]->text, '\\');
+            $paramNameLine = $tokens[$i]->line;
             $i++;
 
             // Reserve `out` / `in` as variance markers: they can never name a
@@ -1705,10 +1708,11 @@ final class XphpSourceParser
             // second `out` read as the name), `class Pair<in, out>`,
             // `class Box<in : Foo>` — all reject with a single diagnostic.
             if (in_array($paramName, ['out', 'in'], true)) {
-                throw new RuntimeException(
+                throw new XphpParseException(
                     '`out` and `in` are variance markers and cannot name a type parameter. '
                     . 'Use `out T` for covariance or `in T` for contravariance, and pick a '
                     . 'different name for the parameter itself.',
+                    $paramNameLine,
                 );
             }
 
@@ -1727,22 +1731,22 @@ final class XphpSourceParser
             $afterBound = self::skipWs($tokens, $i);
             if ($afterBound < $n && $tokens[$afterBound]->text === '=') {
                 if (!$allowDefaults) {
-                    throw new RuntimeException(sprintf(
+                    throw new XphpParseException(sprintf(
                         'Generic parameter `%s` has a default value, which is not yet '
                         . 'supported on static closures. Drop the `static` modifier or '
                         . 'assign the closure to a named function.',
                         $paramName,
-                    ));
+                    ), $tokens[$afterBound]->line);
                 }
                 $afterEq = self::skipWs($tokens, $afterBound + 1);
                 $parsedDefault = self::parseTypeArg($tokens, $afterEq);
                 if ($parsedDefault === null) {
-                    throw new RuntimeException(sprintf(
+                    throw new XphpParseException(sprintf(
                         'Generic parameter `%s` has an invalid default; only a single '
                         . 'concrete or generic type is allowed after `=` (no nullable '
                         . 'or union shapes).',
                         $paramName,
-                    ));
+                    ), $tokens[$afterBound]->line);
                 }
                 [$default, $i] = $parsedDefault;
                 // Reject `T = Box | Other` (union) and `T = Box & Other` (intersection)
@@ -1753,20 +1757,20 @@ final class XphpSourceParser
                 if ($afterDefault < $n
                     && ($tokens[$afterDefault]->text === '|' || $tokens[$afterDefault]->text === '&')
                 ) {
-                    throw new RuntimeException(sprintf(
+                    throw new XphpParseException(sprintf(
                         'Generic parameter `%s` has an invalid default; only a single '
                         . 'concrete or generic type is allowed after `=` (no nullable '
                         . 'or union shapes).',
                         $paramName,
-                    ));
+                    ), $tokens[$afterDefault]->line);
                 }
                 $sawDefault = true;
             } elseif ($sawDefault) {
-                throw new RuntimeException(sprintf(
+                throw new XphpParseException(sprintf(
                     'Generic parameter `%s` has no default but follows a parameter with '
                     . 'a default. Required type parameters must precede defaulted ones.',
                     $paramName,
-                ));
+                ), $paramNameLine);
             }
 
             $entries[] = [

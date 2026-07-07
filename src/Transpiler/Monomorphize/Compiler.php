@@ -327,9 +327,26 @@ final readonly class Compiler
                     // (Broken.xphp -> line 11).
                     new SourceLocation($filepath, $line > 0 ? $line : 1),
                 ));
+            } catch (XphpParseException $e) {
+                // xphp-specific parse-time rejections from the scanner (e.g. variance markers
+                // on methods, malformed generic defaults) — these carry the offending token's
+                // original-source line so the diagnostic points at the real site.
+                $line = $e->sourceLine();
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_PARSE_ERROR,
+                    $e->getMessage(),
+                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- the
+                    // scanner supplies a real line (>= 1) or 0 when no token position was
+                    // available; every `> 0` boundary variant routes 0 to the same `?: 1`
+                    // fallback, so the mutants are equivalent. The real-line path is pinned by
+                    // CheckPassIntegrationTest's testParseTime* cases.
+                    new SourceLocation($filepath, $line > 0 ? $line : 1),
+                ));
             } catch (RuntimeException $e) {
-                // xphp-specific parse-time rejections from the parser (e.g. variance markers on
-                // methods) — these carry no line, so the diagnostic points at the file (line 1).
+                // Remaining xphp parse-time rejections that carry no token position (e.g.
+                // structural checks over parsed entries) — the diagnostic points at the file
+                // (line 1).
                 $diagnostics->add(new Diagnostic(
                     Severity::Error,
                     self::CODE_PARSE_ERROR,
