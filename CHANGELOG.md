@@ -183,6 +183,19 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **A generic clause on a `use` import is rejected instead of misfiring.** Writing
+  a type argument on an import — `use App\Box<int>;`, `use App\Box<int> as B;`,
+  `use const App\BOX<int>;`, or the grouped `use App\{Box<int>, Bag};` — has no
+  meaning (imports name a symbol; they don't instantiate one). It used to either
+  blame a phantom double-qualified template (`Main\App\Box`) with no line, or — for
+  a grouped import whose name collided with a real template — **silently emit
+  unparseable PHP** (an absolute specialized name inside a `use N\{…}` prefix group)
+  that passed both `check` and `compile` and only failed when the file was loaded.
+  Every form now draws one clear diagnostic naming the real symbol at the import's
+  line, collected by `check` and thrown by `compile`. Import the template plainly
+  (`use App\Box;`) and apply the type arguments at the use site. A generic
+  **trait-use** (`class C { use Holder<int>; }`) is unaffected — it still specializes
+  the trait.
 - **`check` reports parse-stage rejections at their real source line.** Syntax
   the scanner rejects before the AST exists — a variance marker on a method or
   closure (`out T` / `in T`), the legacy `+T` / `-T` glyphs, a malformed or
