@@ -332,7 +332,10 @@ final class XphpSourceParser
 
             if ($tok->id === T_FUNCTION) {
                 $j = self::skipWs($tokens, $i + 1);
-                if ($j < $n && $tokens[$j]->id === T_STRING) {
+                // The method name is a real name (T_STRING) OR a semi-reserved keyword PHP
+                // permits as a method name (`function list<T>`) — the keyword id would otherwise
+                // fail the gate, leaving the `<T>` clause to reach php-parser as a raw error.
+                if ($j < $n && ($tokens[$j]->id === T_STRING || self::isSemiReservedName($tokens[$j]))) {
                     $methodName = $tokens[$j]->text;
                     $methodLine = $tokens[$j]->line;
                     $methodAnchorByte = $tokens[$j]->pos;
@@ -488,6 +491,56 @@ final class XphpSourceParser
                 }
                 $i++;
                 continue;
+            }
+
+            // Keyword-named STATIC method turbofish: `Recv::list::<…>()`. A keyword method
+            // name stays a keyword token after `::` (unlike after `->`, where PHP re-tokenizes
+            // it to T_STRING so the name-token branch below already handles the instance form),
+            // so the name-token gate misses it and the `::<…>` clause used to reach php-parser
+            // raw. Match exactly this shape — a semi-reserved keyword, preceded by `::`, followed
+            // by its own `::<…>` — and record a plain `named` marker; the resolver's StaticCall
+            // arm binds it like any other. Kept as a dedicated branch (not folded into the
+            // name-token gate) so keyword tokens never reach that gate's bare-`<`, closure-
+            // signature, or array-sugar sub-branches, where they would mis-parse constructs like
+            // `list($a, $b) = …`.
+            if (self::isSemiReservedName($tok)) {
+                $prevSig = self::skipWsBack($tokens, $i - 1);
+                if ($prevSig >= 0 && $tokens[$prevSig]->id === T_DOUBLE_COLON) {
+                    $j = self::skipWs($tokens, $i + 1);
+                    if ($j < $n && $tokens[$j]->id === T_DOUBLE_COLON) {
+                        $dcTok = $tokens[$j];
+                        $afterDc = $j + 1;
+                        $isEmptyTurbofish = $afterDc < $n
+                            && $tokens[$afterDc]->id === T_IS_NOT_EQUAL
+                            && $tokens[$afterDc]->pos === $dcTok->pos + 2;
+                        $parsed = null;
+                        if ($isEmptyTurbofish) {
+                            $parsed = [[], $afterDc];
+                        } elseif ($afterDc < $n
+                            && $tokens[$afterDc]->text === '<'
+                            && $tokens[$afterDc]->pos === $dcTok->pos + 2
+                        ) {
+                            $parsed = self::parseTypeArgList($tokens, $afterDc);
+                        }
+                        if ($parsed !== null) {
+                            [$args, $endIdx] = $parsed;
+                            $nameMarkers[] = [
+                                'line' => $tok->line,
+                                'anchorLine' => self::memberAccessReceiverLine($tokens, $i) ?? $tok->line,
+                                'name' => self::markerNameSpelling($tok->text),
+                                'kind' => 'named',
+                                'bytePosition' => $tok->pos,
+                                'args' => $args,
+                            ];
+                            $startByte = $dcTok->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
+                    }
+                }
             }
 
             // `static` is a PHP keyword (T_STATIC), not a name token, but the
@@ -2387,6 +2440,23 @@ final class XphpSourceParser
             || $tok->id === T_NAME_QUALIFIED
             || $tok->id === T_NAME_FULLY_QUALIFIED
             || $tok->id === T_NAME_RELATIVE;
+    }
+
+    /**
+     * A semi-reserved keyword usable as a method NAME. PHP has permitted every keyword
+     * (`list`, `print`, `for`, `default`, …) as a method name since 7.0, so a keyword-named
+     * generic method — `public function list<T>(…)` and its static call `Recv::list::<…>()` —
+     * must be recognized where `isNameToken` (which covers only real name tokens) would miss it.
+     * Deliberately excludes name tokens (handled by the isNameToken paths) and variables, and
+     * tests the token's TEXT against PHP's label grammar so punctuation (`(`, `&`, `<`) and
+     * `$vars` never qualify. The instance call `$o->list::<…>()` needs no help — PHP re-tokenizes
+     * `list` as T_STRING after `->`; only the after-`::` and declaration positions keep the keyword id.
+     */
+    private static function isSemiReservedName(PhpToken $tok): bool
+    {
+        return !self::isNameToken($tok)
+            && $tok->id !== T_VARIABLE
+            && preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/', $tok->text) === 1;
     }
 
     /**
