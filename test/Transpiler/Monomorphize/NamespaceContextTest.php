@@ -209,13 +209,115 @@ final class NamespaceContextTest extends TestCase
         self::assertFalse($ctx->isImported('Box'));
     }
 
-    private static function makeUse(string $fqn, ?string $alias = null): Use_
+    public function testFunctionNameUnqualifiedBindsCurrentNamespace(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+
+        self::assertSame('App\\helper', $ctx->resolveFunctionName(new Name('helper')));
+    }
+
+    public function testFunctionNameUnqualifiedBindsUseFunctionImport(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('Lib');
+        $ctx->indexUse(self::makeUse('App\\helper', type: Use_::TYPE_FUNCTION));
+
+        self::assertSame('App\\helper', $ctx->resolveFunctionName(new Name('helper')));
+    }
+
+    public function testAClassImportNeverCapturesAFunctionCall(): void
+    {
+        // A class `use App\helper;` must NOT bind a `helper()` call — PHP keeps class
+        // and function symbol namespaces separate. Without a `use function`, the call
+        // binds the current namespace.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('Lib');
+        $ctx->indexUse(self::makeUse('App\\helper')); // class import
+
+        self::assertSame('Lib\\helper', $ctx->resolveFunctionName(new Name('helper')));
+    }
+
+    public function testFunctionNameFullyQualifiedAndRelativeAndQualified(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexUse(self::makeUse('Vendor\\Pkg', alias: 'V')); // namespace import
+
+        self::assertSame('Other\\f', $ctx->resolveFunctionName(new Name\FullyQualified('Other\\f')));
+        self::assertSame('App\\f', $ctx->resolveFunctionName(new Name\Relative('f')));
+        // Qualified: leading segment resolves via the class/namespace map, not function imports.
+        self::assertSame('Vendor\\Pkg\\f', $ctx->resolveFunctionName(new Name('V\\f')));
+        // Qualified with no matching import falls to the current namespace.
+        self::assertSame('App\\Sub\\f', $ctx->resolveFunctionName(new Name('Sub\\f')));
+        // A name merely STARTING with `namespace` is an ordinary qualified path, not the
+        // relative `namespace\` keyword — it must take the qualified route, not bind relative.
+        self::assertSame('App\\Namespaced\\f', $ctx->resolveFunctionName(new Name('Namespaced\\f')));
+    }
+
+    public function testConstNameUsesItsOwnImportMapSeparateFromFunctions(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('Lib');
+        $ctx->indexUse(self::makeUse('App\\FACTOR', type: Use_::TYPE_CONSTANT));
+        $ctx->indexUse(self::makeUse('App\\helper', type: Use_::TYPE_FUNCTION));
+
+        self::assertSame('App\\FACTOR', $ctx->resolveConstName(new Name('FACTOR')));
+        // A `use const` does not bind a function call, and vice-versa.
+        self::assertSame('Lib\\FACTOR', $ctx->resolveFunctionName(new Name('FACTOR')));
+        self::assertSame('Lib\\helper', $ctx->resolveConstName(new Name('helper')));
+    }
+
+    public function testMixedGroupItemTypesRouteToTheRightMaps(): void
+    {
+        // `use App\{function f, const C, D}` — item-level types partition the maps.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('Lib');
+        $ctx->indexUse(self::makeMultiTypedUse('App', [
+            ['name' => 'App\\f', 'type' => Use_::TYPE_FUNCTION],
+            ['name' => 'App\\C', 'type' => Use_::TYPE_CONSTANT],
+            ['name' => 'App\\D', 'type' => Use_::TYPE_NORMAL],
+        ]));
+
+        self::assertSame('App\\f', $ctx->resolveFunctionName(new Name('f')));
+        self::assertSame('App\\C', $ctx->resolveConstName(new Name('C')));
+        // The class item `D` is not a function/const import.
+        self::assertSame('Lib\\f2', $ctx->resolveFunctionName(new Name('f2')));
+    }
+
+    public function testFunctionAndConstMapsResetOnNamespaceChange(): void
+    {
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('Lib');
+        $ctx->indexUse(self::makeUse('App\\helper', type: Use_::TYPE_FUNCTION));
+        self::assertSame('App\\helper', $ctx->resolveFunctionName(new Name('helper')));
+
+        $ctx->enterNamespace('Other');
+        self::assertSame('Other\\helper', $ctx->resolveFunctionName(new Name('helper')));
+    }
+
+    private static function makeUse(string $fqn, ?string $alias = null, int $type = Use_::TYPE_NORMAL): Use_
     {
         $useItem = new UseItem(
             new Name($fqn),
             $alias !== null ? new Identifier($alias) : null,
         );
-        return new Use_([$useItem]);
+        return new Use_([$useItem], type: $type);
+    }
+
+    /**
+     * A single group-style `Use_` whose items carry their own per-item type.
+     *
+     * @param list<array{name: string, type: int}> $entries
+     */
+    private static function makeMultiTypedUse(string $prefix, array $entries): Use_
+    {
+        $items = array_map(
+            static fn (array $e): UseItem => new UseItem(new Name($e['name']), null, $e['type']),
+            $entries,
+        );
+        // Statement type UNKNOWN so the per-item types govern (as a mixed group parses).
+        return new Use_($items, type: Use_::TYPE_UNKNOWN);
     }
 
     /**

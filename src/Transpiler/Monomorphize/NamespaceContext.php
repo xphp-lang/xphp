@@ -20,8 +20,12 @@ use PhpParser\Node\UseItem;
 final class NamespaceContext
 {
     private string $currentNamespace = '';
-    /** @var array<string, string> alias → FQN */
+    /** @var array<string, string> alias → FQN (class/namespace `use` imports) */
     private array $useMap = [];
+    /** @var array<string, string> alias → FQN (`use function` imports) */
+    private array $functionUseMap = [];
+    /** @var array<string, string> alias → FQN (`use const` imports) */
+    private array $constUseMap = [];
 
     /**
      * Push a new enclosing namespace. `$name` is the namespace string
@@ -35,6 +39,8 @@ final class NamespaceContext
         // never observably differs from '' in the test suite.
         $this->currentNamespace = $name ?? '';
         $this->useMap = [];
+        $this->functionUseMap = [];
+        $this->constUseMap = [];
     }
 
     /**
@@ -50,8 +56,84 @@ final class NamespaceContext
             }
             $fqn = $u->name->toString();
             $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
+            // The class/namespace map keeps EVERY import (including function/const,
+            // as it always has) so class resolution and isImported() are unchanged.
             $this->useMap[$alias] = $fqn;
+            // Additionally route `use function` / `use const` into their own maps so
+            // function/const resolution honours PHP's separate symbol namespaces — a
+            // class `use App\Helper;` must never capture a `helper()` call. The item's
+            // own type wins when set (mixed groups), else the statement's type.
+            $type = $u->type !== Use_::TYPE_UNKNOWN ? $u->type : $use->type;
+            if ($type === Use_::TYPE_FUNCTION) {
+                $this->functionUseMap[$alias] = $fqn;
+            } elseif ($type === Use_::TYPE_CONSTANT) {
+                $this->constUseMap[$alias] = $fqn;
+            }
         }
+    }
+
+    /**
+     * Resolve a php-parser Name used as a FREE-FUNCTION callee to its FQN,
+     * honouring PHP's function-resolution rules: an unqualified name binds a
+     * `use function` import first, else the current namespace (with a global
+     * fallback the caller preserves by NOT rewriting when the FQN is unknown);
+     * a qualified name's leading segment is a NAMESPACE, resolved via the
+     * class/namespace `use` map — never the function-import map.
+     */
+    public function resolveFunctionName(Name $name): string
+    {
+        return $this->resolveCallable($name->toCodeString(), $this->functionUseMap);
+    }
+
+    /**
+     * Resolve a php-parser Name used as a CONST fetch to its FQN, the same way
+     * as {@see resolveFunctionName} but against the `use const` map.
+     */
+    public function resolveConstName(Name $name): string
+    {
+        return $this->resolveCallable($name->toCodeString(), $this->constUseMap);
+    }
+
+    /**
+     * Shared function/const resolution. `$symbolUseMap` is the `use function`
+     * or `use const` alias map consulted for UNqualified names only; qualified
+     * names resolve their leading namespace segment via the class/namespace map.
+     *
+     * @param array<string, string> $symbolUseMap
+     */
+    private function resolveCallable(string $code, array $symbolUseMap): string
+    {
+        if (str_starts_with($code, '\\')) {
+            return ltrim($code, '\\');
+        }
+        if (strncasecmp($code, 'namespace\\', 10) === 0) {
+            $rest = substr($code, 10);
+            return $this->currentNamespace !== ''
+                ? $this->currentNamespace . '\\' . $rest
+                : $rest;
+        }
+        if (!str_contains($code, '\\')) {
+            // Unqualified: a `use function` / `use const` import binds it; else the
+            // current namespace. (No leading backslash is added — the caller's
+            // in-set guard decides whether to fully-qualify, so PHP's global
+            // fallback survives for names the unit does not define.)
+            if (isset($symbolUseMap[$code])) {
+                return $symbolUseMap[$code];
+            }
+            return $this->currentNamespace !== ''
+                ? $this->currentNamespace . '\\' . $code
+                : $code;
+        }
+        // Qualified `A\b`: the leading segment is a namespace, brought into scope
+        // by a class/namespace `use` (never a function/const import), else it is
+        // relative to the current namespace.
+        $first = self::firstSegment($code);
+        if (isset($this->useMap[$first])) {
+            return $this->useMap[$first] . substr($code, strlen($first));
+        }
+        return $this->currentNamespace !== ''
+            ? $this->currentNamespace . '\\' . $code
+            : $code;
     }
 
     /**
