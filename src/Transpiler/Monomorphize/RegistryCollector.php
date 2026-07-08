@@ -8,6 +8,8 @@ use PhpParser\Node;
 use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Const_;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeTraverser;
@@ -107,6 +109,24 @@ final class RegistryCollector extends NodeVisitorAbstract
         if ($node instanceof Use_) {
             // @infection-ignore-all — dual-handled by the inner foreach above.
             $this->ctx->indexUse($node);
+        }
+
+        if ($this->mode !== self::MODE_INSTANTIATIONS) {
+            // Free functions and constants defined in the unit. Recorded so the Specializer can
+            // re-qualify an unqualified `helper()` / `FOO` in a relocated template body to the
+            // ORIGINAL namespace only when the target is known here — leaving builtins and any
+            // undefined name to PHP's global fallback. (Class methods are ClassMethod and class
+            // constants are ClassConst — different node types — so this never sees a member.)
+            $ns = $this->ctx->currentNamespace();
+            if ($node instanceof Function_) {
+                $name = $node->name->toString();
+                $this->registry->recordFunction($ns !== '' ? $ns . '\\' . $name : $name);
+            } elseif ($node instanceof Const_) {
+                foreach ($node->consts as $const) {
+                    $name = $const->name->toString();
+                    $this->registry->recordConst($ns !== '' ? $ns . '\\' . $name : $name);
+                }
+            }
         }
 
         if ($this->mode !== self::MODE_INSTANTIATIONS

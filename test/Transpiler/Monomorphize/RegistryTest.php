@@ -87,6 +87,49 @@ final class RegistryTest extends TestCase
         }
     }
 
+    public function testFunctionMembershipIsCaseInsensitive(): void
+    {
+        $registry = new Registry();
+        $registry->recordFunction('App\\helper');
+
+        // Function names AND namespace segments are case-insensitive in PHP.
+        self::assertTrue($registry->hasFunction('App\\helper'));
+        self::assertTrue($registry->hasFunction('app\\HELPER'));
+        self::assertFalse($registry->hasFunction('App\\other'));
+        self::assertFalse($registry->hasFunction('Other\\helper'));
+    }
+
+    public function testConstMembershipHasCaseInsensitiveNamespaceButSensitiveShortName(): void
+    {
+        $registry = new Registry();
+        $registry->recordConst('App\\FACTOR');
+
+        // Namespace case-insensitive, const short-name case-sensitive.
+        self::assertTrue($registry->hasConst('App\\FACTOR'));
+        self::assertTrue($registry->hasConst('app\\FACTOR'));
+        self::assertFalse($registry->hasConst('App\\factor'));
+        self::assertFalse($registry->hasConst('App\\Factor'));
+    }
+
+    public function testGlobalFunctionAndConstMembership(): void
+    {
+        $registry = new Registry();
+        $registry->recordFunction('helper');
+        $registry->recordConst('FACTOR');
+
+        self::assertTrue($registry->hasFunction('HELPER'));
+        self::assertTrue($registry->hasConst('FACTOR'));
+        self::assertFalse($registry->hasConst('factor'));
+    }
+
+    public function testUnrecordedFunctionAndConstAreAbsent(): void
+    {
+        $registry = new Registry();
+
+        self::assertFalse($registry->hasFunction('App\\strlen'));
+        self::assertFalse($registry->hasConst('App\\PHP_EOL'));
+    }
+
     public function testRecordInstantiationRecursivelyRegistersNestedInstantiations(): void
     {
         $registry = new Registry();

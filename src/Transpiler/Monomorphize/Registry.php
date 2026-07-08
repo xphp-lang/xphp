@@ -58,6 +58,26 @@ final class Registry
      */
     private array $nonGenericClassNames = [];
 
+    /**
+     * FQNs of free functions defined in the compilation unit, keyed by the FULLY lowercased
+     * FQN (PHP function names — and namespace segments — are case-insensitive). Drives the
+     * re-qualification of unqualified free-function calls in relocated generic template bodies:
+     * a call is fully-qualified only when its resolved target is known here, so builtins and any
+     * name the unit does not define keep PHP's global fallback. Value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $functionNames = [];
+
+    /**
+     * FQNs of free constants defined in the compilation unit, keyed with the namespace portion
+     * lowercased and the const short-name preserved (const names are case-sensitive; namespaces
+     * are not). Same role as {@see $functionNames} for `ConstFetch` names. Value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $constNames = [];
+
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
@@ -201,6 +221,55 @@ final class Registry
     public function recordNonGenericClass(string $fqn): void
     {
         $this->nonGenericClassNames[$fqn] = true;
+    }
+
+    /**
+     * Record a free function defined in the compilation unit. `$fqn` is namespace-normalized
+     * (no leading `\`). Keyed case-insensitively (function + namespace names).
+     */
+    public function recordFunction(string $fqn): void
+    {
+        $this->functionNames[strtolower($fqn)] = true;
+    }
+
+    /** Whether the unit defines a free function with this (namespace-normalized) FQN. */
+    public function hasFunction(string $fqn): bool
+    {
+        // Value-check (not isset): so a mutated `recordFunction` storing a non-true value is caught.
+        return ($this->functionNames[strtolower($fqn)] ?? false) === true;
+    }
+
+    /**
+     * Record a free constant defined in the compilation unit. `$fqn` is namespace-normalized
+     * (no leading `\`). Keyed with a case-insensitive namespace and a case-sensitive short name.
+     */
+    public function recordConst(string $fqn): void
+    {
+        $this->constNames[self::constKey($fqn)] = true;
+    }
+
+    /** Whether the unit defines a free constant with this (namespace-normalized) FQN. */
+    public function hasConst(string $fqn): bool
+    {
+        // Value-check (not isset): so a mutated `recordConst` storing a non-true value is caught.
+        return ($this->constNames[self::constKey($fqn)] ?? false) === true;
+    }
+
+    /**
+     * @infection-ignore-all — constKey is a symmetric key-derivation used by BOTH recordConst and
+     * hasConst, so any structural mutation (substr bounds, concat order/removal) transforms every
+     * key uniformly and preserves the exact membership + case relationships the behavioral tests
+     * assert (namespace-insensitive, short-name-sensitive) — the mutants are equivalent. The
+     * SEMANTIC contract is pinned by RegistryTest::testConstMembershipHasCaseInsensitiveNamespace…
+     * (the `strtolower` itself is a plain call, not mutated here).
+     */
+    private static function constKey(string $fqn): string
+    {
+        $pos = strrpos($fqn, '\\');
+        // A global const (no namespace) is keyed by its case-sensitive short name alone.
+        return $pos === false
+            ? $fqn
+            : strtolower(substr($fqn, 0, $pos)) . substr($fqn, $pos);
     }
 
     /**
