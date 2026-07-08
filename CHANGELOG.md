@@ -183,6 +183,20 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **A specialized generic body keeps calling the free functions and constants it
+  named.** When a generic class specializes, its body is relocated into an internal
+  `XPHP\Generated\…` namespace. An unqualified free-function call or constant read in
+  that body — `helper($x)`, `FACTOR`, whether resolved through the enclosing namespace
+  or a `use function` / `use const` import (single **or** grouped, e.g.
+  `use function Lib\{make, scale}`) — used to rebind against the generated namespace
+  (then PHP's global fallback), silently calling the wrong symbol or fatalling at
+  runtime with `Call to undefined function XPHP\Generated\…\helper()` behind a clean
+  `compile` and `check`. Each such reference the compilation unit can resolve is now
+  fully-qualified to the symbol the template meant; built-in functions, magic constants,
+  and any name the unit does not define keep PHP's normal global resolution (functions
+  match case-insensitively, constants case-sensitively). The re-qualification also
+  covers members supplied by the covariant-upcast gap-fill, which are appended after the
+  main relocation pass.
 - **A generic clause on a `use` import is rejected instead of misfiring.** Writing
   a type argument on an import — `use App\Box<int>;`, `use App\Box<int> as B;`,
   `use const App\BOX<int>;`, or the grouped `use App\{Box<int>, Bag};` — has no
