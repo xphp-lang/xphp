@@ -54,4 +54,41 @@ final class FreeSymbolRequalifyTest extends TestCase
             $fixture->cleanup();
         }
     }
+
+    #[RunInSeparateProcess]
+    public function testGroupUseFunctionAndConstImportsBindTheImportedNamespaceAtRuntime(): void
+    {
+        // `use function Vendor\{make, scale}; use Vendor\{const RATE, const STEP};` in an App template:
+        // make(3)=6 + scale(1)=10 + RATE=100 + STEP=7 = 123. Group-form imports must reach the same
+        // function/const symbol maps as the single-import form, or the relocated body fatals on `make`.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/free_symbol_group_use_import/source',
+            'free-symbol-group-use-import',
+        );
+        try {
+            $fixture->registerAutoload('App', 'Vendor');
+            require __DIR__ . '/../../fixture/compile/free_symbol_group_use_import/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testGapFilledCovariantMembersReQualifyTheirFreeSymbolsAtRuntime(): void
+    {
+        // A covariant diamond gap-fills `contains`/`indexOf` onto the concrete specs (Lst, Bag) AFTER the
+        // Phase 2.3 relocation sweep. Those erasable bodies call an in-unit free function `tally` and read
+        // an in-unit const `OFFSET`; without a re-qualify pass over the gap-filled members the bare names
+        // rebind to XPHP\Generated and fatal on the upcast call. contains(absent)=true, indexOf(absent)=1.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/covariant_gapfill_free_symbol/source',
+            'covariant-gapfill-free-symbol',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/covariant_gapfill_free_symbol/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
 }

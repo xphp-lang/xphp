@@ -6,6 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
 use PHPUnit\Framework\TestCase;
@@ -296,6 +297,68 @@ final class NamespaceContextTest extends TestCase
         self::assertSame('Other\\helper', $ctx->resolveFunctionName(new Name('helper')));
     }
 
+    public function testIndexGroupUseFunctionImportsRouteToFunctionMap(): void
+    {
+        // `use function Vendor\{make, scale};` — statement-level FUNCTION type governs both members.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
+            ['name' => 'make', 'alias' => null, 'type' => Use_::TYPE_UNKNOWN],
+            ['name' => 'scale', 'alias' => null, 'type' => Use_::TYPE_UNKNOWN],
+        ], Use_::TYPE_FUNCTION));
+
+        self::assertSame('Vendor\\make', $ctx->resolveFunctionName(new Name('make')));
+        self::assertSame('Vendor\\scale', $ctx->resolveFunctionName(new Name('scale')));
+        // A group `use function` must not leak into const resolution.
+        self::assertSame('App\\make', $ctx->resolveConstName(new Name('make')));
+    }
+
+    public function testIndexGroupUseMixedItemTypesRouteToTheRightMaps(): void
+    {
+        // `use Vendor\{function make, const RATE, Box};` — per-item types partition the maps.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
+            ['name' => 'make', 'alias' => null, 'type' => Use_::TYPE_FUNCTION],
+            ['name' => 'RATE', 'alias' => null, 'type' => Use_::TYPE_CONSTANT],
+            ['name' => 'Box', 'alias' => null, 'type' => Use_::TYPE_NORMAL],
+        ], Use_::TYPE_UNKNOWN));
+
+        self::assertSame('Vendor\\make', $ctx->resolveFunctionName(new Name('make')));
+        self::assertSame('Vendor\\RATE', $ctx->resolveConstName(new Name('RATE')));
+        // The class item `Box` is neither a function nor a const import.
+        self::assertSame('App\\Box', $ctx->resolveFunctionName(new Name('Box')));
+        self::assertSame('App\\Box', $ctx->resolveConstName(new Name('Box')));
+    }
+
+    public function testIndexGroupUseHonoursMemberAlias(): void
+    {
+        // `use function Vendor\{make as mk};` binds the alias, not the member name.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
+            ['name' => 'make', 'alias' => 'mk', 'type' => Use_::TYPE_UNKNOWN],
+        ], Use_::TYPE_FUNCTION));
+
+        self::assertSame('Vendor\\make', $ctx->resolveFunctionName(new Name('mk')));
+        // The un-aliased member name does not resolve to the import.
+        self::assertSame('App\\make', $ctx->resolveFunctionName(new Name('make')));
+    }
+
+    public function testIndexGroupUseClassImportPollutesNeitherSymbolMap(): void
+    {
+        // A plain class group-import `use Vendor\{Box, Crate};` contributes no callable/const alias.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
+            ['name' => 'Box', 'alias' => null, 'type' => Use_::TYPE_UNKNOWN],
+            ['name' => 'Crate', 'alias' => null, 'type' => Use_::TYPE_UNKNOWN],
+        ], Use_::TYPE_NORMAL));
+
+        self::assertSame('App\\Box', $ctx->resolveFunctionName(new Name('Box')));
+        self::assertSame('App\\Crate', $ctx->resolveConstName(new Name('Crate')));
+    }
+
     private static function makeUse(string $fqn, ?string $alias = null, int $type = Use_::TYPE_NORMAL): Use_
     {
         $useItem = new UseItem(
@@ -318,6 +381,25 @@ final class NamespaceContextTest extends TestCase
         );
         // Statement type UNKNOWN so the per-item types govern (as a mixed group parses).
         return new Use_($items, type: Use_::TYPE_UNKNOWN);
+    }
+
+    /**
+     * A `GroupUse` (`use PREFIX\{ ... }`). Each member name is the RELATIVE part; the
+     * per-item type governs a mixed group, else the statement type applies.
+     *
+     * @param list<array{name: string, alias: ?string, type: int}> $members
+     */
+    private static function makeGroupUse(string $prefix, array $members, int $type = Use_::TYPE_NORMAL): GroupUse
+    {
+        $items = array_map(
+            static fn (array $m): UseItem => new UseItem(
+                new Name($m['name']),
+                $m['alias'] !== null ? new Identifier($m['alias']) : null,
+                $m['type'],
+            ),
+            $members,
+        );
+        return new GroupUse(new Name($prefix), $items, $type);
     }
 
     /**

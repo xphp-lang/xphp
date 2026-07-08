@@ -104,9 +104,10 @@ final class Specializer
      *
      * A relocated body has moved out of its origin namespace into XPHP\Generated\…, so an
      * unqualified `helper()` / `FOO` would rebind against the generated namespace (then the
-     * global fallback) instead of the origin. Run over EVERY finalized specialization —
-     * including members supplied by the covariant-upcast closer — once the fixed-point loop
-     * has settled.
+     * global fallback) instead of the origin. The Compiler runs this over every specialization
+     * from the fixed-point loop, and again over each spec the covariant-upcast gap-fill appends
+     * a member to (that member is created after the first sweep). Idempotent: an already
+     * fully-qualified name is skipped.
      */
     public static function requalifyFreeSymbols(ClassLike $specialized, Registry $registry): void
     {

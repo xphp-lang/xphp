@@ -2495,10 +2495,12 @@ final class XphpSourceParser
                     // @infection-ignore-all — bare `namespace { ... }` (no name) isn't used in any
                     // fixture; the null-coalesce branch never observably differs from a missing name.
                     $this->ctx->enterNamespace($node->name?->toString());
-                    // @infection-ignore-all — redundant with the standalone Use_ branch below; dead loop.
+                    // @infection-ignore-all — redundant with the standalone Use_/GroupUse branches below; dead loop.
                     foreach ($node->stmts as $inner) {
                         if ($inner instanceof Use_) {
                             $this->ctx->indexUse($inner);
+                        } elseif ($inner instanceof GroupUse) {
+                            $this->ctx->indexGroupUse($inner);
                         }
                     }
                 }
@@ -2506,6 +2508,9 @@ final class XphpSourceParser
                 if ($node instanceof Use_) {
                     // @infection-ignore-all — dual-handled by the inner foreach above.
                     $this->ctx->indexUse($node);
+                } elseif ($node instanceof GroupUse) {
+                    // @infection-ignore-all — dual-handled by the inner foreach above.
+                    $this->ctx->indexGroupUse($node);
                 }
 
                 if ($node instanceof ClassLike && $node->name !== null) {

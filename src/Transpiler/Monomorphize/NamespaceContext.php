@@ -6,6 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
 
@@ -64,11 +65,47 @@ final class NamespaceContext
             // class `use App\Helper;` must never capture a `helper()` call. The item's
             // own type wins when set (mixed groups), else the statement's type.
             $type = $u->type !== Use_::TYPE_UNKNOWN ? $u->type : $use->type;
-            if ($type === Use_::TYPE_FUNCTION) {
-                $this->functionUseMap[$alias] = $fqn;
-            } elseif ($type === Use_::TYPE_CONSTANT) {
-                $this->constUseMap[$alias] = $fqn;
+            $this->routeSymbolImport($type, $alias, $fqn);
+        }
+    }
+
+    /**
+     * Index a `GroupUse` (`use N\{a, function b, const C}`) into the function/const
+     * symbol maps. Only `use function` / `use const` members contribute a callable or
+     * const alias, so a class/namespace group-import routes nothing — and (unlike
+     * indexUse) the class/namespace useMap is left untouched, keeping class resolution
+     * exactly as it was before group-imported free symbols were recognised. Each member
+     * FQN is the group prefix joined with the member name; the alias is the member's
+     * `as` name, else the last segment of the member name.
+     */
+    public function indexGroupUse(GroupUse $use): void
+    {
+        $prefix = $use->prefix->toString();
+        foreach ($use->uses as $u) {
+            // @phpstan-ignore-next-line instanceof.alwaysTrue — mirrors indexUse's defensive guard against php-parser's PHPDoc-narrowed use-item type.
+            if (!$u instanceof UseItem) {
+                continue;
             }
+            $member = $u->name->toString();
+            $fqn = $prefix . '\\' . $member;
+            $alias = $u->alias?->toString() ?? self::lastSegment($member);
+            // The item's own type wins when set (mixed `use N\{function a, const B}`),
+            // else the group statement's type (`use function N\{a, b}`).
+            $type = $u->type !== Use_::TYPE_UNKNOWN ? $u->type : $use->type;
+            $this->routeSymbolImport($type, $alias, $fqn);
+        }
+    }
+
+    /**
+     * Route a single import into the callable/const symbol maps by its resolved type.
+     * A class/namespace import (any other type) contributes to neither.
+     */
+    private function routeSymbolImport(int $type, string $alias, string $fqn): void
+    {
+        if ($type === Use_::TYPE_FUNCTION) {
+            $this->functionUseMap[$alias] = $fqn;
+        } elseif ($type === Use_::TYPE_CONSTANT) {
+            $this->constUseMap[$alias] = $fqn;
         }
     }
 

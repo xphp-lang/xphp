@@ -1,0 +1,5 @@
+<?php
+declare(strict_types=1);
+namespace App;
+const OFFSET = 5;
+function tally(int $n): int { return $n * 2; }

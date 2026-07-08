@@ -10,6 +10,7 @@ use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Const_;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeTraverser;
@@ -98,10 +99,12 @@ final class RegistryCollector extends NodeVisitorAbstract
             // never appears in any fixture, so the null-safe call is observationally
             // identical to the non-null version on every test input.
             $this->ctx->enterNamespace($node->name?->toString());
-            // @infection-ignore-all — dual-handled by the standalone Use_ branch below; dead loop.
+            // @infection-ignore-all — dual-handled by the standalone Use_/GroupUse branches below; dead loop.
             foreach ($node->stmts as $inner) {
                 if ($inner instanceof Use_) {
                     $this->ctx->indexUse($inner);
+                } elseif ($inner instanceof GroupUse) {
+                    $this->ctx->indexGroupUse($inner);
                 }
             }
         }
@@ -109,6 +112,9 @@ final class RegistryCollector extends NodeVisitorAbstract
         if ($node instanceof Use_) {
             // @infection-ignore-all — dual-handled by the inner foreach above.
             $this->ctx->indexUse($node);
+        } elseif ($node instanceof GroupUse) {
+            // @infection-ignore-all — dual-handled by the inner foreach above.
+            $this->ctx->indexGroupUse($node);
         }
 
         if ($this->mode !== self::MODE_INSTANTIATIONS) {

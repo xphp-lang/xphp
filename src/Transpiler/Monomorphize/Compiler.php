@@ -188,11 +188,12 @@ final readonly class Compiler
             }
         }
 
-        // Phase 2.3: re-qualify free-function calls and const fetches in every finalized
-        // specialization. Each body was relocated out of its origin namespace into
-        // XPHP\Generated\…, where an unqualified `helper()` / `FOO` would otherwise rebind
-        // against the generated namespace and fatal. Runs after the loop so closer-supplied
-        // members are covered too; the guard only qualifies symbols the unit defines.
+        // Phase 2.3: re-qualify free-function calls and const fetches in every specialization
+        // produced by the fixed-point loop. Each body was relocated out of its origin namespace
+        // into XPHP\Generated\…, where an unqualified `helper()` / `FOO` would otherwise rebind
+        // against the generated namespace and fatal. The guard only qualifies symbols the unit
+        // defines. (Members appended later by the covariant-upcast gap-fill are swept in Phase 3.5,
+        // since they don't exist yet here.)
         foreach ($specializedAsts as $classAst) {
             Specializer::requalifyFreeSymbols($classAst, $registry);
         }
@@ -234,6 +235,10 @@ final readonly class Compiler
         // never emitted as a class-load fatal. Re-rewrite the specs it appended a member to so the new
         // member's type references are fully qualified like the rest.
         foreach ($closer->supplyUnmetMembers($registry, $specializedAsts) as $generatedFqn) {
+            // The gap-fill member's body is a relocated template body too, so re-qualify its
+            // free-function/const references (Phase 2.3 ran before this member existed). Idempotent
+            // on the spec's pre-existing members — their callees are already fully qualified.
+            Specializer::requalifyFreeSymbols($specializedAsts[$generatedFqn], $registry);
             $rewritten = $rewriter->rewrite([$specializedAsts[$generatedFqn]]);
             $first = $rewritten[0];
             assert($first instanceof \PhpParser\Node\Stmt\ClassLike);

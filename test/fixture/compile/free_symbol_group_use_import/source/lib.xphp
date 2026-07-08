@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Vendor;
+
+function make(int $x): int
+{
+    return $x * 2;
+}
+
+function scale(int $x): int
+{
+    return $x * 10;
+}
+
+const RATE = 100;
+
+const STEP = 7;
