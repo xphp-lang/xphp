@@ -183,6 +183,24 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **A turbofish on a dynamically-named call is rejected instead of silently dropped.**
+  A type-argument turbofish on a method or static call whose name is a runtime value —
+  `$o->$m::<int>()`, the nullsafe `$o?->$m::<int>()`, the variable-variable
+  `$$g::<int>()`, or the static `Foo::$m::<int>()` — used to be silently discarded (the
+  marker bound no AST node and the `::<…>` clause was stripped anyway), leaving a bare
+  dynamic call against a method that only exists in its specialized `_T_<hash>` form: a
+  runtime fatal behind a clean `compile` and `check`. Such a call cannot be
+  monomorphized — the method name is not known until runtime — so it now draws a clear
+  diagnostic at its real line (collected by `check`, thrown by `compile`). A turbofish on
+  a standalone variable holding a generic closure (`$f::<int>()`) is unaffected.
+- **A generic method may be named with a PHP keyword.** PHP permits every keyword
+  (`list`, `print`, …) as a method name, but a generic one could not be used: the
+  declaration `public function list<T>(…)` reached php-parser as a raw parse error, and
+  the static call `Foo::list::<int>()` did too (the instance call `$o->list::<int>()`
+  happened to work, because PHP re-tokenizes the name after `->`). Keyword-named generic
+  methods now declare, specialize, and are callable through both the instance and static
+  turbofish. Keyword-named non-generic methods and `list(...)` destructuring are
+  unchanged.
 - **A specialized generic body keeps calling the free functions and constants it
   named.** When a generic class specializes, its body is relocated into an internal
   `XPHP\Generated\…` namespace. An unqualified free-function call or constant read in

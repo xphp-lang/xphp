@@ -70,6 +70,15 @@ $id('T_<hash-of-int>', 42);
   scanner requires `::<` to be adjacent.
 - **Anchored to a name**: `Foo<T>(...)` (no `::`) is a PHP-side
   ambiguity (`Foo < T` could be comparison) and is rejected.
+- **The method name must be a literal.** A turbofish on a
+  *dynamically-named* method or static call — `$o->$m::<int>()`, the
+  nullsafe `$o?->$m::<int>()`, the static `Foo::$m::<int>()`, or a
+  variable-variable `$$g::<int>()` — is **rejected** with a diagnostic:
+  the specialized method name cannot be resolved from a value known only
+  at runtime. The name may be any literal identifier, **including a PHP
+  keyword** — `$o->list::<int>()`, `Foo::print::<int>()`, and the
+  matching declaration `public function list<T>(...)` all work, since PHP
+  permits keywords as method names.
 - All call-site shapes can carry empty turbofish `::<>` when the
   template is all-defaulted.
 - Bare `new Foo;` (no `(` or `::<>`) also works for all-defaulted
