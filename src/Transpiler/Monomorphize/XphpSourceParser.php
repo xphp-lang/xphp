@@ -73,6 +73,15 @@ final class XphpSourceParser
     // apply and a bare name would otherwise resolve into XPHP\Generated\...).
     public const ATTR_RESOLVED_FQN = 'xphp:resolvedFqn';
 
+    // Resolved FQN for a FREE-FUNCTION callee Name / a CONST-fetch Name. Like
+    // ATTR_RESOLVED_FQN but for the function/const symbol namespaces (which have a
+    // global fallback classes lack): recorded at parse time honoring the file's
+    // `use function` / `use const` imports + namespace, and read by the Specializer
+    // to fully-qualify the reference on a relocated clone ONLY when the compilation
+    // unit defines that symbol — so builtins and unknown names keep the fallback.
+    public const ATTR_RESOLVED_FUNC_FQN = 'xphp:resolvedFuncFqn';
+    public const ATTR_RESOLVED_CONST_FQN = 'xphp:resolvedConstFqn';
+
     // Method-scoped generics (one type-param set per method, distinct from any class-level set).
     public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
     public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
@@ -2698,6 +2707,31 @@ final class XphpSourceParser
                             break;
                         }
                     }
+                }
+
+                // Free-function callee: record its resolved FQN (honoring `use function`
+                // + namespace) so the Specializer can fully-qualify it on a relocated
+                // clone when the unit defines it. Skip generic-turbofish calls (owned by
+                // GenericMethodCompiler, marked with ATTR_METHOD_GENERIC_ARGS above) and
+                // variable callees (`$fn()` — not a Name).
+                if ($node instanceof Node\Expr\FuncCall
+                    && $node->name instanceof Name
+                    && $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) === null
+                ) {
+                    $node->name->setAttribute(
+                        XphpSourceParser::ATTR_RESOLVED_FUNC_FQN,
+                        $this->ctx->resolveFunctionName($node->name),
+                    );
+                }
+
+                // Const fetch: record its resolved FQN the same way. `true`/`false`/`null`
+                // are ConstFetch nodes too, but their resolved FQN is never in the const
+                // set, so the Specializer's in-set guard leaves them untouched.
+                if ($node instanceof Node\Expr\ConstFetch) {
+                    $node->name->setAttribute(
+                        XphpSourceParser::ATTR_RESOLVED_CONST_FQN,
+                        $this->ctx->resolveConstName($node->name),
+                    );
                 }
 
                 // Variable-turbofish call site: `$var::<...>(...)` -- nikic

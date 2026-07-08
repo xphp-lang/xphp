@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\FreeSym\Sub;
+
+function tweak(int $x): int
+{
+    return $x + 1;
+}

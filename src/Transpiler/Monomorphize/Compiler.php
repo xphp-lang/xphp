@@ -188,6 +188,15 @@ final readonly class Compiler
             }
         }
 
+        // Phase 2.3: re-qualify free-function calls and const fetches in every finalized
+        // specialization. Each body was relocated out of its origin namespace into
+        // XPHP\Generated\…, where an unqualified `helper()` / `FOO` would otherwise rebind
+        // against the generated namespace and fatal. Runs after the loop so closer-supplied
+        // members are covered too; the guard only qualifies symbols the unit defines.
+        foreach ($specializedAsts as $classAst) {
+            Specializer::requalifyFreeSymbols($classAst, $registry);
+        }
+
         // Phase 2.4: grounded closure-signature conformance. Each specialization's
         // `Closure(...)` target now has its type parameters substituted, and the
         // returned literal's types were substituted alongside it, so a mismatch

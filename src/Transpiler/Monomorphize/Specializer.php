@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
@@ -93,6 +94,46 @@ final class Specializer
         self::runSubstitutingVisitor($cloned, $substitution);
 
         return $cloned;
+    }
+
+    /**
+     * Fully-qualify unqualified free-function callees and const fetches in a relocated
+     * class body, keyed on the resolver-recorded ATTR_RESOLVED_FUNC_FQN / _CONST_FQN and
+     * gated by the unit's collected symbol sets. An already fully-qualified name is left
+     * alone (namespace-invariant); an unknown name is left bare (global fallback).
+     *
+     * A relocated body has moved out of its origin namespace into XPHP\Generated\…, so an
+     * unqualified `helper()` / `FOO` would rebind against the generated namespace (then the
+     * global fallback) instead of the origin. Run over EVERY finalized specialization —
+     * including members supplied by the covariant-upcast closer — once the fixed-point loop
+     * has settled.
+     */
+    public static function requalifyFreeSymbols(ClassLike $specialized, Registry $registry): void
+    {
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class ($registry) extends NodeVisitorAbstract {
+            public function __construct(private Registry $registry)
+            {
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof FuncCall && $node->name instanceof Name && !$node->name->isFullyQualified()) {
+                    $fqn = $node->name->getAttribute(XphpSourceParser::ATTR_RESOLVED_FUNC_FQN);
+                    if (is_string($fqn) && $this->registry->hasFunction($fqn)) {
+                        $node->name = new FullyQualified($fqn, $node->name->getAttributes());
+                    }
+                } elseif ($node instanceof ConstFetch && !$node->name->isFullyQualified()) {
+                    $fqn = $node->name->getAttribute(XphpSourceParser::ATTR_RESOLVED_CONST_FQN);
+                    if (is_string($fqn) && $this->registry->hasConst($fqn)) {
+                        $node->name = new FullyQualified($fqn, $node->name->getAttributes());
+                    }
+                }
+
+                return null;
+            }
+        });
+        $traverser->traverse([$specialized]);
     }
 
     /**
