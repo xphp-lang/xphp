@@ -452,25 +452,24 @@ final class XphpSourceParser
                         // The name is a runtime value, so the turbofish is unmonomorphizable;
                         // reject it loudly (at its real line) instead. A standalone receiver
                         // (any other preceding token) is untouched — closure turbofish works.
-                        $prevIdx = self::skipWsBack($tokens, $i - 1);
-                        // @infection-ignore-all `>= 0` vs `> 0` is equivalent: index 0 is always the
-                        // T_OPEN_TAG, which is never one of the reject tokens below, so the branch
-                        // body can't fire when $prevIdx === 0 regardless. The guard only avoids a
-                        // $tokens[-1] access when skipWsBack walks off the front.
-                        if ($prevIdx >= 0) {
-                            $prev = $tokens[$prevIdx];
-                            if ($prev->id === T_OBJECT_OPERATOR
+                        // Defensive bounds only: skipWsBack can't actually walk off the front here
+                        // (index 0 is always the T_OPEN_TAG, never whitespace), and even if it did,
+                        // T_OPEN_TAG is none of the reject tokens — so this guard never changes the
+                        // outcome and is left un-annotated, keeping the reject discriminator below
+                        // fully exposed to mutation testing (each clause is killed by its own fixture).
+                        $prev = $tokens[self::skipWsBack($tokens, $i - 1)] ?? null;
+                        if ($prev !== null
+                            && ($prev->id === T_OBJECT_OPERATOR
                                 || $prev->id === T_NULLSAFE_OBJECT_OPERATOR
                                 || $prev->id === T_DOUBLE_COLON
-                                || $prev->text === '$'
-                            ) {
-                                throw new XphpParseException(
-                                    'A turbofish (`::<…>`) on a dynamically-named method or static '
-                                    . 'call cannot be monomorphized; the method name must be a '
-                                    . 'literal identifier, not a variable',
-                                    $tok->line,
-                                );
-                            }
+                                || $prev->text === '$')
+                        ) {
+                            throw new XphpParseException(
+                                'A turbofish (`::<…>`) on a dynamically-named method or static '
+                                . 'call cannot be monomorphized; the method name must be a '
+                                . 'literal identifier, not a variable',
+                                $tok->line,
+                            );
                         }
                         $varName = substr($tok->text, 1); // strip the leading `$`
                         $nameMarkers[] = [
