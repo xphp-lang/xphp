@@ -6,6 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\Diagnostics\DiagnosticCollector;
@@ -677,6 +678,44 @@ final class CheckPassIntegrationTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Variance markers');
         $this->compileFixture('parse_line_variance_method');
+    }
+
+    /**
+     * A turbofish on a DYNAMICALLY-named method/static call (`$o->$m::<int>()`, its nullsafe and
+     * variable-variable and static-dynamic siblings) cannot be monomorphized — the name is a runtime
+     * value. Each used to silently drop the marker and strip the clause, leaving a bare dynamic call
+     * against a method that now exists only in its `_T_<hash>` form (runtime fatal behind a clean
+     * gate). Each now draws ONE parse-stage diagnostic at the receiver's real line (9 in each fixture).
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function dynamicTurbofishFixtures(): iterable
+    {
+        yield 'dynamic instance name' => ['dynamic_turbofish_instance'];
+        yield 'nullsafe dynamic name' => ['dynamic_turbofish_nullsafe'];
+        yield 'variable-variable' => ['dynamic_turbofish_varvar'];
+        yield 'static dynamic name' => ['dynamic_turbofish_static'];
+    }
+
+    #[DataProvider('dynamicTurbofishFixtures')]
+    public function testDynamicNameTurbofishIsRejectedWithRealLine(string $fixture): void
+    {
+        $diagnostics = $this->check($fixture);
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('dynamically-named method', $d->message);
+        self::assertStringContainsString('must be a literal identifier, not a variable', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnDynamicNameTurbofish(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('dynamically-named method');
+        $this->compileFixture('dynamic_turbofish_instance');
     }
 
     private function compileFixture(string $fixture): void

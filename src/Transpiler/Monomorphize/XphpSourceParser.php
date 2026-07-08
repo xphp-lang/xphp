@@ -438,6 +438,37 @@ final class XphpSourceParser
                     }
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;
+                        // A `variableTurbofish` marker only ever binds a standalone
+                        // `$f::<…>(…)` call (nikic parses that as FuncCall(name: Variable)).
+                        // When this T_VARIABLE is instead a DYNAMIC MEMBER NAME (`$o->$m`,
+                        // `$o?->$m`, `Foo::$m`) or a VARIABLE-VARIABLE (`$$g`), the node is a
+                        // MethodCall/StaticCall/dynamic-name FuncCall the marker can never
+                        // bind — so it was silently dropped while the `::<…>` was stripped,
+                        // leaving a bare dynamic call against a method that now exists only
+                        // in its `_T_<hash>` form: a runtime fatal behind a clean gate.
+                        // The name is a runtime value, so the turbofish is unmonomorphizable;
+                        // reject it loudly (at its real line) instead. A standalone receiver
+                        // (any other preceding token) is untouched — closure turbofish works.
+                        $prevIdx = self::skipWsBack($tokens, $i - 1);
+                        // @infection-ignore-all `>= 0` vs `> 0` is equivalent: index 0 is always the
+                        // T_OPEN_TAG, which is never one of the reject tokens below, so the branch
+                        // body can't fire when $prevIdx === 0 regardless. The guard only avoids a
+                        // $tokens[-1] access when skipWsBack walks off the front.
+                        if ($prevIdx >= 0) {
+                            $prev = $tokens[$prevIdx];
+                            if ($prev->id === T_OBJECT_OPERATOR
+                                || $prev->id === T_NULLSAFE_OBJECT_OPERATOR
+                                || $prev->id === T_DOUBLE_COLON
+                                || $prev->text === '$'
+                            ) {
+                                throw new XphpParseException(
+                                    'A turbofish (`::<…>`) on a dynamically-named method or static '
+                                    . 'call cannot be monomorphized; the method name must be a '
+                                    . 'literal identifier, not a variable',
+                                    $tok->line,
+                                );
+                            }
+                        }
                         $varName = substr($tok->text, 1); // strip the leading `$`
                         $nameMarkers[] = [
                             'line' => $tok->line,
