@@ -718,6 +718,29 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('dynamic_turbofish_instance');
     }
 
+    public function testAmbiguousGenericTraitOperandIsCollectedByCheck(): void
+    {
+        // `use A<int>, A<string>, B<int> { A::m insteadof B; }` — the bare operand `A`
+        // matches two different specializations of `A`, which an `insteadof` clause
+        // cannot disambiguate. Rewriting to an arbitrary one would silently pick a
+        // trait; instead it draws ONE parse-stage diagnostic at the operand's line.
+        $diagnostics = $this->check('generic_trait_ambiguous_operand');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertStringContainsString('Ambiguous generic trait operand `A`', $d->message);
+        self::assertNotNull($d->location);
+        self::assertSame(13, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnAmbiguousGenericTraitOperand(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ambiguous generic trait operand');
+        $this->compileFixture('generic_trait_ambiguous_operand');
+    }
+
     private function compileFixture(string $fixture): void
     {
         $work = sys_get_temp_dir() . '/xphp-check-compile-' . uniqid('', true);

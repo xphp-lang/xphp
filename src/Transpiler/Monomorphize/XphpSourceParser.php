@@ -2673,6 +2673,16 @@ final class XphpSourceParser
                     }
                 }
 
+                if ($node instanceof ClassLike) {
+                    // Rewrite generic-trait adaptation operands (`insteadof` / `as`)
+                    // to the same specialized FQN as their `use`-list entry. Runs
+                    // after the namespace/use context is set (Namespace_/Use_ branches
+                    // above) and this class's type params are pushed, so the list
+                    // entry's args resolve exactly as the blanket Name branch that
+                    // specializes the list itself.
+                    $this->markTraitUseAdaptations($node);
+                }
+
                 if ($node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_
                     || $node instanceof Node\Expr\Closure
@@ -3136,6 +3146,155 @@ final class XphpSourceParser
                 ) {
                     $node->setAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE, $resolved);
                 }
+            }
+
+            /**
+             * Rewrite the trait operands of every `insteadof` / `as` adaptation in
+             * this class to the specialized generated FQN of their `use`-list entry,
+             * so `use A<int>, B<int> { A::m insteadof B; B::m as bm; }` loads instead
+             * of fataling on the removed template `App\A`. The list entries specialize
+             * through the blanket Name branch (they carry a `<…>` marker); the operand
+             * Names carry none, so without this pass they emit bare and resolve to the
+             * stripped template.
+             *
+             * CLASS-SCOPED, not per-`use`-statement: PHP lets an adaptation name a
+             * trait brought in by a DIFFERENT `use` of the same class
+             * (`use A<int>; use B<int> { A::m insteadof B; }` — operand `A` is not in
+             * the `B` statement's trait list), so the operand→specialization map is
+             * built from the generic list entries of ALL `Stmt\TraitUse` in the body,
+             * keyed on resolved template FQN.
+             *
+             * Only operands matching a GENERIC list entry are rewritten; a plain
+             * (non-generic) trait, or an operand naming a trait this class does not use
+             * generically, is left exactly as written — it is a real trait that still
+             * exists (the over-qualification lesson: never mis-qualify a live name). An
+             * operand whose short name maps to more than one distinct specialization in
+             * the class cannot be disambiguated in an adaptation clause, so it is a
+             * loud compile error rather than an arbitrary pick.
+             */
+            private function markTraitUseAdaptations(ClassLike $node): void
+            {
+                /** @var array<string, list<TypeRef>> $genericArgs template FQN => resolved list-entry args (first seen) */
+                $genericArgs = [];
+                /** @var array<string, string> $firstKey template FQN => canonical arg key first seen */
+                $firstKey = [];
+                /** @var array<string, true> $ambiguous template FQN => a second, differently-specialized use appeared */
+                $ambiguous = [];
+                foreach ($node->stmts as $stmt) {
+                    if (!$stmt instanceof Node\Stmt\TraitUse) {
+                        continue;
+                    }
+                    foreach ($stmt->traits as $traitName) {
+                        $args = $this->peekGenericArgs($traitName);
+                        if ($args === null) {
+                            // A plain (non-generic) trait use — its operands stay bare.
+                            continue;
+                        }
+                        $fqn = $this->resolveNameOnly($traitName->toCodeString());
+                        $key = $this->argsKey($args);
+                        if (!isset($genericArgs[$fqn])) {
+                            $genericArgs[$fqn] = $args;
+                            $firstKey[$fqn] = $key;
+                        } elseif ($firstKey[$fqn] !== $key) {
+                            $ambiguous[$fqn] = true;
+                        }
+                    }
+                }
+                if ($genericArgs === []) {
+                    return;
+                }
+                foreach ($node->stmts as $stmt) {
+                    if (!$stmt instanceof Node\Stmt\TraitUse) {
+                        continue;
+                    }
+                    foreach ($stmt->adaptations as $adaptation) {
+                        if ($adaptation instanceof Node\Stmt\TraitUseAdaptation\Precedence) {
+                            // `A::m insteadof B, C;` — the winning trait (`->trait`) and
+                            // every excluded trait (`->insteadof`, a Name[]) are operands.
+                            $this->markTraitOperand($adaptation->trait, $genericArgs, $ambiguous);
+                            foreach ($adaptation->insteadof as $excluded) {
+                                $this->markTraitOperand($excluded, $genericArgs, $ambiguous);
+                            }
+                        } elseif ($adaptation instanceof Node\Stmt\TraitUseAdaptation\Alias) {
+                            // `B::m as bm;` — only `->trait` is a trait name; the
+                            // `newModifier` / `newName` subnodes stay untouched. A bare
+                            // `m as bm;` (no source trait) has a null `->trait`.
+                            $this->markTraitOperand($adaptation->trait, $genericArgs, $ambiguous);
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Tag one adaptation operand with the generic attributes of its matching
+             * list entry so CallSiteRewriter rewrites it to the specialization's FQN
+             * (identical to the list entry — `recordInstantiation` dedupes to one
+             * generated trait). A null operand (`m as bm;` with no source trait) or one
+             * matching no generic list entry is left untouched; an ambiguous match is a
+             * loud error.
+             *
+             * @param array<string, list<TypeRef>> $genericArgs
+             * @param array<string, true> $ambiguous
+             */
+            private function markTraitOperand(?Name $operand, array $genericArgs, array $ambiguous): void
+            {
+                if ($operand === null) {
+                    return;
+                }
+                $fqn = $this->resolveNameOnly($operand->toCodeString());
+                if (isset($ambiguous[$fqn])) {
+                    throw new XphpParseException(sprintf(
+                        'Ambiguous generic trait operand `%s` in an adaptation clause: '
+                        . 'this class uses more than one specialization of that trait, and '
+                        . 'an `insteadof` / `as` clause cannot say which one is meant. Give '
+                        . 'the conflicting traits distinct names to disambiguate.',
+                        $operand->toCodeString(),
+                    ), $operand->getStartLine());
+                }
+                if (!isset($genericArgs[$fqn])) {
+                    // Not a generic trait this class uses — a real, still-existing trait
+                    // (or an unrelated operand). Leave it exactly as written.
+                    return;
+                }
+                $operand->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $genericArgs[$fqn]);
+                $operand->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
+            }
+
+            /**
+             * Peek (WITHOUT consuming) the resolved generic args recorded for a
+             * trait-use LIST entry Name. Returns null when the trait carries no `<…>`
+             * marker (a plain, non-generic trait use). Mirrors the byte+name match of
+             * the blanket Name branch but leaves the marker in place — that branch
+             * still consumes it when the traversal reaches the list entry.
+             *
+             * @return list<TypeRef>|null
+             */
+            private function peekGenericArgs(Name $traitName): ?array
+            {
+                $byte = $this->originalByteOf($traitName);
+                $nameStr = $traitName->toCodeString();
+                foreach ($this->nameMarkers as $marker) {
+                    if ($marker['bytePosition'] === $byte && $marker['name'] === $nameStr) {
+                        return $this->resolveTypeRefList($marker['args']);
+                    }
+                }
+                return null;
+            }
+
+            /**
+             * Canonical, order-sensitive key for a resolved arg list — the same
+             * per-arg canonical form the registry hashes on. Used to detect when one
+             * trait short-name is used with two DIFFERENT specializations in the same
+             * class (`use A<int>, A<string>`), which a bare operand cannot pick between.
+             *
+             * @param list<TypeRef> $args
+             */
+            private function argsKey(array $args): string
+            {
+                return implode(',', array_map(
+                    static fn (TypeRef $a): string => $a->canonical(),
+                    $args,
+                ));
             }
 
             /**
