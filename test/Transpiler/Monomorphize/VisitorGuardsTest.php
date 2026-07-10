@@ -208,7 +208,10 @@ final class VisitorGuardsTest extends TestCase
             (new RegistryCollector($registry))->collect(self::classAndBareNew(), '/x.xphp');
             self::fail('expected a RuntimeException for a bare new of a non-defaults generic');
         } catch (RuntimeException $e) {
-            self::assertStringContainsString('has no default', $e->getMessage());
+            self::assertSame(
+                'Generic template "Box" was instantiated with 0 type argument(s) but parameter `T` (position 1) has no default; supply it explicitly or add defaults to every preceding required parameter.',
+                $e->getMessage(),
+            );
         }
 
         self::assertSame([], $registry->instantiations(), 'a rejected bare new records no instantiation');

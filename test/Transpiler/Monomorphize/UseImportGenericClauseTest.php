@@ -53,9 +53,18 @@ final class UseImportGenericClauseTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('not allowed on a `use` import', $d->message);
         // Names the source spelling, never the requalified phantom (`Main\App\Box`).
-        self::assertStringContainsString('`use ' . $symbol . ';`', $d->message);
+        self::assertSame(
+            sprintf(
+                'A generic clause is not allowed on a `use` import. Import the template with a '
+                . 'plain `use %s;` and apply the type arguments at the use site (the hint '
+                . '`%s<...>` or the call `%s::<...>()`).',
+                $symbol,
+                $symbol,
+                $symbol,
+            ),
+            $d->message,
+        );
         self::assertStringNotContainsString('Main\\App', $d->message);
         self::assertNotNull($d->location);
         self::assertSame($line, $d->location->line);
@@ -90,7 +99,12 @@ final class UseImportGenericClauseTest extends TestCase
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
         self::assertNotNull($d->location);
         self::assertSame(9, $d->location->line);
-        self::assertStringContainsString('`use App\\Box;`', $d->message);
+        self::assertSame(
+            'A generic clause is not allowed on a `use` import. Import the template with a '
+            . 'plain `use App\\Box;` and apply the type arguments at the use site (the hint '
+            . '`App\\Box<...>` or the call `App\\Box::<...>()`).',
+            $d->message,
+        );
     }
 
     public function testCompileThrowsOnGenericClauseImport(): void

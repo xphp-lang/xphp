@@ -75,8 +75,14 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(\XPHP\Diagnostics\Severity::Warning, $d->severity);
         self::assertNotNull($d->location);
         self::assertStringEndsWith('Use.xphp', $d->location->file);
-        self::assertStringContainsString('Book', $d->message);
-        self::assertStringContainsString('not in the source set', $d->message);
+        self::assertSame(
+            'Variance edge cannot be proven while instantiating App\Check\VarianceEdgeUnprovable\Producer<App\Check\VarianceEdgeUnprovable\Book>.
+  type parameter out T is covariant, but App\Check\VarianceEdgeUnprovable\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+  so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
+
+  Add App\Check\VarianceEdgeUnprovable\Book to the source set the hierarchy is built from to enable the edge.',
+            $d->message,
+        );
     }
 
     public function testVarianceEdgeProvableTypesProduceNoWarning(): void
@@ -297,10 +303,12 @@ final class CheckPassIntegrationTest extends TestCase
 
         $all = $diagnostics->all();
         self::assertCount(7, $all);
+        $arrowMsg = 'Generic arrow function is declared with type parameters but never specialized: no `$var::<...>(...)` call grounds them, so its type-parameter hints would reach the emitted code as references to non-existent classes. Call it with an explicit turbofish, or remove the `<...>` clause.';
+        $closureMsg = 'Generic closure is declared with type parameters but never specialized: no `$var::<...>(...)` call grounds them, so its type-parameter hints would reach the emitted code as references to non-existent classes. Call it with an explicit turbofish, or remove the `<...>` clause.';
         $byLine = [];
         foreach ($all as $d) {
             self::assertSame(GenericMethodCompiler::CODE_UNSPECIALIZED_GENERIC_CLOSURE, $d->code);
-            self::assertStringContainsString('never specialized', $d->message);
+            self::assertContains($d->message, [$arrowMsg, $closureMsg]);
             self::assertNotNull($d->location);
             $byLine[$d->location->line] = $d->message;
         }
@@ -309,8 +317,8 @@ final class CheckPassIntegrationTest extends TestCase
         // use-capturing closure, defaulted closure, unused-param arrow, and
         // the conditional else-arm arrow — NOT the called twins.
         self::assertSame([12, 16, 19, 22, 24, 27, 30], array_keys($byLine));
-        self::assertStringContainsString('Generic arrow function', $byLine[12]);
-        self::assertStringContainsString('Generic closure', $byLine[19]);
+        self::assertSame($arrowMsg, $byLine[12]);
+        self::assertSame($closureMsg, $byLine[19]);
     }
 
     public function testCompileThrowsOnUnspecializedGenericClosure(): void
@@ -332,7 +340,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(GenericMethodCompiler::CODE_UNRESOLVED_GENERIC_CALL, $d->code);
         self::assertNotNull($d->location);
         self::assertSame(16, $d->location->line);
-        self::assertStringContainsString('nope', $d->message);
+        self::assertSame(
+            'Generic method `App\Check\UnresolvedGenericMethod\Box::nope::<...>()` could not be resolved to a declared generic method on `App\Check\UnresolvedGenericMethod\Box`. Check the method name or the receiver\'s type.',
+            $d->message,
+        );
     }
 
     public function testCompileStillThrowsOnUnresolvedGenericMethodTurbofish(): void
@@ -428,7 +439,10 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString('Type `Stray`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Stray` used in template `App\NestedMethod\Box` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testCompileStillThrowsOnUndeclaredTypeInGenericFunction(): void
@@ -445,7 +459,10 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString('Type `Nonexistent`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Nonexistent` used in template `App\BadBound\Box` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testUndeclaredNameInADefaultIsCollected(): void
@@ -454,7 +471,10 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString('Type `Nonexistent`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Nonexistent` used in template `App\BadDefault\Pair` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testUndeclaredNamesInIntersectionBoundAndGenericArgAreCollected(): void
@@ -486,7 +506,10 @@ final class CheckPassIntegrationTest extends TestCase
         $diagnostics = $this->check('undeclared_bound_dedup');
 
         self::assertCount(1, $diagnostics->all());
-        self::assertStringContainsString('Type `Bad`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Bad` used in template `App\DupBound\Dup` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testCompileStillThrowsOnUndeclaredBound(): void
@@ -594,7 +617,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('Variance markers', $d->message);
+        self::assertSame(
+            'Variance markers `out T` / `in T` are not supported on methods, functions, closures, or arrow functions — variance is a class-level-only feature by design: a function or closure specialization has no stable class identity to anchor a subtype `extends` edge to. Move the generic to a class-level type parameter.',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(9, $d->location->line);
     }
@@ -608,7 +634,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('`+T` / `-T` variance syntax', $d->message);
+        self::assertSame(
+            'The `+T` / `-T` variance syntax was replaced by `out T` / `in T`. Write `out` for covariance and `in` for contravariance, e.g. `class Box<out T>` or `class Consumer<in T>`.',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(7, $d->location->line);
     }
@@ -622,7 +651,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('Required type parameters must precede', $d->message);
+        self::assertSame(
+            'Generic parameter `U` has no default but follows a parameter with a default. Required type parameters must precede defaulted ones.',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(9, $d->location->line);
     }
@@ -636,7 +668,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('has an invalid default', $d->message);
+        self::assertSame(
+            'Generic parameter `T` has an invalid default; only a single concrete or generic type is allowed after `=` (no nullable or union shapes).',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(7, $d->location->line);
     }
@@ -650,7 +685,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('has an invalid default', $d->message);
+        self::assertSame(
+            'Generic parameter `T` has an invalid default; only a single concrete or generic type is allowed after `=` (no nullable or union shapes).',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(9, $d->location->line);
     }
@@ -666,7 +704,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('cannot use itself as a bound', $d->message);
+        self::assertSame(
+            'Generic parameter `T` cannot use itself as a bound (self-reference detected in the bound expression). Use a nested form like `T : Box<T>` for F-bounded recursion, or remove the bound.',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(1, $d->location->line);
     }
@@ -705,8 +746,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('dynamically-named method', $d->message);
-        self::assertStringContainsString('must be a literal identifier, not a variable', $d->message);
+        self::assertSame(
+            'A turbofish (`::<…>`) on a dynamically-named method or static call cannot be monomorphized; the method name must be a literal identifier, not a variable',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(9, $d->location->line);
     }
@@ -729,9 +772,11 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
-        self::assertStringContainsString('Ambiguous generic trait operand `A`', $d->message);
         // The remedy names an actionable recourse (a trait-level rename is NOT possible).
-        self::assertStringContainsString('Use a single specialization of that trait', $d->message);
+        self::assertSame(
+            'Ambiguous generic trait operand `A` in an adaptation clause: this class uses more than one specialization of that trait, and an `insteadof` / `as` clause names a trait, not a specialization, so it cannot say which one is meant. Use a single specialization of that trait in an adapted class.',
+            $d->message,
+        );
         self::assertNotNull($d->location);
         self::assertSame(13, $d->location->line);
     }
@@ -762,8 +807,8 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString(
-            'parameter 1: string is not wider than int',
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
             $diagnostics->all()[0]->message,
         );
     }

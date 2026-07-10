@@ -27,6 +27,9 @@ use XPHP\Diagnostics\DiagnosticCollector;
  */
 final class ClosureConformanceValidatorTest extends TestCase
 {
+    /** The fixed human-readable prefix {@see ClosureConformanceValidator::message()} prepends to every violation detail. */
+    private const MESSAGE_PREFIX = 'Closure literal does not conform to the declared `Closure(...)` type: ';
+
     /**
      * A conforming literal at any site is silent in both modes.
      *
@@ -166,16 +169,11 @@ final class ClosureConformanceValidatorTest extends TestCase
         self::assertSame(ClosureConformanceValidator::CODE, $diagnostic->code);
         self::assertNotNull($diagnostic->location);
         self::assertSame($line, $diagnostic->location->line, 'diagnostic points at the literal');
-        self::assertStringStartsWith(
-            'Closure literal does not conform to the declared `Closure(...)` type: ',
-            $diagnostic->message,
-            'the human-readable prefix precedes the violation detail',
-        );
-        self::assertStringContainsString($detailNeedle, $diagnostic->message);
+        self::assertSame(self::MESSAGE_PREFIX . $detailNeedle, $diagnostic->message);
 
         $thrown = $this->throwMode($source);
         self::assertInstanceOf(RuntimeException::class, $thrown);
-        self::assertStringContainsString($detailNeedle, $thrown->getMessage());
+        self::assertSame(self::MESSAGE_PREFIX . $detailNeedle, $thrown->getMessage());
     }
 
     /**
@@ -206,12 +204,12 @@ final class ClosureConformanceValidatorTest extends TestCase
         yield 'S-A method return: by-ref mismatch' => [
             "<?php class C {\n    public function m(): Closure(int \$x): void { return fn(int &\$x): void => null; }\n}",
             2,
-            'by-reference-ness must match exactly',
+            'parameter 1: by-reference-ness must match exactly (target by-value, candidate by-ref)',
         ];
         yield 'S-A union return: outside the union' => [
             "<?php function m(): Closure(): int|string {\n    return fn(): float => 0.0;\n}",
             2,
-            'float is not a subtype of int|string',
+            'return type: float is not a subtype of int|string',
         ];
         yield 'S-A union parameter: candidate too narrow' => [
             "<?php function m(): Closure(int|string \$x): void {\n    return fn(int \$x): void => null;\n}",
@@ -225,21 +223,21 @@ final class ClosureConformanceValidatorTest extends TestCase
             // ANY built-in target used to go gradual.)
             "<?php function m(): Closure(): \\Throwable {\n    return fn(): Apple => new Apple();\n}",
             2,
-            'App\\Apple is not a subtype of Throwable',
+            'return type: App\\Apple is not a subtype of Throwable',
         ];
         yield 'S-A return: relative-named TARGET violation is caught' => [
             // Pre-fix, `namespace\Apple` resolved to `App\namespace\Apple`
             // (undeclared ⇒ gradual) and this provable violation was missed.
             "<?php function m(): Closure(): namespace\\Apple {\n    return fn(): Fruit => new Fruit();\n}",
             2,
-            'App\\Fruit is not a subtype of App\\Apple',
+            'return type: App\\Fruit is not a subtype of App\\Apple',
         ];
         yield 'S-A return: fully-qualified literal violation is caught' => [
             // Pre-fix, `\App\Fruit` flattened to the relative `App\App\Fruit`
             // (undeclared ⇒ gradual) and this provable violation was missed.
             "<?php function m(): Closure(): Apple {\n    return fn(): \\App\\Fruit => new Fruit();\n}",
             2,
-            'App\\Fruit is not a subtype of App\\Apple',
+            'return type: App\\Fruit is not a subtype of App\\Apple',
         ];
         yield 'S-A array-sugar parameter: wrong arity still rejected' => [
             // The lowered `array` leaf is gradual but the ARITY is not: the
@@ -310,8 +308,8 @@ final class ClosureConformanceValidatorTest extends TestCase
 
         $collected = $diagnostics->all();
         self::assertCount(1, $collected);
-        self::assertStringContainsString(
-            'App\\Fruit is not a subtype of App\\Apple',
+        self::assertSame(
+            self::MESSAGE_PREFIX . 'return type: App\\Fruit is not a subtype of App\\Apple',
             $collected[0]->message,
         );
     }
@@ -358,8 +356,8 @@ final class ClosureConformanceValidatorTest extends TestCase
         self::validator($ast)->validateFile($ast, 'test.xphp', $diagnostics);
 
         self::assertCount(1, $diagnostics->all());
-        self::assertStringContainsString(
-            'is not a subtype of App\\Apple|App\\Orange',
+        self::assertSame(
+            self::MESSAGE_PREFIX . 'return type: App\\Fruit is not a subtype of App\\Apple|App\\Orange',
             $diagnostics->all()[0]->message,
         );
     }
@@ -382,8 +380,8 @@ final class ClosureConformanceValidatorTest extends TestCase
         self::validator($ast)->validateFile($ast, 'test.xphp', $diagnostics);
 
         self::assertCount(1, $diagnostics->all());
-        self::assertStringContainsString(
-            'is not a subtype of App\\Apple&App\\Orange',
+        self::assertSame(
+            self::MESSAGE_PREFIX . 'return type: App\\Fruit is not a subtype of App\\Apple&App\\Orange',
             $diagnostics->all()[0]->message,
         );
     }
@@ -400,7 +398,10 @@ final class ClosureConformanceValidatorTest extends TestCase
         self::validator($ast)->validateFile($ast, 'test.xphp', $diagnostics);
 
         self::assertCount(1, $diagnostics->all());
-        self::assertStringContainsString('is not wider than int', $diagnostics->all()[0]->message);
+        self::assertSame(
+            self::MESSAGE_PREFIX . 'parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testReturnLiteralIsPairedWithItsInnermostEnclosingFunction(): void

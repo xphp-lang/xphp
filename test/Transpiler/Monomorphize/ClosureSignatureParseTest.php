@@ -262,11 +262,7 @@ final class ClosureSignatureParseTest extends TestCase
     {
         $stripped = self::strip('<?php function f(Closure(int $x, string $y): bool $c) {}');
 
-        self::assertStringContainsString('\\Closure', $stripped);
-        self::assertStringNotContainsString('int $x', $stripped);
-        self::assertStringNotContainsString('): bool', $stripped);
-        // The param variable that follows the whole signature must survive.
-        self::assertStringContainsString('$c', $stripped);
+        self::assertSame('<?php function f(\Closure                         $c) {}', $stripped);
     }
 
     public function testErasurePreservesLineCountForLaterMarkers(): void
@@ -359,9 +355,7 @@ final class ClosureSignatureParseTest extends TestCase
 
         // Still fully erased to a bare \Closure.
         $stripped = self::strip($source);
-        self::assertStringContainsString('\\Closure', $stripped);
-        self::assertStringNotContainsString('A&B', $stripped);
-        self::assertStringNotContainsString('C|null', $stripped);
+        self::assertSame('<?php function u(\Closure             $c) {}', $stripped);
     }
 
     public function testUnionParameterSpanEndsSoNextParameterParses(): void
@@ -655,8 +649,7 @@ final class ClosureSignatureParseTest extends TestCase
         // the junk tail must survive as loud residue, never be absorbed.
         $stripped = self::strip('<?php function f(): Closure(): (A&B)(C&D) {}');
 
-        self::assertStringContainsString('\\Closure', $stripped);
-        self::assertStringContainsString('(C&D)', $stripped);
+        self::assertSame('<?php function f(): \Closure        (C&D) {}', $stripped);
     }
 
     public function testBodyOpeningBraceEndsTheReturnScan(): void
@@ -666,7 +659,7 @@ final class ClosureSignatureParseTest extends TestCase
         // the scan unconditionally.
         $stripped = self::strip("<?php function f(): Closure(): int { strlen('x'); }");
 
-        self::assertStringContainsString("{ strlen('x'); }", $stripped);
+        self::assertSame("<?php function f(): \Closure       { strlen('x'); }", $stripped);
     }
 
     public function testGroupInteriorMustReachTheClosingParen(): void
@@ -714,7 +707,7 @@ final class ClosureSignatureParseTest extends TestCase
         // junk survives as loud residue, never silently swallowed.
         $stripped = self::strip('<?php function f(): Closure(): A&|B {}');
 
-        self::assertStringContainsString('&|B', $stripped);
+        self::assertSame('<?php function f(): \Closure    &|B {}', $stripped);
     }
 
     public function testBareClosureMemberInSignatureUnionReturn(): void
@@ -842,8 +835,7 @@ final class ClosureSignatureParseTest extends TestCase
         // consume the sugar, leave the junk loud.
         $stripped = self::strip('<?php function f(): Closure(): A[][0] {}');
 
-        self::assertStringContainsString('[0]', $stripped);
-        self::assertStringNotContainsString('[]', $stripped);
+        self::assertSame('<?php function f(): \Closure      [0] {}', $stripped);
     }
 
     public function testWhitespaceSeparatedArraySugarIsConsumed(): void
@@ -890,7 +882,7 @@ final class ClosureSignatureParseTest extends TestCase
         // NOT be absorbed into the type span; the junk survives loudly.
         $stripped = self::strip('<?php function f(): Closure(): A[0] {}');
 
-        self::assertStringContainsString('[0]', $stripped);
+        self::assertSame('<?php function f(): \Closure    [0] {}', $stripped);
     }
 
     public function testDoubledClosingBracketStaysLoudResidue(): void
@@ -899,7 +891,7 @@ final class ClosureSignatureParseTest extends TestCase
         // the first non-`[` token, never read on and match the second `]`.
         $stripped = self::strip('<?php function f(): Closure(): A]] {}');
 
-        self::assertStringContainsString(']]', $stripped);
+        self::assertSame('<?php function f(): \Closure    ]] {}', $stripped);
     }
 
     public function testVariadicMarkerDirectlyAfterMemberArraySugar(): void
@@ -923,7 +915,7 @@ final class ClosureSignatureParseTest extends TestCase
         // not be silently absorbed or lowered.
         $stripped = self::strip('<?php function f(): Closure(): Foo<T>[] {}');
 
-        self::assertStringContainsString('[]', $stripped);
+        self::assertSame('<?php function f(): \Closure         [] {}', $stripped);
     }
 
     public function testArrayAccessOfClosureCallIsUntouched(): void
@@ -964,9 +956,7 @@ final class ClosureSignatureParseTest extends TestCase
 
         self::assertNull(self::firstSig($source), 'a call `Closure(5)` is not a type signature');
         // Source is left intact (no erasure) so the call still works.
-        $stripped = self::strip($source);
-        self::assertStringContainsString('Closure(5)', $stripped);
-        self::assertStringNotContainsString('\\Closure', $stripped);
+        self::assertSame($source, self::strip($source));
     }
 
     public function testInstanceofClosureIsNotTreatedAsSignature(): void
@@ -984,8 +974,7 @@ final class ClosureSignatureParseTest extends TestCase
         $source = '<?php function f(Closure $c) {}';
 
         self::assertNull(self::firstSig($source));
-        self::assertStringContainsString('Closure $c', self::strip($source));
-        self::assertStringNotContainsString('\\Closure', self::strip($source));
+        self::assertSame($source, self::strip($source));
     }
 
     public function testSignatureShapedCallInExpressionContextIsNotErased(): void
@@ -998,8 +987,7 @@ final class ClosureSignatureParseTest extends TestCase
         $source = "<?php \$x = Closure(Foo::class);";
 
         self::assertNull(self::firstSig($source));
-        self::assertStringContainsString('Closure(Foo::class)', self::strip($source));
-        self::assertStringNotContainsString('\\Closure', self::strip($source));
+        self::assertSame($source, self::strip($source));
     }
 
     /**

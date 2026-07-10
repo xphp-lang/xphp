@@ -47,8 +47,14 @@ final class EnclosingParamBoundLimitationTest extends TestCase
             $this->compileFixture('enclosing_param_bound_lenient_drop');
             self::fail('expected a bound violation for contains::<Rock> on a branch-merged Box<Fruit>');
         } catch (RuntimeException $e) {
-            self::assertStringContainsString('Generic bound violated', $e->getMessage());
-            self::assertStringContainsString('extend/implement "App\\Fruit"', $e->getMessage());
+            self::assertSame(
+                "Generic bound violated while instantiating App\\Box::contains<App\\Rock>.\n"
+                . "  type parameter U is bounded by App\\Fruit\n"
+                . "  but the supplied concrete type is App\\Rock\n"
+                . "\n"
+                . "  \"App\\Rock\" does not extend/implement \"App\\Fruit\".",
+                $e->getMessage(),
+            );
         }
     }
 
@@ -70,8 +76,14 @@ final class EnclosingParamBoundLimitationTest extends TestCase
             ]);
             self::fail('expected a bound violation for contains::<Rock> on Box<Fruit>');
         } catch (RuntimeException $e) {
-            self::assertStringContainsString('Generic bound violated', $e->getMessage());
-            self::assertStringContainsString('extend/implement "App\\Fruit"', $e->getMessage());
+            self::assertSame(
+                "Generic bound violated while instantiating App\\Box::contains<App\\Rock>.\n"
+                . "  type parameter U is bounded by App\\Fruit\n"
+                . "  but the supplied concrete type is App\\Rock\n"
+                . "\n"
+                . "  \"App\\Rock\" does not extend/implement \"App\\Fruit\".",
+                $e->getMessage(),
+            );
         }
     }
 
@@ -87,8 +99,14 @@ final class EnclosingParamBoundLimitationTest extends TestCase
             $this->compileFixture('enclosing_param_bound_compound_drop');
             self::fail('expected a bound violation for register::<Banana> on a branch-merged Box<Fruit>');
         } catch (RuntimeException $e) {
-            self::assertStringContainsString('Generic bound violated', $e->getMessage());
-            self::assertStringContainsString('Stringable', $e->getMessage());
+            self::assertSame(
+                "Generic bound violated while instantiating App\\Box::register<App\\Banana>.\n"
+                . "  type parameter U is bounded by Stringable & App\\Fruit\n"
+                . "  but the supplied concrete type is App\\Banana\n"
+                . "\n"
+                . "  \"App\\Banana\" does not satisfy \"Stringable & App\\Fruit\".",
+                $e->getMessage(),
+            );
         }
     }
 
@@ -111,8 +129,14 @@ final class EnclosingParamBoundLimitationTest extends TestCase
             ]);
             self::fail('expected a bound violation for register::<Banana> on Box<Fruit>');
         } catch (RuntimeException $e) {
-            self::assertStringContainsString('Generic bound violated', $e->getMessage());
-            self::assertStringContainsString('Stringable', $e->getMessage());
+            self::assertSame(
+                "Generic bound violated while instantiating App\\Box::register<App\\Banana>.\n"
+                . "  type parameter U is bounded by Stringable & App\\Fruit\n"
+                . "  but the supplied concrete type is App\\Banana\n"
+                . "\n"
+                . "  \"App\\Banana\" does not satisfy \"Stringable & App\\Fruit\".",
+                $e->getMessage(),
+            );
         }
     }
 

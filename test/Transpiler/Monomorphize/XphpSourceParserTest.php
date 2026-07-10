@@ -560,7 +560,7 @@ PHP;
         // survive into the cleaned source so any downstream tooling sees the
         // form as invalid PHP rather than xphp silently specializing it.
         $stripped = $parser->strip($source);
-        self::assertStringContainsString('class<T>', $stripped, 'anon-class `<T>` must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testMultiLineTypeParamClauseKeepsLaterLineKeyedMarkersAligned(): void
@@ -697,7 +697,6 @@ class Box<T> {
 PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
-        self::assertStringContainsString('array', $stripped);
         self::assertSame(
             substr_count($source, "\n"),
             substr_count($stripped, "\n"),
@@ -1911,7 +1910,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<Plastic>', $stripped, 'bare `new Name<…>()` must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testBareNewWithoutParensIsRejectedAndLeftUnstripped(): void
@@ -1930,7 +1929,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<Plastic>', $stripped, 'parenless `new Name<…>` must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testBareFreeFunctionCallIsRejectedAndLeftUnstripped(): void
@@ -1942,7 +1941,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<int>', $stripped, 'bare `name<…>()` free-function call must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testBareStaticMethodCallIsRejectedAndLeftUnstripped(): void
@@ -1954,7 +1953,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<int>', $stripped, 'bare `Recv::method<…>()` static call must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testWhitespaceBetweenDoubleColonAndAngleDefeatsTurbofish(): void
@@ -1970,7 +1969,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<int>', $stripped, 'whitespace between `::` and `<` must defeat turbofish recognition');
+        self::assertSame($source, $stripped);
     }
 
     public function testTypeHintPositionAcceptsFullyQualifiedOuterName(): void
@@ -3296,25 +3295,38 @@ PHP;
             [],
             [['line' => 3, 'name' => 'wrap']],
         );
-        self::assertNotNull($named);
-        self::assertStringContainsString('`wrap`', $named);
-        self::assertStringContainsString('line 3', $named);
+        self::assertSame(
+            'The generic type-parameter clause for `wrap` (line 3) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $named,
+        );
 
         $anonymous = XphpSourceParser::unboundDeclarationMarkerMessage(
             [],
             [['line' => 9, 'name' => '']],
         );
-        self::assertNotNull($anonymous);
-        self::assertStringContainsString('an anonymous closure', $anonymous);
-        self::assertStringContainsString('line 9', $anonymous);
+        self::assertSame(
+            'The generic type-parameter clause for an anonymous closure (line 9) was recognized but '
+            . 'never bound to its declaration — compiling on would silently drop the type parameters '
+            . 'from the emitted code. This is a transpiler bug; please report it. As a workaround, '
+            . 'keep the declaration header (attributes, modifiers, and name) on a single line.',
+            $anonymous,
+        );
 
         // Class markers are reported first when both kinds survive.
         $both = XphpSourceParser::unboundDeclarationMarkerMessage(
             [['line' => 1, 'name' => 'A']],
             [['line' => 2, 'name' => 'b']],
         );
-        self::assertNotNull($both);
-        self::assertStringContainsString('`A`', $both);
+        self::assertSame(
+            'The generic type-parameter clause for `A` (line 1) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $both,
+        );
     }
 
     public function testGenericClosureDefaultIsAccepted(): void

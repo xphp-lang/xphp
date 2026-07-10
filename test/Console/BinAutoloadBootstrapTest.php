@@ -75,8 +75,10 @@ final class BinAutoloadBootstrapTest extends TestCase
 
         self::assertSame(1, $result['exit']);
         // The diagnostic must go to STDERR (separate pipe), not STDOUT.
-        self::assertStringContainsString('could not locate', $result['stderr']);
-        self::assertStringContainsString('composer install', $result['stderr']);
+        self::assertSame(
+            "xphp: could not locate Composer's autoloader. Run `composer install`." . PHP_EOL,
+            $result['stderr'],
+        );
     }
 
     /**

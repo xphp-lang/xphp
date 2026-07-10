@@ -30,8 +30,8 @@ final class RegistryTest extends TestCase
         $b = Registry::generatedFqn('App\\RegistryTest\\Other\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         self::assertNotSame($a, $b);
-        self::assertStringContainsString('App\\RegistryTest\\Containers\\Box', $a);
-        self::assertStringContainsString('App\\RegistryTest\\Other\\Box', $b);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $a);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Other\\Box\\T_', $b);
     }
 
     public function testDifferentArgsProduceDifferentHashes(): void
@@ -300,7 +300,15 @@ final class RegistryTest extends TestCase
             self::fail('expected collision exception');
         } catch (\RuntimeException $e) {
             // 48 * 2 = 96, clamped to MAX (64)
-            self::assertStringContainsString('XPHP_HASH_LENGTH=64 bin/xphp compile', $e->getMessage());
+            $expected = "Hash collision detected while monomorphizing generics.\n\n"
+                . "Two distinct instantiations produced the same specialized FQCN:\n"
+                . "  existing : App\\RegistryTest\\Containers\\Box<App\\RegistryTest\\Models\\Plastic>\n"
+                . "  new      : App\\RegistryTest\\Containers\\Box<App\\RegistryTest\\Models\\Metal>\n"
+                . "  collision: {$collidingFqn}\n\n"
+                . "The current XPHP_HASH_LENGTH = 48 is too short for this codebase.\n"
+                . "Increase it (max 64, the full sha256 digest) and re-run, e.g.:\n\n"
+                . "    XPHP_HASH_LENGTH=64 bin/xphp compile <source> <target> <cache>\n";
+            self::assertSame($expected, $e->getMessage());
         }
     }
 

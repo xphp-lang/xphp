@@ -25,4 +25,8 @@ Assert::assertSame(7, $c->n);
 // $a and $b are the same App-side specialization; $c is Other's.
 Assert::assertSame(get_class($a), get_class($b));
 Assert::assertNotSame(get_class($a), get_class($c));
-Assert::assertStringContainsString('Other', get_class($c));
+// $c is a relocated specialization: emitted under Other's Generated namespace.
+Assert::assertSame(
+    'XPHP\\Generated\\Other\\Box\\T_6da88c34ba124c41f977db66a4fc5c1a951708d285c81bb0d47c3206f4c27ca8',
+    get_class($c),
+);

@@ -252,7 +252,7 @@ final class ClosureSignatureConformanceTest extends TestCase
         );
         self::assertNotNull($violation);
         self::assertSame(ClosureConformanceViolation::KIND_PARAM_TYPE, $violation->kind);
-        self::assertStringContainsString('Closure(...)', $violation->detail, 'a nested-closure leaf renders as Closure(...) in the message');
+        self::assertSame('parameter 1: Closure(...) is not wider than Closure(...)', $violation->detail);
     }
 
     public function testNestedClosureReturnConforms(): void
@@ -565,7 +565,8 @@ final class ClosureSignatureConformanceTest extends TestCase
             self::sig([], self::union(self::ref('int'), self::ref('string'))),
         );
         self::assertNotNull($violation);
-        self::assertStringContainsString('int|string', $violation->detail);
+        self::assertSame(ClosureConformanceViolation::KIND_RETURN_TYPE, $violation->kind);
+        self::assertSame('return type: float is not a subtype of int|string', $violation->detail);
     }
 
     public function testViolationDetailRendersIntersectionMembers(): void
@@ -575,7 +576,7 @@ final class ClosureSignatureConformanceTest extends TestCase
             self::sig([], self::intersection(self::ref('App\\Apple'), self::ref('App\\Closurish'))),
         );
         self::assertNotNull($violation);
-        self::assertStringContainsString('App\\Apple&App\\Closurish', $violation->detail);
+        self::assertSame('return type: App\\Fruit is not a subtype of App\\Apple&App\\Closurish', $violation->detail);
     }
 
     public function testViolationDetailNamesThePositionAndBothTypes(): void
@@ -585,9 +586,8 @@ final class ClosureSignatureConformanceTest extends TestCase
             self::sig([self::p(self::ref('int'))], self::ref('int')),
         );
         self::assertNotNull($violation);
-        self::assertStringContainsString('parameter 1', $violation->detail);
-        self::assertStringContainsString('string', $violation->detail);
-        self::assertStringContainsString('int', $violation->detail);
+        self::assertSame(ClosureConformanceViolation::KIND_PARAM_TYPE, $violation->kind);
+        self::assertSame('parameter 1: string is not wider than int', $violation->detail);
     }
 
     public function testReturnViolationDetailNamesBothTypes(): void
@@ -597,9 +597,8 @@ final class ClosureSignatureConformanceTest extends TestCase
             self::sig([], self::ref('App\\Apple')),
         );
         self::assertNotNull($violation);
-        self::assertStringContainsString('return type', $violation->detail);
-        self::assertStringContainsString('Fruit', $violation->detail);
-        self::assertStringContainsString('Apple', $violation->detail);
+        self::assertSame(ClosureConformanceViolation::KIND_RETURN_TYPE, $violation->kind);
+        self::assertSame('return type: App\\Fruit is not a subtype of App\\Apple', $violation->detail);
     }
 
     public function testByRefViolationDetailNamesTheDirections(): void
@@ -609,11 +608,8 @@ final class ClosureSignatureConformanceTest extends TestCase
             self::sig([self::p(self::ref('int'))], self::ref('int')),
         );
         self::assertNotNull($violation);
-        self::assertStringContainsString('parameter 1', $violation->detail);
-        // Exact phrases (not bare 'by-ref', which is a substring of the fixed
-        // "by-reference-ness" text and would match vacuously).
-        self::assertStringContainsString('target by-value', $violation->detail);
-        self::assertStringContainsString('candidate by-ref', $violation->detail);
+        self::assertSame(ClosureConformanceViolation::KIND_BYREF, $violation->kind);
+        self::assertSame('parameter 1: by-reference-ness must match exactly (target by-value, candidate by-ref)', $violation->detail);
     }
 
     // ---- Helpers ---------------------------------------------------------

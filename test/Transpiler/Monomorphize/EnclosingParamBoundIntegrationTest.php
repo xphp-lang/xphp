@@ -159,10 +159,14 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
             ]);
             self::fail('Expected a bound violation for Box<Banana>::contains<Fruit>.');
         } catch (RuntimeException $e) {
-            $msg = $e->getMessage();
-            self::assertStringContainsString('Generic bound violated', $msg);
-            self::assertStringContainsString('extend/implement "App\\Banana"', $msg, 'bound must be grounded to the receiver arg Banana');
-            self::assertStringNotContainsString('"E"', $msg, 'must not report the literal type parameter E');
+            self::assertSame(
+                "Generic bound violated while instantiating App\\Box::contains<App\\Fruit>.\n"
+                . "  type parameter U is bounded by App\\Banana\n"
+                . "  but the supplied concrete type is App\\Fruit\n"
+                . "\n"
+                . "  \"App\\Fruit\" does not extend/implement \"App\\Banana\".",
+                $e->getMessage(),
+            );
         }
     }
 

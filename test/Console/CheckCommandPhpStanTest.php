@@ -119,7 +119,11 @@ final class CheckCommandPhpStanTest extends TestCase
         ]);
 
         self::assertSame(0, $exit); // a missing optional tool is a Warning, not a failure
-        self::assertStringContainsString('PHPStan was not found', $tester->getDisplay());
+        self::assertStringContainsString(
+            'PHPStan was not found (looked for --phpstan-bin, then vendor/bin/phpstan, then $PATH); '
+                . 'skipping static analysis. Pass --no-phpstan to silence this.',
+            $tester->getDisplay(),
+        );
     }
 
     public function testExplicitConfigIsPassedThroughToPhpStan(): void
