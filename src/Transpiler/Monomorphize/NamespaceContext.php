@@ -70,13 +70,14 @@ final class NamespaceContext
     }
 
     /**
-     * Index a `GroupUse` (`use N\{a, function b, const C}`) into the function/const
-     * symbol maps. Only `use function` / `use const` members contribute a callable or
-     * const alias, so a class/namespace group-import routes nothing — and (unlike
-     * indexUse) the class/namespace useMap is left untouched, keeping class resolution
-     * exactly as it was before group-imported free symbols were recognised. Each member
-     * FQN is the group prefix joined with the member name; the alias is the member's
-     * `as` name, else the last segment of the member name.
+     * Index a `GroupUse` (`use N\{a, function b, const C}`). Each member is stored in the
+     * class/namespace useMap (as {@see indexUse} does for every single import), so a
+     * group-imported CLASS or namespace resolves identically to its single-import form —
+     * a relocated generic body that references it re-qualifies to the import target instead
+     * of falling back to the current namespace (and fatalling). `use function` / `use const`
+     * members are ADDITIONALLY routed into their own symbol maps, honouring PHP's separate
+     * symbol namespaces. Each member FQN is the group prefix joined with the member name;
+     * the alias is the member's `as` name, else the last segment of the member name.
      */
     public function indexGroupUse(GroupUse $use): void
     {
@@ -89,6 +90,9 @@ final class NamespaceContext
             $member = $u->name->toString();
             $fqn = $prefix . '\\' . $member;
             $alias = $u->alias?->toString() ?? self::lastSegment($member);
+            // The class/namespace map keeps EVERY member, exactly as indexUse does for a
+            // single import — this is what a relocated body's class-name resolution reads.
+            $this->useMap[$alias] = $fqn;
             // The item's own type wins when set (mixed `use N\{function a, const B}`),
             // else the group statement's type (`use function N\{a, b}`).
             $type = $u->type !== Use_::TYPE_UNKNOWN ? $u->type : $use->type;

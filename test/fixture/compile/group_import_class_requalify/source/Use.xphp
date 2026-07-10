@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use Vendor\Widget;      // single import — must-keep (already worked)
+use Vendor\{Tool};      // group import — the WI-14 fix
+
+// Box<T> relocates into XPHP\Generated\App\Box, out of App's namespace + use scope. Both the
+// group-imported Tool and the single-imported Widget must re-qualify to \Vendor\… in the relocated
+// body — before the fix, the group form emitted \App\Tool::ping() and fataled ("Class App\Tool").
+class Box<T>
+{
+    public function run(): string
+    {
+        return Tool::ping() . Widget::spin();
+    }
+}
+
+$b = new Box::<int>();
+$result = $b->run();

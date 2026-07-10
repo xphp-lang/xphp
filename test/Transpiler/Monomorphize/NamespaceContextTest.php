@@ -345,9 +345,12 @@ final class NamespaceContextTest extends TestCase
         self::assertSame('App\\make', $ctx->resolveFunctionName(new Name('make')));
     }
 
-    public function testIndexGroupUseClassImportPollutesNeitherSymbolMap(): void
+    public function testIndexGroupUseClassImportRoutesToClassMapNotSymbolMaps(): void
     {
-        // A plain class group-import `use Vendor\{Box, Crate};` contributes no callable/const alias.
+        // A plain class group-import `use Vendor\{Box, Crate};` is stored in the class/namespace
+        // useMap (so a relocated body re-qualifies it to the import target, exactly like a single
+        // `use Vendor\Box;`), but contributes NO callable/const alias — the separate-symbol-namespace
+        // invariant still holds.
         $ctx = new NamespaceContext();
         $ctx->enterNamespace('App');
         $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
@@ -355,8 +358,44 @@ final class NamespaceContextTest extends TestCase
             ['name' => 'Crate', 'alias' => null, 'type' => Use_::TYPE_UNKNOWN],
         ], Use_::TYPE_NORMAL));
 
+        // Class map: the import target, and counts as imported.
+        self::assertSame('Vendor\\Box', $ctx->resolveName(new Name('Box')));
+        self::assertSame('Vendor\\Crate', $ctx->resolveName(new Name('Crate')));
+        self::assertTrue($ctx->isImported('Box'));
+        self::assertTrue($ctx->isImported('Crate'));
+        // Symbol maps: untouched — an unqualified function/const name still falls to the current ns.
         self::assertSame('App\\Box', $ctx->resolveFunctionName(new Name('Box')));
         self::assertSame('App\\Crate', $ctx->resolveConstName(new Name('Crate')));
+    }
+
+    public function testIndexGroupUseClassImportHonoursAliasInClassMap(): void
+    {
+        // `use Vendor\{Tool as T};` — the alias resolves to the import target in the class map.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
+            ['name' => 'Tool', 'alias' => 'T', 'type' => Use_::TYPE_UNKNOWN],
+        ], Use_::TYPE_NORMAL));
+
+        self::assertSame('Vendor\\Tool', $ctx->resolveName(new Name('T')));
+        self::assertTrue($ctx->isImported('T'));
+        // The un-aliased member name is NOT imported.
+        self::assertSame('App\\Tool', $ctx->resolveName(new Name('Tool')));
+        self::assertFalse($ctx->isImported('Tool'));
+    }
+
+    public function testIndexGroupUseNamespaceImportResolvesQualifiedNames(): void
+    {
+        // `use Vendor\{Sub};` then `Sub\Thing` resolves through the class/namespace map — the case a
+        // class-only split would have missed.
+        $ctx = new NamespaceContext();
+        $ctx->enterNamespace('App');
+        $ctx->indexGroupUse(self::makeGroupUse('Vendor', [
+            ['name' => 'Sub', 'alias' => null, 'type' => Use_::TYPE_UNKNOWN],
+        ], Use_::TYPE_NORMAL));
+
+        self::assertSame('Vendor\\Sub\\Thing', $ctx->resolveName(new Name('Sub\\Thing')));
+        self::assertTrue($ctx->isImported('Sub'));
     }
 
     private static function makeUse(string $fqn, ?string $alias = null, int $type = Use_::TYPE_NORMAL): Use_
