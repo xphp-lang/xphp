@@ -215,6 +215,16 @@ _In progress on this branch — content still accumulating; date set at tag time
   match case-insensitively, constants case-sensitively). The re-qualification also
   covers members supplied by the covariant-upcast gap-fill, which are appended after the
   main relocation pass.
+- **A specialized generic body keeps resolving the classes it group-imported.** The
+  relocation into `XPHP\Generated\…` also re-qualifies class references against the
+  unit's imports, but a class brought in through a grouped import — `use Vendor\{Tool};`,
+  or a mixed `use Vendor\{Tool, function make};` — was not recorded in the class
+  import map (only single `use Vendor\Tool;` imports were), so a reference to it in the
+  relocated body fell back to the generated namespace (`\App\Tool`) and fatalled at class
+  load with `Class "App\Tool" not found` behind a clean `compile` and `check`. A
+  group-imported class now re-qualifies to its import target exactly like its
+  single-import form; `use function` / `use const` group members keep resolving through
+  their own symbol namespaces.
 - **A generic clause on a `use` import is rejected instead of misfiring.** Writing
   a type argument on an import — `use App\Box<int>;`, `use App\Box<int> as B;`,
   `use const App\BOX<int>;`, or the grouped `use App\{Box<int>, Bag};` — has no
