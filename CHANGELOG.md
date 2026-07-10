@@ -238,6 +238,19 @@ _In progress on this branch — content still accumulating; date set at tag time
   (`use App\Box;`) and apply the type arguments at the use site. A generic
   **trait-use** (`class C { use Holder<int>; }`) is unaffected — it still specializes
   the trait.
+- **A generic trait used with an `insteadof` / `as` adaptation loads instead of
+  fataling.** A generic trait combined with an adaptation block — `use A<int>, B<int>
+  { A::m insteadof B; B::m as bm; }` — specialized the `use`-**list** names to their
+  `\XPHP\Generated\…` form but left the `insteadof` / `as` **operand** names bare, so
+  they resolved to the now-removed template (`App\A`) and fataled at class load
+  (`Trait "App\A" not found`) behind a clean `compile` and `check`. Each adaptation
+  operand that names a generic trait the class uses is now rewritten to the **same**
+  specialization as its list entry, including operands that reference a trait brought
+  in by a different `use` statement of the same class. A non-generic trait operand (or
+  one the class does not use generically) stays untouched — it is a real trait. A bare
+  operand that matches two different specializations of one trait (`use A<int>,
+  A<string> { A::m insteadof B; }`) cannot be disambiguated in an adaptation clause and
+  now draws a clear diagnostic instead of silently picking one.
 - **`check` reports parse-stage rejections at their real source line.** Syntax
   the scanner rejects before the AST exists — a variance marker on a method or
   closure (`out T` / `in T`), the legacy `+T` / `-T` glyphs, a malformed or
