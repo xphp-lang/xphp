@@ -3244,10 +3244,11 @@ final class XphpSourceParser
                 $fqn = $this->resolveNameOnly($operand->toCodeString());
                 if (isset($ambiguous[$fqn])) {
                     throw new XphpParseException(sprintf(
-                        'Ambiguous generic trait operand `%s` in an adaptation clause: '
-                        . 'this class uses more than one specialization of that trait, and '
-                        . 'an `insteadof` / `as` clause cannot say which one is meant. Give '
-                        . 'the conflicting traits distinct names to disambiguate.',
+                        'Ambiguous generic trait operand `%s` in an adaptation clause: this '
+                        . 'class uses more than one specialization of that trait, and an '
+                        . '`insteadof` / `as` clause names a trait, not a specialization, so '
+                        . 'it cannot say which one is meant. Use a single specialization of '
+                        . 'that trait in an adapted class.',
                         $operand->toCodeString(),
                     ), $operand->getStartLine());
                 }

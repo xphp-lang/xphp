@@ -730,6 +730,8 @@ final class CheckPassIntegrationTest extends TestCase
         $d = $diagnostics->all()[0];
         self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
         self::assertStringContainsString('Ambiguous generic trait operand `A`', $d->message);
+        // The remedy names an actionable recourse (a trait-level rename is NOT possible).
+        self::assertStringContainsString('Use a single specialization of that trait', $d->message);
         self::assertNotNull($d->location);
         self::assertSame(13, $d->location->line);
     }
