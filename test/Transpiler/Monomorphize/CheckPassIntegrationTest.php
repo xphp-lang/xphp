@@ -696,6 +696,84 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(11, $d->location->line);
     }
 
+    public function testGroundedClosureConformanceRejectIsCollectedByCheck(): void
+    {
+        // A `Closure(T $x)` target is gradually accepted while T is abstract; check
+        // must ground it per specialization (Registry<string> ⇒ Closure(string))
+        // and collect the now-provable mismatch — the same verdict compile reaches.
+        // Without this, `check --no-phpstan` silently passed invalid code.
+        $diagnostics = $this->check('closure_grounded_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than string',
+            $d->message,
+        );
+    }
+
+    public function testGroundedClosureConformanceAcceptStaysClean(): void
+    {
+        // Grounding the same factory to `int` conforms — no false positive.
+        $diagnostics = $this->check('closure_grounded_accept');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertCount(0, $diagnostics->all());
+    }
+
+    public function testGroundedClosureConformanceReachesTransitiveInstantiations(): void
+    {
+        // A<string> is never written in source — it is discovered only by
+        // specializing B<string>. The bounded fixed-point must reach it, so a
+        // single source-visible pass would miss this grounded reject.
+        $diagnostics = $this->check('closure_grounded_transitive_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than string',
+            $d->message,
+        );
+    }
+
+    public function testNonGenericStructuralClosureMismatchIsCollectedByCheck(): void
+    {
+        // A non-generic arity mismatch has no specialization to ground against, so
+        // only the abstract pre-loop's FULL conformance check catches it — the
+        // grounded pass runs the type-relation half only. This pins that the
+        // abstract pass does NOT run in types-only mode.
+        $diagnostics = $this->check('closure_nongeneric_arity_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: expects at least 2 parameter(s), candidate accepts at most 1',
+            $d->message,
+        );
+    }
+
+    public function testStructuralClosureMismatchOnGenericTargetReportsOnce(): void
+    {
+        // An arity mismatch is grounding-independent and is caught by the abstract
+        // pre-loop. The grounded pass runs the type-relation half only, so it must
+        // not re-report the same structural violation at the specialized location.
+        $diagnostics = $this->check('closure_grounded_arity_once');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: expects at least 2 parameter(s), candidate accepts at most 1',
+            $d->message,
+        );
+        // Reported at the real source line, not the synthetic specialized location.
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('.xphp', $d->location->file);
+    }
+
     public function testParseTimeUnionDefaultReportsRealLine(): void
     {
         // A union default (`T = Foo | Bar`) rejects from the `$tokens[$afterDefault]`

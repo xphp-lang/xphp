@@ -612,6 +612,55 @@ final class ClosureSignatureConformanceTest extends TestCase
         self::assertSame('parameter 1: by-reference-ness must match exactly (target by-value, candidate by-ref)', $violation->detail);
     }
 
+    // ---- checkTypesOnly (grounded re-check: type relations without structural) ----
+
+    public function testCheckTypesOnlySkipsArityMismatch(): void
+    {
+        // The grounded pass must ignore arity — it was already decided abstract.
+        $candidate = self::sig([self::p(self::ref('int'))], self::ref('int'));                 // 1 param
+        $target = self::sig([self::p(self::ref('int')), self::p(self::ref('int'))], self::ref('int')); // 2 params
+        self::assertNull(self::engine()->checkTypesOnly($candidate, $target));
+        // ...whereas the full check reports the structural violation.
+        self::assertSame(
+            ClosureConformanceViolation::KIND_ARITY_TOO_FEW,
+            self::engine()->check($candidate, $target)?->kind,
+        );
+    }
+
+    public function testCheckTypesOnlySkipsByRefMismatch(): void
+    {
+        $candidate = self::sig([self::p(self::ref('int'), byRef: true)], self::ref('int'));
+        $target = self::sig([self::p(self::ref('int'))], self::ref('int'));
+        self::assertNull(self::engine()->checkTypesOnly($candidate, $target));
+        self::assertSame(
+            ClosureConformanceViolation::KIND_BYREF,
+            self::engine()->check($candidate, $target)?->kind,
+        );
+    }
+
+    public function testCheckTypesOnlyStillCatchesParameterMismatch(): void
+    {
+        // A narrower (sibling) candidate parameter is a provable contravariance
+        // violation the grounded pass must still catch.
+        $violation = self::engine()->checkTypesOnly(
+            self::sig([self::p(self::ref('App\\Apple'))], self::ref('int')),  // candidate wants Apple
+            self::sig([self::p(self::ref('App\\Fruit'))], self::ref('int')),  // target passes Fruit
+        );
+        self::assertNotNull($violation);
+        self::assertSame(ClosureConformanceViolation::KIND_PARAM_TYPE, $violation->kind);
+    }
+
+    public function testCheckTypesOnlyStillCatchesReturnMismatch(): void
+    {
+        // A wider candidate return is a provable covariance violation.
+        $violation = self::engine()->checkTypesOnly(
+            self::sig([], self::ref('App\\Fruit')),  // candidate returns Fruit
+            self::sig([], self::ref('App\\Apple')),  // target promises Apple
+        );
+        self::assertNotNull($violation);
+        self::assertSame(ClosureConformanceViolation::KIND_RETURN_TYPE, $violation->kind);
+    }
+
     // ---- Helpers ---------------------------------------------------------
 
     private static function engine(): ClosureSignatureConformance

@@ -69,6 +69,23 @@ final readonly class ClosureSignatureConformance
             return $structural;
         }
 
+        return $this->checkTypesOnly($candidate, $target);
+    }
+
+    /**
+     * The type-relation half of conformance — parameter contravariance and return
+     * covariance — WITHOUT the structural (arity / by-reference) checks. Returns
+     * the first provable violation or null (conforms, or not provable ⇒ accepted).
+     *
+     * Used by the grounded per-specialization re-check: arity and by-reference are
+     * grounding-independent and were already decided at the abstract template
+     * pre-loop, so re-running them once a type parameter grounds would only
+     * re-report the same structural violation at a second (specialized) location.
+     * Only the leaf *types* change under grounding, so the grounded pass runs this
+     * half alone.
+     */
+    public function checkTypesOnly(ClosureSignature $candidate, ClosureSignature $target): ?ClosureConformanceViolation
+    {
         // Parameters: contravariant. Each candidate parameter must be the same as
         // or WIDER than the target's — i.e. the target's type must be a subtype of
         // the candidate's. Only positions the target defines are constrained.

@@ -156,8 +156,13 @@ final readonly class Compiler
         // becomes provable here. Fail-fast, like the pre-loop gate. Structural
         // mismatches (arity / by-ref) don't depend on grounding and were already
         // caught at the template pre-loop, which threw before reaching this point.
+        // @infection-ignore-all TrueValue -- groundedTypesOnly true/false is equivalent
+        // HERE: a structural (arity / by-ref) mismatch throws at the abstract pre-loop
+        // above and never reaches Phase 2.4, so the type-only path and the full check
+        // coincide once execution gets here. `true` states the intent (only leaf types
+        // changed under grounding); check()'s grounded pass genuinely needs it.
         foreach ($specializedAsts as $generatedFqn => $classAst) {
-            $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", null);
+            $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", null, groundedTypesOnly: true);
         }
 
         // Phase 2.5: emit subtype edges between specializations whose template
@@ -323,6 +328,22 @@ final readonly class Compiler
                     );
                 }
 
+                // In resilient mode the registry may hold an arity-mismatched
+                // instantiation (a missing or excess type argument) — already reported
+                // as its own diagnostic. `compile` rejects those before this loop, so
+                // it never sees one; skip it here rather than let array_combine raise a
+                // ValueError on unequal key/value counts.
+                if ($resilient && count($definition->typeParamNames()) !== count($instantiation->concreteTypes)) {
+                    // @infection-ignore-all TrueValue -- `$skip` is a set; only key
+                    // existence matters (`isset($skip[...])` above), so the value true/false
+                    // is equivalent.
+                    $skip[$generatedFqn] = true;
+                    // @infection-ignore-all Continue_ -- break vs continue reconverges: the
+                    // outer while-loop reprocesses the remaining instantiations on the next
+                    // pass (this one is now in `$skip`), yielding the same specialized set.
+                    continue;
+                }
+
                 $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
                 if ($resilient) {
                     try {
@@ -457,6 +478,24 @@ final readonly class Compiler
         // flipping it changes only wasted work, not the collected diagnostics. `emit: false` is the
         // correct (no-wasted-work, no-mutation) choice.
         (new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics))->process($astPerFile, emit: false);
+
+        // Grounded closure-signature conformance. A `Closure(T $x)` target whose
+        // type parameter is still abstract above is gradually accepted; grounding it
+        // per specialization (e.g. `Registry<string>` ⇒ `Closure(string $x)`) can
+        // turn a previously-unprovable literal mismatch into a provable one. `compile`
+        // catches this in Phase 2.4; `check` must too, or it silently passes code
+        // that `compile` rejects (and the compile-driven PHPStan gate would surface
+        // the same reject as a raw exception rather than a diagnostic). Specialize to
+        // a fixed point in resilient mode — discovering transitively-instantiated
+        // generics, not just source-visible ones — then run the type-relation half of
+        // conformance over every specialization in collector mode. Structural (arity /
+        // by-ref) mismatches were already collected by the abstract pre-loop above, so
+        // the grounded pass skips them to avoid a duplicate report at the specialized
+        // location.
+        $groundedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: true);
+        foreach ($groundedAsts as $generatedFqn => $classAst) {
+            $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", $diagnostics, groundedTypesOnly: true);
+        }
 
         return $diagnostics;
     }

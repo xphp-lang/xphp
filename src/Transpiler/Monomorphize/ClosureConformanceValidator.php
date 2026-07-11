@@ -64,15 +64,22 @@ final class ClosureConformanceValidator
      * violation is collected (the `xphp check` path); without one the first
      * violation throws (the fail-fast `compile` path).
      *
+     * With `$groundedTypesOnly = true` the engine runs only the type-relation half
+     * of conformance (parameter contravariance / return covariance), skipping the
+     * grounding-independent arity / by-reference checks. Used for the grounded
+     * per-specialization re-check, where structural mismatches were already decided
+     * at the abstract template and only the leaf types change under substitution —
+     * so they must not be re-reported at a second (specialized) location.
+     *
      * @param list<Node\Stmt> $ast
      */
-    public function validateFile(array $ast, string $file, ?DiagnosticCollector $diagnostics): void
+    public function validateFile(array $ast, string $file, ?DiagnosticCollector $diagnostics, bool $groundedTypesOnly = false): void
     {
         // A fresh context is already global-scope (no namespace, no uses); a
         // `namespace` node encountered during the walk re-scopes it.
         $ctx = new NamespaceContext();
         $traverser = new NodeTraverser();
-        $traverser->addVisitor($this->buildVisitor($ctx, $file, $diagnostics));
+        $traverser->addVisitor($this->buildVisitor($ctx, $file, $diagnostics, $groundedTypesOnly));
         $traverser->traverse($ast);
     }
 
@@ -117,12 +124,15 @@ final class ClosureConformanceValidator
         NamespaceContext $ctx,
         string $file,
         ?DiagnosticCollector $diagnostics,
+        bool $groundedTypesOnly,
     ): void {
         if (!self::isLiteral($literal)) {
             return;
         }
         $candidate = ClosureLiteralSignature::extract($literal, $ctx);
-        $violation = $this->engine->check($candidate, $target);
+        $violation = $groundedTypesOnly
+            ? $this->engine->checkTypesOnly($candidate, $target)
+            : $this->engine->check($candidate, $target);
         if ($violation === null) {
             return;
         }
@@ -144,9 +154,9 @@ final class ClosureConformanceValidator
         return 'Closure literal does not conform to the declared `Closure(...)` type: ' . $violation->detail;
     }
 
-    private function buildVisitor(NamespaceContext $ctx, string $file, ?DiagnosticCollector $diagnostics): NodeVisitorAbstract
+    private function buildVisitor(NamespaceContext $ctx, string $file, ?DiagnosticCollector $diagnostics, bool $groundedTypesOnly): NodeVisitorAbstract
     {
-        return new class($this, $ctx, $file, $diagnostics) extends NodeVisitorAbstract {
+        return new class($this, $ctx, $file, $diagnostics, $groundedTypesOnly) extends NodeVisitorAbstract {
             /**
              * The `Closure(...)` return target of each enclosing function-like that
              * can hold `return` statements, innermost last. An arrow function has no
@@ -161,6 +171,7 @@ final class ClosureConformanceValidator
                 private readonly NamespaceContext $ctx,
                 private readonly string $file,
                 private readonly ?DiagnosticCollector $diagnostics,
+                private readonly bool $groundedTypesOnly,
             ) {
             }
 
@@ -176,14 +187,14 @@ final class ClosureConformanceValidator
                     // Arrow body: the body expression IS the returned value.
                     $target = ClosureConformanceValidator::closureSigOf($node->returnType);
                     if ($target !== null) {
-                        $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics);
+                        $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics, $this->groundedTypesOnly);
                     }
                 } elseif ($node instanceof Return_) {
                     // Return position: the literal is the returned value of the
                     // innermost enclosing function-like.
                     $target = $this->returnTargets === [] ? null : $this->returnTargets[count($this->returnTargets) - 1];
                     if ($target !== null && $node->expr !== null) {
-                        $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics);
+                        $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics, $this->groundedTypesOnly);
                     }
                 }
 
