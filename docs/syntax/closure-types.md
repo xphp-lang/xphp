@@ -202,6 +202,31 @@ else in xphp — and participates in conformance as `array` (a gradual leaf, so
 it can only ever widen acceptance; the arity around it is still checked). The
 `Name<Args>[]` combination remains unsupported, in signatures as elsewhere.
 
+## Known limitations
+
+A `Closure(...)` signature type is accepted in a **parameter, return, or
+property** position (including nested inside another `Closure(...)`). A few
+positions are **not** supported yet; each is rejected with a clear,
+closure-specific compile error (never a silent miscompile), and each may be
+lifted in a future version:
+
+- **As a generic type argument** — `Box<Closure(int): int>`. Wrap the callable in
+  a named type, or use a bare `\Closure` type argument if you don't need the
+  signature checked.
+- **As a generic bound** — `class C<T : Closure(int): int>`. Use a bare
+  `\Closure` bound (`class C<T : \Closure>`) if you only need "some closure".
+- **Nested inside a generic argument of a bound** — `class C<T : Box<Closure(int):
+  int>>` — for the same reason as the two above.
+- **With the `Name<Args>[]` array-of-generic combination** — e.g. `Box<int>[]`
+  inside a signature. This shape is unsupported across xphp, not only in
+  signatures.
+- **With an untyped parameter** — `Closure($x): int`. A signature parameter must
+  carry a type; write `Closure(int $x): int` (a truly unconstrained slot can use
+  `mixed`).
+
+In every case a bare `\Closure` (no call signature) is always accepted — you
+lose the compile-time conformance check but keep a working `\Closure` type.
+
 ## See also
 
 - [Variance](variance.md) — declaration-site `out T` / `in T` class variance:
