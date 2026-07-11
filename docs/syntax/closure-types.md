@@ -67,6 +67,68 @@ function makeBroken(): Closure(int $x): int {
 A mismatch is a compile error (`xphp compile` fails; `xphp check` reports
 `xphp.closure_conformance`). See [errors](../errors.md).
 
+### Contravariance and covariance, concretely
+
+Scalars can't show *why* the rules point the way they do — `int` and `string`
+are unrelated, so neither is "wider" than the other. A class hierarchy makes it
+visible. Take:
+
+```php
+class LivingThing {}
+class Animal extends LivingThing {}
+class Dog extends Animal {}
+class Cat extends Animal {}
+```
+
+and a slot that wants **a function taking a `Dog` and returning some `Animal`**:
+
+```php
+function pipeline(): Closure(Dog $d): Animal {
+    return /* one of the literals in the table below */;
+}
+```
+
+The insight is that the slot *owns both ends of the call*: it will only ever
+**hand the closure a `Dog`**, and it promises its own caller **an `Animal`
+back**.
+
+- **Parameters are contravariant — a *wider* parameter is safe.** The closure is
+  only ever called with a `Dog`, so a closure that accepts any `Animal` (or even
+  any `LivingThing`) copes fine — a `Dog` *is* an `Animal`. A closure that
+  demands a *narrower* or *sibling* type can't: it would be handed a `Dog` it
+  refuses.
+- **The return is covariant — a *narrower* return is safe.** The caller only
+  relies on getting *some* `Animal` back, so a closure returning a `Dog` (a kind
+  of `Animal`) satisfies it. One returning a mere `LivingThing` doesn't — the
+  caller could get a `LivingThing` that isn't an `Animal`.
+
+| Returned literal        | Parameter                | Return                     | Verdict |
+|-------------------------|--------------------------|----------------------------|---------|
+| `fn(Dog $d): Animal`    | exact                    | exact                      | ✓ accepted |
+| `fn(Animal $a): Animal` | **wider** (contravariant)| exact                      | ✓ accepted |
+| `fn(Dog $d): Dog`       | exact                    | **narrower** (covariant)   | ✓ accepted |
+| `fn(Animal $a): Dog`    | wider                    | narrower                   | ✓ accepted |
+| `fn(Cat $c): Animal`    | sibling — not wider      | —                          | ✗ `parameter 1: Cat is not wider than Dog` |
+| `fn(Dog $d): LivingThing` | exact                  | wider — not narrower       | ✗ `return type: LivingThing is not a subtype of Animal` |
+
+(The real diagnostics name the classes fully-qualified; short names are used
+here for readability.)
+
+If your instinct says *"if I expect a `Dog`, I shouldn't have to handle a
+`Cat`"* — that's exactly right, and it's *why* `fn(Cat $c)` is rejected: the slot
+will pass a `Dog`, and a `Cat`-handler can't take it. The very same instinct is
+what makes the *wider* `fn(Animal $a)` **safe**, not unsafe: a handler for any
+`Animal` never chokes on the `Dog` it's given. Contravariance widens what's
+accepted on the way *in*; covariance narrows what's promised on the way *out*.
+
+> This is the **same** variance PHP already enforces when a subclass overrides a
+> method — a wider parameter and a narrower return are exactly what PHP permits
+> in an override. It's a *structural, per-signature* check, and it is distinct
+> from the *declaration-site* `out T` / `in T` class variance in
+> [Variance](variance.md), which instead wires real `extends` edges between whole
+> specializations. Same underlying principle — subtyping flows one way through
+> inputs and the other through outputs — different mechanism.
+
 ### It only rejects a *provable* mismatch
 
 The check is deliberately one-directional: it never rejects code it cannot
@@ -139,3 +201,14 @@ lowers to `array` inside a signature — the same lowering `T[]` gets everywhere
 else in xphp — and participates in conformance as `array` (a gradual leaf, so
 it can only ever widen acceptance; the arity around it is still checked). The
 `Name<Args>[]` combination remains unsupported, in signatures as elsewhere.
+
+## See also
+
+- [Variance](variance.md) — declaration-site `out T` / `in T` class variance:
+  the same "inputs one way, outputs the other" principle, applied to whole
+  specializations via real `extends` edges rather than per-signature.
+- [Closures and arrows](closures-and-arrows.md) — the generic
+  `function<T>(...)` / `fn<T>(...)` forms these signatures describe.
+- [Errors](../errors.md) — the `xphp.closure_conformance` diagnostic.
+- Test fixtures: `test/fixture/check/closure_conformance/`,
+  `test/fixture/compile/closure_conformance_grounded_reject/`.
