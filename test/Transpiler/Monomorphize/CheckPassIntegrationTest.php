@@ -774,6 +774,61 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertStringEndsWith('.xphp', $d->location->file);
     }
 
+    public function testClosureSignatureAsGenericBoundIsCollectedByCheck(): void
+    {
+        // A closure signature as a generic bound is rejected at parse time (bound
+        // reader seam); check collects it at the class line (9).
+        $diagnostics = $this->check('closure_generic_bound_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature type is not supported as a generic bound (closure signatures are '
+            . 'allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testClosureSignatureAsGenericArgumentIsCollectedByCheck(): void
+    {
+        // A closure signature as a generic type argument can't be intercepted in the
+        // scanner (shared with `<`-comparison); the nikic error is enriched. check
+        // collects the enriched message at the real line (16).
+        $diagnostics = $this->check('closure_generic_arg_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature type is not supported as a generic type argument (closure signatures '
+            . 'are allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(16, $d->location->line);
+    }
+
+    public function testUntypedClosureSignatureParameterIsCollectedByCheck(): void
+    {
+        // An untyped signature parameter is rejected at parse time; check collects
+        // it at the offending line (8).
+        $diagnostics = $this->check('closure_untyped_param_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature parameter must have a type (untyped signature parameters are not '
+            . 'supported). Add a type, e.g. `Closure(int $x): int`.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(8, $d->location->line);
+    }
+
     public function testParseTimeUnionDefaultReportsRealLine(): void
     {
         // A union default (`T = Foo | Bar`) rejects from the `$tokens[$afterDefault]`

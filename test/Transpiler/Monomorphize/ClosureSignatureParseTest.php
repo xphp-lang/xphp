@@ -1003,6 +1003,110 @@ final class ClosureSignatureParseTest extends TestCase
         self::assertTrue($variadic->params[0]->variadic);
     }
 
+    public function testClosureSignatureAsGenericBoundIsRejected(): void
+    {
+        // `class C<T : Closure(int): int>` — a closure signature as a generic bound
+        // is unsupported. The bound reader is a declaration-header seam (not the
+        // speculative `<`-comparison path), so a clear reject is safe.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature type is not supported as a generic bound (closure signatures are '
+            . 'allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+        );
+        self::strip('<?php class C<T : Closure(int): int> {}');
+    }
+
+    public function testUntypedSignatureParameterIsRejected(): void
+    {
+        // `Closure($x): int $cb` in a type slot — an untyped signature parameter.
+        // Only a confirmed type slot reaches this throw; a real `Closure($x)`
+        // expression never does (see the no-false-positive cases).
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature parameter must have a type (untyped signature parameters are not '
+            . 'supported). Add a type, e.g. `Closure(int $x): int`.',
+        );
+        self::strip('<?php function g(Closure($x): int $cb): void {}');
+    }
+
+    public function testFullyQualifiedClosureSignatureAsGenericBoundIsRejected(): void
+    {
+        // The guard `ltrim`s the leading backslash, so a fully-qualified
+        // `\Closure(int): int` bound is rejected with the bound-specific message too
+        // (not the generic-argument fallback).
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature type is not supported as a generic bound (closure signatures are '
+            . 'allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+        );
+        self::strip('<?php class C<T : \\Closure(int): int> {}');
+    }
+
+    public function testBareClosureBoundIsAccepted(): void
+    {
+        // A bare `\Closure` bound (no call signature) is a legitimate generic bound —
+        // the guard keys on the `(`, so it must NOT throw. The clause is stripped
+        // like any other bound and the class parses.
+        $ast = self::parser()->parse('<?php class C<T : \\Closure> {}');
+        self::assertNotNull($ast);
+    }
+
+    // ===================================================================
+    // Un-strippable nested positions — enriched parse-error messages
+    // ===================================================================
+
+    public function testClosureSignatureAsGenericArgumentIsEnriched(): void
+    {
+        // `Box<Closure(int): int>` cannot be intercepted in the scanner (the
+        // generic-arg reader is shared with `<`-comparison), so nikic rejects it;
+        // the parse-error is enriched into a clear closure-specific message.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature type is not supported as a generic type argument (closure signatures '
+            . 'are allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+        );
+        self::parser()->parse('<?php class Box<T> {} function f(Box<Closure(int): int> $b): void {}');
+    }
+
+    public function testClosureSignatureInFBoundIsEnriched(): void
+    {
+        // `C<T : Box<Closure(...)>>` — the inner closure sits in Box's type-arg list
+        // (the shared reader), so it too is caught by enrichment, not the bound guard.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('is not supported as a generic type argument');
+        self::parser()->parse('<?php class Box<T> {} class C<T : Box<Closure(int): int>> {}');
+    }
+
+    public function testClosureSignatureWithArraySuffixIsEnriched(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('is not supported as a generic type argument');
+        self::parser()->parse('<?php class Box<T> {} function f(Box<Closure(int): int>[] $b): void {}');
+    }
+
+    public function testLessThanComparisonWithFunctionNamedClosureIsNotEnriched(): void
+    {
+        // The cardinal case: a real `<` comparison against a user function named
+        // `Closure` PARSES CLEANLY, so it never reaches the enricher — no false reject.
+        $ast = self::parser()->parse(
+            "<?php\nconst MAX = 10;\nfunction Closure(int \$x): int { return \$x + 1; }\n"
+            . "function check(): bool { return MAX < Closure(5); }",
+        );
+        self::assertNotNull($ast);
+    }
+
+    public function testUnrelatedSyntaxErrorKeepsNikicMessage(): void
+    {
+        // A genuine syntax error NOT involving a closure-in-`<…>` must keep nikic's
+        // original message — the enricher only relabels the closure-in-generic shape.
+        try {
+            self::parser()->parse('<?php function f( {}');
+            self::fail('expected a parse error');
+        } catch (\PhpParser\Error $e) {
+            self::assertStringNotContainsString('Closure(...) signature type', $e->getMessage());
+        }
+    }
+
     // ===================================================================
     // No false positives — expression-context `Closure(` must be untouched
     // ===================================================================
