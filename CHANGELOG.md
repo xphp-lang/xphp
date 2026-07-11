@@ -25,7 +25,12 @@ _In progress on this branch — content still accumulating; date set at tag time
   union / intersection / nullable inside a signature (`Closure(int|string $x): void`,
   `Closure(): A&B`, `?int`) is variance-checked member by member, following PHP's own
   union/intersection subtyping; an intersection in a parameter position stays gradual
-  (an intersection of unrelated types is uninhabited). See
+  (an intersection of unrelated types is uninhabited). Grounded conformance is checked
+  identically by `xphp compile` and `xphp check`, so the two never disagree on a
+  generic factory. Unsupported positions — a signature as a generic argument or bound,
+  the `Name<Args>[]` combination, and defaulted or untyped signature parameters — are
+  rejected with a clear, closure-specific compile error rather than a miscompile; see
+  the [known limitations](docs/syntax/closure-types.md#known-limitations). See
   [closure types](docs/syntax/closure-types.md).
 - **Multi-root builds via an `xphp.json` manifest.** A project declares its source
   roots, output directory, and hash length in an `xphp.json` at the project root;
