@@ -717,6 +717,50 @@ PHP;
         );
     }
 
+    public function testMultibyteIdentifierAdjacentToMarkerBlanksPerByteAndKeepsLaterMarkers(): void
+    {
+        // A genuine multibyte identifier (`Café`, bytes >= 0x80) sitting directly
+        // against its `<T>` marker, with a SECOND generic class after it. The
+        // blanked `<T>` must stay byte-for-byte the same length or the byte-keyed
+        // marker for `Box` shifts off its node — and multibyte name bytes must NOT
+        // be blanked (they're the identifier, outside the span).
+        $source = "<?php\nnamespace App;\nclass Café<T> {\n"
+            . "    public function __construct(public T \$v) {}\n}\n"
+            . "class Box<U> {\n    public function __construct(public U \$w) {}\n}\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped), 'multibyte-adjacent span must stay byte-exact');
+
+        $ast = $parser->parse($source);
+        $classes = self::classesByName($ast);
+        self::assertSame(['T'], self::paramNames($classes['Café']), 'the multibyte-named template keeps its param');
+        self::assertSame(
+            ['U'],
+            self::paramNames($classes['Box']),
+            'the template declared AFTER a multibyte-adjacent marker keeps its own param',
+        );
+    }
+
+    public function testByteKeyedTurbofishAfterArraySugarSpanStillAttaches(): void
+    {
+        // The `Rec[\n]` -> `array` sugar is length-CHANGING, so it shrinks the
+        // stripped source. A byte-keyed turbofish marker (`Box::<int>`) that comes
+        // AFTER the sugar span on the same scope must still bind its args — the
+        // marker is byte-matched in stripped space, so the shrink must not desync it.
+        $source = "<?php\nnamespace App;\nclass Rec {}\n"
+            . "class Box<T> { public function __construct(public T \$v) {} }\n"
+            . "function tally(Rec[\n] \$rs): int { return \\count(\$rs); }\n"
+            . "\$b = new Box::<int>(5);\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $ast = $parser->parse($source);
+        $args = self::firstNameAttr($ast, 'Box', XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args, 'the turbofish after a length-changing sugar span must still attach its args');
+        self::assertCount(1, $args);
+        self::assertSame('int', $args[0]->canonical(), 'the turbofish arg after the sugar span must be <int>');
+    }
+
     public function testForwardReferenceToEarlierTypeParamAsBoundIsAllowed(): void
     {
         // `class C<T, U : T>` is NOT a self-reference -- U's bound references
