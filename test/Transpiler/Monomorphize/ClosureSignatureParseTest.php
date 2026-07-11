@@ -946,6 +946,63 @@ final class ClosureSignatureParseTest extends TestCase
         self::strip('<?php function f(Closure(int ...$rest, string $tail): void $c) {}');
     }
 
+    public function testDefaultValueInSignatureTypeIsRejected(): void
+    {
+        // A default value in a `Closure(...)` TYPE has no meaning — a signature
+        // describes the callable's shape, not call-time values. Without a loud
+        // reject the stray `= 0` is mis-scanned as extra parameters, inflating the
+        // target's arity and false-rejecting a valid callable.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature type cannot give parameter $x a default value: a '
+            . 'signature describes the callable\'s shape, not call-time values.',
+        );
+        self::strip('<?php function f(): Closure(int $x = 0): int {}');
+    }
+
+    public function testDefaultValueOnUnnamedParameterNamesItsPosition(): void
+    {
+        // With no `$name` token to quote, the message falls back to the 1-based
+        // parameter position.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature type cannot give parameter 1 a default value: a '
+            . 'signature describes the callable\'s shape, not call-time values.',
+        );
+        self::strip('<?php function f(): Closure(int = 0): int {}');
+    }
+
+    public function testDefaultValueOnVariadicParameterIsRejectedAsDefault(): void
+    {
+        // A defaulted variadic must report the default rejection (not the
+        // "variadic must be last" check) — the default guard sits after the `...`
+        // consumption, so it wins.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(
+            'A Closure(...) signature type cannot give parameter $xs a default value: a '
+            . 'signature describes the callable\'s shape, not call-time values.',
+        );
+        self::strip('<?php function f(): Closure(int ...$xs = []): int {}');
+    }
+
+    public function testDefaultFreeSignaturesStillParse(): void
+    {
+        // The reject must not touch a default-free signature: single, multi-param,
+        // and variadic all still parse to the expected shape.
+        $single = self::firstSig('<?php function f(): Closure(int $x): int {}');
+        self::assertNotNull($single);
+        self::assertCount(1, $single->params);
+
+        $multi = self::firstSig('<?php function f(): Closure(int $x, string $y): int {}');
+        self::assertNotNull($multi);
+        self::assertCount(2, $multi->params);
+
+        $variadic = self::firstSig('<?php function f(): Closure(int ...$xs): int {}');
+        self::assertNotNull($variadic);
+        self::assertCount(1, $variadic->params);
+        self::assertTrue($variadic->params[0]->variadic);
+    }
+
     // ===================================================================
     // No false positives — expression-context `Closure(` must be untouched
     // ===================================================================

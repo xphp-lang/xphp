@@ -676,6 +676,26 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(7, $d->location->line);
     }
 
+    public function testDefaultInClosureSignatureTypeIsCollectedAtRealLine(): void
+    {
+        // A default value in a `Closure(...)` TYPE is rejected at parse time; check
+        // collects it as a clean parse-error diagnostic at the `=` line (11), rather
+        // than silently mis-modeling the signature into phantom parameters (which
+        // would false-reject the valid returned closure literal).
+        $diagnostics = $this->check('closure_default_in_type');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature type cannot give parameter $x a default value: a '
+            . 'signature describes the callable\'s shape, not call-time values.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(11, $d->location->line);
+    }
+
     public function testParseTimeUnionDefaultReportsRealLine(): void
     {
         // A union default (`T = Foo | Bar`) rejects from the `$tokens[$afterDefault]`

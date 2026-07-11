@@ -1425,7 +1425,7 @@ final class XphpSourceParser
             if ($sawVariadic) {
                 throw new XphpParseException('Only the last parameter of a Closure signature can be variadic', $tokens[$i]->line);
             }
-            [$param, $i] = self::parseSigParam($tokens, $i, $source);
+            [$param, $i] = self::parseSigParam($tokens, $i, $source, count($params) + 1);
             $params[] = $param;
             $sawVariadic = $param->variadic;
             $i = self::skipWs($tokens, $i);
@@ -1444,16 +1444,22 @@ final class XphpSourceParser
 
     /**
      * Parse one signature parameter `type [&] [...] [$name]` beginning at `$i`.
+     * `$position` is the 1-based index of this parameter in the signature, used
+     * only to name an unnamed parameter in the default-value rejection message.
      *
-     * @infection-ignore-all — flat token walk reading the optional `&`, `...` and
-     * `$name` markers in order; the by-ref / variadic capture is pinned by the by-ref,
-     * variadic, and by-ref-variadic tests, and the residual mutants are `$i < $n`
-     * lookahead guards and whitespace-skip offsets equivalent under the same inputs.
+     * @infection-ignore-all — the token walk reading the optional `&`, `...` and
+     * `$name` markers is pinned by the by-ref, variadic, and by-ref-variadic tests,
+     * and the residual mutants are `$i < $n` lookahead guards and whitespace-skip
+     * offsets equivalent under the same inputs. The one behavioral decision here —
+     * the trailing `=` default-value reject — is NOT covered by MSI (a blanket
+     * ignore); it is pinned by behavioral accept/reject pairs in both modes (the
+     * default-present reject throws / collects, the default-free samples still
+     * compile and run).
      *
      * @param list<PhpToken> $tokens
      * @return array{0: ClosureSignatureParam, 1: int}
      */
-    private static function parseSigParam(array $tokens, int $i, string $source): array
+    private static function parseSigParam(array $tokens, int $i, string $source, int $position): array
     {
         $n = count($tokens);
         [$type, $i] = self::parseSigType($tokens, $i, $source);
@@ -1468,8 +1474,26 @@ final class XphpSourceParser
             $variadic = true;
             $i = self::skipWs($tokens, $i + 1);
         }
+        $paramName = null;
         if ($i < $n && $tokens[$i]->id === T_VARIABLE) {
-            $i++;
+            $paramName = $tokens[$i]->text;
+            $i = self::skipWs($tokens, $i + 1);
+        }
+        // A default value cannot appear in a `Closure(...)` signature TYPE: a
+        // signature describes the callable's shape, not call-time values. Without
+        // this loud reject the stray `= <expr>` is re-scanned by the caller's loop
+        // as bogus extra parameters, inflating the target's required arity and
+        // false-rejecting a perfectly valid callable. Placed after the `$name`
+        // consumption so it also wins over the "variadic must be last" check for a
+        // defaulted variadic. The only legal token here in a confirmed type slot is
+        // `,` or `)`, so an exact `=` match cannot catch `==`/`=>`/`>=`.
+        if ($i < $n && $tokens[$i]->text === '=') {
+            $subject = $paramName !== null ? 'parameter ' . $paramName : sprintf('parameter %d', $position);
+            throw new XphpParseException(sprintf(
+                'A Closure(...) signature type cannot give %s a default value: a '
+                . 'signature describes the callable\'s shape, not call-time values.',
+                $subject,
+            ), $tokens[$i]->line);
         }
         return [new ClosureSignatureParam($type, $byRef, $variadic), $i];
     }
