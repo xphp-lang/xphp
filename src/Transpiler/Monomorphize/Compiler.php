@@ -133,60 +133,10 @@ final readonly class Compiler
             $collector->collectInstantiations($ast, $filepath);
         }
 
-        // Phase 2: fixed-point specialization loop.
-        /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
-        $specializedAsts = [];
-        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy), $this->specializer, $this->hashLength);
-        $depth = 0;
-        while (true) {
-            $countBefore = count($registry->instantiations());
-            $newlyProcessed = false;
-
-            foreach ($registry->instantiations() as $generatedFqn => $instantiation) {
-                if (isset($specializedAsts[$generatedFqn])) {
-                    continue;
-                }
-                $newlyProcessed = true;
-
-                $definition = $registry->definition($instantiation->templateFqn);
-                if ($definition === null) {
-                    throw new RuntimeException(
-                        Registry::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
-                    );
-                }
-
-                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
-                $specialized = $this->specializer->specialize(
-                    $definition->templateAst,
-                    $substitution,
-                    $this->hashLength,
-                );
-
-                $specializedAsts[$generatedFqn] = $specialized;
-                $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
-            }
-
-            // Close the specialization set under the covariant-upcast implementation requirement: a
-            // covariant upcast to an interface specialization carrying an erased (abstract) method
-            // needs the concrete supertype specialization that implements it, which the substitution
-            // walk above never discovers (an upcast is usage, not substitution). Schedules it here so
-            // the next iteration specializes it; the variance edge emitter then inherits the member.
-            $closerAdded = $closer->close($registry, $specializedAsts);
-
-            $countAfter = count($registry->instantiations());
-            if (!$newlyProcessed && !$closerAdded) {
-                break;
-            }
-
-            if ($countAfter === $countBefore) {
-                continue;
-            }
-
-            $depth++;
-            if ($depth > self::MAX_SPECIALIZATION_DEPTH) {
-                throw new RuntimeException(self::unconvergedSpecializationMessage($registry));
-            }
-        }
+        // Phase 2: fixed-point specialization loop. Fail-fast (an undefined template
+        // or an exceeded depth throws) — the emit path must not proceed on a set it
+        // couldn't fully build.
+        $specializedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: false);
 
         // Phase 2.3: re-qualify free-function calls and const fetches in every specialization
         // produced by the fixed-point loop. Each body was relocated out of its origin namespace
@@ -233,7 +183,9 @@ final readonly class Compiler
         // each concrete spec's erased members that single inheritance couldn't carry across a covariant
         // diamond are supplied directly here — or fail loudly (`xphp.unschedulable_covariant_upcast`),
         // never emitted as a class-load fatal. Re-rewrite the specs it appended a member to so the new
-        // member's type references are fully qualified like the rest.
+        // member's type references are fully qualified like the rest. (`SpecializationCloser` is stateless,
+        // so a fresh instance here is equivalent to the one the fixed-point loop used.)
+        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy), $this->specializer, $this->hashLength);
         foreach ($closer->supplyUnmetMembers($registry, $specializedAsts) as $generatedFqn) {
             // The gap-fill member's body is a relocated template body too, so re-qualify its
             // free-function/const references (Phase 2.3 ran before this member existed). Idempotent
@@ -318,6 +270,106 @@ final readonly class Compiler
      * Per-file resilience: a file that fails to parse is reported as a diagnostic and skipped,
      * so the remaining files are still checked (unlike compile(), which fails fast).
      */
+    /**
+     * Phase 2 — specialize every recorded instantiation to a fixed point,
+     * discovering transitively-instantiated generics as it goes (each specialized
+     * AST is re-collected, which records the instantiations nested in its body) and
+     * closing the set under the covariant-upcast implementation requirement.
+     * Returns the specialized ASTs keyed by generated FQCN.
+     *
+     * Shared by `compile` (which emits from the returned set) and `check` (which
+     * grounds closure-signature conformance over it, then discards it):
+     *  - `$resilient = false` (compile): an undefined template or an exceeded
+     *    specialization depth throws, matching the fail-fast emit path.
+     *  - `$resilient = true` (check): an undefined template is skipped (it is
+     *    already reported by {@see Registry::collectUndefinedTemplates}), a
+     *    specialization that throws is skipped, and hitting the depth cap stops
+     *    expansion and returns the set discovered so far — a conformance pass over
+     *    a partial set can only miss a provable violation, never invent one, so
+     *    `check` stays resilient instead of aborting.
+     *
+     * @return array<string, \PhpParser\Node\Stmt\ClassLike> keyed by generated FQCN
+     */
+    private function specializeToFixedPoint(
+        Registry $registry,
+        RegistryCollector $collector,
+        TypeHierarchy $hierarchy,
+        bool $resilient,
+    ): array {
+        /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
+        $specializedAsts = [];
+        /** @var array<string, true> $skip instantiations that could not be specialized (resilient mode only) */
+        $skip = [];
+        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy), $this->specializer, $this->hashLength);
+        $depth = 0;
+        while (true) {
+            $countBefore = count($registry->instantiations());
+            $newlyProcessed = false;
+
+            foreach ($registry->instantiations() as $generatedFqn => $instantiation) {
+                if (isset($specializedAsts[$generatedFqn]) || isset($skip[$generatedFqn])) {
+                    continue;
+                }
+                $newlyProcessed = true;
+
+                $definition = $registry->definition($instantiation->templateFqn);
+                if ($definition === null) {
+                    if ($resilient) {
+                        $skip[$generatedFqn] = true;
+                        continue;
+                    }
+                    throw new RuntimeException(
+                        Registry::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
+                    );
+                }
+
+                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
+                if ($resilient) {
+                    try {
+                        $specialized = $this->specializer->specialize($definition->templateAst, $substitution, $this->hashLength);
+                    } catch (RuntimeException) {
+                        // A specialization that throws is a compile-time error that `compile`
+                        // will raise; `check` skips it here so one bad instantiation doesn't
+                        // abort the grounded conformance pass over the rest.
+                        $skip[$generatedFqn] = true;
+                        continue;
+                    }
+                } else {
+                    $specialized = $this->specializer->specialize($definition->templateAst, $substitution, $this->hashLength);
+                }
+
+                $specializedAsts[$generatedFqn] = $specialized;
+                $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
+            }
+
+            // Close the specialization set under the covariant-upcast implementation requirement: a
+            // covariant upcast to an interface specialization carrying an erased (abstract) method
+            // needs the concrete supertype specialization that implements it, which the substitution
+            // walk above never discovers (an upcast is usage, not substitution). Schedules it here so
+            // the next iteration specializes it; the variance edge emitter then inherits the member.
+            $closerAdded = $closer->close($registry, $specializedAsts);
+
+            $countAfter = count($registry->instantiations());
+            if (!$newlyProcessed && !$closerAdded) {
+                break;
+            }
+
+            if ($countAfter === $countBefore) {
+                continue;
+            }
+
+            $depth++;
+            if ($depth > self::MAX_SPECIALIZATION_DEPTH) {
+                if ($resilient) {
+                    break;
+                }
+                throw new RuntimeException(self::unconvergedSpecializationMessage($registry));
+            }
+        }
+
+        return $specializedAsts;
+    }
+
     public function check(FilepathArray $sources): DiagnosticCollector
     {
         $diagnostics = new DiagnosticCollector();
