@@ -215,4 +215,4 @@ ever has to know the generated class names.
   message.
 - [How it works](guides/how-it-works.md) — the compile pipeline,
   end to end.
-- [Roadmap](roadmap.md) — what's coming next.
+- [Roadmap](roadmap.md) — what's shipped, what's in discovery.

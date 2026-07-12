@@ -126,6 +126,10 @@ In CI (GitHub Actions), one step gates the build and annotates the diff:
 | `Cannot determine the receiver's type` | [Turbofish — receiver-type analysis](syntax/turbofish.md#receiver-type-analysis-instance-methods) — give the receiver a declared type. |
 | `Cannot specialize the self-call` | [Type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail) — the forward targets a non-erasable method; forward to an erasable one or move the call to a typed-receiver context. |
 | `was instantiated with N type argument(s) but parameter ... has no default` | [Defaults](syntax/defaults.md) — supply all required args or add defaults |
+| `signature type is not supported as a generic` | [Closure types — known limitations](syntax/closure-types.md#known-limitations) — a `Closure(...)` signature can't be a generic type argument or bound; use a bare `\Closure` there. |
+| `signature parameter must have a type` | [Closure types — known limitations](syntax/closure-types.md#known-limitations) — every `Closure(...)` signature parameter needs a type; use `mixed` for an unconstrained slot. |
+| `signature type cannot give parameter` ... `a default value` | [Closure types](syntax/closure-types.md) — a signature describes the callable's shape; drop the `= ...` default. |
+| `Closure literal does not conform` | [Closure types — conformance checking](syntax/closure-types.md#conformance-checking) |
 | `Nested generic specialization exceeded depth` | A generic refers to itself transitively too deeply (compiler aborts at depth 16) — usually a recursive instantiation cycle. Refactor to break the cycle. |
 | `Parser returned null AST` | The source file isn't valid PHP after the generic strip pass. Run `php -l <file>.xphp` mentally on the cleaned source — most often a syntax error in the user code that's unrelated to generics. |
 
@@ -396,6 +400,34 @@ a subtype of B` (the return must be the same as or **narrower** — covariance),
 *provable* mismatch: an unresolved class, a still-abstract type parameter, an
 untyped (⇒ `mixed`) slot, a union/intersection, or a built-in supertype is
 accepted rather than falsely rejected.
+
+### Closure-signature parse rejects
+
+Each of these is a parse-time rejection (`xphp check` reports it as
+`xphp.parse_error`); see
+[closure types → known limitations](syntax/closure-types.md#known-limitations).
+
+```
+A Closure(...) signature type is not supported as a generic type argument
+(closure signatures are allowed only in parameter, return, and property
+types). Use a bare \Closure, or introduce a named type alias.
+```
+
+```
+A Closure(...) signature type is not supported as a generic bound (closure
+signatures are allowed only in parameter, return, and property types). Use
+a bare \Closure, or introduce a named type alias.
+```
+
+```
+A Closure(...) signature parameter must have a type (untyped signature
+parameters are not supported). Add a type, e.g. `Closure(int $x): int`.
+```
+
+```
+A Closure(...) signature type cannot give parameter <$name|N> a default
+value: a signature describes the callable's shape, not call-time values.
+```
 
 ### Parse / AST
 

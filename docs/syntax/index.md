@@ -55,6 +55,11 @@ $pick::<int>(1, 2, true);
 $id = fn<T>(T $x): T => $x;
 $id::<string>('hi');
 
+// Closure signature type (erases to \Closure; literal checked for conformance)
+function adder(int $by): Closure(int $x): int {
+    return fn(int $x): int => $x + $by;
+}
+
 // Type bounds
 class Sortable<T : Comparable<T>> {}     // F-bounded
 class Pair<K : Stringable & Countable, V> {}

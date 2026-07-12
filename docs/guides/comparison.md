@@ -27,6 +27,7 @@ than erasure can.
 | Generic classes / interfaces / traits    | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Generic functions / methods              | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Generic closures + arrow functions       | ✅                      | ✅               | ✅               | ✅            | ✅                    |
+| Typed closure signatures (`Closure(int): bool`) | ✅ (erases to `\Closure`; literal conformance checked at compile time) | ✅ (runtime-lenient) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
 | Upper bounds                             | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Multiple bounds (intersection)           | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Union bounds + DNF                       | ✅                      | ✅               | ✅               | ❌ (intersection only via `where`) | n/a |
