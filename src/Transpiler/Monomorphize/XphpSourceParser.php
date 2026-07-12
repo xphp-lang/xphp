@@ -200,10 +200,10 @@ final class XphpSourceParser
     private static function enrichClosureInGenericError(string $cleaned, \PhpParser\Error $error): ?XphpParseException
     {
         $attrs = $error->getAttributes();
-        if (!isset($attrs['startFilePos'])) {
+        $pos = $attrs['startFilePos'] ?? null;
+        if (!is_int($pos)) {
             return null;
         }
-        $pos = $attrs['startFilePos'];
         if (($cleaned[$pos] ?? '') !== '<') {
             return null;
         }
