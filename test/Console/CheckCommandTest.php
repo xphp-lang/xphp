@@ -79,9 +79,10 @@ final class CheckCommandTest extends TestCase
         // A PHP syntax error: reported with its real line.
         self::assertSame(Compiler::CODE_PARSE_ERROR, $byFile['Broken.xphp']['code']);
         self::assertSame(11, $byFile['Broken.xphp']['line']);
-        // An xphp-specific parse rejection (no line): reported at line 1.
+        // An xphp-specific parse rejection: reported at the offending token's real line
+        // (the `<out T>` variance marker sits on line 9), not the line-1 fallback.
         self::assertSame(Compiler::CODE_PARSE_ERROR, $byFile['ClosureVariance.xphp']['code']);
-        self::assertSame(1, $byFile['ClosureVariance.xphp']['line']);
+        self::assertSame(9, $byFile['ClosureVariance.xphp']['line']);
         // A VALID file is still checked despite the two unparseable files.
         self::assertSame('xphp.bound_violation', $byFile['Use.xphp']['code']);
     }

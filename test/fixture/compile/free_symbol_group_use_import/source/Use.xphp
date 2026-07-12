@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Group-form imports: `use function Vendor\{make, scale}` and a mixed
+// `use Vendor\{const RATE, const STEP}`. Group-use was never indexed into the
+// function/const symbol maps, so after Wrap relocates into XPHP\Generated\App\Wrap
+// these references would rebind to the generated namespace (then global) and fatal.
+// They must fully-qualify to the Vendor symbols exactly like the single-import form.
+use function Vendor\{make, scale};
+use Vendor\{const RATE, const STEP};
+
+class Wrap<T>
+{
+    public function compute(T $seed): int
+    {
+        return make(3) + scale(1) + RATE + STEP;
+    }
+}
+
+$wrap = new Wrap::<int>();
+$computed = $wrap->compute(0);

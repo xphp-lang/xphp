@@ -30,8 +30,8 @@ final class RegistryTest extends TestCase
         $b = Registry::generatedFqn('App\\RegistryTest\\Other\\Box', [new TypeRef('App\\RegistryTest\\Models\\Plastic')]);
 
         self::assertNotSame($a, $b);
-        self::assertStringContainsString('App\\RegistryTest\\Containers\\Box', $a);
-        self::assertStringContainsString('App\\RegistryTest\\Other\\Box', $b);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $a);
+        self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Other\\Box\\T_', $b);
     }
 
     public function testDifferentArgsProduceDifferentHashes(): void
@@ -85,6 +85,49 @@ final class RegistryTest extends TestCase
         foreach ($registry->instantiations() as $fqn => $_) {
             self::assertStringStartsWith('XPHP\\Generated\\App\\RegistryTest\\Containers\\Box\\T_', $fqn);
         }
+    }
+
+    public function testFunctionMembershipIsCaseInsensitive(): void
+    {
+        $registry = new Registry();
+        $registry->recordFunction('App\\helper');
+
+        // Function names AND namespace segments are case-insensitive in PHP.
+        self::assertTrue($registry->hasFunction('App\\helper'));
+        self::assertTrue($registry->hasFunction('app\\HELPER'));
+        self::assertFalse($registry->hasFunction('App\\other'));
+        self::assertFalse($registry->hasFunction('Other\\helper'));
+    }
+
+    public function testConstMembershipHasCaseInsensitiveNamespaceButSensitiveShortName(): void
+    {
+        $registry = new Registry();
+        $registry->recordConst('App\\FACTOR');
+
+        // Namespace case-insensitive, const short-name case-sensitive.
+        self::assertTrue($registry->hasConst('App\\FACTOR'));
+        self::assertTrue($registry->hasConst('app\\FACTOR'));
+        self::assertFalse($registry->hasConst('App\\factor'));
+        self::assertFalse($registry->hasConst('App\\Factor'));
+    }
+
+    public function testGlobalFunctionAndConstMembership(): void
+    {
+        $registry = new Registry();
+        $registry->recordFunction('helper');
+        $registry->recordConst('FACTOR');
+
+        self::assertTrue($registry->hasFunction('HELPER'));
+        self::assertTrue($registry->hasConst('FACTOR'));
+        self::assertFalse($registry->hasConst('factor'));
+    }
+
+    public function testUnrecordedFunctionAndConstAreAbsent(): void
+    {
+        $registry = new Registry();
+
+        self::assertFalse($registry->hasFunction('App\\strlen'));
+        self::assertFalse($registry->hasConst('App\\PHP_EOL'));
     }
 
     public function testRecordInstantiationRecursivelyRegistersNestedInstantiations(): void
@@ -257,7 +300,15 @@ final class RegistryTest extends TestCase
             self::fail('expected collision exception');
         } catch (\RuntimeException $e) {
             // 48 * 2 = 96, clamped to MAX (64)
-            self::assertStringContainsString('XPHP_HASH_LENGTH=64 bin/xphp compile', $e->getMessage());
+            $expected = "Hash collision detected while monomorphizing generics.\n\n"
+                . "Two distinct instantiations produced the same specialized FQCN:\n"
+                . "  existing : App\\RegistryTest\\Containers\\Box<App\\RegistryTest\\Models\\Plastic>\n"
+                . "  new      : App\\RegistryTest\\Containers\\Box<App\\RegistryTest\\Models\\Metal>\n"
+                . "  collision: {$collidingFqn}\n\n"
+                . "The current XPHP_HASH_LENGTH = 48 is too short for this codebase.\n"
+                . "Increase it (max 64, the full sha256 digest) and re-run, e.g.:\n\n"
+                . "    XPHP_HASH_LENGTH=64 bin/xphp compile <source> <target> <cache>\n";
+            self::assertSame($expected, $e->getMessage());
         }
     }
 

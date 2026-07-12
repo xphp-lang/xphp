@@ -1,0 +1,47 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\AttributedClosures;
+
+// Attribute groups and the `static` modifier precede the `function` / `fn`
+// keyword, but php-parser starts the closure node at its FIRST token — the
+// generic marker must anchor there too, or the closure silently loses its
+// type params and the emitted code keeps raw `T` hints that fatal at runtime.
+
+#[\Attribute]
+class Marked
+{
+}
+
+#[\Attribute]
+class Tagged
+{
+    public function __construct(public array $xs)
+    {
+    }
+}
+
+$plain = #[Marked] function<T>(T $x): T {
+    return $x;
+};
+
+$arrow = #[Marked] fn<T>(T $x): T => $x;
+
+$sfn = static fn<T>(T $x): T => $x;
+
+// Two groups, one with an array argument (inner brackets must balance),
+// plus `static` — the node starts at the first `#[`.
+$both = #[Marked] #[Tagged([1, 2])] static fn<T>(T $x): T => $x;
+
+// Attribute on its own line — the walk back to the node start crosses it.
+$split = #[Marked]
+function<T>(T $x): T {
+    return $x;
+};
+
+$a = $plain::<int>(7);
+$b = $arrow::<string>('b');
+$c = $sfn::<int>(3);
+$d = $both::<string>('d');
+$e = $split::<int>(11);

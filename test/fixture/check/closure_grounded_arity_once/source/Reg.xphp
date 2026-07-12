@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Grounded;
+
+// An arity mismatch (target wants 2 params, literal supplies 1) is
+// grounding-independent: it is caught once by the abstract pre-loop at the real
+// source line, and the grounded (type-relation-only) pass must NOT re-report it
+// at the synthetic specialized location.
+class Reg<T>
+{
+    public function factory(): Closure(T $a, T $b): bool
+    {
+        return fn(int $a): bool => $a > 0;
+    }
+}
+
+new Reg::<int>();

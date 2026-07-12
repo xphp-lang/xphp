@@ -119,63 +119,50 @@ final readonly class Compiler
         // Container's slot is invariant) fail here BEFORE instantiations
         // amplify the error.
         $registry->validateInnerVariance();
+        // Closure-signature conformance at the statically-visible literal site (a
+        // `return`/arrow body whose declared return type is `Closure(...)`).
+        // Fail-fast in compile mode (null collector ⇒ throw on the first provable
+        // mismatch), matching the other source-level gates. A target that
+        // references an enclosing type parameter is checked with those leaves
+        // still abstract here (⇒ gradually accepted).
+        $closureValidator = new ClosureConformanceValidator($hierarchy);
+        foreach ($astPerFile as $filepath => $ast) {
+            $closureValidator->validateFile($ast, $filepath, null);
+        }
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }
 
-        // Phase 2: fixed-point specialization loop.
-        /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
-        $specializedAsts = [];
-        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy), $this->specializer, $this->hashLength);
-        $depth = 0;
-        while (true) {
-            $countBefore = count($registry->instantiations());
-            $newlyProcessed = false;
+        // Phase 2: fixed-point specialization loop. Fail-fast (an undefined template
+        // or an exceeded depth throws) — the emit path must not proceed on a set it
+        // couldn't fully build.
+        $specializedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: false);
 
-            foreach ($registry->instantiations() as $generatedFqn => $instantiation) {
-                if (isset($specializedAsts[$generatedFqn])) {
-                    continue;
-                }
-                $newlyProcessed = true;
+        // Phase 2.3: re-qualify free-function calls and const fetches in every specialization
+        // produced by the fixed-point loop. Each body was relocated out of its origin namespace
+        // into XPHP\Generated\…, where an unqualified `helper()` / `FOO` would otherwise rebind
+        // against the generated namespace and fatal. The guard only qualifies symbols the unit
+        // defines. (Members appended later by the covariant-upcast gap-fill are swept in Phase 3.5,
+        // since they don't exist yet here.)
+        foreach ($specializedAsts as $classAst) {
+            Specializer::requalifyFreeSymbols($classAst, $registry);
+        }
 
-                $definition = $registry->definition($instantiation->templateFqn);
-                if ($definition === null) {
-                    throw new RuntimeException(
-                        Registry::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
-                    );
-                }
-
-                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
-                $specialized = $this->specializer->specialize(
-                    $definition->templateAst,
-                    $substitution,
-                    $this->hashLength,
-                );
-
-                $specializedAsts[$generatedFqn] = $specialized;
-                $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
-            }
-
-            // Close the specialization set under the covariant-upcast implementation requirement: a
-            // covariant upcast to an interface specialization carrying an erased (abstract) method
-            // needs the concrete supertype specialization that implements it, which the substitution
-            // walk above never discovers (an upcast is usage, not substitution). Schedules it here so
-            // the next iteration specializes it; the variance edge emitter then inherits the member.
-            $closerAdded = $closer->close($registry, $specializedAsts);
-
-            $countAfter = count($registry->instantiations());
-            if (!$newlyProcessed && !$closerAdded) {
-                break;
-            }
-
-            if ($countAfter === $countBefore) {
-                continue;
-            }
-
-            $depth++;
-            if ($depth > self::MAX_SPECIALIZATION_DEPTH) {
-                throw new RuntimeException(self::unconvergedSpecializationMessage($registry));
-            }
+        // Phase 2.4: grounded closure-signature conformance. Each specialization's
+        // `Closure(...)` target now has its type parameters substituted, and the
+        // returned literal's types were substituted alongside it, so a mismatch
+        // that was gradual while the type parameter was abstract (e.g. a `string`
+        // literal parameter against a `Closure(T $x)` target grounded to `int`)
+        // becomes provable here. Fail-fast, like the pre-loop gate. Structural
+        // mismatches (arity / by-ref) don't depend on grounding and were already
+        // caught at the template pre-loop, which threw before reaching this point.
+        // @infection-ignore-all TrueValue -- groundedTypesOnly true/false is equivalent
+        // HERE: a structural (arity / by-ref) mismatch throws at the abstract pre-loop
+        // above and never reaches Phase 2.4, so the type-only path and the full check
+        // coincide once execution gets here. `true` states the intent (only leaf types
+        // changed under grounding); check()'s grounded pass genuinely needs it.
+        foreach ($specializedAsts as $generatedFqn => $classAst) {
+            $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", null, groundedTypesOnly: true);
         }
 
         // Phase 2.5: emit subtype edges between specializations whose template
@@ -201,8 +188,14 @@ final readonly class Compiler
         // each concrete spec's erased members that single inheritance couldn't carry across a covariant
         // diamond are supplied directly here — or fail loudly (`xphp.unschedulable_covariant_upcast`),
         // never emitted as a class-load fatal. Re-rewrite the specs it appended a member to so the new
-        // member's type references are fully qualified like the rest.
+        // member's type references are fully qualified like the rest. (`SpecializationCloser` is stateless,
+        // so a fresh instance here is equivalent to the one the fixed-point loop used.)
+        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy), $this->specializer, $this->hashLength);
         foreach ($closer->supplyUnmetMembers($registry, $specializedAsts) as $generatedFqn) {
+            // The gap-fill member's body is a relocated template body too, so re-qualify its
+            // free-function/const references (Phase 2.3 ran before this member existed). Idempotent
+            // on the spec's pre-existing members — their callees are already fully qualified.
+            Specializer::requalifyFreeSymbols($specializedAsts[$generatedFqn], $registry);
             $rewritten = $rewriter->rewrite([$specializedAsts[$generatedFqn]]);
             $first = $rewritten[0];
             assert($first instanceof \PhpParser\Node\Stmt\ClassLike);
@@ -282,6 +275,122 @@ final readonly class Compiler
      * Per-file resilience: a file that fails to parse is reported as a diagnostic and skipped,
      * so the remaining files are still checked (unlike compile(), which fails fast).
      */
+    /**
+     * Phase 2 — specialize every recorded instantiation to a fixed point,
+     * discovering transitively-instantiated generics as it goes (each specialized
+     * AST is re-collected, which records the instantiations nested in its body) and
+     * closing the set under the covariant-upcast implementation requirement.
+     * Returns the specialized ASTs keyed by generated FQCN.
+     *
+     * Shared by `compile` (which emits from the returned set) and `check` (which
+     * grounds closure-signature conformance over it, then discards it):
+     *  - `$resilient = false` (compile): an undefined template or an exceeded
+     *    specialization depth throws, matching the fail-fast emit path.
+     *  - `$resilient = true` (check): an undefined template is skipped (it is
+     *    already reported by {@see Registry::collectUndefinedTemplates}), a
+     *    specialization that throws is skipped, and hitting the depth cap stops
+     *    expansion and returns the set discovered so far — a conformance pass over
+     *    a partial set can only miss a provable violation, never invent one, so
+     *    `check` stays resilient instead of aborting.
+     *
+     * @return array<string, \PhpParser\Node\Stmt\ClassLike> keyed by generated FQCN
+     */
+    private function specializeToFixedPoint(
+        Registry $registry,
+        RegistryCollector $collector,
+        TypeHierarchy $hierarchy,
+        bool $resilient,
+    ): array {
+        /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
+        $specializedAsts = [];
+        /** @var array<string, true> $skip instantiations that could not be specialized (resilient mode only) */
+        $skip = [];
+        $closer = new SpecializationCloser($hierarchy, new VarianceSubtyping($hierarchy), $this->specializer, $this->hashLength);
+        $depth = 0;
+        while (true) {
+            $countBefore = count($registry->instantiations());
+            $newlyProcessed = false;
+
+            foreach ($registry->instantiations() as $generatedFqn => $instantiation) {
+                if (isset($specializedAsts[$generatedFqn]) || isset($skip[$generatedFqn])) {
+                    continue;
+                }
+                $newlyProcessed = true;
+
+                $definition = $registry->definition($instantiation->templateFqn);
+                if ($definition === null) {
+                    if ($resilient) {
+                        $skip[$generatedFqn] = true;
+                        continue;
+                    }
+                    throw new RuntimeException(
+                        Registry::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
+                    );
+                }
+
+                // In resilient mode the registry may hold an arity-mismatched
+                // instantiation (a missing or excess type argument) — already reported
+                // as its own diagnostic. `compile` rejects those before this loop, so
+                // it never sees one; skip it here rather than let array_combine raise a
+                // ValueError on unequal key/value counts.
+                if ($resilient && count($definition->typeParamNames()) !== count($instantiation->concreteTypes)) {
+                    // @infection-ignore-all TrueValue -- `$skip` is a set; only key
+                    // existence matters (`isset($skip[...])` above), so the value true/false
+                    // is equivalent.
+                    $skip[$generatedFqn] = true;
+                    // @infection-ignore-all Continue_ -- break vs continue reconverges: the
+                    // outer while-loop reprocesses the remaining instantiations on the next
+                    // pass (this one is now in `$skip`), yielding the same specialized set.
+                    continue;
+                }
+
+                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
+                if ($resilient) {
+                    try {
+                        $specialized = $this->specializer->specialize($definition->templateAst, $substitution, $this->hashLength);
+                    } catch (RuntimeException) {
+                        // A specialization that throws is a compile-time error that `compile`
+                        // will raise; `check` skips it here so one bad instantiation doesn't
+                        // abort the grounded conformance pass over the rest.
+                        $skip[$generatedFqn] = true;
+                        continue;
+                    }
+                } else {
+                    $specialized = $this->specializer->specialize($definition->templateAst, $substitution, $this->hashLength);
+                }
+
+                $specializedAsts[$generatedFqn] = $specialized;
+                $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
+            }
+
+            // Close the specialization set under the covariant-upcast implementation requirement: a
+            // covariant upcast to an interface specialization carrying an erased (abstract) method
+            // needs the concrete supertype specialization that implements it, which the substitution
+            // walk above never discovers (an upcast is usage, not substitution). Schedules it here so
+            // the next iteration specializes it; the variance edge emitter then inherits the member.
+            $closerAdded = $closer->close($registry, $specializedAsts);
+
+            $countAfter = count($registry->instantiations());
+            if (!$newlyProcessed && !$closerAdded) {
+                break;
+            }
+
+            if ($countAfter === $countBefore) {
+                continue;
+            }
+
+            $depth++;
+            if ($depth > self::MAX_SPECIALIZATION_DEPTH) {
+                if ($resilient) {
+                    break;
+                }
+                throw new RuntimeException(self::unconvergedSpecializationMessage($registry));
+            }
+        }
+
+        return $specializedAsts;
+    }
+
     public function check(FilepathArray $sources): DiagnosticCollector
     {
         $diagnostics = new DiagnosticCollector();
@@ -305,9 +414,27 @@ final readonly class Compiler
                     // (Broken.xphp -> line 11).
                     new SourceLocation($filepath, $line > 0 ? $line : 1),
                 ));
+            } catch (XphpParseException $e) {
+                // xphp-specific parse-time rejections from the scanner (e.g. variance markers
+                // on methods, malformed generic defaults) — these carry the offending token's
+                // original-source line so the diagnostic points at the real site.
+                $line = $e->sourceLine();
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_PARSE_ERROR,
+                    $e->getMessage(),
+                    // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- every
+                    // current throw site supplies a real token line (>= 1), so this `> 0` guard is
+                    // a defensive floor for the exception's documented 0 ("no position") contract.
+                    // The fallback value equals the boundary (1), so shifting or flipping the `> 0`
+                    // test routes to the same result — the mutants are equivalent. The real-line
+                    // path is pinned by CheckPassIntegrationTest's testParseTime* cases.
+                    new SourceLocation($filepath, $line > 0 ? $line : 1),
+                ));
             } catch (RuntimeException $e) {
-                // xphp-specific parse-time rejections from the parser (e.g. variance markers on
-                // methods) — these carry no line, so the diagnostic points at the file (line 1).
+                // Remaining xphp parse-time rejections that carry no token position (e.g.
+                // structural checks over parsed entries) — the diagnostic points at the file
+                // (line 1).
                 $diagnostics->add(new Diagnostic(
                     Severity::Error,
                     self::CODE_PARSE_ERROR,
@@ -329,6 +456,14 @@ final readonly class Compiler
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);
         $registry->validateDefaultsAgainstBounds();
         $registry->validateInnerVariance();
+        // Closure-signature conformance at the statically-visible literal site
+        // (a `Closure(...)` return handing back a closure literal). In
+        // validate-only mode every violation is collected (parse-failed files were
+        // already skipped from $astPerFile above).
+        $closureValidator = new ClosureConformanceValidator($hierarchy);
+        foreach ($astPerFile as $filepath => $ast) {
+            $closureValidator->validateFile($ast, $filepath, $diagnostics);
+        }
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectInstantiations($ast, $filepath);
         }
@@ -343,6 +478,24 @@ final readonly class Compiler
         // flipping it changes only wasted work, not the collected diagnostics. `emit: false` is the
         // correct (no-wasted-work, no-mutation) choice.
         (new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics))->process($astPerFile, emit: false);
+
+        // Grounded closure-signature conformance. A `Closure(T $x)` target whose
+        // type parameter is still abstract above is gradually accepted; grounding it
+        // per specialization (e.g. `Registry<string>` ⇒ `Closure(string $x)`) can
+        // turn a previously-unprovable literal mismatch into a provable one. `compile`
+        // catches this in Phase 2.4; `check` must too, or it silently passes code
+        // that `compile` rejects (and the compile-driven PHPStan gate would surface
+        // the same reject as a raw exception rather than a diagnostic). Specialize to
+        // a fixed point in resilient mode — discovering transitively-instantiated
+        // generics, not just source-visible ones — then run the type-relation half of
+        // conformance over every specialization in collector mode. Structural (arity /
+        // by-ref) mismatches were already collected by the abstract pre-loop above, so
+        // the grounded pass skips them to avoid a duplicate report at the specialized
+        // location.
+        $groundedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: true);
+        foreach ($groundedAsts as $generatedFqn => $classAst) {
+            $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", $diagnostics, groundedTypesOnly: true);
+        }
 
         return $diagnostics;
     }

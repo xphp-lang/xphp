@@ -1,0 +1,61 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\MultilineMarkers;
+
+// Every stripped span below contains a newline. Stripping must preserve
+// the line layout, or every LINE-KEYED marker recorded after the span
+// (class headers, name markers) attaches to the wrong line and the later
+// declarations are emitted raw — a silent de-generification.
+
+// Multi-line type-param clause, with a multibyte comment inside the
+// blanked span (café) so per-byte blanking is exercised too.
+final class Wide<
+    T // café
+> {
+    public function __construct(public T $v)
+    {
+    }
+}
+
+// Must still specialize although the clause above spanned lines.
+final class Box<T>
+{
+    public function __construct(public T $v)
+    {
+    }
+}
+
+final class Rec
+{
+}
+
+// Newline inside the `[]` sugar brackets — a length-CHANGING rewrite
+// that must still keep the line count.
+function tally(Rec[
+] $rs): int
+{
+    return \count($rs);
+}
+
+// Multi-line bare generic type hint + multi-line turbofish arg list.
+function pick(): Box<
+    int
+> {
+    return new Box::<
+        int
+    >(7);
+}
+
+// A generic closure AFTER all of the spans above — line- and byte-keyed
+// markers both have to survive the strips.
+$id = function<T>(T $x): T {
+    return $x;
+};
+
+$w = new Wide::<string>('w');
+$b = pick();
+$n = $id::<int>(41);
+$s = $id::<string>('s');
+$c = tally([new Rec(), new Rec()]);

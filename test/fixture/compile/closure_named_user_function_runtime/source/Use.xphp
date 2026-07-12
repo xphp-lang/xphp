@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureNamedUserFunction;
+
+// A user function named `Closure` (legal in a namespace) called in the
+// expression positions whose `) :` token pair looks like a return-type slot —
+// ternary else, alt-syntax if, case label. None of these are type slots; the
+// calls must survive compilation untouched and execute. The arguments are
+// CONSTANT NAMES on purpose: a literal argument never even reaches the
+// position gate, a name-token argument does.
+const HALF = 21;
+const TEN = 10;
+const SIX = 6;
+
+function Closure(int $n): int
+{
+    return $n * 2;
+}
+
+$flag = false;
+$ternary = $flag ? strlen('x') : Closure(HALF);
+
+$alt = 0;
+if (!$flag): $alt = Closure(TEN); endif;
+
+$case = 0;
+switch (true) { case boolval(1): $case = Closure(SIX); }

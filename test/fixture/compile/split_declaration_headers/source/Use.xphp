@@ -1,0 +1,66 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\SplitHeaders;
+
+// A declaration whose attributes / modifiers / keyword sit on a different
+// line than its NAME: the generic marker records the name token's line, so
+// matching must key on the name, not on the node start (which php-parser
+// puts at the first attribute or modifier).
+
+#[\Attribute]
+class Note
+{
+}
+
+#[Note]
+final class Box<T>
+{
+    public function __construct(public T $v)
+    {
+    }
+}
+
+final
+class Pair<U>
+{
+    public function __construct(public U $u)
+    {
+    }
+}
+
+class Wrap
+{
+    #[Note]
+    public function lift<T>(T $x): T
+    {
+        return $x;
+    }
+
+    public static
+    function pick<T>(T $x): T
+    {
+        return $x;
+    }
+}
+
+#[Note]
+function ident<T>(T $x): T
+{
+    return $x;
+}
+
+function
+double<T>(T $x): array
+{
+    return [$x, $x];
+}
+
+$b = new Box::<string>('bx');
+$p = new Pair::<int>(4);
+$w = new Wrap();
+$l = $w->lift::<int>(5);
+$s = Wrap::pick::<string>('pk');
+$i = ident::<int>(9);
+$d = double::<string>('z');

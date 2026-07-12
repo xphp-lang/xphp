@@ -150,7 +150,10 @@ final class RegistryInnerVarianceTest extends TestCase
 
         self::assertCount(1, $collector->all());
         self::assertSame(InnerVarianceValidator::CODE_INNER_VARIANCE, $collector->all()[0]->code);
-        self::assertStringContainsString('Variance violation in template P', $collector->all()[0]->message);
+        self::assertSame(
+            'Variance violation in template P: type-parameter out T appears in invariant-only position (via slot 0 of Container).',
+            $collector->all()[0]->message,
+        );
     }
 
     public function testCovariantOuterInInvariantInnerSlotIsRejected(): void

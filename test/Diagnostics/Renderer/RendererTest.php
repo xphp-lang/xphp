@@ -55,41 +55,45 @@ final class RendererTest extends TestCase
     public function testTextOmitsColumnWhenAbsent(): void
     {
         $d = [new Diagnostic(Severity::Error, 'c', 'm', new SourceLocation('/a.xphp', 4))];
-        self::assertStringContainsString('at /a.xphp:4 [c]', (new TextRenderer())->render($d));
+        self::assertSame(
+            'error: m' . PHP_EOL . '  at /a.xphp:4 [c]' . PHP_EOL,
+            (new TextRenderer())->render($d),
+        );
     }
 
     public function testJsonContract(): void
     {
         $out = (new JsonRenderer())->render($this->sample());
-        // Pin the raw formatting: pretty-printed (space after key) and slashes unescaped.
-        self::assertStringContainsString('"file": "/src/Box.xphp"', $out);
-        /** @var array{diagnostics: list<array<string, mixed>>} $decoded */
-        $decoded = json_decode($out, true, flags: JSON_THROW_ON_ERROR);
+        // Pin the whole raw formatting: pretty-printed (space after key), slashes
+        // unescaped, and a trailing newline.
+        $expected = <<<'JSON'
+            {
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": "xphp.bound_violation",
+                        "message": "bad bound",
+                        "source": "xphp",
+                        "triggeredBy": null,
+                        "file": "/src/Box.xphp",
+                        "line": 7,
+                        "column": 3
+                    },
+                    {
+                        "severity": "warning",
+                        "code": "phpstan.return",
+                        "message": "maybe",
+                        "source": "phpstan",
+                        "triggeredBy": "App\\Box<int>",
+                        "file": null,
+                        "line": null,
+                        "column": null
+                    }
+                ]
+            }
+            JSON . PHP_EOL;
 
-        self::assertSame([
-            'diagnostics' => [
-                [
-                    'severity' => 'error',
-                    'code' => 'xphp.bound_violation',
-                    'message' => 'bad bound',
-                    'source' => 'xphp',
-                    'triggeredBy' => null,
-                    'file' => '/src/Box.xphp',
-                    'line' => 7,
-                    'column' => 3,
-                ],
-                [
-                    'severity' => 'warning',
-                    'code' => 'phpstan.return',
-                    'message' => 'maybe',
-                    'source' => 'phpstan',
-                    'triggeredBy' => 'App\\Box<int>',
-                    'file' => null,
-                    'line' => null,
-                    'column' => null,
-                ],
-            ],
-        ], $decoded);
+        self::assertSame($expected, $out);
     }
 
     public function testJsonEmpty(): void

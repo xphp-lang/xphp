@@ -6,6 +6,7 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\Diagnostics\DiagnosticCollector;
@@ -74,8 +75,14 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(\XPHP\Diagnostics\Severity::Warning, $d->severity);
         self::assertNotNull($d->location);
         self::assertStringEndsWith('Use.xphp', $d->location->file);
-        self::assertStringContainsString('Book', $d->message);
-        self::assertStringContainsString('not in the source set', $d->message);
+        self::assertSame(
+            'Variance edge cannot be proven while instantiating App\Check\VarianceEdgeUnprovable\Producer<App\Check\VarianceEdgeUnprovable\Book>.
+  type parameter out T is covariant, but App\Check\VarianceEdgeUnprovable\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+  so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
+
+  Add App\Check\VarianceEdgeUnprovable\Book to the source set the hierarchy is built from to enable the edge.',
+            $d->message,
+        );
     }
 
     public function testVarianceEdgeProvableTypesProduceNoWarning(): void
@@ -143,6 +150,49 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(1, $diagnostics->all());
         self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $diagnostics->all()[0]->code);
         self::assertNotNull($diagnostics->all()[0]->location);
+    }
+
+    public function testBareNewOfNonDefaultsGenericIsCollectedByCheck(): void
+    {
+        // `new Box(5)` where `Box<T>` has a required (non-defaulted) param and no
+        // turbofish: cannot pad from defaults, so it is a missing-type-argument error
+        // — same code and message as the call path, routed through padArgsWithDefaults.
+        $diagnostics = $this->check('bare_new_missing_arg');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+        self::assertSame(10, $d->location->line);
+    }
+
+    public function testBareNewQualifiedAndRelativeSpellingsAreBothCollected(): void
+    {
+        // FQ `new \…\Box(5)` and relative `new namespace\Box(6)` reject with the same
+        // verdict as the bare spelling, and BOTH are collected in one run (check does
+        // not throw-on-first).
+        $diagnostics = $this->check('bare_new_missing_arg_qualified');
+
+        self::assertCount(2, $diagnostics->all());
+        foreach ($diagnostics->all() as $d) {
+            self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $d->code);
+            self::assertNotNull($d->location);
+        }
+        self::assertSame([10, 11], array_map(
+            static fn ($d): ?int => $d->location?->line,
+            $diagnostics->all(),
+        ));
+    }
+
+    public function testBareNewOfConditionalSameNamePlainClassIsNotRejected(): void
+    {
+        // False-reject guard: a plain `class B` (live branch) coexists with a generic `class B<T>`
+        // (dead branch). `new B` resolves to the instantiable plain class, so the bare-new guard
+        // must stay silent — rejecting the generic twin's name here would be a false reject.
+        $diagnostics = $this->check('bare_new_conditional_same_name');
+
+        self::assertSame([], $diagnostics->all());
     }
 
     public function testUndefinedTemplateIsCollectedByCheck(): void
@@ -220,6 +270,64 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('closure_static');
     }
 
+    public function testAttributedStaticGenericClosureIsCollectedByCheck(): void
+    {
+        // The attribute moves the closure node's start to `#[`; the generic
+        // marker must still bind there, so the static-closure reject FIRES —
+        // before, the marker was lost and the closure silently compiled raw.
+        $diagnostics = $this->check('closure_static_attributed');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(GenericMethodCompiler::CODE_UNSUPPORTED_STATIC_CLOSURE, $d->code);
+        self::assertNotNull($d->location);
+        self::assertSame(19, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnAttributedStaticGenericClosure(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('static closures cannot yet be specialized');
+        $this->compileFixture('closure_static_attributed');
+    }
+
+    public function testUnspecializedGenericClosuresAreCollectedByCheck(): void
+    {
+        // Declared-but-never-turbofish-called generic closures across every
+        // position (assigned, return, argument, use-capturing, defaulted,
+        // unused-param, conditional else-arm) each draw ONE diagnostic; the
+        // called twins draw none. Note the eager static/$this rejects also
+        // stay single diagnostics (their templates count as attempted) —
+        // pinned by the closure_static / closure_this_capture tests' counts.
+        $diagnostics = $this->check('closure_unspecialized');
+
+        $all = $diagnostics->all();
+        self::assertCount(7, $all);
+        $arrowMsg = 'Generic arrow function is declared with type parameters but never specialized: no `$var::<...>(...)` call grounds them, so its type-parameter hints would reach the emitted code as references to non-existent classes. Call it with an explicit turbofish, or remove the `<...>` clause.';
+        $closureMsg = 'Generic closure is declared with type parameters but never specialized: no `$var::<...>(...)` call grounds them, so its type-parameter hints would reach the emitted code as references to non-existent classes. Call it with an explicit turbofish, or remove the `<...>` clause.';
+        $byLine = [];
+        foreach ($all as $d) {
+            self::assertSame(GenericMethodCompiler::CODE_UNSPECIALIZED_GENERIC_CLOSURE, $d->code);
+            self::assertContains($d->message, [$arrowMsg, $closureMsg]);
+            self::assertNotNull($d->location);
+            $byLine[$d->location->line] = $d->message;
+        }
+        ksort($byLine);
+        // The static arrow, return-position arrow, argument-position closure,
+        // use-capturing closure, defaulted closure, unused-param arrow, and
+        // the conditional else-arm arrow — NOT the called twins.
+        self::assertSame([12, 16, 19, 22, 24, 27, 30], array_keys($byLine));
+        self::assertSame($arrowMsg, $byLine[12]);
+        self::assertSame($closureMsg, $byLine[19]);
+    }
+
+    public function testCompileThrowsOnUnspecializedGenericClosure(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('never specialized');
+        $this->compileFixture('closure_unspecialized');
+    }
+
     public function testUnresolvedGenericMethodTurbofishIsCollectedByCheck(): void
     {
         // A turbofish call to a generic method that exists nowhere on the receiver
@@ -232,7 +340,10 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(GenericMethodCompiler::CODE_UNRESOLVED_GENERIC_CALL, $d->code);
         self::assertNotNull($d->location);
         self::assertSame(16, $d->location->line);
-        self::assertStringContainsString('nope', $d->message);
+        self::assertSame(
+            'Generic method `App\Check\UnresolvedGenericMethod\Box::nope::<...>()` could not be resolved to a declared generic method on `App\Check\UnresolvedGenericMethod\Box`. Check the method name or the receiver\'s type.',
+            $d->message,
+        );
     }
 
     public function testCompileStillThrowsOnUnresolvedGenericMethodTurbofish(): void
@@ -328,7 +439,10 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString('Type `Stray`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Stray` used in template `App\NestedMethod\Box` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testCompileStillThrowsOnUndeclaredTypeInGenericFunction(): void
@@ -345,7 +459,10 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString('Type `Nonexistent`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Nonexistent` used in template `App\BadBound\Box` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testUndeclaredNameInADefaultIsCollected(): void
@@ -354,7 +471,10 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(UndeclaredTypeParameterValidator::CODE_UNDECLARED_TYPE, $diagnostics->all()[0]->code);
-        self::assertStringContainsString('Type `Nonexistent`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Nonexistent` used in template `App\BadDefault\Pair` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testUndeclaredNamesInIntersectionBoundAndGenericArgAreCollected(): void
@@ -386,7 +506,10 @@ final class CheckPassIntegrationTest extends TestCase
         $diagnostics = $this->check('undeclared_bound_dedup');
 
         self::assertCount(1, $diagnostics->all());
-        self::assertStringContainsString('Type `Bad`', $diagnostics->all()[0]->message);
+        self::assertSame(
+            'Type `Bad` used in template `App\DupBound\Dup` is not a declared type parameter and does not resolve to a known class, interface, or trait. Declare it as a type parameter, or import (`use`) / fully-qualify it if it names a real type.',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     public function testCompileStillThrowsOnUndeclaredBound(): void
@@ -445,6 +568,15 @@ final class CheckPassIntegrationTest extends TestCase
         $this->compileFixture('generic_method_missing_arg');
     }
 
+    public function testCompileThrowsOnBareNewOfNonDefaultsGeneric(): void
+    {
+        // Compile mode (no collector) throws the identical missing-type-argument message
+        // the call path throws — confirms the shared reporter keeps the throw path intact.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('has no default');
+        $this->compileFixture('bare_new_missing_arg');
+    }
+
     public function testCompileStillThrowsOnDuplicateGenericFunction(): void
     {
         $this->expectException(RuntimeException::class);
@@ -475,6 +607,340 @@ final class CheckPassIntegrationTest extends TestCase
         }
     }
 
+    public function testParseTimeVarianceOnMethodReportsRealLine(): void
+    {
+        // A parser-stage rejection (variance marker on a method) is caught in check mode
+        // and must report the offending token's real source line, not the line-1 fallback
+        // used for position-less parse failures. `eat<out T>` sits on line 9.
+        $diagnostics = $this->check('parse_line_variance_method');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'Variance markers `out T` / `in T` are not supported on methods, functions, closures, or arrow functions — variance is a class-level-only feature by design: a function or closure specialization has no stable class identity to anchor a subtype `extends` edge to. Move the generic to a class-level type parameter.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testParseTimeLegacyVarianceGlyphReportsRealLine(): void
+    {
+        // The `+T` legacy-variance rejection fires from a different throw site; it too
+        // carries its token line. `class Box<+T>` sits on line 7.
+        $diagnostics = $this->check('parse_line_legacy_variance');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'The `+T` / `-T` variance syntax was replaced by `out T` / `in T`. Write `out` for covariance and `in` for contravariance, e.g. `class Box<out T>` or `class Consumer<in T>`.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(7, $d->location->line);
+    }
+
+    public function testParseTimeDefaultOrderingReportsRealLine(): void
+    {
+        // The required-after-defaulted rejection anchors to the offending parameter's
+        // name line (`class Pair<T = int, U>` on line 9), proving the name-line path.
+        $diagnostics = $this->check('parse_line_default_ordering');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'Generic parameter `U` has no default but follows a parameter with a default. Required type parameters must precede defaulted ones.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testParseTimeInvalidDefaultReportsRealLine(): void
+    {
+        // An invalid default shape (`T = ?int`) rejects from the `$tokens[$afterBound]`
+        // (the `=`) throw site — a distinct index from the variance sites. Line 7.
+        $diagnostics = $this->check('parse_line_invalid_default');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'Generic parameter `T` has an invalid default; only a single concrete or generic type is allowed after `=` (no nullable or union shapes).',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(7, $d->location->line);
+    }
+
+    public function testDefaultInClosureSignatureTypeIsCollectedAtRealLine(): void
+    {
+        // A default value in a `Closure(...)` TYPE is rejected at parse time; check
+        // collects it as a clean parse-error diagnostic at the `=` line (11), rather
+        // than silently mis-modeling the signature into phantom parameters (which
+        // would false-reject the valid returned closure literal).
+        $diagnostics = $this->check('closure_default_in_type');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature type cannot give parameter $x a default value: a '
+            . 'signature describes the callable\'s shape, not call-time values.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(11, $d->location->line);
+    }
+
+    public function testGroundedClosureConformanceRejectIsCollectedByCheck(): void
+    {
+        // A `Closure(T $x)` target is gradually accepted while T is abstract; check
+        // must ground it per specialization (Registry<string> ⇒ Closure(string))
+        // and collect the now-provable mismatch — the same verdict compile reaches.
+        // Without this, `check --no-phpstan` silently passed invalid code.
+        $diagnostics = $this->check('closure_grounded_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than string',
+            $d->message,
+        );
+    }
+
+    public function testGroundedClosureConformanceAcceptStaysClean(): void
+    {
+        // Grounding the same factory to `int` conforms — no false positive.
+        $diagnostics = $this->check('closure_grounded_accept');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertCount(0, $diagnostics->all());
+    }
+
+    public function testGroundedClosureConformanceReachesTransitiveInstantiations(): void
+    {
+        // A<string> is never written in source — it is discovered only by
+        // specializing B<string>. The bounded fixed-point must reach it, so a
+        // single source-visible pass would miss this grounded reject.
+        $diagnostics = $this->check('closure_grounded_transitive_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than string',
+            $d->message,
+        );
+    }
+
+    public function testNonGenericStructuralClosureMismatchIsCollectedByCheck(): void
+    {
+        // A non-generic arity mismatch has no specialization to ground against, so
+        // only the abstract pre-loop's FULL conformance check catches it — the
+        // grounded pass runs the type-relation half only. This pins that the
+        // abstract pass does NOT run in types-only mode.
+        $diagnostics = $this->check('closure_nongeneric_arity_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: expects at least 2 parameter(s), candidate accepts at most 1',
+            $d->message,
+        );
+    }
+
+    public function testStructuralClosureMismatchOnGenericTargetReportsOnce(): void
+    {
+        // An arity mismatch is grounding-independent and is caught by the abstract
+        // pre-loop. The grounded pass runs the type-relation half only, so it must
+        // not re-report the same structural violation at the specialized location.
+        $diagnostics = $this->check('closure_grounded_arity_once');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(ClosureConformanceValidator::CODE, $d->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: expects at least 2 parameter(s), candidate accepts at most 1',
+            $d->message,
+        );
+        // Reported at the real source line, not the synthetic specialized location.
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('.xphp', $d->location->file);
+    }
+
+    public function testClosureSignatureAsGenericBoundIsCollectedByCheck(): void
+    {
+        // A closure signature as a generic bound is rejected at parse time (bound
+        // reader seam); check collects it at the class line (9).
+        $diagnostics = $this->check('closure_generic_bound_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature type is not supported as a generic bound (closure signatures are '
+            . 'allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testClosureSignatureAsGenericArgumentIsCollectedByCheck(): void
+    {
+        // A closure signature as a generic type argument can't be intercepted in the
+        // scanner (shared with `<`-comparison); the nikic error is enriched. check
+        // collects the enriched message at the real line (16).
+        $diagnostics = $this->check('closure_generic_arg_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature type is not supported as a generic type argument (closure signatures '
+            . 'are allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(16, $d->location->line);
+    }
+
+    public function testUntypedClosureSignatureParameterIsCollectedByCheck(): void
+    {
+        // An untyped signature parameter is rejected at parse time; check collects
+        // it at the offending line (8).
+        $diagnostics = $this->check('closure_untyped_param_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A Closure(...) signature parameter must have a type (untyped signature parameters are not '
+            . 'supported). Add a type, e.g. `Closure(int $x): int`.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(8, $d->location->line);
+    }
+
+    public function testParseTimeUnionDefaultReportsRealLine(): void
+    {
+        // A union default (`T = Foo | Bar`) rejects from the `$tokens[$afterDefault]`
+        // (the `|`) throw site — again a distinct index. `class Slot<...>` on line 9.
+        $diagnostics = $this->check('parse_line_union_default');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'Generic parameter `T` has an invalid default; only a single concrete or generic type is allowed after `=` (no nullable or union shapes).',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testParseTimePositionlessRejectionFallsBackToLineOne(): void
+    {
+        // A structural rejection raised over parsed entries (a self-bound `T : T`) carries
+        // no token position, so check mode collects it via the fallback catch at line 1 —
+        // and it is collected, not propagated (the file is still reported, exit stays clean
+        // of a fatal).
+        $diagnostics = $this->check('parse_self_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'Generic parameter `T` cannot use itself as a bound (self-reference detected in the bound expression). Use a nested form like `T : Box<T>` for F-bounded recursion, or remove the bound.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(1, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnVarianceOnMethod(): void
+    {
+        // Compile mode catches the same rejection as a RuntimeException (XphpParseException
+        // extends it) — the message path is unchanged; only check mode reads the line.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Variance markers');
+        $this->compileFixture('parse_line_variance_method');
+    }
+
+    /**
+     * A turbofish on a DYNAMICALLY-named method/static call (`$o->$m::<int>()`, its nullsafe and
+     * variable-variable and static-dynamic siblings) cannot be monomorphized — the name is a runtime
+     * value. Each used to silently drop the marker and strip the clause, leaving a bare dynamic call
+     * against a method that now exists only in its `_T_<hash>` form (runtime fatal behind a clean
+     * gate). Each now draws ONE parse-stage diagnostic at the receiver's real line (9 in each fixture).
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function dynamicTurbofishFixtures(): iterable
+    {
+        yield 'dynamic instance name' => ['dynamic_turbofish_instance'];
+        yield 'nullsafe dynamic name' => ['dynamic_turbofish_nullsafe'];
+        yield 'variable-variable' => ['dynamic_turbofish_varvar'];
+        yield 'static dynamic name' => ['dynamic_turbofish_static'];
+    }
+
+    #[DataProvider('dynamicTurbofishFixtures')]
+    public function testDynamicNameTurbofishIsRejectedWithRealLine(string $fixture): void
+    {
+        $diagnostics = $this->check($fixture);
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        self::assertSame(
+            'A turbofish (`::<…>`) on a dynamically-named method or static call cannot be monomorphized; the method name must be a literal identifier, not a variable',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(9, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnDynamicNameTurbofish(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('dynamically-named method');
+        $this->compileFixture('dynamic_turbofish_instance');
+    }
+
+    public function testAmbiguousGenericTraitOperandIsCollectedByCheck(): void
+    {
+        // `use A<int>, A<string>, B<int> { A::m insteadof B; }` — the bare operand `A`
+        // matches two different specializations of `A`, which an `insteadof` clause
+        // cannot disambiguate. Rewriting to an arbitrary one would silently pick a
+        // trait; instead it draws ONE parse-stage diagnostic at the operand's line.
+        $diagnostics = $this->check('generic_trait_ambiguous_operand');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Compiler::CODE_PARSE_ERROR, $d->code);
+        // The remedy names an actionable recourse (a trait-level rename is NOT possible).
+        self::assertSame(
+            'Ambiguous generic trait operand `A` in an adaptation clause: this class uses more than one specialization of that trait, and an `insteadof` / `as` clause names a trait, not a specialization, so it cannot say which one is meant. Use a single specialization of that trait in an adapted class.',
+            $d->message,
+        );
+        self::assertNotNull($d->location);
+        self::assertSame(13, $d->location->line);
+    }
+
+    public function testCompileStillThrowsOnAmbiguousGenericTraitOperand(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ambiguous generic trait operand');
+        $this->compileFixture('generic_trait_ambiguous_operand');
+    }
+
     private function compileFixture(string $fixture): void
     {
         $work = sys_get_temp_dir() . '/xphp-check-compile-' . uniqid('', true);
@@ -484,6 +950,20 @@ final class CheckPassIntegrationTest extends TestCase
         } finally {
             self::rrmdir($work);
         }
+    }
+
+    public function testClosureConformanceViolationIsCollectedByCheck(): void
+    {
+        // Exercises the ClosureConformanceValidator step of check(): a return-site
+        // closure literal whose parameter is narrower than the target guarantees.
+        $diagnostics = $this->check('closure_conformance');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
     }
 
     private function check(string $fixture): DiagnosticCollector

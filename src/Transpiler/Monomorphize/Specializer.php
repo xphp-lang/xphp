@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Expr\ConstFetch;
+use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
 use PhpParser\Node\Expr\Variable;
@@ -92,6 +94,47 @@ final class Specializer
         self::runSubstitutingVisitor($cloned, $substitution);
 
         return $cloned;
+    }
+
+    /**
+     * Fully-qualify unqualified free-function callees and const fetches in a relocated
+     * class body, keyed on the resolver-recorded ATTR_RESOLVED_FUNC_FQN / _CONST_FQN and
+     * gated by the unit's collected symbol sets. An already fully-qualified name is left
+     * alone (namespace-invariant); an unknown name is left bare (global fallback).
+     *
+     * A relocated body has moved out of its origin namespace into XPHP\Generated\…, so an
+     * unqualified `helper()` / `FOO` would rebind against the generated namespace (then the
+     * global fallback) instead of the origin. The Compiler runs this over every specialization
+     * from the fixed-point loop, and again over each spec the covariant-upcast gap-fill appends
+     * a member to (that member is created after the first sweep). Idempotent: an already
+     * fully-qualified name is skipped.
+     */
+    public static function requalifyFreeSymbols(ClassLike $specialized, Registry $registry): void
+    {
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class ($registry) extends NodeVisitorAbstract {
+            public function __construct(private Registry $registry)
+            {
+            }
+
+            public function leaveNode(Node $node): null
+            {
+                if ($node instanceof FuncCall && $node->name instanceof Name && !$node->name->isFullyQualified()) {
+                    $fqn = $node->name->getAttribute(XphpSourceParser::ATTR_RESOLVED_FUNC_FQN);
+                    if (is_string($fqn) && $this->registry->hasFunction($fqn)) {
+                        $node->name = new FullyQualified($fqn, $node->name->getAttributes());
+                    }
+                } elseif ($node instanceof ConstFetch && !$node->name->isFullyQualified()) {
+                    $fqn = $node->name->getAttribute(XphpSourceParser::ATTR_RESOLVED_CONST_FQN);
+                    if (is_string($fqn) && $this->registry->hasConst($fqn)) {
+                        $node->name = new FullyQualified($fqn, $node->name->getAttributes());
+                    }
+                }
+
+                return null;
+            }
+        });
+        $traverser->traverse([$specialized]);
     }
 
     /**
@@ -287,13 +330,58 @@ final class Specializer
 
             public function leaveNode(Node $node): ?Node
             {
-                if ($node instanceof Name && !$node->isFullyQualified()) {
-                    $parts = $node->getParts();
-                    if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
-                        $concrete = $this->substitution[$parts[0]];
-                        return Specializer::typeRefToNode($concrete, $node->getAttributes());
+                // Ground a variable-turbofish call's type arguments in place. An inner
+                // `$inner::<S>(...)` inside a generic template body parses as a FuncCall on
+                // a Variable whose type args live in ATTR_METHOD_GENERIC_ARGS; when the
+                // enclosing generic specializes (`S → int`) those args must ground too, so
+                // the per-specialization closure-grounding pass sees `$inner::<int>` and can
+                // dispatch it. Left un-substituted the closure keeps a raw `I` hint and
+                // fatals at runtime. (This substitution is e2e-inert until that grounding
+                // pass runs — it only rewrites the recorded type args, never emits.)
+                if ($node instanceof FuncCall) {
+                    $methodArgs = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+                    if (is_array($methodArgs) && $methodArgs !== []) {
+                        /** @var list<TypeRef> $methodArgs — ATTR_METHOD_GENERIC_ARGS is a TypeRef list (set by XphpSourceParser). */
+                        $node->setAttribute(
+                            XphpSourceParser::ATTR_METHOD_GENERIC_ARGS,
+                            array_map(
+                                fn (TypeRef $a): TypeRef => Specializer::substituteTypeRef($a, $this->substitution),
+                                $methodArgs,
+                            ),
+                        );
+                    }
+                }
+
+                // Ground a closure-signature target in place. The erased `\Closure`
+                // head that carries it is fully-qualified, so it never reaches the
+                // type-param swap below; substitute its type-parameter leaves here.
+                if ($node instanceof Name) {
+                    $sig = $node->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG);
+                    if ($sig instanceof ClosureSignature) {
+                        $node->setAttribute(
+                            XphpSourceParser::ATTR_CLOSURE_SIG,
+                            Specializer::substituteClosureSignature($sig, $this->substitution),
+                        );
+                    }
+                }
+
+                if ($node instanceof Name) {
+                    // The type-param swap applies only to a PLAIN single-segment
+                    // name: `\T` and `namespace\T` are explicit class references
+                    // by spelling — substituting a type param into them emitted
+                    // wrong signatures (`namespace\Thing $x` becoming `int $x`).
+                    if (!$node->isFullyQualified() && !$node->isRelative()) {
+                        $parts = $node->getParts();
+                        if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
+                            $concrete = $this->substitution[$parts[0]];
+                            return Specializer::typeRefToNode($concrete, $node->getAttributes());
+                        }
                     }
 
+                    // Generic-args substitution runs for FULLY-QUALIFIED names
+                    // too: `\App\Box<T>` inside a template body carries the same
+                    // attributes as the bare form and its `T` must ground when
+                    // the class specializes.
                     $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
                     if (is_array($args) && $args !== []) {
                         /** @var list<TypeRef> $args — ATTR_GENERIC_ARGS is a TypeRef list (set by XphpSourceParser); the type-hint lets array_map infer the callback's parameter as TypeRef. */
@@ -303,9 +391,20 @@ final class Specializer
                         );
                         $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $substituted);
 
+                        // @infection-ignore-all ReturnRemoval — falling through is
+                        // observationally equivalent, but NOT because the attributes are
+                        // exclusive: markName runs from the PARENT node's enterNode before
+                        // the child Name's own attach sets ATTR_GENERIC_ARGS, so a generic
+                        // reference in a marked position carries BOTH. Equivalence holds
+                        // because the fallen-through swap yields a FullyQualified that still
+                        // carries the (substituted, concrete) generic attributes, which the
+                        // call-site rewriter now admits and rewrites to the same
+                        // specialization the normal path reaches.
                         return null;
                     }
+                }
 
+                if ($node instanceof Name && !$node->isFullyQualified()) {
                     // Bare, non-generic class/interface name carried over from the
                     // template (extends Countable, new ArrayIterator, ...). The parser
                     // tagged it with the FQN resolved against the source file's
@@ -370,6 +469,63 @@ final class Specializer
             $ref->args,
         );
         return new TypeRef($ref->name, $newArgs, $ref->isScalar, $ref->isTypeParam);
+    }
+
+    /**
+     * Ground a closure-signature target ({@see XphpSourceParser::ATTR_CLOSURE_SIG})
+     * by substituting its type-parameter leaves with their concrete types, so the
+     * conformance validator's post-specialization pass checks `Closure(int): int`
+     * (not `Closure(T): T`) against the likewise-substituted returned literal.
+     * Mirrors the parser's own signature-resolution walk.
+     *
+     * Public for the same reason as {@see substituteTypeRef} — the shared
+     * anonymous-class visitor calls back into Specializer.
+     *
+     * @param array<string, TypeRef> $subst
+     */
+    public static function substituteClosureSignature(ClosureSignature $sig, array $subst): ClosureSignature
+    {
+        $params = array_map(
+            static fn (ClosureSignatureParam $p): ClosureSignatureParam => new ClosureSignatureParam(
+                self::substituteSigType($p->type, $subst),
+                $p->byRef,
+                $p->variadic,
+                $p->optional,
+            ),
+            $sig->params,
+        );
+        $return = $sig->return === null ? null : self::substituteSigType($sig->return, $subst);
+
+        return new ClosureSignature($params, $return, $sig->nullable);
+    }
+
+    /**
+     * @param array<string, TypeRef> $subst
+     */
+    private static function substituteSigType(SigType $type, array $subst): SigType
+    {
+        if ($type instanceof SigTypeRef) {
+            return new SigTypeRef(self::substituteTypeRef($type->type, $subst));
+        }
+        if ($type instanceof SigClosure) {
+            return new SigClosure(self::substituteClosureSignature($type->signature, $subst));
+        }
+        if ($type instanceof SigUnion) {
+            return new SigUnion(array_map(
+                static fn (SigType $m): SigType => self::substituteSigType($m, $subst),
+                $type->members,
+            ));
+        }
+        if ($type instanceof SigIntersection) {
+            return new SigIntersection(array_map(
+                static fn (SigType $m): SigType => self::substituteSigType($m, $subst),
+                $type->members,
+            ));
+        }
+
+        // SigRaw (an unstructured DNF / scalar-bearing intersection) is gradual;
+        // there is nothing to ground.
+        return $type;
     }
 
     /**

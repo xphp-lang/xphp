@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\ClosureStaticAttributed;
+
+#[\Attribute]
+class Marked
+{
+}
+
+// An ATTRIBUTED static generic closure: the attribute moves the closure
+// node's start to `#[`, and the static-closure reject must still fire —
+// silently emitting the closure raw would be far worse than the loud gate.
+$f = #[Marked] static function<T>(T $x): T {
+    return $x;
+};
+
+$r = $f::<int>(1);

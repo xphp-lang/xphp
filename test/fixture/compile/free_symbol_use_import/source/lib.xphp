@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Vendor;
+
+function make(int $x): int
+{
+    return $x * 2;
+}
+
+const RATE = 100;

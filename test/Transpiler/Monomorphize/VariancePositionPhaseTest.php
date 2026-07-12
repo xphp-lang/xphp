@@ -20,25 +20,25 @@ use XPHP\Diagnostics\DiagnosticCollector;
 final class VariancePositionPhaseTest extends TestCase
 {
     /**
-     * @return iterable<string, array{string, list<string>}>
+     * @return iterable<string, array{string, string}>
      */
     public static function rejectedSources(): iterable
     {
         yield 'covariant in method parameter' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function set(T \$x): void {}\n}\n",
-            ['out T', 'method parameter'],
+            'Generic parameter `out T` appears in method parameter position, which is not allowed for covariant variance.',
         ];
         yield 'contravariant in method return' => [
             "<?php\nnamespace App;\nclass Consumer<in T>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
-            ['in T', 'method return'],
+            'Generic parameter `in T` appears in method return position, which is not allowed for contravariant variance.',
         ];
         yield 'covariant in mutable property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public T \$item;\n}\n",
-            ['mutable property'],
+            'Generic parameter `out T` appears in mutable property position, which is not allowed for covariant variance.',
         ];
         yield 'covariant in readonly property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public readonly T \$item;\n    public function get(): T { return \$this->item; }\n}\n",
-            ['readonly property'],
+            'Generic parameter `out T` appears in readonly property position, which is not allowed for covariant variance.',
         ];
         // NOTE: a NESTED type-param in a bound (`out T : Box<T>`) is owned by the composing
         // inner-variance pass, not this direct-position pass — see
@@ -48,7 +48,7 @@ final class VariancePositionPhaseTest extends TestCase
         // supported method-level `contains<U : E>` shape, where U is a *method* type parameter.)
         yield 'covariant in sibling bare bound' => [
             "<?php\nnamespace App;\nclass Pair<out T, U : T>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
-            ['bound'],
+            'Generic parameter `out T` appears inside the bound of generic parameter `U`, which is not allowed for covariant variance.',
         ];
         // NOTE: `out T` in a *non-promoted* constructor parameter of a variant class is
         // ALLOWED — a constructor parameter is variance-exempt (constructors aren't
@@ -58,7 +58,7 @@ final class VariancePositionPhaseTest extends TestCase
         // strictly invariant (a `T`-typed property would PHP-fatal across the chain):
         yield 'covariant in promoted constructor property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function __construct(public T \$item) {}\n}\n",
-            ['constructor parameter'],
+            'Generic parameter `out T` appears in constructor parameter position, which is not allowed for covariant variance.',
         ];
         // A *protected* property/promoted property is also a visible property (PHP
         // enforces invariant types across the chain for it), so it stays rejected —
@@ -66,11 +66,11 @@ final class VariancePositionPhaseTest extends TestCase
         // mutant that swaps the visibility bit for PROTECTED.
         yield 'covariant in protected promoted constructor property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function __construct(protected T \$item) {}\n}\n",
-            ['constructor parameter'],
+            'Generic parameter `out T` appears in constructor parameter position, which is not allowed for covariant variance.',
         ];
         yield 'covariant in protected mutable property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    protected T \$item;\n}\n",
-            ['mutable property'],
+            'Generic parameter `out T` appears in mutable property position, which is not allowed for covariant variance.',
         ];
         // Asymmetric visibility (PHP 8.4): a `public private(set)` property is
         // externally *readable* through an upcast reference (PRIVATE_SET sets a
@@ -79,45 +79,45 @@ final class VariancePositionPhaseTest extends TestCase
         // pin the PRIVATE-bit detection against a mutant that swaps it for PRIVATE_SET.
         yield 'covariant in public private(set) promoted constructor property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function __construct(public private(set) T \$item) {}\n}\n",
-            ['constructor parameter'],
+            'Generic parameter `out T` appears in constructor parameter position, which is not allowed for covariant variance.',
         ];
         yield 'covariant in public private(set) declared property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public private(set) T \$item;\n}\n",
-            ['mutable property'],
+            'Generic parameter `out T` appears in mutable property position, which is not allowed for covariant variance.',
         ];
         yield 'covariant in nested closure parameter' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function emit(): array\n    {\n        \$f = function (T \$x) {};\n        return [];\n    }\n}\n",
-            ['nested closure/arrow parameter'],
+            'Generic parameter `out T` appears in nested closure/arrow parameter position, which is not allowed for covariant variance.',
         ];
         yield 'contravariant in nested arrow return' => [
             "<?php\nnamespace App;\nclass Consumer<in T>\n{\n    public function pipe(): array\n    {\n        \$f = fn (): T => null;\n        return [];\n    }\n}\n",
-            ['nested closure/arrow return'],
+            'Generic parameter `in T` appears in nested closure/arrow return position, which is not allowed for contravariant variance.',
         ];
         // NOTE: a NESTED type-param in a method parameter/return (`Box<T>`) is owned by the
         // composing inner-variance pass — see testNestedTypeParamIsRejectedByTheComposingPass.
         yield 'interface method signature' => [
             "<?php\nnamespace App;\ninterface Producer<out T>\n{\n    public function feed(T \$x): void;\n}\n",
-            ['out T'],
+            'Generic parameter `out T` appears in method parameter position, which is not allowed for covariant variance.',
         ];
         // A by-reference parameter is read AND written back, so it is an
         // invariant position — neither +T nor -T is allowed there.
         yield 'contravariant in by-reference parameter' => [
             "<?php\nnamespace App;\nclass Consumer<in T>\n{\n    public function swap(T &\$x): void {}\n}\n",
-            ['in T', 'by-reference parameter'],
+            'Generic parameter `in T` appears in by-reference parameter position, which is not allowed for contravariant variance.',
         ];
         yield 'covariant in by-reference parameter' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function swap(T &\$x): void {}\n}\n",
-            ['out T', 'by-reference parameter'],
+            'Generic parameter `out T` appears in by-reference parameter position, which is not allowed for covariant variance.',
         ];
         yield 'contravariant in nested closure by-reference parameter' => [
             "<?php\nnamespace App;\nclass Consumer<in T>\n{\n    public function pipe(): array\n    {\n        \$f = function (T &\$x) {};\n        return [];\n    }\n}\n",
-            ['by-reference parameter'],
+            'Generic parameter `in T` appears in by-reference parameter position, which is not allowed for contravariant variance.',
         ];
         // A variant class can't be `final`: its specializations are linked by
         // real `extends` edges, which a `final` class can't anchor.
         yield 'final variant class' => [
             "<?php\nnamespace App;\nfinal class Producer<out T>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
-            ['cannot be declared `final`'],
+            'A variant class cannot be declared `final`: its specializations participate in `extends` subtype edges that a `final` class cannot anchor. Remove `final`.',
         ];
     }
 
@@ -157,11 +157,8 @@ final class VariancePositionPhaseTest extends TestCase
         ];
     }
 
-    /**
-     * @param list<string> $fragments
-     */
     #[DataProvider('rejectedSources')]
-    public function testVariancePositionIsRejectedInCompileMode(string $source, array $fragments): void
+    public function testVariancePositionIsRejectedInCompileMode(string $source, string $expectedMessage): void
     {
         $registry = $this->registryFor($source);
 
@@ -169,9 +166,7 @@ final class VariancePositionPhaseTest extends TestCase
             $registry->validateVariancePositions();
             self::fail('expected a variance-position violation');
         } catch (RuntimeException $e) {
-            foreach ($fragments as $fragment) {
-                self::assertStringContainsString($fragment, $e->getMessage());
-            }
+            self::assertSame($expectedMessage, $e->getMessage());
         }
     }
 
@@ -183,10 +178,9 @@ final class VariancePositionPhaseTest extends TestCase
      * into type-constructor args, so these are reported by `validateInnerVariance` with the composing
      * "via slot N of …" message — never double-reported by both passes.
      *
-     * @param list<string> $fragments
      */
     #[DataProvider('nestedComposingRejections')]
-    public function testNestedTypeParamIsRejectedByTheComposingPass(string $source, array $fragments): void
+    public function testNestedTypeParamIsRejectedByTheComposingPass(string $source, string $expectedMessage): void
     {
         $registry = $this->registryFor($source);
         // The direct-position pass must stay SILENT on a purely-nested violation (no double-report).
@@ -196,28 +190,26 @@ final class VariancePositionPhaseTest extends TestCase
             $registry->validateInnerVariance();
             self::fail('expected an inner-variance composition violation');
         } catch (RuntimeException $e) {
-            foreach ($fragments as $fragment) {
-                self::assertStringContainsString($fragment, $e->getMessage());
-            }
+            self::assertSame($expectedMessage, $e->getMessage());
         }
     }
 
     /**
-     * @return iterable<string, array{string, list<string>}>
+     * @return iterable<string, array{string, string}>
      */
     public static function nestedComposingRejections(): iterable
     {
         yield 'covariant nested in method parameter' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public function set(Box<T> \$x): void {}\n}\n",
-            ['out T', 'invariant-only position', 'via slot 0 of'],
+            'Variance violation in template Producer: type-parameter out T appears in invariant-only position (via slot 0 of Box).',
         ];
         yield 'contravariant nested in method return' => [
             "<?php\nnamespace App;\nclass Consumer<in T>\n{\n    public function fetch(): Box<T> { throw new \\LogicException; }\n}\n",
-            ['in T', 'invariant-only position', 'via slot 0 of'],
+            'Variance violation in template Consumer: type-parameter in T appears in invariant-only position (via slot 0 of Box).',
         ];
         yield 'covariant nested in bound' => [
             "<?php\nnamespace App;\nclass Sortable<out T : Box<T>>\n{\n    public function get(): T { throw new \\LogicException; }\n}\n",
-            ['out T', 'invariant-only position', 'via slot 0 of'],
+            'Variance violation in template Sortable: type-parameter out T appears in invariant-only position (via slot 0 of App\Box).',
         ];
         // A NESTED type-param in a VISIBLE (non-promoted) declared property — `public Box<T> $item` on
         // `out T`. The property's outer position is invariant; Box's invariant slot composes to invariant,
@@ -225,20 +217,20 @@ final class VariancePositionPhaseTest extends TestCase
         // would be exempt — only visible ones are walked).
         yield 'covariant nested in visible declared property' => [
             "<?php\nnamespace App;\nclass Producer<out T>\n{\n    public Box<T> \$item;\n}\n",
-            ['out T', 'invariant-only position', 'via slot 0 of'],
+            'Variance violation in template Producer: type-parameter out T appears in invariant-only position (via slot 0 of Box).',
         ];
         // Composition through a NON-invariant inner slot. `Producer<out X>` as a method PARAMETER:
         // compose(contravariant param, covariant slot) = contravariant → a covariant `out E` is rejected.
         yield 'covariant Producer param composes to contravariant' => [
             "<?php\nnamespace App;\ninterface Producer<out X> { public function get(): X; }\nclass Box<out E>\n{\n    public function take(Producer<E> \$p): void {}\n}\n",
-            ['out E', 'contravariant-only position', 'via slot 0 of'],
+            'Variance violation in template Box: type-parameter out E appears in contravariant-only position (via slot 0 of Producer).',
         ];
         // The mirror that confirms the composing pass owns the unsound direction too: `Sink<in E>` with a
         // `Comparator<in T>` parameter — compose(contravariant param, contravariant slot) = covariant → a
         // contravariant `in E` is rejected. (The sound covariant case is the accept test below.)
         yield 'contravariant Sink with Comparator composes to covariant' => [
             "<?php\nnamespace App;\ninterface Comparator<in T> { public function compare(T \$a, T \$b): int; }\nclass Sink<in E>\n{\n    public function pick(Comparator<E> \$c): void {}\n}\n",
-            ['in E', 'covariant-only position', 'via slot 0 of'],
+            'Variance violation in template Sink: type-parameter in E appears in covariant-only position (via slot 0 of Comparator).',
         ];
     }
 
@@ -359,7 +351,10 @@ final class VariancePositionPhaseTest extends TestCase
         self::assertNotNull($d->location);
         self::assertSame('/T.xphp', $d->location->file);
         self::assertSame(5, $d->location->line);
-        self::assertStringContainsString('method parameter', $d->message);
+        self::assertSame(
+            'Generic parameter `out T` appears in method parameter position, which is not allowed for covariant variance.',
+            $d->message,
+        );
     }
 
     public function testAllViolationsAcrossDefinitionsCollectedInOneRun(): void
@@ -402,9 +397,13 @@ final class VariancePositionPhaseTest extends TestCase
         $registry->validateVariancePositions();
 
         $messages = array_map(static fn ($d): string => $d->message, $collector->all());
-        self::assertCount(2, $messages);
-        self::assertStringContainsString('by-reference parameter', implode("\n", $messages));
-        self::assertStringContainsString('method parameter', implode("\n", $messages));
+        self::assertEqualsCanonicalizing(
+            [
+                'Generic parameter `out T` appears in by-reference parameter position, which is not allowed for covariant variance.',
+                'Generic parameter `out T` appears in method parameter position, which is not allowed for covariant variance.',
+            ],
+            $messages,
+        );
     }
 
     private function registryFor(string $source, ?DiagnosticCollector $collector = null): Registry

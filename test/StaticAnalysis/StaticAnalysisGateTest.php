@@ -93,7 +93,11 @@ final class StaticAnalysisGateTest extends TestCase
         self::assertSame(StaticAnalysisGate::CODE_UNAVAILABLE, $diagnostics[0]->code);
         self::assertSame(Severity::Warning, $diagnostics[0]->severity);
         self::assertFalse($diagnostics[0]->severity->isFailing());
-        self::assertStringContainsString('PHPStan was not found', $diagnostics[0]->message);
+        self::assertSame(
+            'PHPStan was not found (looked for --phpstan-bin, then vendor/bin/phpstan, then $PATH); '
+                . 'skipping static analysis. Pass --no-phpstan to silence this.',
+            $diagnostics[0]->message,
+        );
     }
 
     public function testFailedRunYieldsNonFailingWarning(): void

@@ -7,6 +7,7 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeTraverser;
@@ -72,9 +73,23 @@ final class XphpSourceParser
     // apply and a bare name would otherwise resolve into XPHP\Generated\...).
     public const ATTR_RESOLVED_FQN = 'xphp:resolvedFqn';
 
+    // Resolved FQN for a FREE-FUNCTION callee Name / a CONST-fetch Name. Like
+    // ATTR_RESOLVED_FQN but for the function/const symbol namespaces (which have a
+    // global fallback classes lack): recorded at parse time honoring the file's
+    // `use function` / `use const` imports + namespace, and read by the Specializer
+    // to fully-qualify the reference on a relocated clone ONLY when the compilation
+    // unit defines that symbol — so builtins and unknown names keep the fallback.
+    public const ATTR_RESOLVED_FUNC_FQN = 'xphp:resolvedFuncFqn';
+    public const ATTR_RESOLVED_CONST_FQN = 'xphp:resolvedConstFqn';
+
     // Method-scoped generics (one type-param set per method, distinct from any class-level set).
     public const ATTR_METHOD_GENERIC_PARAMS = 'xphp:methodGenericParams';
     public const ATTR_METHOD_GENERIC_ARGS = 'xphp:methodGenericArgs';
+
+    // A parsed closure signature type (`Closure(int $x): bool`) attached to the
+    // surviving `\Closure` type-hint Name after the `(…)[: ret]` span is erased.
+    // Carries a ClosureSignature; read by the compile-time conformance validator.
+    public const ATTR_CLOSURE_SIG = 'xphp:closureSig';
 
     // A bare, single-segment, non-imported class-name used inside a generic context
     // (a template or generic method/function/closure) that is NOT a declared type
@@ -125,17 +140,101 @@ final class XphpSourceParser
      */
     public function parseWithMap(string $source): array
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers] = $this->scanAndStrip($source);
 
-        $ast = $this->parser->parse($cleanedSource);
+        try {
+            $ast = $this->parser->parse($cleanedSource);
+        } catch (\PhpParser\Error $e) {
+            // An un-strippable `Closure(...)` signature nested in a generic clause
+            // (a type argument, an F-bound, or `Name<Args>[]`) reaches nikic as raw
+            // text and is rejected with a misleading `<`-error. Relabel it with a
+            // clear closure-specific message. Safe by construction: this runs only
+            // after parsing has already failed, and valid code parses cleanly, so no
+            // well-formed program is reached here.
+            throw self::enrichClosureInGenericError($cleanedSource, $e) ?? $e;
+        }
         if ($ast === null) {
             throw new RuntimeException('Parser returned null AST.');
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
+        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
+        // @infection-ignore-all — defensive backstop, unreachable from valid input by
+        // construction (see unboundDeclarationMarkerMessage): no test can reach a
+        // mutant here. The message builder is pinned by direct unit tests; this
+        // wiring exists to turn any FUTURE marker-alignment bug into a loud compile
+        // error instead of a silent de-generification of the declaration.
+        if ($unbound !== null) {
+            throw new RuntimeException($unbound);
+        }
 
         return [$ast, $byteOffsetMap];
+    }
+
+    /**
+     * When nikic rejects an un-strippable `Closure(...)` signature nested inside a
+     * generic clause — a type argument (`Box<Closure(int): int>`), an F-bound
+     * (`C<T : Box<Closure(...)>>`), or `Box<Closure(...)>[]` — its error anchors at
+     * the clause's opening `<` with a message about `<` that never mentions
+     * closures. Detect that shape from the already-failed parse and return a clear
+     * {@see XphpParseException}; otherwise return null so the original error stands.
+     *
+     * These positions cannot be intercepted in the scanner: the generic-argument
+     * reader is shared with the speculative `<`-comparison path, so a throw there
+     * would false-reject valid code like `$a < Closure(5)`. Enriching only a parse
+     * that has ALREADY failed is safe by construction — valid code parses cleanly
+     * and never reaches here, so no well-formed program can be relabelled or
+     * rejected. Indexes the CLEANED source nikic actually parsed, so offsets align
+     * even after a length-changing `T[]` -> `array` rewrite.
+     *
+     * @infection-ignore-all — pure message-enrichment on an ALREADY-failed parse:
+     * this runs only inside the parse-failure catch and returns either a relabelled
+     * exception or null (the original nikic error then stands), so an error is
+     * thrown either way — no mutation of the balanced-scan bounds, the boundary
+     * break, or the substr window can change whether a program is accepted or
+     * rejected, only the TEXT or line of an error that fires regardless. The
+     * behavioral contract is pinned by the generic-arg / F-bound / array-suffix
+     * reject tests (enriched message asserted) and the comparison-safety +
+     * unrelated-syntax-error no-misfire tests.
+     */
+    private static function enrichClosureInGenericError(string $cleaned, \PhpParser\Error $error): ?XphpParseException
+    {
+        $attrs = $error->getAttributes();
+        $pos = $attrs['startFilePos'] ?? null;
+        if (!is_int($pos)) {
+            return null;
+        }
+        if (($cleaned[$pos] ?? '') !== '<') {
+            return null;
+        }
+        // Balanced scan of the `< … >` clause, stopping at a statement boundary so a
+        // stray `<` in unrelated broken code can't run away to the end of the file.
+        $depth = 0;
+        $end = null;
+        for ($k = $pos, $len = strlen($cleaned); $k < $len; $k++) {
+            $c = $cleaned[$k];
+            if ($c === '<') {
+                $depth++;
+            } elseif ($c === '>') {
+                $depth--;
+                if ($depth === 0) {
+                    $end = $k;
+                    break;
+                }
+            } elseif ($c === ';' || $c === '{') {
+                break;
+            }
+        }
+        if ($end === null) {
+            return null;
+        }
+        if (preg_match('/\bClosure\s*\(/', substr($cleaned, $pos, $end - $pos + 1)) !== 1) {
+            return null;
+        }
+        return new XphpParseException(
+            'A Closure(...) signature type is not supported as a generic type argument (closure signatures are allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+            $error->getStartLine(),
+        );
     }
 
     /**
@@ -163,7 +262,7 @@ final class XphpSourceParser
      */
     public function parseTolerantWithMap(string $source): ?ParseWithMapResult
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers] = $this->scanAndStrip($source);
 
         $errorHandler = new \PhpParser\ErrorHandler\Collecting();
         $ast = $this->parser->parse($cleanedSource, $errorHandler);
@@ -172,7 +271,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
 
         return new ParseWithMapResult($ast, $byteOffsetMap);
     }
@@ -197,7 +296,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -209,6 +308,8 @@ final class XphpSourceParser
         $classMarkers = [];
         $nameMarkers = [];
         $methodMarkers = [];
+        /** @var list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers */
+        $closureMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
 
@@ -216,14 +317,17 @@ final class XphpSourceParser
         while ($i < $n) {
             $tok = $tokens[$i];
 
-            // Anonymous closure: `function<T>(...){}` or
-            // `static function<T>(...){}`. Recognized by T_FUNCTION followed
-            // immediately by `<` (no T_STRING name). For `static function<T>`
-            // the leading T_STATIC was consumed in the same arm.
+            // Anonymous closure: `function<T>(...){}` / `fn<T>(...)`.
+            // Recognized by T_FUNCTION/T_FN followed immediately by `<` (no
+            // T_STRING name). `static`-prefixed shapes are consumed by the
+            // T_STATIC arm below before the loop ever reaches the keyword.
             if ($tok->id === T_FUNCTION || $tok->id === T_FN) {
                 $isArrow = $tok->id === T_FN;
-                $anchorByte = $tok->pos;
-                $anchorLine = $tok->line;
+                // An attributed closure's node starts at its first `#[`, not at
+                // the keyword — anchor the (byte-matched) marker there.
+                $anchorIdx = self::anchorPastAttributeGroups($tokens, $i);
+                $anchorByte = $tokens[$anchorIdx]->pos;
+                $anchorLine = $tokens[$anchorIdx]->line;
                 $j = self::skipWs($tokens, $i + 1);
                 if ($j < $n && $tokens[$j]->text === '<') {
                     // P5.7: defaults allowed on anonymous closures + arrows
@@ -248,7 +352,7 @@ final class XphpSourceParser
                         $startByte = $tokens[$j]->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                         $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                         $i = $endIdx + 1;
                         continue;
                     }
@@ -257,32 +361,43 @@ final class XphpSourceParser
                 // named-function path (T_FUNCTION) or skip the token (T_FN).
             }
 
-            // `static function<T>(...)` -- the leading T_STATIC must be
-            // recognized so we can include it in the anchor byte position.
+            // `static function<T>(...)` / `static fn<T>(...)` -- the leading
+            // T_STATIC must be recognized so the anchor covers it (the node
+            // starts at `static`, or at a preceding attribute group). A static
+            // ARROW takes the ordinary arrow specialization path — it cannot
+            // bind `$this` by construction, which is the only thing the
+            // dispatcher rewrite cannot carry; static CLOSURES stay gated
+            // (kind `staticClosure` hard-fails at the call-site rewrite).
+            // Known drift: the emitted dispatcher closure is non-static, so
+            // `Closure::bind` succeeds and `ReflectionFunction::isStatic()`
+            // is false where PHP's own static arrow would refuse/report —
+            // invisible to normal calls, which never carry a `$this`.
             if ($tok->id === T_STATIC) {
                 $j = self::skipWs($tokens, $i + 1);
-                if ($j < $n && $tokens[$j]->id === T_FUNCTION) {
+                if ($j < $n && ($tokens[$j]->id === T_FUNCTION || $tokens[$j]->id === T_FN)) {
+                    $isArrow = $tokens[$j]->id === T_FN;
                     $k = self::skipWs($tokens, $j + 1);
                     if ($k < $n && $tokens[$k]->text === '<') {
                         $parsed = self::parseTypeParamList(
                             $tokens,
                             $k,
-                            allowDefaults: false,
+                            allowDefaults: $isArrow,
                             allowVariance: false,
                         );
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
+                            $anchorIdx = self::anchorPastAttributeGroups($tokens, $i);
                             $methodMarkers[] = [
-                                'line' => $tok->line,
+                                'line' => $tokens[$anchorIdx]->line,
                                 'name' => '',
-                                'kind' => 'staticClosure',
-                                'bytePosition' => $tok->pos,
+                                'kind' => $isArrow ? 'arrow' : 'staticClosure',
+                                'bytePosition' => $tokens[$anchorIdx]->pos,
                                 'params' => $paramEntries,
                             ];
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -293,7 +408,10 @@ final class XphpSourceParser
 
             if ($tok->id === T_FUNCTION) {
                 $j = self::skipWs($tokens, $i + 1);
-                if ($j < $n && $tokens[$j]->id === T_STRING) {
+                // The method name is a real name (T_STRING) OR a semi-reserved keyword PHP
+                // permits as a method name (`function list<T>`) — the keyword id would otherwise
+                // fail the gate, leaving the `<T>` clause to reach php-parser as a raw error.
+                if ($j < $n && ($tokens[$j]->id === T_STRING || self::isSemiReservedName($tokens[$j]))) {
                     $methodName = $tokens[$j]->text;
                     $methodLine = $tokens[$j]->line;
                     $methodAnchorByte = $tokens[$j]->pos;
@@ -307,19 +425,31 @@ final class XphpSourceParser
                         );
                         if ($parsed !== null) {
                             [$paramEntries, $endIdx] = $parsed;
-                            $methodMarkers[] = [
-                                'line' => $methodLine,
-                                'name' => $methodName,
-                                'kind' => 'named',
-                                'bytePosition' => $methodAnchorByte,
-                                'params' => $paramEntries,
-                            ];
-                            $startByte = $tokens[$k]->pos;
-                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
-                            $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
-                            $i = $endIdx + 1;
-                            continue;
+                            // A function/method DECLARATION always opens its
+                            // param list right after the clause; a
+                            // `use function b<T>;` import does not. Without
+                            // this check the import's clause was recorded and
+                            // stripped, leaving a marker no AST node can ever
+                            // bind — misreported as a transpiler bug by the
+                            // unbound-marker backstop. Left unstripped, PHP
+                            // reports its own syntax error on the `<`, blaming
+                            // the right party.
+                            $afterClause = self::skipWs($tokens, $endIdx + 1);
+                            if ($afterClause < $n && $tokens[$afterClause]->text === '(') {
+                                $methodMarkers[] = [
+                                    'line' => $methodLine,
+                                    'name' => $methodName,
+                                    'kind' => 'named',
+                                    'bytePosition' => $methodAnchorByte,
+                                    'params' => $paramEntries,
+                                ];
+                                $startByte = $tokens[$k]->pos;
+                                $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                                $length = $endByte - $startByte;
+                                $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
+                                $i = $endIdx + 1;
+                                continue;
+                            }
                         }
                     }
                 }
@@ -353,7 +483,7 @@ final class XphpSourceParser
                             $startByte = $tokens[$k]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
@@ -387,6 +517,36 @@ final class XphpSourceParser
                     }
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;
+                        // A `variableTurbofish` marker only ever binds a standalone
+                        // `$f::<…>(…)` call (nikic parses that as FuncCall(name: Variable)).
+                        // When this T_VARIABLE is instead a DYNAMIC MEMBER NAME (`$o->$m`,
+                        // `$o?->$m`, `Foo::$m`) or a VARIABLE-VARIABLE (`$$g`), the node is a
+                        // MethodCall/StaticCall/dynamic-name FuncCall the marker can never
+                        // bind — so it was silently dropped while the `::<…>` was stripped,
+                        // leaving a bare dynamic call against a method that now exists only
+                        // in its `_T_<hash>` form: a runtime fatal behind a clean gate.
+                        // The name is a runtime value, so the turbofish is unmonomorphizable;
+                        // reject it loudly (at its real line) instead. A standalone receiver
+                        // (any other preceding token) is untouched — closure turbofish works.
+                        // Defensive bounds only: skipWsBack can't actually walk off the front here
+                        // (index 0 is always the T_OPEN_TAG, never whitespace), and even if it did,
+                        // T_OPEN_TAG is none of the reject tokens — so this guard never changes the
+                        // outcome and is left un-annotated, keeping the reject discriminator below
+                        // fully exposed to mutation testing (each clause is killed by its own fixture).
+                        $prev = $tokens[self::skipWsBack($tokens, $i - 1)] ?? null;
+                        if ($prev !== null
+                            && ($prev->id === T_OBJECT_OPERATOR
+                                || $prev->id === T_NULLSAFE_OBJECT_OPERATOR
+                                || $prev->id === T_DOUBLE_COLON
+                                || $prev->text === '$')
+                        ) {
+                            throw new XphpParseException(
+                                'A turbofish (`::<…>`) on a dynamically-named method or static '
+                                . 'call cannot be monomorphized; the method name must be a '
+                                . 'literal identifier, not a variable',
+                                $tok->line,
+                            );
+                        }
                         $varName = substr($tok->text, 1); // strip the leading `$`
                         $nameMarkers[] = [
                             'line' => $tok->line,
@@ -399,13 +559,63 @@ final class XphpSourceParser
                         $startByte = $dcTok->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                         $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                         $i = $endIdx + 1;
                         continue;
                     }
                 }
                 $i++;
                 continue;
+            }
+
+            // Keyword-named STATIC method turbofish: `Recv::list::<…>()`. A keyword method
+            // name stays a keyword token after `::` (unlike after `->`, where PHP re-tokenizes
+            // it to T_STRING so the name-token branch below already handles the instance form),
+            // so the name-token gate misses it and the `::<…>` clause used to reach php-parser
+            // raw. Match exactly this shape — a semi-reserved keyword, preceded by `::`, followed
+            // by its own `::<…>` — and record a plain `named` marker; the resolver's StaticCall
+            // arm binds it like any other. Kept as a dedicated branch (not folded into the
+            // name-token gate) so keyword tokens never reach that gate's bare-`<`, closure-
+            // signature, or array-sugar sub-branches, where they would mis-parse constructs like
+            // `list($a, $b) = …`.
+            if (self::isSemiReservedName($tok)) {
+                $prevSig = self::skipWsBack($tokens, $i - 1);
+                if ($prevSig >= 0 && $tokens[$prevSig]->id === T_DOUBLE_COLON) {
+                    $j = self::skipWs($tokens, $i + 1);
+                    if ($j < $n && $tokens[$j]->id === T_DOUBLE_COLON) {
+                        $dcTok = $tokens[$j];
+                        $afterDc = $j + 1;
+                        $isEmptyTurbofish = $afterDc < $n
+                            && $tokens[$afterDc]->id === T_IS_NOT_EQUAL
+                            && $tokens[$afterDc]->pos === $dcTok->pos + 2;
+                        $parsed = null;
+                        if ($isEmptyTurbofish) {
+                            $parsed = [[], $afterDc];
+                        } elseif ($afterDc < $n
+                            && $tokens[$afterDc]->text === '<'
+                            && $tokens[$afterDc]->pos === $dcTok->pos + 2
+                        ) {
+                            $parsed = self::parseTypeArgList($tokens, $afterDc);
+                        }
+                        if ($parsed !== null) {
+                            [$args, $endIdx] = $parsed;
+                            $nameMarkers[] = [
+                                'line' => $tok->line,
+                                'anchorLine' => self::memberAccessReceiverLine($tokens, $i) ?? $tok->line,
+                                'name' => self::markerNameSpelling($tok->text),
+                                'kind' => 'named',
+                                'bytePosition' => $tok->pos,
+                                'args' => $args,
+                            ];
+                            $startByte = $dcTok->pos;
+                            $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
+                            $length = $endByte - $startByte;
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
+                            $i = $endIdx + 1;
+                            continue;
+                        }
+                    }
+                }
             }
 
             // `static` is a PHP keyword (T_STATIC), not a name token, but the
@@ -418,11 +628,9 @@ final class XphpSourceParser
                 $nameLine = $tok->line;
                 // For member-access call sites (`Foo::method::<…>`, `$x->method::<…>`,
                 // `$x?->method::<…>`), walk back past the operator to the receiver and
-                // record its line as the marker's anchor. nikic sets a MethodCall /
-                // StaticCall's getStartLine() to the leftmost token in the chain — so
-                // matching against just the identifier's line breaks the moment the
-                // operator+name are split across lines, e.g. `Foo::\n    method::<int>`.
-                // The resolver matches if startLine ∈ [anchorLine, line].
+                // record its line as the marker's anchor. Matching is byte-exact
+                // against the method-name Identifier, so anchorLine is
+                // informational (diagnostics/debugging) rather than a match key.
                 $anchorLine = self::memberAccessReceiverLine($tokens, $i) ?? $nameLine;
                 $j = self::skipWs($tokens, $i + 1);
 
@@ -478,7 +686,7 @@ final class XphpSourceParser
                             $nameMarkers[] = [
                                 'line' => $nameLine,
                                 'anchorLine' => $anchorLine,
-                                'name' => ltrim($nameText, '\\'),
+                                'name' => self::markerNameSpelling($nameText),
                                 'kind' => 'named',
                                 'bytePosition' => $tok->pos,
                                 'args' => $args,
@@ -490,7 +698,7 @@ final class XphpSourceParser
                         $startByte = $dcTok->pos;
                         $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                         $length = $endByte - $startByte;
-                        $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                        $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                         $i = $endIdx + 1;
                         continue;
                     }
@@ -504,7 +712,14 @@ final class XphpSourceParser
                 // the Name is preceded by `new` (catches the parenless `new Foo<T>;`
                 // and `new Foo<T>` shapes that PHP accepts but the RFC turbofish
                 // requirement refuses). Type-hint sites match neither check.
-                if ($j < $n && $tokens[$j]->text === '<') {
+                // A name directly after the `function` keyword is a DECLARATION
+                // name, never a type hint — when the declaration arm declined it
+                // (a `use function b<T>;` import has no param list), the clause
+                // must survive so PHP reports its own syntax error instead of the
+                // import being silently swallowed.
+                $prevSig = self::skipWsBack($tokens, $i - 1);
+                $isDeclarationName = $prevSig >= 0 && $tokens[$prevSig]->id === T_FUNCTION;
+                if (!$isDeclarationName && $j < $n && $tokens[$j]->text === '<') {
                     $parsed = self::parseTypeArgList($tokens, $j);
                     if ($parsed !== null) {
                         [$args, $endIdx] = $parsed;
@@ -528,7 +743,7 @@ final class XphpSourceParser
                                 $nameMarkers[] = [
                                     'line' => $nameLine,
                                     'anchorLine' => $anchorLine,
-                                    'name' => ltrim($nameText, '\\'),
+                                    'name' => self::markerNameSpelling($nameText),
                                     'kind' => 'named',
                                     'bytePosition' => $tok->pos,
                                     'args' => $args,
@@ -537,10 +752,37 @@ final class XphpSourceParser
                             $startByte = $tokens[$j]->pos;
                             $endByte = $tokens[$endIdx]->pos + strlen($tokens[$endIdx]->text);
                             $length = $endByte - $startByte;
-                            $replacements[] = [$startByte, $length, str_repeat(' ', $length)];
+                            $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
                             $i = $endIdx + 1;
                             continue;
                         }
+                    }
+                }
+
+                // Closure signature type `Closure(params): return` in a type slot.
+                // Fires for any `Name(` not in a member-access / `new` context;
+                // `tryParseClosureSignature`'s position gate distinguishes a genuine
+                // type slot from an expression-context call (which falls through
+                // untouched), and throws the two structural errors. A signature-shaped
+                // production on a non-`Closure` name is the only-`Closure` compile error.
+                // @infection-ignore-all — the `(`/cast opener test is a fast-path guard:
+                // findClosureSigEnd re-validates the opener and returns null for anything
+                // that is not a `(` or a cast token, so negating this sub-expression only
+                // adds calls that bail to null — observably equivalent.
+                if ($j < $n && ($tokens[$j]->text === '(' || self::isCastToken($tokens[$j]))
+                    && !self::isMemberAccessContext($tokens, $i)
+                    && !self::isPrecededByNew($tokens, $i)
+                ) {
+                    $sig = self::tryParseClosureSignature($tokens, $i, $j, $source);
+                    if ($sig !== null) {
+                        [$signature, $endIdx, $spanStart, $spanLen, $replacement] = $sig;
+                        $closureMarkers[] = [
+                            'bytePosition' => $tok->pos,
+                            'signature' => $signature,
+                        ];
+                        $replacements[] = [$spanStart, $spanLen, $replacement];
+                        $i = $endIdx + 1;
+                        continue;
                     }
                 }
 
@@ -552,7 +794,15 @@ final class XphpSourceParser
                     if ($arraySuffixEnd !== null) {
                         $startByte = $tok->pos;
                         $endByte = $tokens[$arraySuffixEnd]->pos + strlen($tokens[$arraySuffixEnd]->text);
-                        $replacements[] = [$startByte, $endByte - $startByte, 'array'];
+                        // `array` is shorter than most sugar spans, so byte length
+                        // can't be preserved here — but the span's newlines must be
+                        // (line-keyed markers after it depend on the line count).
+                        // ByteOffsetMap::fromReplacements absorbs the length delta.
+                        $replacements[] = [
+                            $startByte,
+                            $endByte - $startByte,
+                            'array' . self::newlinesOf(substr($source, $startByte, $endByte - $startByte)),
+                        ];
                         $i = $arraySuffixEnd + 1;
                         continue;
                     }
@@ -567,7 +817,1007 @@ final class XphpSourceParser
         $cleaned = self::applyReplacements($source, $replacements);
         $byteOffsetMap = ByteOffsetMap::fromReplacements($replacements);
 
-        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap, $closureMarkers];
+    }
+
+    /**
+     * Recognize + parse a closure signature type `Closure(params): return` that
+     * begins at the `Closure`/`\Closure` name token index `$i`, where `$j` is the
+     * index of the `(` immediately following the name (past whitespace).
+     *
+     * Returns `[ClosureSignature, spanEndIdx, spanStartByte, spanLen, replacement]`
+     * when the position is a genuine type slot, or `null` when it is an ordinary
+     * expression (e.g. a call to a user function named `Closure`) that must be left
+     * untouched. Throws for the two structural errors (only-`Closure`, variadic-last).
+     *
+     * @infection-ignore-all — the accept/reject behavior (type-slot vs. call, the two
+     * structural throws) and the newline-preserving erasure math are pinned by
+     * behavioral tests; the sole residual mutant is the defensive
+     * `findClosureSigEnd() === null` guard, unreachable once the pre-filter has matched
+     * a balanced `(…)` at a genuine type slot.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: ClosureSignature, 1: int, 2: int, 3: int, 4: string}|null
+     */
+    private static function tryParseClosureSignature(array $tokens, int $i, int $j, string $source): ?array
+    {
+        $n = count($tokens);
+
+        // Cheap pre-filter: a signature's first inner token is type-ish, never a
+        // literal (which a real call `Closure(5)` has). A cast token
+        // (`Closure(int)`) is itself the whole one-scalar param list.
+        $untypedFirstParam = false;
+        if (!self::isCastToken($tokens[$j])) {
+            $firstInner = self::skipWs($tokens, $j + 1);
+            if ($firstInner >= $n) {
+                return null;
+            }
+            $ft = $tokens[$firstInner];
+            if ($ft->id === T_VARIABLE) {
+                // A `$var` first-inner is usually a real call `Closure($x)`. But
+                // `Closure($x): int $cb` in a type slot is an UNTYPED signature
+                // parameter — don't bail yet; let the position gate below decide.
+                // A real expression can never satisfy that gate (it is not followed
+                // by a `$var`/return slot), so this only fires on a genuine type slot.
+                $untypedFirstParam = true;
+            } else {
+                $firstOk = self::isSigTypeToken($ft)
+                    || $ft->id === T_ELLIPSIS
+                    || in_array($ft->text, ['?', '(', ')', '&'], true);
+                if (!$firstOk) {
+                    return null;
+                }
+            }
+        }
+
+        // Balanced end of `( … )` plus an optional `: return`.
+        $spanEnd = self::findClosureSigEnd($tokens, $j);
+        if ($spanEnd === null) {
+            return null;
+        }
+
+        // Position gate: a type slot is a param/property (a `$var` follows the whole
+        // signature) or a return type (the name follows the `:` of a `function`/`fn`
+        // declaration header — see isClosureReturnSlot). Anything else is
+        // expression-context `Closure(` — leave it.
+        $afterSpan = self::skipWs($tokens, $spanEnd + 1);
+        $isParamOrProp = $afterSpan < $n && $tokens[$afterSpan]->id === T_VARIABLE;
+        $isReturn = self::isClosureReturnSlot($tokens, $i);
+        if (!$isParamOrProp && !$isReturn) {
+            return null;
+        }
+
+        // An untyped signature parameter that reached a confirmed type slot — reject
+        // it specifically instead of leaking to a misleading nikic parse error.
+        if ($untypedFirstParam) {
+            throw new XphpParseException(
+                'A Closure(...) signature parameter must have a type (untyped signature parameters are not supported). Add a type, e.g. `Closure(int $x): int`.',
+                $tokens[$i]->line,
+            );
+        }
+
+        $name = ltrim($tokens[$i]->text, '\\');
+        if ($name !== 'Closure') {
+            throw new XphpParseException(sprintf(
+                'Only "Closure" may carry a call signature, "%s" may not',
+                $name,
+            ), $tokens[$i]->line);
+        }
+
+        $nullable = self::isNullablePrefixed($tokens, $i);
+        $signature = self::buildClosureSignature($tokens, $j, $source, $nullable);
+
+        // Erase to `\Closure`, preserving both the newline count (line-keyed
+        // markers depend on it) and the total byte length (byte-keyed markers —
+        // e.g. anonymous-closure generics — depend on positions after the span not
+        // shifting). `\Closure` is 8 bytes; a bare `Closure` name is only 7, so the
+        // extra `\` reclaims one blank byte from the tail (which always begins with
+        // `(`, never a newline). A fully-qualified `\Closure` name is already 8.
+        $spanStart = $tokens[$i]->pos;
+        $nameLen = strlen($tokens[$i]->text);
+        $spanEndByte = $tokens[$spanEnd]->pos + strlen($tokens[$spanEnd]->text);
+        $drop = strlen('\\Closure') - $nameLen;
+        $tail = substr($source, $spanStart + $nameLen + $drop, $spanEndByte - ($spanStart + $nameLen + $drop));
+        $replacement = '\\Closure' . self::blank($tail);
+
+        return [$signature, $spanEnd, $spanStart, $spanEndByte - $spanStart, $replacement];
+    }
+
+    /**
+     * The scalar-cast token ids (`(int)`, `(bool)`, `(float)`, `(string)`,
+     * `(array)`, `(object)`, `(unset)`). A bare single-scalar signature parameter
+     * — `Closure(int)` — is lexed by PHP as one cast token rather than
+     * `(` `int` `)`, so the scanner must accept a cast token where it expects the
+     * parameter-list parens (the same collision the engine RFC handles).
+     *
+     * @return array<int, string> token-id → canonical scalar name
+     */
+    private static function castTokenScalars(): array
+    {
+        return [
+            T_INT_CAST => 'int',
+            T_BOOL_CAST => 'bool',
+            T_DOUBLE_CAST => 'float',
+            T_STRING_CAST => 'string',
+            T_ARRAY_CAST => 'array',
+            T_OBJECT_CAST => 'object',
+            T_UNSET_CAST => 'void',
+        ];
+    }
+
+    private static function isCastToken(PhpToken $tok): bool
+    {
+        return array_key_exists($tok->id, self::castTokenScalars());
+    }
+
+    /**
+     * True for a token that can lead a signature type leaf: an ordinary name
+     * ({@see isNameToken}) plus the reserved-word type keywords `array`,
+     * `callable`, and `static`, which PHP lexes as their own tokens
+     * (T_ARRAY / T_CALLABLE / T_STATIC) rather than T_STRING — so `isNameToken`
+     * alone would miss them and a signature like `Closure(array $a): callable`
+     * would fail to erase.
+     */
+    private static function isSigTypeToken(PhpToken $tok): bool
+    {
+        return self::isNameToken($tok)
+            || $tok->id === T_ARRAY
+            || $tok->id === T_CALLABLE
+            || $tok->id === T_STATIC;
+    }
+
+    /**
+     * Index of the last token of a closure signature whose parameter list opens at
+     * `$openIdx` (a `(` OR a single cast token like `(int)`): the matching `)` (or
+     * the cast token itself), extended over an optional `: <returnType>`. `null` if
+     * the parens are unbalanced.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function findClosureSigEnd(array $tokens, int $openIdx): ?int
+    {
+        $n = count($tokens);
+        // @infection-ignore-all GreaterThanOrEqualTo — every caller derives $openIdx
+        // from an existing token's lookahead, so $openIdx === $n is unreachable;
+        // the guard is defensive.
+        if ($openIdx >= $n) {
+            return null;
+        }
+        if (self::isCastToken($tokens[$openIdx])) {
+            $closeIdx = $openIdx;
+        } elseif ($tokens[$openIdx]->text === '(') {
+            $depth = 0;
+            $closeIdx = null;
+            for ($i = $openIdx; $i < $n; $i++) {
+                $t = $tokens[$i]->text;
+                if ($t === '(') {
+                    $depth++;
+                } elseif ($t === ')') {
+                    $depth--;
+                    if ($depth === 0) {
+                        $closeIdx = $i;
+                        break;
+                    }
+                }
+            }
+            if ($closeIdx === null) {
+                // @infection-ignore-all ReturnRemoval — removing this early return
+                // sends `null + 1` into the skipWs below; the token near the file
+                // start it lands on is never a `:`, so the function still returns
+                // the null $closeIdx — equivalent, just accidental.
+                return null;
+            }
+        } else {
+            return null;
+        }
+        $k = self::skipWs($tokens, $closeIdx + 1);
+        if ($k < $n && $tokens[$k]->text === ':') {
+            $retStart = self::skipWs($tokens, $k + 1);
+            return self::scanTypeExprEnd($tokens, $retStart);
+        }
+        return $closeIdx;
+    }
+
+    /**
+     * Index of the last token of a type expression starting at `$idx` — a leaf
+     * (scalar / class / `Name<…>` generic / nested `Closure(…)` / nullable /
+     * parenthesised DNF group) plus any `|` / `&` union-or-intersection
+     * continuation. Stops before a top-level `$var` / `{` / `;` / `,` / `)` /
+     * `=`. `null` if nothing type-shaped is there.
+     *
+     * A `(` is a DNF group only where a LEAF may start (scan start, or right
+     * after a `|` / `&` continuation), and only when its interior is itself a
+     * valid type expression ending exactly at the matching `)` — an
+     * expression-context paren (`Closure(int) : ($flag ? …)`) fails that
+     * interior check and terminates the scan as before.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function scanTypeExprEnd(array $tokens, int $idx): ?int
+    {
+        $n = count($tokens);
+        $last = null;
+        $i = $idx;
+        $expectLeaf = true;
+        while ($i < $n) {
+            $t = $tokens[$i];
+            if ($t->id === T_WHITESPACE || $t->id === T_COMMENT || $t->id === T_DOC_COMMENT) {
+                $i++;
+                continue;
+            }
+            if ($t->text === '?') {
+                $last = $i;
+                $i++;
+                continue;
+            }
+            if ($t->text === '(' && $expectLeaf) {
+                $close = self::scanGroupEnd($tokens, $i);
+                if ($close === null) {
+                    break;
+                }
+                $last = $close;
+                $i = $close + 1;
+                $expectLeaf = false;
+                continue;
+            }
+            if (self::isSigTypeToken($t)) {
+                $last = $i;
+                $expectLeaf = false;
+                $la = self::skipWs($tokens, $i + 1);
+                if ($la < $n && ($tokens[$la]->text === '(' || self::isCastToken($tokens[$la])) && ltrim($t->text, '\\') === 'Closure') {
+                    $inner = self::findClosureSigEnd($tokens, $la);
+                    if ($inner === null) {
+                        return null;
+                    }
+                    $last = $inner;
+                    // @infection-ignore-all DecrementInteger — re-entering the walk AT
+                    // the consumed signature's last token (`+ 0`) only revisits a token
+                    // that cannot extend or shrink the span (it is never a name with a
+                    // consumable tail), so `$last` is unchanged. Re-entering BEFORE it
+                    // (`- 1`) is NOT equivalent (it can re-consume the nested signature
+                    // or overwrite `$last`) and is pinned by the nested-no-return test;
+                    // skipping forward (`+ 2`) is pinned by the group-with-nested-
+                    // signature test.
+                    $i = $inner + 1;
+                } elseif ($la < $n && $tokens[$la]->text === '<') {
+                    $inner = self::findAngleEnd($tokens, $la);
+                    if ($inner === null) {
+                        return null;
+                    }
+                    $last = $inner;
+                    $i = $inner + 1;
+                } else {
+                    // `Name[]` array sugar: consume the bracket pair into the
+                    // leaf so it erases with the signature (the global `T[]` →
+                    // `array` rewrite never sees it). `Name<Args>[]` is NOT
+                    // consumed — the generic-sugar combination stays the same
+                    // loud pre-existing gap it is outside signatures.
+                    $suffix = self::arraySuffixEnd($tokens, $i + 1);
+                    if ($suffix !== null) {
+                        $last = $suffix;
+                        $i = $suffix + 1;
+                    } else {
+                        $i++;
+                    }
+                }
+                continue;
+            }
+            if ($t->text === '|' || $t->text === '&') {
+                // `&` before a `$var` / `...` / `)` is a by-ref marker (belongs to
+                // the parameter, not the type) — stop. `&`/`|` before a Name, `?`,
+                // or a `(` group is an intersection / union continuation.
+                $nx = self::skipWs($tokens, $i + 1);
+                $continues = $nx < $n
+                    && (self::isSigTypeToken($tokens[$nx])
+                        || $tokens[$nx]->text === '?'
+                        || $tokens[$nx]->text === '(');
+                if (!$continues) {
+                    break;
+                }
+                $i++;
+                $expectLeaf = true;
+                continue;
+            }
+            break;
+        }
+        return $last;
+    }
+
+    /**
+     * Index of the LAST `]` of one-or-more chained EMPTY `[ ]` bracket pairs
+     * whose first `[` is the first significant token at or after `$idx`
+     * (whitespace/comments tolerated), or `null` when the next tokens are not
+     * array sugar. Chains (`T[][]`) are consumed whole, matching the global
+     * sugar's parseArraySuffix. A non-empty `[expr]` is expression syntax,
+     * never type sugar — the `]` check rejects it.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function arraySuffixEnd(array $tokens, int $idx): ?int
+    {
+        $n = count($tokens);
+        $end = null;
+        while (true) {
+            $open = self::skipWs($tokens, $idx);
+            if ($open >= $n || $tokens[$open]->text !== '[') {
+                return $end;
+            }
+            $close = self::skipWs($tokens, $open + 1);
+            if ($close >= $n || $tokens[$close]->text !== ']') {
+                return $end;
+            }
+            $end = $close;
+            $idx = $close + 1;
+        }
+    }
+
+    /**
+     * Index of the matching `)` for a parenthesised DNF group whose `(` sits at
+     * `$openIdx`, or `null` when the interior is not a complete type expression
+     * ending exactly at that `)`. The interior reuses the full leaf machinery
+     * (names, generics via `findAngleEnd`, nested `Closure(…)` recursion, nested
+     * groups), so an expression paren (`($flag ? a() : b())`, `($x)`) is rejected
+     * and never absorbed into a type span.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function scanGroupEnd(array $tokens, int $openIdx): ?int
+    {
+        $inner = self::scanTypeExprEnd($tokens, self::skipWs($tokens, $openIdx + 1));
+        if ($inner === null) {
+            // @infection-ignore-all ReturnRemoval — removing the early return sends
+            // `null + 1` into skipWs, whose result (a token near the file start) is
+            // never the group's `)`, so the ternary below still yields null.
+            return null;
+        }
+        $close = self::skipWs($tokens, $inner + 1);
+        return $close < count($tokens) && $tokens[$close]->text === ')' ? $close : null;
+    }
+
+    /**
+     * Index of the matching `>` for a `<` at `$openIdx` (generic arg clause).
+     * Assumes `splitMergedAngleTokens` has already split `>>` etc. `null` if
+     * unbalanced.
+     *
+     * @infection-ignore-all — flat balanced-angle scan; the depth logic is pinned by
+     * the nested-generic test (a broken counter leaves a stray `>` that fails to
+     * re-parse), and the sole residual mutant is the `$i < $n` loop-bound guard, which
+     * is defensive: the caller only passes a `<` that has a matching `>`.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function findAngleEnd(array $tokens, int $openIdx): ?int
+    {
+        $n = count($tokens);
+        $depth = 0;
+        for ($i = $openIdx; $i < $n; $i++) {
+            $t = $tokens[$i]->text;
+            if ($t === '<') {
+                $depth++;
+            } elseif ($t === '>') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True iff the `Closure` at `$i` sits in a genuine RETURN-TYPE slot: preceded
+     * (past an optional nullable `?` and whitespace) by `:` which closes a
+     * parameter list (or a closure's `use (…)` clause) headed by `function` / `fn`.
+     *
+     * `)`-then-`:` alone is NOT enough — a ternary's else (`$a ? b() : …`), a
+     * `case expr():` label, and every alt-syntax construct (`if/elseif/while/
+     * for/foreach/declare (…):`) produce the same pair; keying on them silently
+     * erased expression-context `Closure(…)` calls and hard-threw the
+     * only-Closure error on ordinary calls (`$a ? b() : g(FOO)`). The walk now
+     * matches the `)` back to its `(` and requires a declaration head, rejecting
+     * `C::fn()` / `$o->fn()` member CALLS whose head token is the semi-reserved
+     * `fn` / `function` after `::` / `->` / `?->`.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function isClosureReturnSlot(array $tokens, int $i): bool
+    {
+        $p = self::skipWsBack($tokens, $i - 1);
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 (open tag) is never
+        // `?`, so testing index 0 cannot change the outcome.
+        if ($p >= 0 && $tokens[$p]->text === '?') {
+            $p = self::skipWsBack($tokens, $p - 1);
+        }
+        // @infection-ignore-all LessThan — token 0 (open tag) is never `:`, so
+        // testing index 0 cannot change the outcome.
+        if ($p < 0 || $tokens[$p]->text !== ':') {
+            return false;
+        }
+        $q = self::skipWsBack($tokens, $p - 1);
+        // @infection-ignore-all LessThan — token 0 is always the open tag, never
+        // `)`, so testing index 0 cannot change the outcome.
+        if ($q < 0 || $tokens[$q]->text !== ')') {
+            return false;
+        }
+        $open = self::matchParenBack($tokens, $q);
+        if ($open === null) {
+            return false;
+        }
+        $h = self::skipWsBack($tokens, $open - 1);
+        // One `use (…)` layer: `function () use ($a): R` — the `)` before the
+        // `:` closes the use clause; hop to the parameter list it follows.
+        // (Use clauses don't nest, so one layer suffices.)
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 (open tag) is never
+        // T_USE, so testing index 0 cannot change the outcome.
+        if ($h >= 0 && $tokens[$h]->id === T_USE) {
+            $h = self::skipWsBack($tokens, $h - 1);
+            // @infection-ignore-all LessThan LogicalOr — token 0 is never `)`
+            // (LessThan); and a reached T_USE always has preceding significant
+            // tokens (`use` is never the first token after the open tag), so
+            // h >= 0 always holds and the OR arms cannot disagree. The `)` test
+            // itself is load-bearing: a STATIC member call of a method named
+            // `use` (`C::use($q) : …` — after `->` the name lexes as a
+            // contextual T_STRING and never reaches here) arrives with `::`
+            // before the T_USE and must be rejected — pinned by the
+            // static-use-call provider entry.
+            if ($h < 0 || $tokens[$h]->text !== ')') {
+                return false;
+            }
+            $open = self::matchParenBack($tokens, $h);
+            if ($open === null) {
+                return false;
+            }
+            $h = self::skipWsBack($tokens, $open - 1);
+        }
+        // Optional declaration pieces between the head and the `(`, walked
+        // backwards: a GENERIC clause (`function<T>(…)`, `function m<T : B>(…)`),
+        // then a NAME, then a by-ref `&` (`function &f(…)`, `fn &(…)`).
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 (open tag) is
+        // never `>`.
+        if ($h >= 0 && $tokens[$h]->text === '>') {
+            $angleOpen = self::matchAngleBack($tokens, $h);
+            if ($angleOpen === null) {
+                return false;
+            }
+            $h = self::skipWsBack($tokens, $angleOpen - 1);
+        }
+        // The name may be ANY single token: PHP allows every semi-reserved
+        // keyword as a METHOD name (`function list()`, `function default()`),
+        // and those lex as their own keyword tokens, not T_STRING — so no
+        // name-token test can enumerate them. The head check below is the real
+        // discriminator; the name slot just skips one token that is neither
+        // the by-ref marker nor the head itself.
+        // @infection-ignore-all GreaterThanOrEqualTo IncrementInteger — token 0
+        // (open tag) is never a name; and starting the back-skip one index
+        // earlier only matters when the skipped token is significant, which for
+        // the name slot is only the by-ref `&` — both routes then land on the
+        // same T_FUNCTION and accept identically.
+        if ($h >= 0 && $tokens[$h]->text !== '&'
+            && $tokens[$h]->id !== T_FUNCTION && $tokens[$h]->id !== T_FN
+        ) {
+            $h = self::skipWsBack($tokens, $h - 1);
+        }
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is never `&`.
+        if ($h >= 0 && $tokens[$h]->text === '&') {
+            $h = self::skipWsBack($tokens, $h - 1);
+        }
+        // @infection-ignore-all LessThan — token 0 is never T_FUNCTION/T_FN, so
+        // testing index 0 cannot flip the head check.
+        if ($h < 0 || ($tokens[$h]->id !== T_FUNCTION && $tokens[$h]->id !== T_FN)) {
+            return false;
+        }
+        // `C::fn(…)` / `$o->function(…)` are member CALLS — `fn`/`function` are
+        // semi-reserved and lex as T_FN/T_FUNCTION even after `::`.
+        $before = self::skipWsBack($tokens, $h - 1);
+        // @infection-ignore-all LessThan — token 0 (open tag) is never `::`/`->`/`?->`,
+        // so testing index 0 cannot change the verdict.
+        return $before < 0 || !in_array(
+            $tokens[$before]->id,
+            [T_DOUBLE_COLON, T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR],
+            true,
+        );
+    }
+
+    /**
+     * Index of the `<` matching the `>` at `$closeIdx`, scanning backwards, or
+     * `null` if unbalanced. Merged `>>` tokens are already split before any
+     * signature scanning, so whole-token text compares suffice.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function matchAngleBack(array $tokens, int $closeIdx): ?int
+    {
+        $depth = 0;
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is the open tag, never
+        // `<` or `>`, so excluding it from the walk cannot change the result.
+        for ($i = $closeIdx; $i >= 0; $i--) {
+            $t = $tokens[$i]->text;
+            if ($t === '>') {
+                $depth++;
+            } elseif ($t === '<') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Index of the `(` matching the `)` at `$closeIdx`, scanning backwards, or
+     * `null` if unbalanced. Compares whole-token text, so parens INSIDE a
+     * string/comment/cast token never perturb the depth.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function matchParenBack(array $tokens, int $closeIdx): ?int
+    {
+        $depth = 0;
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is the open tag, never
+        // `(` or `)`, so excluding it from the walk cannot change the result.
+        for ($i = $closeIdx; $i >= 0; $i--) {
+            $t = $tokens[$i]->text;
+            if ($t === ')') {
+                $depth++;
+            } elseif ($t === '(') {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True iff a `?` (nullable) immediately precedes the `Closure` at `$i`.
+     *
+     * @infection-ignore-all — flat backward token walk; the nullable/non-nullable
+     * behavior is pinned by the `?Closure` tests, and the residual `$p >= 0` guard is
+     * defensive (index 0 is always T_OPEN_TAG, so a `?` can never sit at index 0).
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function isNullablePrefixed(array $tokens, int $i): bool
+    {
+        $p = self::skipWsBack($tokens, $i - 1);
+        return $p >= 0 && $tokens[$p]->text === '?';
+    }
+
+    /**
+     * Skip whitespace/comments walking backwards from `$i`; returns the index of
+     * the first significant token at or before `$i`, or -1.
+     *
+     * @infection-ignore-all GreaterThanOrEqualTo — `>= 0` vs `> 0` differs only in
+     * whether token 0 is tested for whitespace; token 0 is always the open tag
+     * (never T_WHITESPACE), so both stop at 0 with the same result.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function skipWsBack(array $tokens, int $i): int
+    {
+        while ($i >= 0
+            && ($tokens[$i]->id === T_WHITESPACE || $tokens[$i]->id === T_COMMENT || $tokens[$i]->id === T_DOC_COMMENT)) {
+            $i--;
+        }
+        return $i;
+    }
+
+    /**
+     * Canonical marker spelling for a name token: the raw source text with
+     * only the case-insensitive `namespace\` keyword prefix folded to
+     * lowercase, so it compares equal to `Name::toCodeString()` (which always
+     * emits the keyword lowercase). The leading `\` of a fully-qualified name
+     * and the `namespace\` prefix are deliberately KEPT: stripping them
+     * conflated `\App\Box` with a qualified `App\Box`, and let a bare aliased
+     * `Box` on the same line steal a `namespace\Box` marker (or vice versa) —
+     * specializing the wrong site.
+     */
+    private static function markerNameSpelling(string $nameText): string
+    {
+        if (strncasecmp($nameText, 'namespace\\', 10) === 0) {
+            return 'namespace\\' . substr($nameText, 10);
+        }
+        return $nameText;
+    }
+
+    /**
+     * The true start of an anonymous closure/arrow node whose keyword sits at
+     * `$keywordIdx`: php-parser starts the node at its FIRST token — the first
+     * attribute group when the closure is attributed — while the scanner sits
+     * on the `function` / `fn` / `static` keyword. Anonymous markers are
+     * matched byte-exact against the node start, so walk back over any number
+     * of complete `#[ … ]` groups (and the whitespace/comments between them)
+     * to the token the node actually starts at. Anything that is not a
+     * complete attribute group ends the walk.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function anchorPastAttributeGroups(array $tokens, int $keywordIdx): int
+    {
+        $anchor = $keywordIdx;
+        $i = self::skipWsBack($tokens, $keywordIdx - 1);
+        while ($i >= 0 && $tokens[$i]->text === ']') {
+            $open = self::matchAttributeGroupBack($tokens, $i);
+            if ($open === null) {
+                break;
+            }
+            $anchor = $open;
+            $i = self::skipWsBack($tokens, $open - 1);
+        }
+        return $anchor;
+    }
+
+    /**
+     * Match a `]` at `$closeIdx` back to the `#[` (T_ATTRIBUTE) that opens its
+     * attribute group, tracking square-bracket balance so attribute arguments
+     * containing array literals (`#[A([1, 2])]`) don't derail the walk.
+     * Returns null when the balance lands on a plain `[` instead — the `]`
+     * closed ordinary array syntax, not an attribute group.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function matchAttributeGroupBack(array $tokens, int $closeIdx): ?int
+    {
+        $depth = 0;
+        // @infection-ignore-all GreaterThanOrEqualTo — token 0 is the open tag, never
+        // `]`, `[`, or `#[`, so excluding it from the walk cannot change the result.
+        for ($i = $closeIdx; $i >= 0; $i--) {
+            $t = $tokens[$i];
+            if ($t->text === ']') {
+                $depth++;
+            } elseif ($t->id === T_ATTRIBUTE) {
+                $depth--;
+                if ($depth === 0) {
+                    return $i;
+                }
+            } elseif ($t->text === '[') {
+                $depth--;
+                if ($depth === 0) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build the structured `ClosureSignature` for a `(` at `$openIdx`. Throws the
+     * variadic-not-last structural error. Nested `Closure(…)` leaves recurse.
+     *
+     * @infection-ignore-all — structural correctness (param arity, the cast-token
+     * single-scalar param, absent-vs-present return, the variadic-not-last throw,
+     * nested recursion) is pinned by behavioral accept/reject tests; the residual
+     * mutants are all `$i < $n` loop/lookahead guards and whitespace-skip offsets,
+     * equivalent because the param loop is terminated by the closing `)` the caller
+     * guarantees and the tightly-packed / spaced fixtures both assert the same shape.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function buildClosureSignature(array $tokens, int $openIdx, string $source, bool $nullable): ClosureSignature
+    {
+        $n = count($tokens);
+
+        // `Closure(int)` — the whole one-scalar param list is a single cast token.
+        if (self::isCastToken($tokens[$openIdx])) {
+            $scalar = self::castTokenScalars()[$tokens[$openIdx]->id];
+            // No isScalar flag here: resolveTypeRef re-derives it from SCALAR_TYPES
+            // during resolution, so setting it at scan time would be dead.
+            $params = [new ClosureSignatureParam(new SigTypeRef(new TypeRef($scalar)))];
+            $return = null;
+            $k = self::skipWs($tokens, $openIdx + 1);
+            if ($k < $n && $tokens[$k]->text === ':') {
+                [$return] = self::parseSigType($tokens, self::skipWs($tokens, $k + 1), $source);
+            }
+            return new ClosureSignature($params, $return, $nullable);
+        }
+
+        $params = [];
+        $i = self::skipWs($tokens, $openIdx + 1);
+        $sawVariadic = false;
+        while ($i < $n && $tokens[$i]->text !== ')') {
+            if ($sawVariadic) {
+                throw new XphpParseException('Only the last parameter of a Closure signature can be variadic', $tokens[$i]->line);
+            }
+            [$param, $i] = self::parseSigParam($tokens, $i, $source, count($params) + 1);
+            $params[] = $param;
+            $sawVariadic = $param->variadic;
+            $i = self::skipWs($tokens, $i);
+            if ($i < $n && $tokens[$i]->text === ',') {
+                $i = self::skipWs($tokens, $i + 1);
+            }
+        }
+        $return = null;
+        $k = self::skipWs($tokens, min($i, $n - 1) + 1);
+        if ($k < $n && $tokens[$k]->text === ':') {
+            $retStart = self::skipWs($tokens, $k + 1);
+            [$return] = self::parseSigType($tokens, $retStart, $source);
+        }
+        return new ClosureSignature($params, $return, $nullable);
+    }
+
+    /**
+     * Parse one signature parameter `type [&] [...] [$name]` beginning at `$i`.
+     * `$position` is the 1-based index of this parameter in the signature, used
+     * only to name an unnamed parameter in the default-value rejection message.
+     *
+     * @infection-ignore-all — the token walk reading the optional `&`, `...` and
+     * `$name` markers is pinned by the by-ref, variadic, and by-ref-variadic tests,
+     * and the residual mutants are `$i < $n` lookahead guards and whitespace-skip
+     * offsets equivalent under the same inputs. The one behavioral decision here —
+     * the trailing `=` default-value reject — is NOT covered by MSI (a blanket
+     * ignore); it is pinned by behavioral accept/reject pairs in both modes (the
+     * default-present reject throws / collects, the default-free samples still
+     * compile and run).
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: ClosureSignatureParam, 1: int}
+     */
+    private static function parseSigParam(array $tokens, int $i, string $source, int $position): array
+    {
+        $n = count($tokens);
+        [$type, $i] = self::parseSigType($tokens, $i, $source);
+        $i = self::skipWs($tokens, $i);
+        $byRef = false;
+        $variadic = false;
+        if ($i < $n && $tokens[$i]->text === '&') {
+            $byRef = true;
+            $i = self::skipWs($tokens, $i + 1);
+        }
+        if ($i < $n && $tokens[$i]->id === T_ELLIPSIS) {
+            $variadic = true;
+            $i = self::skipWs($tokens, $i + 1);
+        }
+        $paramName = null;
+        if ($i < $n && $tokens[$i]->id === T_VARIABLE) {
+            $paramName = $tokens[$i]->text;
+            $i = self::skipWs($tokens, $i + 1);
+        }
+        // A default value cannot appear in a `Closure(...)` signature TYPE: a
+        // signature describes the callable's shape, not call-time values. Without
+        // this loud reject the stray `= <expr>` is re-scanned by the caller's loop
+        // as bogus extra parameters, inflating the target's required arity and
+        // false-rejecting a perfectly valid callable. Placed after the `$name`
+        // consumption so it also wins over the "variadic must be last" check for a
+        // defaulted variadic. The only legal token here in a confirmed type slot is
+        // `,` or `)`, so an exact `=` match cannot catch `==`/`=>`/`>=`.
+        if ($i < $n && $tokens[$i]->text === '=') {
+            $subject = $paramName !== null ? 'parameter ' . $paramName : sprintf('parameter %d', $position);
+            throw new XphpParseException(sprintf(
+                'A Closure(...) signature type cannot give %s a default value: a '
+                . 'signature describes the callable\'s shape, not call-time values.',
+                $subject,
+            ), $tokens[$i]->line);
+        }
+        return [new ClosureSignatureParam($type, $byRef, $variadic), $i];
+    }
+
+    /**
+     * Parse one signature leaf type beginning at `$i` → `[SigType, nextIdx]`.
+     * A nested `Closure(…)` becomes a `SigClosure`; a plain scalar / class /
+     * type-parameter / `Name<…>` leaf becomes a `SigTypeRef`; a flat `?A` / `A|B` /
+     * `A&B` is structured into a `SigUnion` / `SigIntersection` (the member-splitting
+     * lives in {@see parseFlatCompound}); a shape the flat splitter does not own (a
+     * DNF group, a mixed `|`/`&`, a scalar in an intersection) falls back to a
+     * gradual `SigRaw`. Members are left unresolved — the resolver walks the tree.
+     *
+     * @infection-ignore-all — leaf-kind DISPATCH (nested `SigClosure`, nullable,
+     * union/intersection, plain `SigTypeRef`) is pinned behaviorally by the parser's
+     * accept/reject fixtures; the member-splitting logic it delegates to lives in
+     * {@see parseFlatCompound} / {@see parseMemberLeaf} (fully mutation-covered), and
+     * the residual mutants here are `$i < $n` lookahead guards and whitespace-skip
+     * offsets, equivalent for the balanced, type-shaped spans the caller passes.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: SigType, 1: int}
+     */
+    private static function parseSigType(array $tokens, int $i, string $source): array
+    {
+        $n = count($tokens);
+        if ($i < $n && self::isNameToken($tokens[$i]) && ltrim($tokens[$i]->text, '\\') === 'Closure') {
+            $la = self::skipWs($tokens, $i + 1);
+            if ($la < $n && ($tokens[$la]->text === '(' || self::isCastToken($tokens[$la]))) {
+                $end = self::findClosureSigEnd($tokens, $la);
+                if ($end !== null) {
+                    return [new SigClosure(self::buildClosureSignature($tokens, $la, $source, false)), $end + 1];
+                }
+            }
+        }
+
+        // A leading `?` marks a nullable leaf — keep the whole leaf raw for now.
+        $nullableLeaf = $i < $n && $tokens[$i]->text === '?';
+        $start = $i;
+        if ($nullableLeaf) {
+            $i = self::skipWs($tokens, $i + 1);
+        }
+
+        $parsed = self::parseTypeArg($tokens, $i);
+        if ($parsed === null && $i < $n && self::isSigTypeToken($tokens[$i])) {
+            // `array` / `callable` / `static` — reserved-word type keywords that
+            // parseTypeArg (T_STRING / T_NAME only) does not recognize. Build the
+            // leaf directly; resolveTypeRef treats them as built-ins via SCALAR_TYPES.
+            $parsed = [new TypeRef(strtolower($tokens[$i]->text)), $i + 1];
+        }
+        if ($parsed === null) {
+            $end = self::scanTypeExprEnd($tokens, $start);
+            $end = $end ?? $start;
+            return [new SigRaw(self::sliceTokens($tokens, $source, $start, $end)), $end + 1];
+        }
+        [$typeRef, $afterLeaf] = $parsed;
+
+        // `Name[]` array sugar lowers to `array` — the same lowering the global
+        // rewrite applies outside signatures; as a gradual leaf it can never
+        // false-reject. `Name<Args>[]` is excluded (the pre-existing loud gap).
+        $suffix = self::arraySuffixEnd($tokens, $afterLeaf);
+        if ($suffix !== null && !$typeRef->isGeneric()) {
+            $typeRef = new TypeRef('array');
+            $afterLeaf = $suffix + 1;
+        }
+
+        $peek = self::skipWs($tokens, $afterLeaf);
+        $hasUnion = $peek < $n && $tokens[$peek]->text === '|';
+        $hasIntersection = $peek < $n && $tokens[$peek]->text === '&'
+            && self::sigAmpersandIsIntersection($tokens, $peek);
+
+        // A leading `?` is `A|null`. `?A|B` / `?A&B` are invalid PHP; keep raw.
+        if ($nullableLeaf) {
+            if ($hasUnion || $hasIntersection) {
+                return self::rawSigLeaf($tokens, $source, $start, $afterLeaf);
+            }
+            return [new SigUnion([new SigTypeRef($typeRef), new SigTypeRef(new TypeRef('null'))]), $afterLeaf];
+        }
+
+        // A flat union / intersection continuation → structure it. A DNF paren, a
+        // mixed `|`/`&` at top level, or a scalar in an intersection falls back to a
+        // gradual SigRaw (structured DNF on the token side is a tracked follow-up).
+        if ($hasUnion || $hasIntersection) {
+            $compound = self::parseFlatCompound($tokens, $typeRef, $afterLeaf, $hasUnion ? '|' : '&');
+            return $compound ?? self::rawSigLeaf($tokens, $source, $start, $afterLeaf);
+        }
+
+        return [new SigTypeRef($typeRef), $afterLeaf];
+    }
+
+    /**
+     * Collect the remaining members of a FLAT union / intersection (the first is
+     * already parsed) into a {@see SigUnion} / {@see SigIntersection}. Returns null
+     * to fall back to a gradual {@see SigRaw} for a case the flat splitter does not
+     * own: a DNF group `(…)`, a mixed `|`/`&` at top level, an intersection member
+     * that is a scalar (invalid PHP), or a member that isn't a type leaf.
+     *
+     * @param list<PhpToken> $tokens
+     * @param string $sep '|' or '&'
+     * @return array{0: SigType, 1: int}|null
+     */
+    private static function parseFlatCompound(array $tokens, TypeRef $first, int $afterFirst, string $sep): ?array
+    {
+        $n = count($tokens);
+        $members = [$first];
+        $lastEnd = $afterFirst;
+        $i = self::skipWs($tokens, $afterFirst);
+        // @infection-ignore-all LessThan — `$i < $n` is a defensive bound; a well-formed
+        // signature always has a following `)` / `{`, so `$i` never reaches `$n` here.
+        while ($i < $n && $tokens[$i]->text === $sep) {
+            $j = self::skipWs($tokens, $i + 1);
+            // A member that isn't a type leaf — a DNF group `(…)`, a `?`-prefixed
+            // member, or end-of-input — bails the whole leaf to a gradual SigRaw.
+            $member = self::parseMemberLeaf($tokens, $j);
+            if ($member === null) {
+                return null;
+            }
+            [$ref, $lastEnd] = $member;
+            $members[] = $ref;
+            $i = self::skipWs($tokens, $lastEnd);
+        }
+
+        // A different separator still ahead ⇒ a mix that needs DNF parens ⇒ bail.
+        // @infection-ignore-all LessThan — `$i < $n` is a defensive bound (a following
+        // `)` / `{` always exists); the separator conditions are pinned behaviorally.
+        if ($i < $n && ($tokens[$i]->text === '|'
+            || ($tokens[$i]->text === '&' && self::sigAmpersandIsIntersection($tokens, $i)))
+        ) {
+            return null;
+        }
+
+        $leaves = array_map(static fn (TypeRef $r): SigTypeRef => new SigTypeRef($r), $members);
+        if ($sep === '|') {
+            return [new SigUnion($leaves), $lastEnd];
+        }
+        // A scalar member makes the intersection invalid PHP ⇒ stay gradual (raw).
+        foreach ($members as $member) {
+            // @infection-ignore-all UnwrapLtrim/UnwrapStrToLower — a scalar keyword is
+            // never fully-qualified and arrives lowercased from the grammar, so both
+            // normalizations are defensive (same rationale as resolveTypeRef's scalar guard).
+            if (in_array(strtolower(ltrim($member->name, '\\')), self::SCALAR_TYPES, true)) {
+                return null;
+            }
+        }
+        return [new SigIntersection($leaves), $lastEnd];
+    }
+
+    /**
+     * Parse one union / intersection MEMBER leaf → `[TypeRef, nextIdx]`, or null if
+     * the position isn't a type leaf. Mirrors the primary-leaf parse in
+     * {@see parseSigType}: a `Name` / `Name<…>` via {@see parseTypeArg}, or a
+     * reserved-word type keyword (`array` / `callable` / `static`).
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: TypeRef, 1: int}|null
+     */
+    private static function parseMemberLeaf(array $tokens, int $i): ?array
+    {
+        $parsed = self::parseTypeArg($tokens, $i);
+        if ($parsed === null) {
+            // @infection-ignore-all LessThan UnwrapStrToLower — the `$i < count` bound
+            // is defensive (the caller only reaches here mid-span, never at
+            // end-of-input); `strtolower` matches the first-leaf keyword branch but
+            // the resolver re-lowercases, so it is redundant. (The `$i + 1` end index
+            // is NOT ignored — it is pinned by a keyword-member-followed-by-parameter
+            // test.)
+            if ($i < count($tokens) && self::isSigTypeToken($tokens[$i])) {
+                $parsed = [new TypeRef(strtolower($tokens[$i]->text)), $i + 1];
+            }
+        }
+        if ($parsed === null) {
+            return null;
+        }
+        // Member-level `Name[]` sugar lowers to `array`, same as the first leaf.
+        [$ref, $next] = $parsed;
+        $suffix = self::arraySuffixEnd($tokens, $next);
+        if ($suffix !== null && !$ref->isGeneric()) {
+            return [new TypeRef('array'), $suffix + 1];
+        }
+        return $parsed;
+    }
+
+    /**
+     * The gradual {@see SigRaw} fallback for a compound leaf the flat splitter does
+     * not own — spans from `$start` to the end of the type expression.
+     *
+     * @infection-ignore-all — pure index plumbing: the `?? ($afterLeaf - 1)` arm is
+     * unreachable (scanTypeExprEnd returns non-null for the balanced spans that reach a
+     * bail), and the `$end + 1` next-index is the parser's shared convention, absorbed
+     * by every caller's `skipWs`, so a ±1 shift is unobservable. The raw text is
+     * display-only for a gradual leaf. Bail *detection* is pinned behaviorally.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: SigRaw, 1: int}
+     */
+    private static function rawSigLeaf(array $tokens, string $source, int $start, int $afterLeaf): array
+    {
+        $end = self::scanTypeExprEnd($tokens, $start) ?? ($afterLeaf - 1);
+        return [new SigRaw(self::sliceTokens($tokens, $source, $start, $end)), $end + 1];
+    }
+
+    /**
+     * True iff the `&` at `$idx` continues an intersection type (a Name follows)
+     * rather than marking a by-reference parameter (a `$var` / `...` follows).
+     *
+     * @infection-ignore-all — flat one-token lookahead; the intersection-vs-by-ref
+     * discrimination is pinned by the intersection-by-ref and intersection-member
+     * tests, and the residual `$nx < count()` guard is defensive (a `&` is only reached
+     * mid-span, never at the token-array boundary).
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function sigAmpersandIsIntersection(array $tokens, int $idx): bool
+    {
+        $nx = self::skipWs($tokens, $idx + 1);
+        return $nx < count($tokens)
+            && (self::isSigTypeToken($tokens[$nx]) || $tokens[$nx]->text === '?');
+    }
+
+    /**
+     * Source substring spanning token indices `$from`..`$to` inclusive.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function sliceTokens(array $tokens, string $source, int $from, int $to): string
+    {
+        $start = $tokens[$from]->pos;
+        $end = $tokens[$to]->pos + strlen($tokens[$to]->text);
+        return substr($source, $start, $end - $start);
     }
 
     /**
@@ -617,10 +1867,11 @@ final class XphpSourceParser
             // hint rather than letting them fall through to a bare `null` (which
             // would surface downstream as an opaque PHP syntax error).
             if ($i < $n && ($tokens[$i]->text === '+' || $tokens[$i]->text === '-')) {
-                throw new RuntimeException(
+                throw new XphpParseException(
                     'The `+T` / `-T` variance syntax was replaced by `out T` / `in T`. '
                     . 'Write `out` for covariance and `in` for contravariance, e.g. '
                     . '`class Box<out T>` or `class Consumer<in T>`.',
+                    $tokens[$i]->line,
                 );
             }
 
@@ -638,13 +1889,14 @@ final class XphpSourceParser
                 $afterMarker = self::skipWs($tokens, $i + 1);
                 if ($afterMarker < $n && self::isNameToken($tokens[$afterMarker])) {
                     if (!$allowVariance) {
-                        throw new RuntimeException(
+                        throw new XphpParseException(
                             'Variance markers `out T` / `in T` are not supported on methods, '
                             . 'functions, closures, or arrow functions — variance is a '
                             . 'class-level-only feature by design: a function or closure '
                             . 'specialization has no stable class identity to anchor a '
                             . 'subtype `extends` edge to. Move the generic to a class-level '
                             . 'type parameter.',
+                            $tokens[$i]->line,
                         );
                     }
                     $variance = $tokens[$i]->text === 'out'
@@ -658,6 +1910,7 @@ final class XphpSourceParser
                 return null;
             }
             $paramName = ltrim($tokens[$i]->text, '\\');
+            $paramNameLine = $tokens[$i]->line;
             $i++;
 
             // Reserve `out` / `in` as variance markers: they can never name a
@@ -667,10 +1920,11 @@ final class XphpSourceParser
             // second `out` read as the name), `class Pair<in, out>`,
             // `class Box<in : Foo>` — all reject with a single diagnostic.
             if (in_array($paramName, ['out', 'in'], true)) {
-                throw new RuntimeException(
+                throw new XphpParseException(
                     '`out` and `in` are variance markers and cannot name a type parameter. '
                     . 'Use `out T` for covariance or `in T` for contravariance, and pick a '
                     . 'different name for the parameter itself.',
+                    $paramNameLine,
                 );
             }
 
@@ -689,22 +1943,22 @@ final class XphpSourceParser
             $afterBound = self::skipWs($tokens, $i);
             if ($afterBound < $n && $tokens[$afterBound]->text === '=') {
                 if (!$allowDefaults) {
-                    throw new RuntimeException(sprintf(
+                    throw new XphpParseException(sprintf(
                         'Generic parameter `%s` has a default value, which is not yet '
                         . 'supported on static closures. Drop the `static` modifier or '
                         . 'assign the closure to a named function.',
                         $paramName,
-                    ));
+                    ), $tokens[$afterBound]->line);
                 }
                 $afterEq = self::skipWs($tokens, $afterBound + 1);
                 $parsedDefault = self::parseTypeArg($tokens, $afterEq);
                 if ($parsedDefault === null) {
-                    throw new RuntimeException(sprintf(
+                    throw new XphpParseException(sprintf(
                         'Generic parameter `%s` has an invalid default; only a single '
                         . 'concrete or generic type is allowed after `=` (no nullable '
                         . 'or union shapes).',
                         $paramName,
-                    ));
+                    ), $tokens[$afterBound]->line);
                 }
                 [$default, $i] = $parsedDefault;
                 // Reject `T = Box | Other` (union) and `T = Box & Other` (intersection)
@@ -715,20 +1969,20 @@ final class XphpSourceParser
                 if ($afterDefault < $n
                     && ($tokens[$afterDefault]->text === '|' || $tokens[$afterDefault]->text === '&')
                 ) {
-                    throw new RuntimeException(sprintf(
+                    throw new XphpParseException(sprintf(
                         'Generic parameter `%s` has an invalid default; only a single '
                         . 'concrete or generic type is allowed after `=` (no nullable '
                         . 'or union shapes).',
                         $paramName,
-                    ));
+                    ), $tokens[$afterDefault]->line);
                 }
                 $sawDefault = true;
             } elseif ($sawDefault) {
-                throw new RuntimeException(sprintf(
+                throw new XphpParseException(sprintf(
                     'Generic parameter `%s` has no default but follows a parameter with '
                     . 'a default. Required type parameters must precede defaulted ones.',
                     $paramName,
-                ));
+                ), $paramNameLine);
             }
 
             $entries[] = [
@@ -1021,6 +2275,27 @@ final class XphpSourceParser
 
         $args = [];
         $afterName = self::skipWs($tokens, $idx);
+        // A `Closure(...)` signature type used as a generic bound
+        // (`class C<T : Closure(int): int>`) is not supported. This reader sits on
+        // a declaration-header seam (never the speculative `<`-comparison path), so
+        // a clear reject here is safe — a bare `\Closure` bound (no signature) is
+        // untouched, and an ordinary user type is keyed out by the name check. The
+        // opener is a plain `(` or a scalar cast token (`Closure(int)` lexes `(int)`
+        // as one T_INT_CAST), mirroring the closure-signature scanner.
+        if (ltrim($rawName, '\\') === 'Closure'
+            && $afterName < $n
+            && ($tokens[$afterName]->text === '(' || self::isCastToken($tokens[$afterName]))
+        ) {
+            throw new XphpParseException(
+                'A Closure(...) signature type is not supported as a generic bound (closure signatures are allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
+                // @infection-ignore-all Minus/IncrementInteger/DecrementInteger -- the `Closure`
+                // name token and its neighbours share one source line in any single-line
+                // generic-parameter declaration (the common form), so shifting this index
+                // reports the same line; the real-line behaviour is pinned by the bound
+                // check fixture's line assertion.
+                $tokens[$idx - 1]->line,
+            );
+        }
         if ($afterName < $n && $tokens[$afterName]->text === '<') {
             $parsed = self::parseTypeArgList($tokens, $afterName);
             if ($parsed === null) {
@@ -1307,6 +2582,23 @@ final class XphpSourceParser
     }
 
     /**
+     * A semi-reserved keyword usable as a method NAME. PHP has permitted every keyword
+     * (`list`, `print`, `for`, `default`, …) as a method name since 7.0, so a keyword-named
+     * generic method — `public function list<T>(…)` and its static call `Recv::list::<…>()` —
+     * must be recognized where `isNameToken` (which covers only real name tokens) would miss it.
+     * Deliberately excludes name tokens (handled by the isNameToken paths) and variables, and
+     * tests the token's TEXT against PHP's label grammar so punctuation (`(`, `&`, `<`) and
+     * `$vars` never qualify. The instance call `$o->list::<…>()` needs no help — PHP re-tokenizes
+     * `list` as T_STRING after `->`; only the after-`::` and declaration positions keep the keyword id.
+     */
+    private static function isSemiReservedName(PhpToken $tok): bool
+    {
+        return !self::isNameToken($tok)
+            && $tok->id !== T_VARIABLE
+            && preg_match('/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/', $tok->text) === 1;
+    }
+
+    /**
      * `self` / `static` / `parent` are PHP keywords that resolve dynamically
      * at runtime against the currently-executing class. xphp's scanner sees
      * them in two positions that need special handling:
@@ -1337,6 +2629,29 @@ final class XphpSourceParser
     }
 
     /**
+     * Equal-length whitespace for a stripped span, keeping every newline byte
+     * in place: byte-keyed markers after the span rely on the length, and
+     * line-keyed (class / method / name) markers rely on the line count — a
+     * multi-line `<…>` clause, turbofish arg list, or sugar span collapsed to
+     * spaces would shift every later marker off its node. Deliberately
+     * byte-wise (no `/u`): a multibyte character inside the span must blank
+     * to one space PER BYTE or the length invariant breaks.
+     */
+    private static function blank(string $span): string
+    {
+        return preg_replace('/[^\r\n]/', ' ', $span) ?? '';
+    }
+
+    /**
+     * Just the newline bytes of a span, for length-CHANGING rewrites (the
+     * `T[]` -> `array` sugar) that still must not swallow line breaks.
+     */
+    private static function newlinesOf(string $span): string
+    {
+        return preg_replace('/[^\r\n]/', '', $span) ?? '';
+    }
+
+    /**
      * @param list<array{int, int, string}> $replacements [byte offset, original length, replacement text]
      */
     private static function applyReplacements(string $source, array $replacements): string
@@ -1359,19 +2674,26 @@ final class XphpSourceParser
      * recognition (closures / arrows, Phase 4) can dispatch to a different
      * matcher without having to peek at the rest of the marker shape.
      *
+     * Returns the loud-backstop error for the first class/method marker left
+     * unbound after the walk (always a transpiler alignment bug), or null when
+     * every declaration marker attached. The strict parse path throws it; the
+     * tolerant (LSP) path ignores it — half-typed code legitimately strands
+     * markers there.
+     *
      * @param list<Node\Stmt> $ast
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
+     * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers): void
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap): ?string
     {
         $traverser = new NodeTraverser();
-        $traverser->addVisitor(new
+        $visitor = new
             /**
              * @phpstan-import-type BoundDict from XphpSourceParser
              */
-            class($classMarkers, $nameMarkers, $methodMarkers) extends NodeVisitorAbstract {
+            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap) extends NodeVisitorAbstract {
             private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
@@ -1385,25 +2707,40 @@ final class XphpSourceParser
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $classMarkers
              * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
+             * @param array<int, array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
              */
             public function __construct(
                 private array $classMarkers,
                 private array $nameMarkers,
                 private array $methodMarkers,
+                private array $closureMarkers,
+                private ByteOffsetMap $byteOffsetMap,
             ) {
                 $this->ctx = new NamespaceContext();
             }
 
             public function enterNode(Node $node): null
             {
+                if ($node instanceof Use_ || $node instanceof GroupUse) {
+                    // Reject a generic clause on a namespace-import BEFORE the blanket
+                    // Name branch below resolves its marker (which mis-qualifies the
+                    // already-absolute import name) or CallSiteRewriter emits an
+                    // absolute specialized name inside a `use N\{…}` prefix group
+                    // (unparseable PHP). A generic TRAIT-use is a Stmt\TraitUse — a
+                    // different node that never reaches here and keeps specializing.
+                    $this->rejectGenericClauseOnImport($node);
+                }
+
                 if ($node instanceof Namespace_) {
                     // @infection-ignore-all — bare `namespace { ... }` (no name) isn't used in any
                     // fixture; the null-coalesce branch never observably differs from a missing name.
                     $this->ctx->enterNamespace($node->name?->toString());
-                    // @infection-ignore-all — redundant with the standalone Use_ branch below; dead loop.
+                    // @infection-ignore-all — redundant with the standalone Use_/GroupUse branches below; dead loop.
                     foreach ($node->stmts as $inner) {
                         if ($inner instanceof Use_) {
                             $this->ctx->indexUse($inner);
+                        } elseif ($inner instanceof GroupUse) {
+                            $this->ctx->indexGroupUse($inner);
                         }
                     }
                 }
@@ -1411,13 +2748,24 @@ final class XphpSourceParser
                 if ($node instanceof Use_) {
                     // @infection-ignore-all — dual-handled by the inner foreach above.
                     $this->ctx->indexUse($node);
+                } elseif ($node instanceof GroupUse) {
+                    // @infection-ignore-all — dual-handled by the inner foreach above.
+                    $this->ctx->indexGroupUse($node);
                 }
 
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $shortName = $node->name->toString();
+                    // Match on the NAME Identifier's BYTE (mapped back to the
+                    // original source): the node starts at its first attribute
+                    // group or modifier, and line-keyed matching let two
+                    // same-name declarations on ONE line steal each other's
+                    // markers (`if(){class B}else{class B<T>}` handed the
+                    // clause to the plain class). The marker records the name
+                    // token's byte, which is unique per declaration.
+                    $classNameByte = $this->originalByteOf($node->name);
                     $paramEntries = null;
                     foreach ($this->classMarkers as $i => $marker) {
-                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $shortName) {
+                        if ($marker['bytePosition'] === $classNameByte && $marker['name'] === $shortName) {
                             $paramEntries = $marker['params'];
                             unset($this->classMarkers[$i]);
                             // @infection-ignore-all — break vs continue is equivalent after unset (marker is gone).
@@ -1465,29 +2813,50 @@ final class XphpSourceParser
                     }
                 }
 
+                if ($node instanceof ClassLike) {
+                    // Rewrite generic-trait adaptation operands (`insteadof` / `as`)
+                    // to the same specialized FQN as their `use`-list entry. Runs
+                    // after the namespace/use context is set (Namespace_/Use_ branches
+                    // above) and this class's type params are pushed, so the list
+                    // entry's args resolve exactly as the blanket Name branch that
+                    // specializes the list itself.
+                    $this->markTraitUseAdaptations($node);
+                }
+
                 if ($node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_
                     || $node instanceof Node\Expr\Closure
                     || $node instanceof Node\Expr\ArrowFunction
                 ) {
-                    // Named templates match by (line, name); anonymous templates
-                    // (closures + arrows) match by (line, bytePosition) -- the
-                    // bytePosition recorded at the `function` / `static` / `fn`
-                    // keyword aligns with nikic's `getStartFilePos()` for the
-                    // same AST node.
+                    // Named templates match by (name line, name); anonymous templates
+                    // (closures + arrows) match by (kind, bytePosition). The marker
+                    // records the ORIGINAL-source byte of the node's first token (the
+                    // first attribute group, `static`, or the keyword itself),
+                    // while getStartFilePos() reports the STRIPPED-source
+                    // byte -- a length-changing rewrite earlier in the file (e.g.
+                    // `LongName[]` -> `array`) shifts the two apart, so the stripped
+                    // position maps back through the byte-offset map before comparing
+                    // (same translation as attachClosureSig below).
                     $isAnonymous = $node instanceof Node\Expr\Closure
                         || $node instanceof Node\Expr\ArrowFunction;
                     $declName = $isAnonymous ? '' : $node->name->toString();
-                    $nodeStartByte = $node->getStartFilePos();
+                    // Named declarations match on the NAME Identifier's BYTE
+                    // (the node itself starts at its first attribute group or
+                    // modifier; a shared line no longer conflates two
+                    // declarations). Anonymous ones match the node's own start
+                    // byte — the marker anchored at the first attribute group,
+                    // `static`, or the keyword.
+                    $declByte = $isAnonymous ? -1 : $this->originalByteOf($node->name);
+                    $nodeStartByte = $this->byteOffsetMap->toOriginal($node->getStartFilePos());
                     $matchedParamNames = [];
                     foreach ($this->methodMarkers as $i => $marker) {
                         // @infection-ignore-all -- markers are populated jointly with
-                        // both halves of the (line, name) or (kind, bytePosition) pair;
-                        // any single-clause-only input is unreachable from the scanner.
+                        // both halves of the (name byte, name) or (kind, bytePosition)
+                        // pair; any single-clause-only input is unreachable from the scanner.
                         $isMatch = $isAnonymous
                             ? ($marker['kind'] !== 'named'
                                 && $marker['bytePosition'] === $nodeStartByte)
-                            : ($marker['line'] === $node->getStartLine()
+                            : ($marker['bytePosition'] === $declByte
                                 && $marker['name'] === $declName);
                         if ($isMatch) {
                             // Same two-pass scope-push-before-bound-build pattern
@@ -1544,18 +2913,17 @@ final class XphpSourceParser
                     && $node->name instanceof Node\Identifier
                 ) {
                     $callMethodName = $node->name->toString();
-                    $startLine = $node->getStartLine();
+                    // Match by the method-name Identifier's BYTE — the marker
+                    // anchored at the method token, so this is exact for
+                    // multi-line chains (`Foo::\n method::<int>`) AND for two
+                    // same-name calls sharing a line (the old line-range match
+                    // let `Plain::pick(5) + Util::pick::<int>(4)` cross-claim,
+                    // false-rejecting both). Covers static, instance, and
+                    // nullsafe calls alike.
+                    $methodNameByte = $this->originalByteOf($node->name);
                     foreach ($this->nameMarkers as $i => $marker) {
-                        // Match by name + line-range overlap. The Call node's
-                        // getStartLine() is the receiver's line; the marker's anchorLine
-                        // is the same, and its (later) line is the identifier's line.
-                        // Both can differ on multi-line `Foo::\n    method::<int>` or
-                        // `$obj->\n    method::<int>` constructs. The same logic now
-                        // covers static, instance, and nullsafe method calls -- the
-                        // GenericMethodCompiler distinguishes them later by AST type.
                         if ($marker['name'] === $callMethodName
-                            && $startLine >= $marker['anchorLine']
-                            && $startLine <= $marker['line']
+                            && $marker['bytePosition'] === $methodNameByte
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
@@ -1569,15 +2937,21 @@ final class XphpSourceParser
                 if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Name) {
                     // Claim the marker on FuncCall enter (parent fires before children) so the
                     // inner Name doesn't pick it up and trigger the class-rewrite path.
-                    $funcName = $node->name->toString();
-                    $startLine = $node->getStartLine();
+                    // toCodeString(): markers record the raw source spelling, so a
+                    // `\App\make` / `namespace\make` marker must compare against the
+                    // node's own qualified spelling, not the prefix-erased toString().
+                    $funcName = $node->name->toCodeString();
+                    // Byte of the callee Name node — exact even for two
+                    // same-name turbofish calls sharing a line. The
+                    // variableTurbofish kind-guard is belt-and-braces (a
+                    // Variable marker's byte is a `$`, never a name byte).
+                    $calleeByte = $this->originalByteOf($node->name);
                     foreach ($this->nameMarkers as $i => $marker) {
-                        // @infection-ignore-all -- the three `&&` clauses are jointly
+                        // @infection-ignore-all -- the clauses are jointly
                         // populated when a marker is created; any single-clause-only
                         // input is unreachable from XphpSourceParser's own scanner.
                         if ($marker['name'] === $funcName
-                            && $startLine >= $marker['anchorLine']
-                            && $startLine <= $marker['line']
+                            && $marker['bytePosition'] === $calleeByte
                             && $marker['kind'] !== 'variableTurbofish'
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
@@ -1590,6 +2964,31 @@ final class XphpSourceParser
                     }
                 }
 
+                // Free-function callee: record its resolved FQN (honoring `use function`
+                // + namespace) so the Specializer can fully-qualify it on a relocated
+                // clone when the unit defines it. Skip generic-turbofish calls (owned by
+                // GenericMethodCompiler, marked with ATTR_METHOD_GENERIC_ARGS above) and
+                // variable callees (`$fn()` — not a Name).
+                if ($node instanceof Node\Expr\FuncCall
+                    && $node->name instanceof Name
+                    && $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) === null
+                ) {
+                    $node->name->setAttribute(
+                        XphpSourceParser::ATTR_RESOLVED_FUNC_FQN,
+                        $this->ctx->resolveFunctionName($node->name),
+                    );
+                }
+
+                // Const fetch: record its resolved FQN the same way. `true`/`false`/`null`
+                // are ConstFetch nodes too, but their resolved FQN is never in the const
+                // set, so the Specializer's in-set guard leaves them untouched.
+                if ($node instanceof Node\Expr\ConstFetch) {
+                    $node->name->setAttribute(
+                        XphpSourceParser::ATTR_RESOLVED_CONST_FQN,
+                        $this->ctx->resolveConstName($node->name),
+                    );
+                }
+
                 // Variable-turbofish call site: `$var::<...>(...)` -- nikic
                 // parses this (after the scanner stripped `::<...>`) as
                 // `FuncCall(name: Variable, args: [...])`. The marker's name
@@ -1599,16 +2998,18 @@ final class XphpSourceParser
                     && is_string($node->name->name)
                 ) {
                     $varName = $node->name->name;
-                    $startLine = $node->getStartLine();
+                    // Byte of the Variable node's `$` — equals the recorded
+                    // T_VARIABLE position; exact for repeated `$f::<…>` calls
+                    // of the same variable on one line.
+                    $varByte = $this->originalByteOf($node->name);
                     foreach ($this->nameMarkers as $i => $marker) {
                         // @infection-ignore-all -- markers are populated jointly:
-                        // kind/name/anchorLine/line are all set together by the
+                        // kind/name/bytePosition are all set together by the
                         // scanner's variable-turbofish arm, so single-clause
                         // dropouts are unreachable.
                         if ($marker['kind'] === 'variableTurbofish'
                             && $marker['name'] === $varName
-                            && $startLine >= $marker['anchorLine']
-                            && $startLine <= $marker['line']
+                            && $marker['bytePosition'] === $varByte
                         ) {
                             $resolvedArgs = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $resolvedArgs);
@@ -1620,9 +3021,20 @@ final class XphpSourceParser
                 }
 
                 if ($node instanceof Name) {
-                    $nameStr = $node->toString();
+                    // toCodeString(): a Relative node's toString() erases the
+                    // `namespace\` prefix, so a bare `Box` node on the same line
+                    // could steal a `namespace\Box` marker (and the relative
+                    // node's own marker never matched at all — silently dropping
+                    // its type args). The marker records the source spelling.
+                    $nameStr = $node->toCodeString();
+                    // Byte of the Name node itself — the old line match let a
+                    // plain same-spelling hint on the same line steal a generic
+                    // hint's marker (`f(Box $a, Box<int> $b)` specialized the
+                    // wrong parameter), and a return hint could steal a `new`
+                    // turbofish's marker.
+                    $nameByte = $this->originalByteOf($node);
                     foreach ($this->nameMarkers as $i => $marker) {
-                        if ($marker['line'] === $node->getStartLine() && $marker['name'] === $nameStr) {
+                        if ($marker['bytePosition'] === $nameByte && $marker['name'] === $nameStr) {
                             $resolved = $this->resolveTypeRefList($marker['args']);
                             $node->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $resolved);
                             $templateFqn = $this->resolveNameOnly($nameStr);
@@ -1692,6 +3104,7 @@ final class XphpSourceParser
             private function markType(?Node $type): void
             {
                 if ($type instanceof Name) {
+                    $this->attachClosureSig($type);
                     $this->markName($type);
                 } elseif ($type instanceof Node\NullableType) {
                     $this->markType($type->type);
@@ -1702,13 +3115,160 @@ final class XphpSourceParser
                 }
             }
 
+            /**
+             * If a `\Closure` type Name is the erased head of a closure signature
+             * (the `(…)[: ret]` was blanked at scan time, leaving this surviving
+             * `\Closure`), attach the resolved signature. Matched by BYTE POSITION,
+             * not by line: a plain `Closure` type hint sharing a line with a real
+             * signature (`Closure $a, Closure(int): int $b`) would otherwise steal the
+             * marker. The node's stripped-source start position maps back through the
+             * byte-offset map to the original `Closure` position the marker recorded.
+             */
+            private function attachClosureSig(Name $node): void
+            {
+                // @infection-ignore-all ReturnRemoval — fast-path guard: a
+                // non-Closure name can never match a marker anyway (each
+                // recorded bytePosition holds the erased `\Closure` name
+                // itself), so falling through only wastes loop work.
+                if (ltrim($node->toString(), '\\') !== 'Closure') {
+                    return;
+                }
+                $startPos = $node->getStartFilePos();
+                // @infection-ignore-all — defensive: getStartFilePos() only returns < 0
+                // when positions are unrecorded; a real Name never sits at byte 0 (the
+                // open tag), so shifting this boundary is unreachable with valid input.
+                if ($startPos < 0) {
+                    return;
+                }
+                $originalPos = $this->byteOffsetMap->toOriginal($startPos);
+                foreach ($this->closureMarkers as $i => $marker) {
+                    if ($marker['bytePosition'] === $originalPos) {
+                        $node->setAttribute(
+                            XphpSourceParser::ATTR_CLOSURE_SIG,
+                            $this->resolveClosureSignature($marker['signature']),
+                        );
+                        unset($this->closureMarkers[$i]);
+                        // @infection-ignore-all — break vs continue is equivalent after unset:
+                        // bytePosition is unique, so no later marker can match again.
+                        break;
+                    }
+                }
+            }
+
+            private function resolveClosureSignature(ClosureSignature $sig): ClosureSignature
+            {
+                $params = array_map(
+                    fn (ClosureSignatureParam $p): ClosureSignatureParam => new ClosureSignatureParam(
+                        $this->resolveSigType($p->type),
+                        $p->byRef,
+                        $p->variadic,
+                        $p->optional,
+                    ),
+                    $sig->params,
+                );
+                $return = $sig->return === null ? null : $this->resolveSigType($sig->return);
+
+                return new ClosureSignature($params, $return, $sig->nullable);
+            }
+
+            private function resolveSigType(SigType $type): SigType
+            {
+                if ($type instanceof SigTypeRef) {
+                    return new SigTypeRef($this->resolveTypeRef($type->type));
+                }
+                if ($type instanceof SigClosure) {
+                    return new SigClosure($this->resolveClosureSignature($type->signature));
+                }
+                if ($type instanceof SigUnion) {
+                    return new SigUnion(array_map($this->resolveSigType(...), $type->members));
+                }
+                if ($type instanceof SigIntersection) {
+                    return new SigIntersection(array_map($this->resolveSigType(...), $type->members));
+                }
+
+                // SigRaw — a leaf the flat splitter could not structure (a DNF group,
+                // an intersection with a scalar); carry the raw text through gradual.
+                return $type;
+            }
+
+            /**
+             * A node's start byte in the ORIGINAL source: getStartFilePos()
+             * reports the STRIPPED-source byte, so a length-changing rewrite
+             * earlier in the file (the `T[]` -> `array` lowering) shifts the
+             * two apart; the byte-offset map translates back. Returns -1
+             * (matching no marker) for a position-less node — never produced
+             * by parsing real source, defensive only.
+             */
+            /**
+             * A generic clause on a namespace-import `use` — single (`use App\Box<int>;`),
+             * aliased (`… as B`), `use const`, or grouped (`use App\{Box<int>, …}`, and the
+             * clause-on-prefix shape `use App<int>\{…}`) — has no valid xphp meaning: imports
+             * name a symbol, they don't instantiate one. Left alone, the single/aliased/const
+             * forms mis-blame a double-qualified phantom template, and the grouped form emits
+             * an absolute specialized name inside a `use N\{…}` prefix group, which is
+             * unparseable PHP produced silently. Reject it here — before the blanket Name
+             * branch consumes the marker — so both `check` (collected) and `compile` (thrown)
+             * report the right symbol at the import's line. `use function …<…>` never reaches
+             * this stage (its clause is left unstripped, so php-parser rejects it first).
+             *
+             * @param Use_|GroupUse $node
+             */
+            private function rejectGenericClauseOnImport(Node $node): void
+            {
+                $prefix = $node instanceof GroupUse ? $node->prefix->toCodeString() : null;
+                /** @var list<array{Name, string}> $candidates [name node, display symbol] */
+                $candidates = [];
+                if ($node instanceof GroupUse) {
+                    $candidates[] = [$node->prefix, $prefix];
+                }
+                foreach ($node->uses as $use) {
+                    $spelling = $use->name->toCodeString();
+                    $candidates[] = [
+                        $use->name,
+                        $prefix !== null ? $prefix . '\\' . $spelling : $spelling,
+                    ];
+                }
+                foreach ($candidates as [$name, $symbol]) {
+                    $byte = $this->originalByteOf($name);
+                    $spelling = $name->toCodeString();
+                    foreach ($this->nameMarkers as $marker) {
+                        if ($marker['bytePosition'] === $byte && $marker['name'] === $spelling) {
+                            throw new XphpParseException(sprintf(
+                                'A generic clause is not allowed on a `use` import. Import the '
+                                . 'template with a plain `use %s;` and apply the type arguments '
+                                . 'at the use site (the hint `%s<...>` or the call `%s::<...>()`).',
+                                $symbol,
+                                $symbol,
+                                $symbol,
+                            ), $name->getStartLine());
+                        }
+                    }
+                }
+            }
+
+            private function originalByteOf(Node $node): int
+            {
+                $pos = $node->getStartFilePos();
+                // @infection-ignore-all — defensive: php-parser records positions on
+                // every node parsed from source; -1 only occurs for synthesized nodes,
+                // which never reach the marker matchers.
+                if ($pos < 0) {
+                    return -1;
+                }
+                return $this->byteOffsetMap->toOriginal($pos);
+            }
+
             private function markName(Name $node): void
             {
                 if (!$this->shouldQualify($node)) {
                     return;
                 }
-                $name = $node->toString();
-                $resolved = $this->ctx->resolveAgainstContext($name);
+                // resolveName (not a flattened toString()): a relative
+                // `namespace\Base` must bind to the current namespace — a
+                // `use Other\Base` alias never applies to it, and resolving
+                // the bare tail through the alias map emitted generated code
+                // extending/typing the WRONG class.
+                $resolved = $this->ctx->resolveName($node);
                 $node->setAttribute(XphpSourceParser::ATTR_RESOLVED_FQN, $resolved);
 
                 // Flag a bare, single-segment, non-imported class reference used inside a
@@ -1717,12 +3277,165 @@ final class XphpSourceParser
                 // a real (in-project / built-in) type or a stray/undeclared type parameter
                 // like the `T` in `interface Foo<Z> { add(T $x): void; }`. The validator
                 // resolves which using the declared-set; here we only record the suspicion.
-                if (count($node->getParts()) === 1
+                // Relative names are excluded: `namespace\Thing` is as explicit a class
+                // reference as an import or a FQ spelling.
+                if (!$node->isRelative()
+                    && count($node->getParts()) === 1
                     && $this->hasEnclosingTypeParams()
-                    && !$this->ctx->isImported($name)
+                    && !$this->ctx->isImported($node->toString())
                 ) {
                     $node->setAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE, $resolved);
                 }
+            }
+
+            /**
+             * Rewrite the trait operands of every `insteadof` / `as` adaptation in
+             * this class to the specialized generated FQN of their `use`-list entry,
+             * so `use A<int>, B<int> { A::m insteadof B; B::m as bm; }` loads instead
+             * of fataling on the removed template `App\A`. The list entries specialize
+             * through the blanket Name branch (they carry a `<…>` marker); the operand
+             * Names carry none, so without this pass they emit bare and resolve to the
+             * stripped template.
+             *
+             * CLASS-SCOPED, not per-`use`-statement: PHP lets an adaptation name a
+             * trait brought in by a DIFFERENT `use` of the same class
+             * (`use A<int>; use B<int> { A::m insteadof B; }` — operand `A` is not in
+             * the `B` statement's trait list), so the operand→specialization map is
+             * built from the generic list entries of ALL `Stmt\TraitUse` in the body,
+             * keyed on resolved template FQN.
+             *
+             * Only operands matching a GENERIC list entry are rewritten; a plain
+             * (non-generic) trait, or an operand naming a trait this class does not use
+             * generically, is left exactly as written — it is a real trait that still
+             * exists (the over-qualification lesson: never mis-qualify a live name). An
+             * operand whose short name maps to more than one distinct specialization in
+             * the class cannot be disambiguated in an adaptation clause, so it is a
+             * loud compile error rather than an arbitrary pick.
+             */
+            private function markTraitUseAdaptations(ClassLike $node): void
+            {
+                /** @var array<string, list<TypeRef>> $genericArgs template FQN => resolved list-entry args (first seen) */
+                $genericArgs = [];
+                /** @var array<string, string> $firstKey template FQN => canonical arg key first seen */
+                $firstKey = [];
+                /** @var array<string, true> $ambiguous template FQN => a second, differently-specialized use appeared */
+                $ambiguous = [];
+                foreach ($node->stmts as $stmt) {
+                    if (!$stmt instanceof Node\Stmt\TraitUse) {
+                        continue;
+                    }
+                    foreach ($stmt->traits as $traitName) {
+                        $args = $this->peekGenericArgs($traitName);
+                        if ($args === null) {
+                            // A plain (non-generic) trait use — its operands stay bare.
+                            continue;
+                        }
+                        $fqn = $this->resolveNameOnly($traitName->toCodeString());
+                        $key = $this->argsKey($args);
+                        if (!isset($genericArgs[$fqn])) {
+                            $genericArgs[$fqn] = $args;
+                            $firstKey[$fqn] = $key;
+                        } elseif ($firstKey[$fqn] !== $key) {
+                            $ambiguous[$fqn] = true;
+                        }
+                    }
+                }
+                if ($genericArgs === []) {
+                    return;
+                }
+                foreach ($node->stmts as $stmt) {
+                    if (!$stmt instanceof Node\Stmt\TraitUse) {
+                        continue;
+                    }
+                    foreach ($stmt->adaptations as $adaptation) {
+                        if ($adaptation instanceof Node\Stmt\TraitUseAdaptation\Precedence) {
+                            // `A::m insteadof B, C;` — the winning trait (`->trait`) and
+                            // every excluded trait (`->insteadof`, a Name[]) are operands.
+                            $this->markTraitOperand($adaptation->trait, $genericArgs, $ambiguous);
+                            foreach ($adaptation->insteadof as $excluded) {
+                                $this->markTraitOperand($excluded, $genericArgs, $ambiguous);
+                            }
+                        } elseif ($adaptation instanceof Node\Stmt\TraitUseAdaptation\Alias) {
+                            // `B::m as bm;` — only `->trait` is a trait name; the
+                            // `newModifier` / `newName` subnodes stay untouched. A bare
+                            // `m as bm;` (no source trait) has a null `->trait`.
+                            $this->markTraitOperand($adaptation->trait, $genericArgs, $ambiguous);
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Tag one adaptation operand with the generic attributes of its matching
+             * list entry so CallSiteRewriter rewrites it to the specialization's FQN
+             * (identical to the list entry — `recordInstantiation` dedupes to one
+             * generated trait). A null operand (`m as bm;` with no source trait) or one
+             * matching no generic list entry is left untouched; an ambiguous match is a
+             * loud error.
+             *
+             * @param array<string, list<TypeRef>> $genericArgs
+             * @param array<string, true> $ambiguous
+             */
+            private function markTraitOperand(?Name $operand, array $genericArgs, array $ambiguous): void
+            {
+                if ($operand === null) {
+                    return;
+                }
+                $fqn = $this->resolveNameOnly($operand->toCodeString());
+                if (isset($ambiguous[$fqn])) {
+                    throw new XphpParseException(sprintf(
+                        'Ambiguous generic trait operand `%s` in an adaptation clause: this '
+                        . 'class uses more than one specialization of that trait, and an '
+                        . '`insteadof` / `as` clause names a trait, not a specialization, so '
+                        . 'it cannot say which one is meant. Use a single specialization of '
+                        . 'that trait in an adapted class.',
+                        $operand->toCodeString(),
+                    ), $operand->getStartLine());
+                }
+                if (!isset($genericArgs[$fqn])) {
+                    // Not a generic trait this class uses — a real, still-existing trait
+                    // (or an unrelated operand). Leave it exactly as written.
+                    return;
+                }
+                $operand->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, $genericArgs[$fqn]);
+                $operand->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
+            }
+
+            /**
+             * Peek (WITHOUT consuming) the resolved generic args recorded for a
+             * trait-use LIST entry Name. Returns null when the trait carries no `<…>`
+             * marker (a plain, non-generic trait use). Mirrors the byte+name match of
+             * the blanket Name branch but leaves the marker in place — that branch
+             * still consumes it when the traversal reaches the list entry.
+             *
+             * @return list<TypeRef>|null
+             */
+            private function peekGenericArgs(Name $traitName): ?array
+            {
+                $byte = $this->originalByteOf($traitName);
+                $nameStr = $traitName->toCodeString();
+                foreach ($this->nameMarkers as $marker) {
+                    if ($marker['bytePosition'] === $byte && $marker['name'] === $nameStr) {
+                        return $this->resolveTypeRefList($marker['args']);
+                    }
+                }
+                return null;
+            }
+
+            /**
+             * Canonical, order-sensitive key for a resolved arg list — the same
+             * per-arg canonical form the registry hashes on. Used to detect when one
+             * trait short-name is used with two DIFFERENT specializations in the same
+             * class (`use A<int>, A<string>`), which a bare operand cannot pick between.
+             *
+             * @param list<TypeRef> $args
+             */
+            private function argsKey(array $args): string
+            {
+                return implode(',', array_map(
+                    static fn (TypeRef $a): string => $a->canonical(),
+                    $args,
+                ));
             }
 
             /**
@@ -1745,11 +3458,14 @@ final class XphpSourceParser
                     return false;
                 }
                 $name = $node->toString();
+                // A RELATIVE spelling is never a type param (`namespace\T` is an
+                // explicit class reference), so only a plain name defers to the
+                // enclosing scope here.
                 // @infection-ignore-all — defensive only: an enclosing type-param is a single
                 // segment that the Specializer substitutes (returning early via typeRefToNode)
                 // before the resolved-FQN swap can ever read the attribute, so tagging it is
                 // likewise unobservable.
-                if ($this->isEnclosingTypeParam($name)) {
+                if (!$node->isRelative() && $this->isEnclosingTypeParam($name)) {
                     return false;
                 }
                 $parts = $node->getParts();
@@ -1763,9 +3479,9 @@ final class XphpSourceParser
 
             private function resolveNameOnly(string $name): string
             {
-                if (str_starts_with($name, '\\')) {
-                    return ltrim($name, '\\');
-                }
+                // A prefixed spelling (`\App\Box`, `namespace\Box`) can never
+                // name a type param and resolves in resolveAgainstContext's own
+                // leading-backslash / relative branches.
                 if ($this->isEnclosingTypeParam($name)) {
                     return $name;
                 }
@@ -1951,8 +3667,68 @@ final class XphpSourceParser
                 }
                 return false;
             }
-        });
+
+            /**
+             * Diagnostic for a class/method marker that survived the walk
+             * unbound, or null when every one attached. Valid input can never
+             * leave one behind — once parsing succeeded, every recognized
+             * declaration clause hangs off a real AST node — so a survivor is
+             * a marker/AST alignment bug that would otherwise silently drop
+             * the clause's type parameters from the emitted code. Name markers
+             * are deliberately excluded: their attachment is lax by design
+             * (pseudo-type type-args are skipped, gradual call shapes pass
+             * through unclaimed).
+             */
+            public function firstUnboundDeclarationMarker(): ?string
+            {
+                return XphpSourceParser::unboundDeclarationMarkerMessage(
+                    $this->classMarkers,
+                    $this->methodMarkers,
+                );
+            }
+        };
+        $traverser->addVisitor($visitor);
 
         $traverser->traverse($ast);
+
+        return $visitor->firstUnboundDeclarationMarker();
+    }
+
+    /**
+     * Build the loud error for the first unbound class/method generic marker,
+     * or null when none survived. See the visitor's
+     * `firstUnboundDeclarationMarker` for why a survivor is always a
+     * transpiler bug: the strict parse path throws it rather than compiling
+     * on and silently de-generifying the declaration.
+     *
+     * @internal exposed for direct testing; not part of the public API.
+     *
+     * @param array<int, array{line: int, name: string}> $classMarkers
+     * @param array<int, array{line: int, name: string}> $methodMarkers
+     */
+    public static function unboundDeclarationMarkerMessage(array $classMarkers, array $methodMarkers): ?string
+    {
+        foreach ($classMarkers as $marker) {
+            return self::unboundMarkerMessage(sprintf('`%s`', $marker['name']), $marker['line']);
+        }
+        foreach ($methodMarkers as $marker) {
+            $subject = $marker['name'] !== ''
+                ? sprintf('`%s`', $marker['name'])
+                : 'an anonymous closure';
+            return self::unboundMarkerMessage($subject, $marker['line']);
+        }
+        return null;
+    }
+
+    private static function unboundMarkerMessage(string $subject, int $line): string
+    {
+        return sprintf(
+            'The generic type-parameter clause for %s (line %d) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $subject,
+            $line,
+        );
     }
 }

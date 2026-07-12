@@ -22,6 +22,7 @@ use PhpParser\Node\MatchArm;
 use PhpParser\Node\Name;
 use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Param;
 use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\Stmt\Case_;
 use PhpParser\Node\Stmt\Catch_;
@@ -91,6 +92,7 @@ final class GenericMethodCompiler
     public const CODE_BOUND_UNPROVABLE = 'xphp.bound_unprovable';
     public const CODE_UNDETERMINED_RECEIVER = 'xphp.undetermined_receiver';
     public const CODE_UNSPECIALIZABLE_SELF_CALL = 'xphp.unspecializable_self_call';
+    public const CODE_UNSPECIALIZED_GENERIC_CLOSURE = 'xphp.unspecialized_generic_closure';
 
     /**
      * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
@@ -479,6 +481,17 @@ final class GenericMethodCompiler
              * }>
              */
             public array $closureDispatchPlan = [];
+            /**
+             * spl_object_id set of closure/arrow templates some call site
+             * ATTEMPTED to specialize (turbofish lookup or bare-call
+             * resolution) — even when that call then drew its own reject
+             * (static closure, `$this` capture, missing turbofish). Read
+             * after the walk: a generic template never attempted anywhere
+             * is an orphan that would emit raw type-param hints.
+             *
+             * @var array<int, true>
+             */
+            public array $attemptedClosureTemplates = [];
             /**
              * Snapshot stack for scope isolation across nested
              * Function_/ClassMethod/Closure/ArrowFunction boundaries. On enter we push the
@@ -2058,6 +2071,17 @@ final class GenericMethodCompiler
                     return null;
                 }
                 if ($isVarTurbofish && $args !== [] && !self::allConcrete($args)) {
+                    // The author DID write a turbofish for this template — its
+                    // args just aren't concrete at this point (`$f::<T>($v)`
+                    // inside a still-abstract enclosing template). Mark it
+                    // attempted so the unspecialized-closure orphan check does
+                    // not misdiagnose it as never-called; how such a call
+                    // grounds when the enclosing template specializes is that
+                    // pipeline's own (tracked, pre-existing) concern.
+                    $template = $this->currentScopeClosureTemplates[$node->name->name] ?? null;
+                    if ($template !== null) {
+                        $this->attemptedClosureTemplates[spl_object_id($template)] = true;
+                    }
                     return null;
                 }
                 // Variable turbofish `$var::<T>(...)` / `$var::<>(...)`:
@@ -2152,7 +2176,7 @@ final class GenericMethodCompiler
              *
              * @param list<TypeRef> $args
              */
-            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): null
+            private function rewriteVariableTurbofishCall(FuncCall $node, array $args): ?Node
             {
                 assert($node->name instanceof Variable && is_string($node->name->name));
                 $varName = $node->name->name;
@@ -2160,6 +2184,10 @@ final class GenericMethodCompiler
                 if ($template === null) {
                     return null;
                 }
+                // Attempted — even if this call draws one of the eager rejects
+                // below, the template is not an ORPHAN and must not draw a
+                // second (unspecialized-closure) error for the same root cause.
+                $this->attemptedClosureTemplates[spl_object_id($template)] = true;
 
                 // Eager rejections -- preserved from pre-P5.4 behavior so the
                 // throw fires at the first offending call site, before the
@@ -2275,6 +2303,21 @@ final class GenericMethodCompiler
                     $entry['seenTagSet'][$tag] = true;
                     $entry['argSets'][] = $args;
                 }
+                unset($entry);
+
+                // First-class callable of a turbofish specialization (`$g = $f::<int>(...)`).
+                // The call site's args are just the `...` placeholder, so prepending the tag arg
+                // (the direct-call path below) would emit `$f('T_…', ...)` — illegal PHP that does
+                // not parse. Instead return a forwarding closure that binds the tag and forwards
+                // through the dispatcher `$varName` (materialized by finalize from the argSet just
+                // recorded), preserving callable semantics (arity, variadics, named args, and the
+                // captures the dispatcher already carries). It is NOT added to `callSites`, so
+                // finalize leaves it alone.
+                if ($node->isFirstClassCallable()) {
+                    return $this->buildForwardingFccClosure($varName, $tag, $node);
+                }
+
+                $entry = &$this->closureDispatchPlan[$planKey];
                 // Pair each call site with its PADDED tag so finalize doesn't
                 // recompute from the original `ATTR_METHOD_GENERIC_ARGS` (which
                 // may be empty for the `$f::<>()` default-padding shape).
@@ -2283,6 +2326,35 @@ final class GenericMethodCompiler
                 // Do NOT mutate the call site yet -- pass 2 prepends the tag arg
                 // once the dispatcher's specializations are known.
                 return null;
+            }
+
+            /**
+             * Build the forwarding closure that replaces a first-class-callable turbofish
+             * (`$f::<int>(...)`): `fn(...$p) => $f('<tag>', ...$p)`. Calling it routes through the
+             * dispatcher `$varName` (which finalize installs in that variable) to the specialization
+             * named by `$tag`. The variadic param name is guaranteed distinct from `$varName` so it
+             * never shadows the captured dispatcher inside the body.
+             */
+            private function buildForwardingFccClosure(string $varName, string $tag, FuncCall $node): ArrowFunction
+            {
+                $paramName = '__xphp_fcc_args';
+                while ($paramName === $varName) {
+                    $paramName .= '_';
+                }
+                $forward = new FuncCall(
+                    new Variable($varName),
+                    [
+                        new Arg(new String_($tag)),
+                        new Arg(new Variable($paramName), false, true),
+                    ],
+                );
+                return new ArrowFunction(
+                    [
+                        'params' => [new Param(new Variable($paramName), null, null, false, true)],
+                        'expr'   => $forward,
+                    ],
+                    $node->getAttributes(),
+                );
             }
 
             private function resolveClassName(Name $name): string
@@ -2307,6 +2379,15 @@ final class GenericMethodCompiler
                 }
                 if (str_starts_with($raw, '\\')) {
                     return ltrim($raw, '\\');
+                }
+                // `namespace\Svc` binds to the current namespace — never to a
+                // `use` alias (toString() erased the prefix, so ask the node).
+                // Alias capture here made the receiver's method-template lookup
+                // land on the wrong class.
+                if ($name->isRelative()) {
+                    return $this->currentNamespace !== ''
+                        ? $this->currentNamespace . '\\' . $raw
+                        : $raw;
                 }
                 $first = self::firstSegment($raw);
                 if (isset($this->useMap[$first])) {
@@ -2343,6 +2424,10 @@ final class GenericMethodCompiler
                     if ($template === null) {
                         return null;
                     }
+                    // A bare call to a generic closure draws the loud
+                    // missing-turbofish reject — that already covers the
+                    // template, so it is not an orphan too.
+                    $this->attemptedClosureTemplates[spl_object_id($template)] = true;
                     $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                     /** @var list<TypeParam>|null $params */
                     return is_array($params) ? [$params, '$' . $node->name->name] : null;
@@ -2428,6 +2513,10 @@ final class GenericMethodCompiler
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
 
+        // Runs BEFORE the emit gate: check mode must collect the orphan
+        // diagnostics too (this is a validation, not an emission side-effect).
+        $this->rejectUnspecializedClosureTemplates($ast, $visitor->attemptedClosureTemplates, $currentFile);
+
         // Validate-only (check) skips all emission: no dispatcher materialization, no buffered
         // appends. The traversal above already produced the diagnostics via the call-site checks.
         if (!$emit) {
@@ -2448,11 +2537,60 @@ final class GenericMethodCompiler
     }
 
     /**
+     * Reject every generic closure/arrow template no call site attempted to
+     * specialize. Specialization is call-site-driven: with no in-scope
+     * `$var::<...>(...)` grounding its type parameters, the template's
+     * type-parameter hints survive into the emitted output as references to
+     * non-existent classes (`App\T`) — a guaranteed TypeError behind a clean
+     * gate the moment the value is invoked. Handing the closure away as a
+     * plain callable cannot ground it (the dispatcher rewrite only exists for
+     * turbofish sites), so declared-but-never-specialized is always an error
+     * — including when the type parameters are referenced nowhere: the
+     * clause is dead syntax, and the remedy is deleting it.
+     *
+     * Runs in BOTH modes (compile throws at the first orphan; check collects
+     * one diagnostic per orphan).
+     *
+     * @param list<Node\Stmt> $ast
+     * @param array<int, true> $attemptedTemplateIds spl_object_id set of
+     *        templates some call site looked up (successfully or into one of
+     *        the eager rejects — those already carry their own error).
+     */
+    private function rejectUnspecializedClosureTemplates(array $ast, array $attemptedTemplateIds, string $currentFile): void
+    {
+        $finder = new \PhpParser\NodeFinder();
+        foreach ($finder->find($ast, static fn (Node $n): bool => ($n instanceof Closure || $n instanceof ArrowFunction)
+            && is_array($n->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))) as $template) {
+            if (isset($attemptedTemplateIds[spl_object_id($template)])) {
+                continue;
+            }
+            $message = sprintf(
+                'Generic %s is declared with type parameters but never specialized: no '
+                . '`$var::<...>(...)` call grounds them, so its type-parameter hints would reach '
+                . 'the emitted code as references to non-existent classes. Call it with an '
+                . 'explicit turbofish, or remove the `<...>` clause.',
+                $template instanceof ArrowFunction ? 'arrow function' : 'closure',
+            );
+            if ($this->diagnostics !== null) {
+                $this->diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_UNSPECIALIZED_GENERIC_CLOSURE,
+                    $message,
+                    new SourceLocation($currentFile, $template->getStartLine()),
+                ));
+                continue;
+            }
+            throw new RuntimeException($message);
+        }
+    }
+
+    /**
      * Pass 2: turn each collected dispatch-plan entry into a dispatcher
      * closure plus specialized top-level functions. Skips entries whose
-     * argSets are empty -- a generic closure template that was declared
-     * but never called via turbofish keeps its original Assign untouched,
-     * so reflection on unused templates stays faithful.
+     * argSets are empty -- every reachable declared-but-never-called template
+     * was already rejected by rejectUnspecializedClosureTemplates before this
+     * pass runs, so an empty argSet here means the template's only call sites
+     * drew their own (eager) rejects.
      *
      */
     private function finalizeClosureDispatchers(object $visitor, int $hashLength): void
@@ -2576,10 +2714,11 @@ final class GenericMethodCompiler
             /**
              * @infection-ignore-all -- this pre-scan keeps the rewrite pass alive for files that have no
              * NAMED generic templates but do use anonymous generics. It fires on a variable turbofish
-             * call (`$f::<…>()`) AND on a generic closure/arrow TEMPLATE assignment — the latter so a
-             * BARE call to that closure (`$f('x')`, no turbofish) is still traversed and diagnosed rather
-             * than silently skipped. (Inner anonymous visitor: Infection's blind spot — the closure-call
-             * diagnosis is covered behaviorally by the bare-closure-call accept/reject tests.)
+             * call (`$f::<…>()`) AND on ANY generic closure/arrow TEMPLATE — not just assigned ones —
+             * so a bare call (`$f('x')`), a return-position or argument-position template, and the
+             * never-called orphan are all traversed and diagnosed rather than silently skipped.
+             * (Inner anonymous visitor: Infection's blind spot — covered behaviorally by the
+             * bare-closure-call and unspecialized-closure accept/reject tests.)
              */
             public function enterNode(Node $node): null
             {
@@ -2592,9 +2731,8 @@ final class GenericMethodCompiler
                 ) {
                     $this->found = true;
                 }
-                if ($node instanceof Assign
-                    && ($node->expr instanceof Closure || $node->expr instanceof ArrowFunction)
-                    && is_array($node->expr->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
+                if (($node instanceof Closure || $node instanceof ArrowFunction)
+                    && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
                 ) {
                     $this->found = true;
                 }

@@ -42,6 +42,11 @@ timeline
         Pseudo-types
                 : self static parent in type positions
                 : constructor turbofish forms
+        Closure signature types
+                : typed callable hints in parameter return and property slots
+                : erasure to a bare Closure
+                : return-position conformance for closure literals
+                : signatures grounded per specialization
         Reified T
                 : runtime instanceof T
                 : marker interface per template
@@ -54,11 +59,6 @@ timeline
                 : undeclared-type and arity validation
                 : unresolved-generic-call detection
                 : PHPStan over the compiled output
-    section Next
-        Editor and tooling
-                : Live transpilation via stream wrapper
-        Compiler ergonomics
-                : Source maps back to xphp lines
     section Discovery
         Generic surface
                 : Generic type aliases
@@ -68,6 +68,7 @@ timeline
                 : this-capturing and static generic closures
                 : generic methods inherited via traits
                 : trait composition for variance and bounds
+                : closure signatures in generic args and bounds
         Module surface
                 : internal visibility modifier
                 : composer-package boundary
@@ -82,6 +83,8 @@ timeline
                 : Variadic type parameters
                 : Per-arg specialization
         Ecosystem
+                : Live transpilation via stream wrapper
+                : Source maps back to xphp lines
                 : REPL and playground
                 : Migration tooling from PHPDoc
         Explorations
@@ -190,6 +193,24 @@ upcoming one.
 - `new self::<T>(...)`, `new parent::<T>(...)`,
   `new static::<T>(...)` at constructor sites.
 
+### Closure signature types
+
+- `Closure(int $x, string $y): bool` accepted in parameter, return, and
+  property positions (including nested inside another signature);
+  erases to a bare `\Closure` in the emitted PHP.
+- Return-position conformance for closure literals: parameters
+  contravariant, return covariant, by-reference exact, arity
+  compatible — only a *provable* mismatch is rejected
+  (`xphp.closure_conformance`).
+- Signatures that reference an enclosing type parameter are grounded
+  per specialization; `compile` and `check` apply the identical check.
+- Flat union / intersection / nullable members are variance-checked
+  member by member; DNF and array-sugar leaves stay gradual (accepted).
+- Unsupported forms (a signature as a generic type argument or
+  bound, an untyped or defaulted signature parameter) are clear
+  compile errors, never miscompiles — see
+  [closure types → known limitations](syntax/closure-types.md#known-limitations).
+
 ### Reified T
 
 - `instanceof T`, `T::class`, `T $arg` runtime-checked via
@@ -232,18 +253,6 @@ upcoming one.
 
 ---
 
-## Next
-
-### Editor and tooling
-
-- Live transpilation via stream wrapper (no build step in dev).
-
-### Compiler ergonomics
-
-- Source maps (stack traces back to `.xphp` lines).
-
----
-
 ## Discovery
 
 Items in this section are open design questions, not committed work.
@@ -278,6 +287,13 @@ Gaps in already-shipped generics, deferred rather than designed out:
 - Trait composition for variance and bounds: the variance-position
   validator doesn't walk trait-imported method signatures, and bound
   satisfaction doesn't follow trait chains — both currently unmodeled.
+- Closure signature types as generic type arguments and bounds
+  (`Box<Closure(int): int>`, `class C<T : Closure(int): int>`): both
+  rejected today with a closure-specific error; lifting them is a
+  candidate. A bare `\Closure` works in every such position now.
+- Structuring a DNF leaf inside a `Closure(...)` signature
+  (`Closure((A&B)|C $x)`) into variance-checked members — today it
+  stays gradual (accepted, never the cause of a rejection).
 
 ### Module surface
 
@@ -309,6 +325,8 @@ Gaps in already-shipped generics, deferred rather than designed out:
 
 ### Ecosystem
 
+- Live transpilation via stream wrapper (no build step in dev).
+- Source maps (stack traces back to `.xphp` lines).
 - Psalm bridge (the PHPStan bridge has shipped — see Shipped above).
 - REPL / playground.
 - Migration tooling: lift PHPDoc `@template` annotations to xphp

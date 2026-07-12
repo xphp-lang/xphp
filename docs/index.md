@@ -34,7 +34,7 @@ echo $intContainer->get(), $strContainer->get();   // 42hello
 | [How it works](guides/how-it-works.md) | Curious about the compile pipeline (parse → specialize → emit). |
 | [Runtime semantics](guides/runtime-semantics.md) | What the generated code looks like and why reflection/serializers behave the way they do. |
 | [Comparison](guides/comparison.md) | TS / Kotlin / Rust experience — what carries over and what's different. |
-| [Roadmap](roadmap.md) | What's shipped, what's queued. Generics are the start. |
+| [Roadmap](roadmap.md) | What's shipped, what's in discovery. Generics are the start. |
 | [Architecture decisions](adr/README.md) | Why xphp is shaped the way it is — the significant design choices and their trade-offs. |
 
 ## Heads up — divergence from the RFC
@@ -57,6 +57,6 @@ and the gap is explicit in [comparison](guides/comparison.md) and
 
 Generics are the first substantial chunk of work in xphp, but the
 roadmap is much broader. See [roadmap](roadmap.md) for what's
-shipped, what's coming next (PhpStorm syntax highlighting, LSP,
-Composer plugin, source maps), and the long-term explorations (type
-aliases, mapped types, variadic generics, generic enums, AST macros).
+shipped and for the discovery items under exploration (type aliases,
+mapped types, variadic generics, generic enums, source maps, AST
+macros, and more).

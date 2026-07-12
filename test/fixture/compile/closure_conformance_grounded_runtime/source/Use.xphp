@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureGroundRuntime;
+
+// The `Closure(...)` return target references the class type parameter `T`. At
+// the template it is abstract (gradual); specialized as `Box<int>` it grounds to
+// `Closure(int $x): int`, and the returned literal `fn(int $x): int` conforms.
+class Box<T>
+{
+    public function make(): Closure(T $x): T
+    {
+        return fn(int $x): int => $x + 40;
+    }
+}
+
+$box = new Box::<int>();
+$factory = $box->make();
+$result = $factory(2); // 2 + 40 = 42

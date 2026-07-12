@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Grounded;
+
+// A<string> is never written in source — it is discovered only by specializing
+// B<string>. The bounded fixed-point in check must reach it to ground A's
+// closure factory, so a single (source-visible) pass would miss this reject.
+class A<T>
+{
+    public function factory(): Closure(T $value): bool
+    {
+        return fn(int $value): bool => $value > 0;
+    }
+}
+
+class B<U>
+{
+    public function make(): A<U>
+    {
+        return new A::<U>();
+    }
+}
+
+new B::<string>();

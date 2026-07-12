@@ -11,6 +11,27 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Added
 
+- **`Closure(...)` signature types.** A type hint such as `Closure(int $x, string $y):
+  bool` may appear in any parameter, return, or property position; it documents the
+  callable a slot expects and **erases to a bare `\Closure`** in the emitted PHP.
+  Where a closure literal is returned against a `Closure(...)` return type (a
+  typed-closure factory), xphp checks conformance — parameters contravariant, return
+  covariant, by-reference exact, arity compatible — and fails the build on a
+  **provable** mismatch (`xphp.closure_conformance`), while accepting anything it can't
+  prove wrong (untyped ⇒ `mixed`, an unresolved or built-in supertype, a
+  still-abstract type parameter, a union/intersection). A signature that references an
+  enclosing type parameter is **grounded** per specialization, so `Registry<int>` and
+  `Registry<string>` check the same factory against different concrete targets. A flat
+  union / intersection / nullable inside a signature (`Closure(int|string $x): void`,
+  `Closure(): A&B`, `?int`) is variance-checked member by member, following PHP's own
+  union/intersection subtyping; an intersection in a parameter position stays gradual
+  (an intersection of unrelated types is uninhabited). Grounded conformance is checked
+  identically by `xphp compile` and `xphp check`, so the two never disagree on a
+  generic factory. Unsupported positions — a signature as a generic argument or bound,
+  the `Name<Args>[]` combination, and defaulted or untyped signature parameters — are
+  rejected with a clear, closure-specific compile error rather than a miscompile; see
+  the [known limitations](docs/syntax/closure-types.md#known-limitations). See
+  [closure types](docs/syntax/closure-types.md).
 - **Multi-root builds via an `xphp.json` manifest.** A project declares its source
   roots, output directory, and hash length in an `xphp.json` at the project root;
   `xphp compile` and `xphp check` auto-detect it (or take an explicit `--config`).
@@ -167,6 +188,160 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **A turbofish on a dynamically-named call is rejected instead of silently dropped.**
+  A type-argument turbofish on a method or static call whose name is a runtime value —
+  `$o->$m::<int>()`, the nullsafe `$o?->$m::<int>()`, the variable-variable
+  `$$g::<int>()`, or the static `Foo::$m::<int>()` — used to be silently discarded (the
+  marker bound no AST node and the `::<…>` clause was stripped anyway), leaving a bare
+  dynamic call against a method that only exists in its specialized `_T_<hash>` form: a
+  runtime fatal behind a clean `compile` and `check`. Such a call cannot be
+  monomorphized — the method name is not known until runtime — so it now draws a clear
+  diagnostic at its real line (collected by `check`, thrown by `compile`). A turbofish on
+  a standalone variable holding a generic closure (`$f::<int>()`) is unaffected.
+- **A generic method may be named with a PHP keyword.** PHP permits every keyword
+  (`list`, `print`, …) as a method name, but a generic one could not be used: the
+  declaration `public function list<T>(…)` reached php-parser as a raw parse error, and
+  the static call `Foo::list::<int>()` did too (the instance call `$o->list::<int>()`
+  happened to work, because PHP re-tokenizes the name after `->`). Keyword-named generic
+  methods now declare, specialize, and are callable through both the instance and static
+  turbofish. Keyword-named non-generic methods and `list(...)` destructuring are
+  unchanged.
+- **A specialized generic body keeps calling the free functions and constants it
+  named.** When a generic class specializes, its body is relocated into an internal
+  `XPHP\Generated\…` namespace. An unqualified free-function call or constant read in
+  that body — `helper($x)`, `FACTOR`, whether resolved through the enclosing namespace
+  or a `use function` / `use const` import (single **or** grouped, e.g.
+  `use function Lib\{make, scale}`) — used to rebind against the generated namespace
+  (then PHP's global fallback), silently calling the wrong symbol or fatalling at
+  runtime with `Call to undefined function XPHP\Generated\…\helper()` behind a clean
+  `compile` and `check`. Each such reference the compilation unit can resolve is now
+  fully-qualified to the symbol the template meant; built-in functions, magic constants,
+  and any name the unit does not define keep PHP's normal global resolution (functions
+  match case-insensitively, constants case-sensitively). The re-qualification also
+  covers members supplied by the covariant-upcast gap-fill, which are appended after the
+  main relocation pass.
+- **A specialized generic body keeps resolving the classes it group-imported.** The
+  relocation into `XPHP\Generated\…` also re-qualifies class references against the
+  unit's imports, but a class brought in through a grouped import — `use Vendor\{Tool};`,
+  or a mixed `use Vendor\{Tool, function make};` — was not recorded in the class
+  import map (only single `use Vendor\Tool;` imports were), so a reference to it in the
+  relocated body fell back to the generated namespace (`\App\Tool`) and fatalled at class
+  load with `Class "App\Tool" not found` behind a clean `compile` and `check`. A
+  group-imported class now re-qualifies to its import target exactly like its
+  single-import form; `use function` / `use const` group members keep resolving through
+  their own symbol namespaces.
+- **A generic clause on a `use` import is rejected instead of misfiring.** Writing
+  a type argument on an import — `use App\Box<int>;`, `use App\Box<int> as B;`,
+  `use const App\BOX<int>;`, or the grouped `use App\{Box<int>, Bag};` — has no
+  meaning (imports name a symbol; they don't instantiate one). It used to either
+  blame a phantom double-qualified template (`Main\App\Box`) with no line, or — for
+  a grouped import whose name collided with a real template — **silently emit
+  unparseable PHP** (an absolute specialized name inside a `use N\{…}` prefix group)
+  that passed both `check` and `compile` and only failed when the file was loaded.
+  Every form now draws one clear diagnostic naming the real symbol at the import's
+  line, collected by `check` and thrown by `compile`. Import the template plainly
+  (`use App\Box;`) and apply the type arguments at the use site. A generic
+  **trait-use** (`class C { use Holder<int>; }`) is unaffected — it still specializes
+  the trait.
+- **A generic trait used with an `insteadof` / `as` adaptation loads instead of
+  fataling.** A generic trait combined with an adaptation block — `use A<int>, B<int>
+  { A::m insteadof B; B::m as bm; }` — specialized the `use`-**list** names to their
+  `\XPHP\Generated\…` form but left the `insteadof` / `as` **operand** names bare, so
+  they resolved to the now-removed template (`App\A`) and fataled at class load
+  (`Trait "App\A" not found`) behind a clean `compile` and `check`. Each adaptation
+  operand that names a generic trait the class uses is now rewritten to the **same**
+  specialization as its list entry, including operands that reference a trait brought
+  in by a different `use` statement of the same class. A non-generic trait operand (or
+  one the class does not use generically) stays untouched — it is a real trait. A bare
+  operand that matches two different specializations of one trait (`use A<int>,
+  A<string> { A::m insteadof B; }`) cannot be disambiguated in an adaptation clause and
+  now draws a clear diagnostic instead of silently picking one.
+- **`check` reports parse-stage rejections at their real source line.** Syntax
+  the scanner rejects before the AST exists — a variance marker on a method or
+  closure (`out T` / `in T`), the legacy `+T` / `-T` glyphs, a malformed or
+  misordered generic default (`T = ?int`, `T = Foo | Bar`, a required parameter
+  after a defaulted one), or a call signature on a non-`Closure` name — was
+  reported by `check` at line 1 regardless of where it occurred, so an editor
+  could not navigate to it (the real location survived only in the message text).
+  These now carry the offending token's line. A few structural rejections raised
+  after parsing (a self-referential bound, a default referencing a later
+  parameter) still fall back to line 1, where no token position is available.
+  `compile` behaviour is unchanged.
+- **A bare `new` of a generic without all-defaults is rejected instead of
+  silently emitting an uninstantiable marker.** `new Box(...)` where `Box<T>`
+  has a required type parameter and no turbofish was skipped by the
+  instantiation collector, leaving the call site pointing at the stripped marker
+  `interface Box {}` — so the emitted code fatalled with "Cannot instantiate
+  interface" behind a clean compile and a clean `check`. It now fails with
+  `xphp.missing_type_argument` (throwing in `compile`, collected in `check`),
+  exactly as a turbofish-less generic call does. All-defaults generics still
+  instantiate from a bare `new`, and a bare `new B` still works when a plain
+  `class B` coexists with a generic `class B<T>` (conditional same-name
+  declarations resolve to the plain class at runtime).
+- **A first-class callable of a turbofish specialization emits valid PHP.**
+  `$g = $f::<int>(...)` on a generic closure emitted `$f('T_…', ...)` — the
+  specialization tag prepended beside the `...` placeholder, which does not
+  parse, so the output failed to load. It now emits a forwarding closure that
+  routes through the dispatcher, preserving callable semantics (positional,
+  variadic, and named arguments and the closure's captures); empty-turbofish
+  all-defaults FCCs (`$f::<>(...)`) work the same way.
+- **Parenthesised DNF types inside `Closure(...)` signatures are supported.** A
+  DNF group (`(A&B)|C`, `A|(B&C)`) anywhere in a signature previously broke the
+  type scanner: a leading group in a return position failed to compile, a
+  trailing group in a return hint silently mis-erased (emitting a wrong type and
+  a truncated recorded return), and a group in a parameter threw the signature's
+  arity off — wrongly rejecting a conforming factory literal. A DNF group now
+  scans as one **gradual** leaf: the signature erases correctly, arity and the
+  slots around the group are checked as usual, and the group itself is accepted
+  rather than variance-checked member by member.
+- **Array-sugar types inside `Closure(...)` signatures are supported.** A
+  sugared leaf (`Closure(Item[] $items): int`, `Closure(): int[]`) previously
+  broke the signature scanner: in a return position the bracket pair survived
+  erasure as a raw parse error, and in a parameter position it mis-parsed as
+  three parameters — wrongly rejecting a conforming factory literal on arity.
+  The sugar now lowers to `array` inside signatures, the same lowering it gets
+  everywhere else, and is checked as a gradual `array` leaf.
+- **Provable violations against built-in target types are now caught.** A factory
+  whose literal returns a class with fully-known, built-in-free ancestry checked
+  against a built-in target (`Closure(): \Throwable` returning a plain user
+  class) was silently accepted — the guard treated EVERY built-in target as
+  unprovable. When the candidate's whole ancestry is declared user code, the
+  non-relation is provable and now fails the build. Everything genuinely
+  satisfiable at runtime keeps compiling: subclasses of built-ins
+  (`extends \Exception` vs `\Throwable`), enums against interfaces they
+  implement (enum `implements` clauses and the implicit `UnitEnum`/`BackedEnum`
+  edges are now modeled — which also lets `T : UnitEnum` bounds accept enum
+  arguments), `__toString` classes against `\Stringable`, and candidates with
+  any unknown ancestor.
+- **Expression-position `Closure(...)` calls are never mistaken for return types.**
+  The return-slot detector keyed on a bare `) :` pair — which ternaries,
+  `case expr():` labels, and alt-syntax blocks (`if/elseif/while/for/foreach/
+  declare (…):`) also produce. A call to a user function named `Closure` in
+  those positions was silently rewritten into a `\Closure` constant fetch, and a
+  call to ANY function there (`$a ? b() : g(FOO);`) failed the compile with the
+  only-Closure error. The detector now requires an actual `function`/`fn`
+  declaration header (including by-ref, `use (…)` clauses, and tight spellings)
+  and ignores member calls of the semi-reserved names (`C::fn()`).
+- **Relative `namespace\Foo` types resolve correctly everywhere names are read
+  from tokens.** A relative reference bound to the wrong name (`App\namespace\Foo`,
+  or a colliding `use` alias) wherever the resolver worked on raw token text —
+  most visibly a `Closure(): namespace\D` target type, which silently skipped
+  conformance checking. Relative names now bind to the current namespace, exactly
+  as PHP does, for signature targets, bounds, defaults, and generic arguments
+  alike; only the exact `namespace\` keyword segment is affected.
+- **Fully-qualified types in closure literals participate in conformance.** A
+  factory literal spelling its type fully qualified (`fn(): \App\Fruit`) had the
+  leading `\` dropped during extraction, mis-resolving the name relative to the
+  current namespace — an undeclared class, so the check silently went gradual and
+  provable violations were missed. FQ names now resolve absolutely (relative and
+  imported names are unchanged).
+- **Generic closures after array-sugar rewrites specialize correctly.** The
+  `Name[]` → `array` rewrite shortens the source, and the byte-keyed marker that
+  attaches type parameters to an anonymous `function<T>` / `fn<T>` was compared
+  against the shifted position — so a generic closure appearing after such a
+  rewrite silently lost its type parameters, compiled unspecialized, and the
+  emitted code fataled at runtime despite a clean validation pass. Marker
+  positions are now translated through the byte-offset map before matching.
 - **Undeclared type parameters are now rejected** instead of silently compiling to
   a reference to a non-existent class. A bare, single-segment, non-imported type
   name used in a generic member, bound, or default that is neither a declared type
@@ -221,6 +396,79 @@ _In progress on this branch — content still accumulating; date set at tag time
   scalars (`int`, `string`, `bool`, `float`, and case variants like `Int`) are unchanged;
   an undeclared `Double` member is now reported as `xphp.undeclared_type` instead of being
   silently absorbed as a scalar.
+- **Generic declarations keep their type parameters regardless of header layout.**
+  Four marker-alignment defects silently de-generified declarations — clean compile,
+  clean `check`, raw `T` hints in the emitted code, `TypeError` at runtime: any
+  **multi-line** generic clause, turbofish argument list, or `T[]` sugar span
+  collapsed its newlines when stripped, shifting every later declaration off its
+  marker (`class Wide<\n T\n>` before `class Box<T>` left `Box` raw); `static
+  fn<T>(...)` anchored its marker at `fn` while the node starts at `static`; an
+  attribute before a generic closure (`#[A] function<T>`, `#[A] static fn<T>`)
+  moved the node start to `#[`; and an attribute or modifier on its own line before
+  a **named** generic declaration (`#[Override]` above `public function wrap<T>`,
+  `final` above `class Pair<T>`) lost the marker too — or false-rejected the class
+  as "instantiated but never defined". Stripping now preserves newlines
+  byte-for-byte (multibyte- and CRLF-safe; the `T[]` lowering re-appends its span's
+  newlines), anonymous markers anchor at the node's true start (walking back over
+  attribute groups and `static`), and named markers match on the declaration
+  name's line. A `static fn<T>` now simply **specializes** like any arrow — it can
+  never bind `$this`; the rewritten dispatcher closure is technically non-static,
+  observable only via `Closure::bind`/reflection — while `static function<T>`
+  keeps its loud not-yet-supported error, which now also fires when an attribute
+  precedes it.
+- **A generic clause that fails to bind to its declaration is now a loud compile
+  error.** Every defect in the family above was silent for the same structural
+  reason: an unbound marker simply evaporated and the compiler carried on. The
+  strict compile path now reports it (as a transpiler bug to report), instead of
+  emitting silently de-generified code; the tolerant LSP path is exempt —
+  half-typed editor buffers legitimately strand markers. A `use function b<T>;`
+  typo gets PHP's own syntax error on the `<` rather than being swallowed.
+- **Fully-qualified and `namespace\`-relative spellings work at every generic
+  site.** Names were resolved from prefix-erased strings, losing the author's
+  qualification: `new \App\Box::<int>` hard-failed as the undefined, doubled
+  `App\App\Box` — and an FQ generic **function** call (`\App\make::<int>(...)`)
+  silently lost its dispatcher, an undefined-function fatal at runtime;
+  `new \App\Box("hi")` on an all-defaults generic silently emitted the stripped
+  marker interface plus the kept `new` — "Cannot instantiate interface" at
+  runtime; `new namespace\Box::<int>` never bound its marker and silently emitted
+  the same fatal shape; on one line, a relative generic return type could steal
+  the body turbofish's marker, specializing the wrong site; `class Gen<T> extends
+  namespace\Base` with a colliding `use Other\Base` in scope emitted the generated
+  class extending `\Other\Base` — a `use` alias never applies to a relative name —
+  and the same capture hit every marked type position, generic-method receiver
+  typing, and the conformance hierarchy (where a wrong parent edge could
+  false-reject a valid factory); and `namespace\Thing` colliding with a type
+  parameter was substituted like one, emitting `int $x` where the author wrote an
+  explicit class reference. Markers now record the raw source spelling
+  (case-folding only the `namespace` keyword), every resolver honors the node's
+  own qualification, fully-qualified call sites rewrite to their specializations,
+  and relative names bind to the current namespace — exactly as PHP does.
+- **Generic markers bind byte-exact — two same-spelling sites on one line can no
+  longer steal each other's markers.** Marker matching was line-keyed
+  (first-traversed-wins), so `f(Box $a, Box<int> $b)` emitted the specialization
+  on the **wrong parameter**; a plain return hint could steal a
+  `new Box::<int>(...)` marker, leaving a raw `new` against the marker interface;
+  one-line same-name conditional classes handed the generic clause to the plain
+  class — rewriting it into an uninstantiable marker interface; and
+  `Plain::pick(5) + Util::pick::<int>(4)` on one line **false-rejected both
+  calls** (the plain call's line-range claimed the generic call's marker). Every
+  marker now matches on the byte of the token it anchors at, translated through
+  the byte-offset map — exact across multi-line member chains, length-changing
+  `T[]` rewrites, interpolated-string turbofish, and multibyte identifiers.
+- **A generic closure that nothing specializes is now rejected**
+  (`xphp.unspecialized_generic_closure`) instead of silently emitting raw
+  type-parameter hints. Specialization is call-site-driven, so a generic
+  closure/arrow with no in-scope grounding `$var::<...>(...)` call kept hints
+  naming the non-existent class `App\T` in the emitted output — a `TypeError` on
+  first invocation behind a clean compile and a clean `check`, including when the
+  value was only handed away as a callable (`array_map($f, ...)`, a returned
+  factory) — which cannot ground it. Both modes reject every such shape:
+  assigned-but-uncalled, return-position, argument-position, `use (...)`-
+  capturing, defaulted, conditional arms, and — uniformly — a clause whose
+  parameters are never referenced (dead syntax; delete it). A template whose
+  call sites drew their own rejection (static closure, `$this` capture, missing
+  turbofish) is not double-reported, and a turbofish with still-abstract type
+  arguments counts as a real call.
 
 ## [0.2.1] - 2026-06-17
 

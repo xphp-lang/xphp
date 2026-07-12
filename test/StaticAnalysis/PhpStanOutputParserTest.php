@@ -155,8 +155,7 @@ final class PhpStanOutputParserTest extends TestCase
         $result = PhpStanOutputParser::parse($json, '');
 
         self::assertFalse($result->ranOk);
-        self::assertStringContainsString('Ignored error pattern was not matched', $result->errorOutput ?? '');
-        self::assertStringContainsString('Another general error', $result->errorOutput ?? '');
+        self::assertSame("Ignored error pattern was not matched\nAnother general error", $result->errorOutput);
     }
 
     public function testFileFindingsWinOverTopLevelErrors(): void

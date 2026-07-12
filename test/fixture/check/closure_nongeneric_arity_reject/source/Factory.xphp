@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NonGeneric;
+
+// A NON-generic structural (arity) mismatch: the target guarantees two
+// parameters, the returned literal accepts one. This is grounding-independent
+// and has no specialization to fall back on, so only the abstract pre-loop's
+// FULL conformance check (not the type-relation-only grounded pass) catches it.
+function make(): Closure(int $a, int $b): int
+{
+    return fn(int $a): int => $a;
+}

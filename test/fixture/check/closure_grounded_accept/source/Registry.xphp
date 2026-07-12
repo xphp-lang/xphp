@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Grounded;
+
+// Grounding T to `int` makes the int-parameter literal conform — check stays
+// clean, matching compile.
+class Registry<T>
+{
+    public function factory(): Closure(T $value): bool
+    {
+        return fn(int $value): bool => $value > 0;
+    }
+}
+
+new Registry::<int>();

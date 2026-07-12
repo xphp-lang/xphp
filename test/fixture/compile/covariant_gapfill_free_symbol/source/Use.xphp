@@ -1,0 +1,26 @@
+<?php
+declare(strict_types=1);
+namespace App;
+// Same diamond as covariant_upcast_multipath_diamond, but the erasable bodies call an in-unit free
+// function `tally` and read an in-unit const `OFFSET`. The post-edge gap-fill appends `contains`/`indexOf`
+// onto the CONCRETE specs (Lst<Tuple<Book,Book>>, Bag<Tuple<Book,Book>>) for the sibling element supertype
+// Tuple<Book,Product> AFTER the relocation sweep — so those bodies must still bind `tally`/`OFFSET` to App.
+// The upcast calls below dispatch to exactly those gap-filled members (not the base-carried ones).
+function has(Collection<Tuple<Book, Product>> $c): bool
+{
+    return $c->contains::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+}
+function at(Lookup<Tuple<Book, Product>> $c): int
+{
+    return $c->indexOf::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+}
+$lbb = new Lst::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+$lbp = new Lst::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+$lpb = new Lst::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+$lpp = new Lst::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+$bbb = new Bag::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+$bbp = new Bag::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+$bpb = new Bag::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+$bpp = new Bag::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+$found = has($lbb);
+$index = at($bbb);

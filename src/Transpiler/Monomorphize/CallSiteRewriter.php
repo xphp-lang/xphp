@@ -46,7 +46,11 @@ final class CallSiteRewriter
 
             public function leaveNode(Node $node): Node|int|null
             {
-                if ($node instanceof Name && !$node instanceof FullyQualified) {
+                // Fully-qualified names are admitted too: `new \App\Box::<int>` /
+                // `\App\Box<int>` carry the same attributes and must rewrite to the
+                // specialization — skipping them would silently leave the call site
+                // pointing at the stripped marker interface.
+                if ($node instanceof Name) {
                     $args = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
                     $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
                     // Empty `$args` is the call-site shape that asks the registry to pad
@@ -57,7 +61,16 @@ final class CallSiteRewriter
                         /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
                         if (is_string($fqn) && self::allConcrete($args)) {
                             $instantiation = $this->registry->recordInstantiation($fqn, $args);
-                            return new FullyQualified($instantiation->generatedFqn, $node->getAttributes());
+                            // Drop the generic attributes from the replacement: the
+                            // FullyQualified result re-enters this branch on the
+                            // Phase-3.5 re-rewrite of specialized ASTs, so the
+                            // rewrite must be idempotent by construction.
+                            $attributes = $node->getAttributes();
+                            unset(
+                                $attributes[XphpSourceParser::ATTR_GENERIC_ARGS],
+                                $attributes[XphpSourceParser::ATTR_TEMPLATE_FQN],
+                            );
+                            return new FullyQualified($instantiation->generatedFqn, $attributes);
                         }
                     }
                 }

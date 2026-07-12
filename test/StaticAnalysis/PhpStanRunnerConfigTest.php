@@ -19,20 +19,30 @@ final class PhpStanRunnerConfigTest extends TestCase
             '/project/phpstan.neon',
         );
 
-        self::assertStringContainsString("includes:\n    - \"/project/phpstan.neon\"", $config);
-        self::assertStringContainsString('parameters:', $config);
-        self::assertStringContainsString("    scanDirectories:\n        - \"/abs/dist\"\n        - \"/abs/Generated\"", $config);
         // Level is inherited from the consumer config, so it must NOT be set here.
-        self::assertStringNotContainsString('level:', $config);
+        self::assertSame(
+            "includes:\n"
+            . "    - \"/project/phpstan.neon\"\n"
+            . "parameters:\n"
+            . "    scanDirectories:\n"
+            . "        - \"/abs/dist\"\n"
+            . "        - \"/abs/Generated\"\n",
+            $config,
+        );
     }
 
     public function testWithoutConsumerConfigSetsDefaultLevelAndNoIncludes(): void
     {
         $config = PhpStanRunner::buildConfig(['/abs/dist'], null);
 
-        self::assertStringNotContainsString('includes:', $config);
-        self::assertStringContainsString('    level: 5', $config);
-        self::assertStringContainsString("    scanDirectories:\n        - \"/abs/dist\"", $config);
+        // No consumer config, so a default level is set and there are no includes.
+        self::assertSame(
+            "parameters:\n"
+            . "    level: 5\n"
+            . "    scanDirectories:\n"
+            . "        - \"/abs/dist\"\n",
+            $config,
+        );
     }
 
     public function testPathsAreNeonQuotedAndEscaped(): void
@@ -40,7 +50,13 @@ final class PhpStanRunnerConfigTest extends TestCase
         $config = PhpStanRunner::buildConfig(['/weird/pa"th\\x'], null);
 
         // Double quote and backslash must be escaped inside the NEON double-quoted string.
-        self::assertStringContainsString('- "/weird/pa\\"th\\\\x"', $config);
+        self::assertSame(
+            "parameters:\n"
+            . "    level: 5\n"
+            . "    scanDirectories:\n"
+            . "        - \"/weird/pa\\\"th\\\\x\"\n",
+            $config,
+        );
     }
 
     public function testConfigEndsWithNewline(): void
@@ -71,6 +87,12 @@ final class PhpStanRunnerConfigTest extends TestCase
     {
         $config = PhpStanRunner::buildConfig(['/has a space/dist'], null);
 
-        self::assertStringContainsString('- "/has a space/dist"', $config);
+        self::assertSame(
+            "parameters:\n"
+            . "    level: 5\n"
+            . "    scanDirectories:\n"
+            . "        - \"/has a space/dist\"\n",
+            $config,
+        );
     }
 }

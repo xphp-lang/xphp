@@ -90,6 +90,26 @@ final class ArraySugarIntegrationTest extends TestCase
         }
     }
 
+    /**
+     * A length-changing `Name[]` -> `array` rewrite BEFORE a generic closure
+     * shifts every following byte of the stripped source; the closure's
+     * marker (recorded at the ORIGINAL `function` byte) must map back through
+     * the byte-offset map, or the closure silently loses its type params and
+     * the emitted output fatals at runtime.
+     */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testSugarBeforeGenericClosureStillSpecializes(): void
+    {
+        $source = realpath(__DIR__ . '/../../fixture/compile/array_sugar_before_generic_closure/source')
+            ?: throw new RuntimeException('Fixture missing');
+        $fixture = CompiledFixture::compile($source, 'array-sugar-marker-offset');
+        try {
+            require __DIR__ . '/../../fixture/compile/array_sugar_before_generic_closure/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     private function compile(): void
     {
         $compiler = $this->buildCompiler();

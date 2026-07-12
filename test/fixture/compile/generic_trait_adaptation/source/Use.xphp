@@ -1,0 +1,53 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericTraitAdaptation;
+
+// Two generic traits with a COLLIDING method (`pick`), each specialized to <int>
+// and used in SEPARATE `use` statements. The conflict is resolved in the second
+// statement's adaptation block, whose `insteadof` / `as` operands name a trait
+// from BOTH statements -- so the operand->specialization map must be class-scoped,
+// not per-`use`-node. Every operand (`A`, `B`) is a generic trait that specializes
+// out of `App\...` into `XPHP\Generated\...`; leaving an operand bare fatals at
+// class load with "Trait App\A not found".
+trait A<T>
+{
+    public function pick(T $x): string
+    {
+        return 'A:' . $x;
+    }
+
+    public function aOnly(T $x): T
+    {
+        return $x;
+    }
+}
+
+trait B<T>
+{
+    public function pick(T $x): string
+    {
+        return 'B:' . $x;
+    }
+
+    public function bOnly(T $x): T
+    {
+        return $x;
+    }
+}
+
+class C
+{
+    use A<int>;
+    use B<int> {
+        A::pick insteadof B;
+        B::pick as bpick;
+    }
+}
+
+$c = new C();
+$pick = $c->pick(5);
+$bpick = $c->bpick(6);
+$aOnly = $c->aOnly(3);
+$bOnly = $c->bOnly(4);

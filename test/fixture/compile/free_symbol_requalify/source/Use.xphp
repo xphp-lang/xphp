@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\FreeSym;
+
+// A generic class body that references free symbols every which way. After the class
+// specializes into XPHP\Generated\…, each App-defined reference must still bind App's
+// symbol (not a phantom in the generated namespace), while the builtin `strlen` and the
+// magic constant `true` keep PHP's global resolution.
+class Box<T>
+{
+    public function run(T $seed): int
+    {
+        return scale(1)            // bare free function  -> \App\FreeSym\scale
+            + BONUS                // bare const          -> \App\FreeSym\BONUS
+            + Sub\tweak(2)         // qualified function  -> \App\FreeSym\Sub\tweak
+            + strlen('ab')         // builtin             -> stays global
+            + (true ? 0 : 99);     // magic const         -> stays global (never rewritten)
+    }
+}
+
+$box = new Box::<int>();
+$result = $box->run(0);

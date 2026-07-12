@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Vendor;
+
+class Tool
+{
+    public static function ping(): string
+    {
+        return 'pong';
+    }
+}
+
+class Widget
+{
+    public static function spin(): string
+    {
+        return 'spin';
+    }
+}

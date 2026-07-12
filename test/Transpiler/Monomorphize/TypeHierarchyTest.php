@@ -21,6 +21,15 @@ final class TypeHierarchyTest extends TestCase
         self::assertTrue($hierarchy->isSubtype('Stringable', 'Stringable'));
     }
 
+    public function testIsBuiltinRecognisesBuiltinsAndStripsLeadingBackslash(): void
+    {
+        $hierarchy = new TypeHierarchy([]);
+        self::assertTrue($hierarchy->isBuiltin('Throwable'));
+        self::assertTrue($hierarchy->isBuiltin('\\Throwable'), 'a leading-backslash builtin still matches');
+        self::assertFalse($hierarchy->isBuiltin('App\\Throwable'), 'a namespaced look-alike is not the builtin');
+        self::assertFalse($hierarchy->isBuiltin('App\\Fruit'));
+    }
+
     public function testUnknownConcreteTypeReturnsNull(): void
     {
         // Reject-by-uncertainty: caller can't prove SomeRandomClass satisfies anything because
@@ -105,6 +114,70 @@ final class TypeHierarchyTest extends TestCase
             'App\\Bar' => ['Stringable'],
         ]);
         self::assertTrue($hierarchy->isSubtype('\\App\\Bar', '\\Stringable'));
+    }
+
+    public function testFromAstPerFileCollectsEnumClausesAndImplicitEdges(): void
+    {
+        // An enum's `implements` clauses AND PHP's implicit edges must be
+        // modeled: every enum is a UnitEnum, a backed enum also a BackedEnum.
+        // Without them an enum masquerades as a parentless plain class and
+        // closed-world reasoning would falsely prove it unrelated to built-in
+        // interfaces it genuinely implements at runtime.
+        $parser = (new ParserFactory())->createForHostVersion();
+        $src = <<<'PHP'
+<?php
+namespace App;
+
+enum Pure implements \Countable
+{
+    case A;
+    public function count(): int { return 1; }
+}
+
+enum Backed: string
+{
+    case A = 'a';
+}
+PHP;
+        $ast = $parser->parse($src);
+        self::assertNotNull($ast);
+
+        $hierarchy = TypeHierarchy::fromAstPerFile(['/x.php' => $ast]);
+
+        self::assertTrue($hierarchy->isSubtype('App\\Pure', 'Countable'), 'enum implements clause collected');
+        self::assertTrue($hierarchy->isSubtype('App\\Pure', 'UnitEnum'), 'every enum is a UnitEnum');
+        self::assertNotTrue($hierarchy->isSubtype('App\\Pure', 'BackedEnum'), 'a pure enum is NOT a BackedEnum');
+        self::assertTrue($hierarchy->isSubtype('App\\Backed', 'UnitEnum'));
+        self::assertTrue($hierarchy->isSubtype('App\\Backed', 'BackedEnum'), 'a backed enum is a BackedEnum');
+    }
+
+    public function testHasClosedUserAncestryRequiresFullyModeledBuiltinFreeChain(): void
+    {
+        $parser = (new ParserFactory())->createForHostVersion();
+        $src = <<<'PHP'
+<?php
+namespace App;
+
+class Plain extends Base {}
+class Base {}
+class OpenAncestor extends Unknown {}
+class ViaBuiltin implements \Countable {}
+class MysteryIface implements SomethingUndeclared {}
+enum E { case A; }
+PHP;
+        $ast = $parser->parse($src);
+        self::assertNotNull($ast);
+
+        $hierarchy = TypeHierarchy::fromAstPerFile(['/x.php' => $ast]);
+
+        self::assertTrue($hierarchy->hasClosedUserAncestry('App\\Plain'), 'fully-modeled user chain is closed');
+        self::assertTrue($hierarchy->hasClosedUserAncestry('\\App\\Plain'), 'leading backslash tolerated');
+        self::assertFalse($hierarchy->hasClosedUserAncestry('App\\OpenAncestor'), 'an unknown ancestor opens the world');
+        self::assertFalse($hierarchy->hasClosedUserAncestry('App\\ViaBuiltin'), 'a built-in in the chain opens the world');
+        self::assertFalse($hierarchy->hasClosedUserAncestry('App\\MysteryIface'), 'an undeclared interface opens the world');
+        self::assertFalse($hierarchy->hasClosedUserAncestry('App\\E'), 'an enum carries built-in edges (UnitEnum)');
+        self::assertFalse($hierarchy->hasClosedUserAncestry('App\\NotDeclared'), 'an unknown class is never closed');
+        self::assertFalse($hierarchy->hasClosedUserAncestry('Throwable'), 'a built-in itself is never closed');
     }
 
     public function testFromAstPerFileCollectsClassExtendsImplements(): void

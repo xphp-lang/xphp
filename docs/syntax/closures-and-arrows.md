@@ -76,6 +76,12 @@ ref-ness is preserved end-to-end.
   dispatcher, including `&` byref captures.
 - The variable receiver stays unchanged at call sites — `$f::<int>(...)`
   becomes `$f('T_<hash>', ...)`, not a renamed call.
+- A **first-class callable** of a specialization (`$g = $f::<int>(...)`)
+  becomes a forwarding closure `fn(...$a) => $f('T_<hash>', ...$a)` that
+  routes through the dispatcher, so `$g` stays a callable with the
+  specialization bound (positional, variadic, and named arguments and the
+  closure's captures are all preserved). Empty-turbofish all-defaults FCCs
+  (`$f::<>(...)`) work the same way.
 
 ## Caveats
 
@@ -87,9 +93,17 @@ ref-ness is preserved end-to-end.
 
 - > ⚠️ **`static` closures rejected** — `static function<T>(...)` is
   rejected because generic static closures can't yet be specialized at
-  the call site (a capability gap, not a binding one). Use a named
-  generic function at file scope instead. See
+  the call site (a capability gap, not a binding one). A `static`
+  **arrow** (`static fn<T>(...)`) specializes like a plain arrow. Use
+  an arrow or a named generic function at file scope instead. See
   [caveats](../caveats.md#static-closures-not-supported).
+
+- > ⚠️ **Declared-but-never-called rejected** — a generic closure that no
+  `$var::<...>(...)` call grounds is a compile error
+  (`xphp.unspecialized_generic_closure`): specialization is call-site
+  driven, so the value would otherwise keep raw type-parameter hints and
+  fatal on first invocation — including when handed away as a plain
+  callable. Call it with a turbofish, or drop the `<...>` clause.
 
 - > ⚠️ **Variance markers not allowed** — `out T` / `in T` are rejected on
   anonymous templates. They have no stable identity for an `extends`

@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\FreeSym;
+
+function scale(int $x): int
+{
+    return $x * 10;
+}
+
+const BONUS = 5;

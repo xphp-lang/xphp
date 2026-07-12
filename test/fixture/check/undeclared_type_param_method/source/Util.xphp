@@ -20,9 +20,13 @@ function wrap<A>(C $x): A
     return $x;
 }
 
-// Generic closure and arrow: `D` and `E` are stray parameters.
+// Generic closure and arrow: `D` and `E` are stray parameters. Both are
+// turbofish-called so the only diagnostics here stay the undeclared-type
+// ones (an uncalled generic closure draws its own, different error).
 $closure = function<A>(D $x): A {
     return $x;
 };
+$closure::<int>(1);
 
 $arrow = fn<A>(E $x): A => $x;
+$arrow::<int>(2);

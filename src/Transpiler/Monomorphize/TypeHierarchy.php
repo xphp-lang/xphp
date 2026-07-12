@@ -8,6 +8,7 @@ use PhpParser\Node;
 use PhpParser\Node\Name;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\Interface_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Trait_;
@@ -151,6 +152,42 @@ final readonly class TypeHierarchy
         $fqn = ltrim($fqn, '\\');
 
         return isset($this->ancestors[$fqn]) || in_array($fqn, self::BUILTIN_TYPES, true);
+    }
+
+    /**
+     * Whether $fqn names a built-in PHP interface/class ({@see BUILTIN_TYPES}).
+     * These are `isDeclared`, but the hierarchy models none of their ancestor
+     * edges (it seeds edges only from scanned source), so an `isSubtype` verdict
+     * of `false` against a built-in target is unprovable — callers that treat a
+     * `false` as a proof must exclude a built-in target first.
+     */
+    public function isBuiltin(string $fqn): bool
+    {
+        return in_array(ltrim($fqn, '\\'), self::BUILTIN_TYPES, true);
+    }
+
+    /**
+     * True when $fqn's ENTIRE ancestry is modeled from scanned source and is
+     * built-in-free: $fqn itself and every member of its ancestor chain is a
+     * user type declared in the source set. Under such a CLOSED WORLD an
+     * {@see isSubtype} verdict of `false` is a real proof even against a
+     * built-in target — no unmodeled built-in edge can exist, because every
+     * edge of the chain was collected from source and none leads outside it.
+     * An unknown ancestor (chain member that is no map key) or ANY built-in in
+     * the chain opens the world and returns false.
+     */
+    public function hasClosedUserAncestry(string $fqn): bool
+    {
+        $fqn = ltrim($fqn, '\\');
+        if (!isset($this->ancestors[$fqn]) || $this->isBuiltin($fqn)) {
+            return false;
+        }
+        foreach ($this->ancestorChain($fqn) as $ancestor) {
+            if (!isset($this->ancestors[$ancestor]) || $this->isBuiltin($ancestor)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -331,10 +368,26 @@ final readonly class TypeHierarchy
                         foreach ($node->extends as $interface) {
                             $clauses[] = $interface;
                         }
+                    } elseif ($node instanceof Enum_) {
+                        // Enums carry their `implements` clauses like classes do, PLUS
+                        // PHP's implicit built-in edges: every enum is a UnitEnum, and a
+                        // backed enum is also a BackedEnum. Without these an enum looks
+                        // like a parentless plain class — a "closed world" it is not —
+                        // and closed-world reasoning would falsely prove it unrelated
+                        // to built-in interfaces it genuinely implements at runtime.
+                        foreach ($node->implements as $interface) {
+                            $clauses[] = $interface;
+                        }
                     }
                     // Trait_ has no formal ancestors — uses-of-traits are statements inside the body
                     // and would only matter for shared-method bounds, which we don't model.
                     $directAncestors = [];
+                    if ($node instanceof Enum_) {
+                        $directAncestors[] = 'UnitEnum';
+                        if ($node->scalarType !== null) {
+                            $directAncestors[] = 'BackedEnum';
+                        }
+                    }
                     $parameterized = [];
                     foreach ($clauses as $clause) {
                         $fqn = $this->resolveName($clause);
@@ -378,6 +431,13 @@ final readonly class TypeHierarchy
                 $raw = $name->toString();
                 if ($name->isFullyQualified() || str_starts_with($raw, '\\')) {
                     return ltrim($raw, '\\');
+                }
+                // `namespace\Base` binds to the current namespace — never to a
+                // `use` alias. An alias-captured hierarchy edge here recorded
+                // the wrong parent, which conformance then treated as a
+                // PROVABLE mismatch — a false reject of valid code.
+                if ($name->isRelative()) {
+                    return $this->qualify($raw);
                 }
                 $first = self::firstSegment($raw);
                 if (isset($this->useMap[$first])) {

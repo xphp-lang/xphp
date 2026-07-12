@@ -48,6 +48,36 @@ final class Registry
     /** @var array<string, GenericDefinition> Keyed by template FQN. */
     private array $definitions = [];
 
+    /**
+     * FQNs that also have a NON-generic class/interface/trait declaration (a plain `class B {}`
+     * alongside a generic `class B<T> {}`, e.g. in mutually exclusive conditional branches). A
+     * bare `new B` on such a name resolves to the plain class at runtime, so the bare-new guard
+     * must NOT reject it. Keyed by the namespace-normalized FQN (no leading `\`); value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $nonGenericClassNames = [];
+
+    /**
+     * FQNs of free functions defined in the compilation unit, keyed by the FULLY lowercased
+     * FQN (PHP function names — and namespace segments — are case-insensitive). Drives the
+     * re-qualification of unqualified free-function calls in relocated generic template bodies:
+     * a call is fully-qualified only when its resolved target is known here, so builtins and any
+     * name the unit does not define keep PHP's global fallback. Value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $functionNames = [];
+
+    /**
+     * FQNs of free constants defined in the compilation unit, keyed with the namespace portion
+     * lowercased and the const short-name preserved (const names are case-sensitive; namespaces
+     * are not). Same role as {@see $functionNames} for `ConstFetch` names. Value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $constNames = [];
+
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
@@ -178,6 +208,99 @@ final class Registry
             $definition->typeParams,
             $args,
             ltrim($templateFqn, '\\'),
+            $this->diagnostics,
+            $callSite,
+        );
+    }
+
+    /**
+     * Record that `$fqn` has a non-generic class/interface/trait declaration. See
+     * {@see $nonGenericClassNames}. `$fqn` is already namespace-normalized (no leading `\`) by
+     * every caller, and is looked up verbatim in {@see reportMissingTypeArgumentsForBareNew}.
+     */
+    public function recordNonGenericClass(string $fqn): void
+    {
+        $this->nonGenericClassNames[$fqn] = true;
+    }
+
+    /**
+     * Record a free function defined in the compilation unit. `$fqn` is namespace-normalized
+     * (no leading `\`). Keyed case-insensitively (function + namespace names).
+     */
+    public function recordFunction(string $fqn): void
+    {
+        $this->functionNames[strtolower($fqn)] = true;
+    }
+
+    /** Whether the unit defines a free function with this (namespace-normalized) FQN. */
+    public function hasFunction(string $fqn): bool
+    {
+        // Value-check (not isset): so a mutated `recordFunction` storing a non-true value is caught.
+        return ($this->functionNames[strtolower($fqn)] ?? false) === true;
+    }
+
+    /**
+     * Record a free constant defined in the compilation unit. `$fqn` is namespace-normalized
+     * (no leading `\`). Keyed with a case-insensitive namespace and a case-sensitive short name.
+     */
+    public function recordConst(string $fqn): void
+    {
+        $this->constNames[self::constKey($fqn)] = true;
+    }
+
+    /** Whether the unit defines a free constant with this (namespace-normalized) FQN. */
+    public function hasConst(string $fqn): bool
+    {
+        // Value-check (not isset): so a mutated `recordConst` storing a non-true value is caught.
+        return ($this->constNames[self::constKey($fqn)] ?? false) === true;
+    }
+
+    /**
+     * @infection-ignore-all — constKey is a symmetric key-derivation used by BOTH recordConst and
+     * hasConst, so any structural mutation (substr bounds, concat order/removal) transforms every
+     * key uniformly and preserves the exact membership + case relationships the behavioral tests
+     * assert (namespace-insensitive, short-name-sensitive) — the mutants are equivalent. The
+     * SEMANTIC contract is pinned by RegistryTest::testConstMembershipHasCaseInsensitiveNamespace…
+     * (the `strtolower` itself is a plain call, not mutated here).
+     */
+    private static function constKey(string $fqn): string
+    {
+        $pos = strrpos($fqn, '\\');
+        // A global const (no namespace) is keyed by its case-sensitive short name alone.
+        return $pos === false
+            ? $fqn
+            : strtolower(substr($fqn, 0, $pos)) . substr($fqn, $pos);
+    }
+
+    /**
+     * Report a bare `new` of a generic template that supplies no type arguments and cannot pad
+     * entirely from defaults (some parameter is required). Routes through the canonical
+     * `padArgsWithDefaults`, so the code (`xphp.missing_type_argument`), message, and
+     * throw-vs-collect duality match the function/method call path exactly. The padded result is
+     * discarded — a bare `new` of a non-all-defaults generic is a hard error, not an instantiation,
+     * so nothing is recorded (recording the partial tuple would store a bogus specialization and
+     * draw spurious secondary diagnostics). A no-op when the template isn't recorded, or when a
+     * non-generic class of the same name also exists (the bare `new` resolves to that at runtime).
+     *
+     * `$templateFqn` is the resolveName-normalized name (no leading `\`), matching the keys of both
+     * `$definitions` and `$nonGenericClassNames`.
+     */
+    public function reportMissingTypeArgumentsForBareNew(string $templateFqn, ?SourceLocation $callSite): void
+    {
+        $definition = $this->definitions[$templateFqn] ?? null;
+        if ($definition === null) {
+            return;
+        }
+        // A plain class of the same name also exists (conditional same-name declaration): the bare
+        // `new` resolves to the instantiable class at runtime, so rejecting it would be a false
+        // reject. The generic twin is emitted as a marker interface; the plain class is what runs.
+        if (($this->nonGenericClassNames[$templateFqn] ?? false) === true) {
+            return;
+        }
+        self::padArgsWithDefaults(
+            $definition->typeParams,
+            [],
+            $templateFqn,
             $this->diagnostics,
             $callSite,
         );

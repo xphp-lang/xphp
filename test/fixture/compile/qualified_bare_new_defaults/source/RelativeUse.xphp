@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\QualifiedDefaults;
+
+use Other\Box;
+
+// `new namespace\Box(...)` binds to THIS namespace's Box — the `use`
+// alias never applies to a relative name, so synthesis must target
+// App\QualifiedDefaults\Box (string default), not Other\Box.
+$b = new namespace\Box("ho");
+
+// The aliased bare `new` keeps working: it synthesizes Other\Box's
+// defaults tuple (int).
+$c = new Box(7);

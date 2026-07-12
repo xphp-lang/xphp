@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Positions;
+
+// A closure signature used as a generic bound — unsupported; check collects a
+// clear parse-error diagnostic at the class line.
+class C<T : Closure(int): int>
+{
+}

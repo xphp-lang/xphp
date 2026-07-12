@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureGroundReject;
+
+// At the template `Closure(T $x): T` is gradual, so the `string`-parameter
+// literal is accepted. Specialized as `Box<int>` the target grounds to
+// `Closure(int $x): int`; now the literal's `string` parameter is provably not
+// wider than `int`, so compilation must fail.
+class Box<T>
+{
+    public function make(): Closure(T $x): T
+    {
+        return fn(string $x): int => 0;
+    }
+}
+
+$box = new Box::<int>();

@@ -39,8 +39,16 @@ final class RegistryBoundsDiagnosticTest extends TestCase
         self::assertSame(Registry::CODE_BOUND_VIOLATION, $d->code);
         self::assertSame(DiagnosticSource::Xphp, $d->source);
         self::assertSame($loc, $d->location);
-        self::assertStringContainsString('Generic bound violated', $d->message);
-        self::assertStringContainsString('"int" does not extend/implement "Stringable"', $d->message);
+        self::assertSame(
+            <<<'TXT'
+            Generic bound violated while instantiating App\Box<int>.
+              type parameter T is bounded by Stringable
+              but the supplied concrete type is int
+
+              "int" does not extend/implement "Stringable".
+            TXT,
+            $d->message,
+        );
 
         // Recording still completed (continue-safely): the instantiation is on file.
         self::assertCount(1, $registry->instantiations());

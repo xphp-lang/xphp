@@ -1,0 +1,53 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericTraitAdaptationMixed;
+
+// A generic-trait adaptation block that MIXES generic and non-generic traits, and
+// excludes TWO traits in one `insteadof`. `Plain` is a real, still-existing trait --
+// its operand must stay bare (mis-qualifying it to a specialized FQN would fatal).
+// `G` and `H` are generic operands that must be rewritten to their specializations.
+trait G<T>
+{
+    public function val(T $x): string
+    {
+        return 'G:' . $x;
+    }
+}
+
+trait H<T>
+{
+    public function val(T $x): string
+    {
+        return 'H:' . $x;
+    }
+}
+
+trait Plain
+{
+    public function val(int $x): string
+    {
+        return 'P:' . $x;
+    }
+
+    public function plainOnly(): string
+    {
+        return 'plain';
+    }
+}
+
+class C
+{
+    use G<int>, H<int>, Plain {
+        Plain::val insteadof G, H;
+        G::val as gval;
+        H::val as hval;
+    }
+}
+
+$c = new C();
+$val = $c->val(1);
+$gval = $c->gval(2);
+$hval = $c->hval(3);
+$plainOnly = $c->plainOnly();

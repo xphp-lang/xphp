@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Main;
+
+use App\{Box<int>, Bag};
+
+class C {}

@@ -560,7 +560,205 @@ PHP;
         // survive into the cleaned source so any downstream tooling sees the
         // form as invalid PHP rather than xphp silently specializing it.
         $stripped = $parser->strip($source);
-        self::assertStringContainsString('class<T>', $stripped, 'anon-class `<T>` must be left un-stripped');
+        self::assertSame($source, $stripped);
+    }
+
+    public function testMultiLineTypeParamClauseKeepsLaterLineKeyedMarkersAligned(): void
+    {
+        // The `<…>` strip used to collapse newlines to spaces, shifting every
+        // later LINE-KEYED marker: `class Wide<\n T\n>` before `class Box<T>`
+        // left Box un-generic — raw `T` hints in the emitted code, a silent
+        // runtime fatal. Blanking must preserve BOTH byte length and line count.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Wide<
+    T
+> {
+    public function __construct(public T $v) {}
+}
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped), 'blanking must preserve byte length');
+        self::assertSame(
+            substr_count($source, "\n"),
+            substr_count($stripped, "\n"),
+            'blanking must preserve line count',
+        );
+
+        $ast = $parser->parse($source);
+        $byName = self::classesByName($ast);
+        self::assertSame(['T'], self::paramNames($byName['Wide']));
+        self::assertSame(
+            ['T'],
+            self::paramNames($byName['Box']),
+            'the class declared AFTER a multi-line clause must keep its type params',
+        );
+    }
+
+    public function testMultiLineTurbofishArgListKeepsLaterMarkersAligned(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+
+$b = new Box::<
+    int
+>(1);
+
+class Pair<U> {
+    public function __construct(public U $u) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped));
+        self::assertSame(substr_count($source, "\n"), substr_count($stripped, "\n"));
+
+        $ast = $parser->parse($source);
+        self::assertNotNull(
+            self::firstNameAttr($ast, 'Box', XphpSourceParser::ATTR_GENERIC_ARGS),
+            'the multi-line turbofish itself must still attach',
+        );
+        self::assertSame(
+            ['U'],
+            self::paramNames(self::classesByName($ast)['Pair']),
+            'the class declared AFTER a multi-line turbofish must keep its type params',
+        );
+    }
+
+    public function testMultibyteInsideStrippedClauseBlanksPerByte(): void
+    {
+        // A multibyte character inside the blanked span (here in a comment the
+        // clause tolerates) must blank to one space PER BYTE — a /u-flagged
+        // blanking would shrink the file and shift every later byte-keyed marker.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Wide<
+    T // café
+> {}
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped), 'multibyte spans must blank per byte');
+
+        $ast = $parser->parse($source);
+        self::assertSame(['T'], self::paramNames(self::classesByName($ast)['Box']));
+    }
+
+    public function testCrlfInsideStrippedClauseIsPreserved(): void
+    {
+        $source = "<?php\r\nnamespace App;\r\nclass Wide<\r\n    T\r\n> {}\r\nclass Box<T> {\r\n"
+            . "    public function __construct(public T \$v) {}\r\n}\r\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped));
+        self::assertSame(substr_count($source, "\r\n"), substr_count($stripped, "\r\n"));
+
+        $ast = $parser->parse($source);
+        self::assertSame(['T'], self::paramNames(self::classesByName($ast)['Box']));
+    }
+
+    public function testArraySugarSpanWithNewlineKeepsLineCount(): void
+    {
+        // The sugar rewrite is length-CHANGING (`Rec[\n]` -> `array`), so byte
+        // length cannot be preserved — but the span's newlines must be
+        // re-appended or every later line-keyed marker shifts.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Rec {}
+
+function tally(Rec[
+] $rs): int {
+    return \count($rs);
+}
+
+class Box<T> {
+    public function __construct(public T $v) {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(
+            substr_count($source, "\n"),
+            substr_count($stripped, "\n"),
+            'a length-changing sugar rewrite must still keep the line count',
+        );
+        self::assertSame(
+            strpos($source, 'Rec['),
+            strpos($stripped, 'array'),
+            'the lowered type must start where the original type started — the '
+            . 'span\'s newlines belong AFTER it, or positions stop rounding-trip',
+        );
+
+        $ast = $parser->parse($source);
+        self::assertSame(
+            ['T'],
+            self::paramNames(self::classesByName($ast)['Box']),
+            'the class declared AFTER a newline-bearing sugar span must keep its type params',
+        );
+    }
+
+    public function testMultibyteIdentifierAdjacentToMarkerBlanksPerByteAndKeepsLaterMarkers(): void
+    {
+        // A genuine multibyte identifier (`Café`, bytes >= 0x80) sitting directly
+        // against its `<T>` marker, with a SECOND generic class after it. The
+        // blanked `<T>` must stay byte-for-byte the same length or the byte-keyed
+        // marker for `Box` shifts off its node — and multibyte name bytes must NOT
+        // be blanked (they're the identifier, outside the span).
+        $source = "<?php\nnamespace App;\nclass Café<T> {\n"
+            . "    public function __construct(public T \$v) {}\n}\n"
+            . "class Box<U> {\n    public function __construct(public U \$w) {}\n}\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped), 'multibyte-adjacent span must stay byte-exact');
+
+        $ast = $parser->parse($source);
+        $classes = self::classesByName($ast);
+        self::assertSame(['T'], self::paramNames($classes['Café']), 'the multibyte-named template keeps its param');
+        self::assertSame(
+            ['U'],
+            self::paramNames($classes['Box']),
+            'the template declared AFTER a multibyte-adjacent marker keeps its own param',
+        );
+    }
+
+    public function testByteKeyedTurbofishAfterArraySugarSpanStillAttaches(): void
+    {
+        // The `Rec[\n]` -> `array` sugar is length-CHANGING, so it shrinks the
+        // stripped source. A byte-keyed turbofish marker (`Box::<int>`) that comes
+        // AFTER the sugar span on the same scope must still bind its args — the
+        // marker is byte-matched in stripped space, so the shrink must not desync it.
+        $source = "<?php\nnamespace App;\nclass Rec {}\n"
+            . "class Box<T> { public function __construct(public T \$v) {} }\n"
+            . "function tally(Rec[\n] \$rs): int { return \\count(\$rs); }\n"
+            . "\$b = new Box::<int>(5);\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $ast = $parser->parse($source);
+        $args = self::firstNameAttr($ast, 'Box', XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args, 'the turbofish after a length-changing sugar span must still attach its args');
+        self::assertCount(1, $args);
+        self::assertSame('int', $args[0]->canonical(), 'the turbofish arg after the sugar span must be <int>');
     }
 
     public function testForwardReferenceToEarlierTypeParamAsBoundIsAllowed(): void
@@ -1756,7 +1954,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<Plastic>', $stripped, 'bare `new Name<…>()` must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testBareNewWithoutParensIsRejectedAndLeftUnstripped(): void
@@ -1775,7 +1973,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<Plastic>', $stripped, 'parenless `new Name<…>` must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testBareFreeFunctionCallIsRejectedAndLeftUnstripped(): void
@@ -1787,7 +1985,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<int>', $stripped, 'bare `name<…>()` free-function call must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testBareStaticMethodCallIsRejectedAndLeftUnstripped(): void
@@ -1799,7 +1997,7 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<int>', $stripped, 'bare `Recv::method<…>()` static call must be left un-stripped');
+        self::assertSame($source, $stripped);
     }
 
     public function testWhitespaceBetweenDoubleColonAndAngleDefeatsTurbofish(): void
@@ -1815,15 +2013,15 @@ PHP;
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
         $stripped = $parser->strip($source);
 
-        self::assertStringContainsString('<int>', $stripped, 'whitespace between `::` and `<` must defeat turbofish recognition');
+        self::assertSame($source, $stripped);
     }
 
     public function testTypeHintPositionAcceptsFullyQualifiedOuterName(): void
     {
-        // Locks the ltrim('\\') on the bare-`<…>` (type-hint) branch: when the
-        // outer Name is fully qualified (`\App\Containers\Box`), the marker
-        // must be keyed by the trimmed form so the resolver -- which sees the
-        // AST Name's `toString()` (no leading backslash) -- can match.
+        // A fully-qualified outer Name (`\App\Containers\Box<Plastic>`) in a
+        // type-hint slot: the marker records the raw source spelling (leading
+        // `\` kept) and the resolver compares the node's `toCodeString()`, so
+        // the two agree and the generic args attach.
         $source = <<<'PHP'
 <?php
 namespace App;
@@ -1837,6 +2035,206 @@ PHP;
         $args = self::parseAndGetArgs($source, 'App\\Containers\\Box');
         self::assertCount(1, $args);
         self::assertSame('App\\Models\\Plastic', $args[0]->name);
+    }
+
+    public function testFullyQualifiedTurbofishResolvesWithoutDoublingTheNamespace(): void
+    {
+        // `new \App\Box::<int>` used to record ATTR_TEMPLATE_FQN = `App\App\Box`
+        // (the leading `\` was trimmed before namespace resolution), which
+        // hard-failed as an undefined template.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+$b = new \App\Box::<int>(1);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $fq = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isFullyQualified()) {
+                $fq = $n;
+            }
+        }
+        self::assertNotNull($fq);
+        self::assertSame('App\\Box', $fq->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $args = $fq->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testSameLineRelativeReturnAndBareTurbofishKeepTheirOwnMarkers(): void
+    {
+        // On ONE line, the relative return type's marker and the body
+        // turbofish's marker both spell a bare `Box` after toString() — the
+        // return-type node used to steal the body's marker (specializing the
+        // wrong site) while its own `namespace\Box` marker never bound.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+function f(): namespace\Box<int> { return new Box::<string>('s'); }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        $bare = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            } elseif (!$n->isFullyQualified() && $n->toString() === 'Box'
+                && $n->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) !== null
+            ) {
+                $bare = $n;
+            }
+        }
+
+        self::assertNotNull($relative, 'relative return-type Name missing');
+        self::assertSame('App\\Box', $relative->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $relArgs = $relative->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($relArgs);
+        self::assertSame('int', $relArgs[0]->name, 'the return type must keep its OWN args');
+
+        self::assertNotNull($bare, 'body turbofish Name missing its args');
+        $bareArgs = $bare->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($bareArgs);
+        self::assertSame('string', $bareArgs[0]->name, 'the body turbofish must keep its OWN args');
+    }
+
+    public function testUppercaseRelativePrefixStillMatchesItsMarker(): void
+    {
+        // The `namespace` keyword is case-insensitive in source, but
+        // `toCodeString()` always emits it lowercase — the marker spelling
+        // must fold the prefix or `NAMESPACE\Box::<int>` silently loses
+        // its marker.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+$b = new NAMESPACE\Box::<int>(1);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            }
+        }
+        self::assertNotNull($relative);
+        self::assertSame('App\\Box', $relative->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $args = $relative->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testRelativeNamesResolveToTheCurrentNamespaceNotTheAliasMap(): void
+    {
+        // `namespace\Thing` binds to App\Thing even with `use Other\Thing` in
+        // scope, and — being an explicit class reference — is never flagged as
+        // a suspect undeclared type parameter.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+use Other\Thing;
+
+class Gen<T> {
+    public function m(namespace\Thing $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            }
+        }
+        self::assertNotNull($relative);
+        self::assertSame(
+            'App\\Thing',
+            $relative->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN),
+            'the alias must not capture a relative name',
+        );
+        self::assertNull(
+            $relative->getAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE),
+            'a relative name is an explicit class reference, never a suspect type param',
+        );
+    }
+
+    public function testRelativeNameCollidingWithATypeParamIsStillAClassReference(): void
+    {
+        // Inside `Gen<T>`, `namespace\T` spells the CLASS App\T — it must get
+        // a resolved FQN (so the specializer swaps it to `\App\T`), never be
+        // treated as the type parameter.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+class Gen<T> {
+    public function m(namespace\T $x): void {}
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $relative = null;
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->isRelative()) {
+                $relative = $n;
+            }
+        }
+        self::assertNotNull($relative);
+        self::assertSame('App\\T', $relative->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN));
+        self::assertNull(
+            $relative->getAttribute(XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE),
+            'an explicit relative reference must not be flagged as a suspect type param'
+            . ' — here there is no alias, so only the relative exclusion protects it',
+        );
+    }
+
+    public function testQualifiedFunctionTurbofishesResolveAndAttach(): void
+    {
+        // `\App\make::<int>(…)` used to double the namespace in
+        // ATTR_TEMPLATE_FQN (stripping the generic function with no dispatcher
+        // emitted — a silent undefined-function fatal); `namespace\make::<…>`
+        // never matched its marker at all and false-rejected as a
+        // missing-type-argument call.
+        $source = <<<'PHP'
+<?php
+namespace App;
+function make<T>(T $x): T { return $x; }
+$a = \App\make::<int>(1);
+$b = namespace\make::<string>('s');
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $calls = $finder->findInstanceOf($ast, Node\Expr\FuncCall::class);
+        self::assertCount(2, $calls);
+
+        $fqCall = $calls[0];
+        self::assertSame('App\\make', $fqCall->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $fqArgs = $fqCall->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($fqArgs);
+        self::assertSame('int', $fqArgs[0]->name);
+
+        $relCall = $calls[1];
+        self::assertSame('App\\make', $relCall->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN));
+        $relArgs = $relCall->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        self::assertIsArray($relArgs);
+        self::assertSame('string', $relArgs[0]->name);
     }
 
     public function testTypeHintPositionStillAcceptsBareGenericArgs(): void
@@ -2615,6 +3013,366 @@ PHP;
         self::assertSame('T', $params[0]->name);
     }
 
+    public function testGenericStaticArrowAttachesItsMarker(): void
+    {
+        // The node starts at `static`, not at `fn` — the marker must anchor
+        // there or the arrow silently loses its params (raw `T` in the output).
+        $source = <<<'PHP'
+<?php
+namespace App;
+$id = static fn<T>(T $x): T => $x;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $arrow = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\ArrowFunction::class);
+        self::assertNotNull($arrow);
+        self::assertTrue($arrow->static);
+        $params = $arrow->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('T', $params[0]->name);
+    }
+
+    public function testAttributedGenericClosureAttachesItsMarker(): void
+    {
+        // The node starts at the first `#[`, not at `function`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$f = #[Marked] function<T>(T $x): T {
+    return $x;
+};
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $closure = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\Closure::class);
+        self::assertNotNull($closure);
+        $params = $closure->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('T', $params[0]->name);
+    }
+
+    public function testAttributedStaticGenericArrowAttachesItsMarker(): void
+    {
+        // Two ADJACENT attribute groups (no whitespace between them) — one
+        // with an array argument, so the walk back to the node start must
+        // balance the inner brackets AND resume exactly one token before
+        // each consumed group — plus `static`.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$g = #[Marked]#[Tagged([1, 2])] static fn<U>(U $y): U => $y;
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+        $arrow = self::findFirstNodeOfType($ast, \PhpParser\Node\Expr\ArrowFunction::class);
+        self::assertNotNull($arrow);
+        self::assertTrue($arrow->static);
+        $params = $arrow->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+        self::assertIsArray($params);
+        self::assertSame('U', $params[0]->name);
+    }
+
+    public function testSplitDeclarationHeadersKeepTheirMarkers(): void
+    {
+        // php-parser starts a node at its first attribute group or modifier —
+        // when that sits on a DIFFERENT line than the declaration's name, the
+        // marker (recorded at the name token's line) must still bind. Every
+        // shape here either silently lost its type params or false-rejected
+        // with "instantiated but never defined" when matched on the node line.
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+#[Note]
+final class Box<T> {
+    public function __construct(public T $v) {}
+}
+
+final
+class Pair<U> {
+    public function __construct(public U $u) {}
+}
+
+class Wrap {
+    #[Note]
+    public function lift<T>(T $x): T { return $x; }
+
+    public static
+    function pick<T>(T $x): T { return $x; }
+}
+
+#[Note]
+function ident<T>(T $x): T { return $x; }
+
+function
+double<T>(T $x): array { return [$x, $x]; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $byName = self::classesByName($ast);
+        self::assertSame(['T'], self::paramNames($byName['Box']));
+        self::assertSame(['U'], self::paramNames($byName['Pair']));
+
+        foreach ($byName['Wrap']->getMethods() as $method) {
+            $params = $method->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+            self::assertIsArray($params, "method {$method->name->toString()} lost its marker");
+            self::assertCount(1, $params);
+        }
+
+        $functions = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                foreach ($stmt->stmts as $s) {
+                    if ($s instanceof \PhpParser\Node\Stmt\Function_) {
+                        $functions[$s->name->toString()] = $s;
+                    }
+                }
+            }
+        }
+        self::assertSame(['ident', 'double'], array_keys($functions));
+        foreach ($functions as $name => $fn) {
+            $params = $fn->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+            self::assertIsArray($params, "function {$name} lost its marker");
+            self::assertCount(1, $params);
+        }
+    }
+
+    public function testSplitInterfaceAndTraitHeadersKeepTheirMarkers(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+#[Note]
+interface Keeper<T> {
+    public function get(): T;
+}
+
+#[Note]
+trait Mixin<T> {
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $iface = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Interface_::class);
+        self::assertNotNull($iface);
+        self::assertSame(['T'], self::paramNames($iface));
+
+        $trait = self::findFirstClassLike($ast, \PhpParser\Node\Stmt\Trait_::class);
+        self::assertNotNull($trait);
+        self::assertSame(['T'], self::paramNames($trait));
+    }
+
+    public function testVariableTurbofishStripPreservesByteLength(): void
+    {
+        // The `$var::<…>` strip must blank exactly its own span — byte length
+        // and line count of the whole file preserved.
+        $source = <<<'PHP'
+<?php
+namespace App;
+$id = fn<T>(T $x): T => $x;
+$r = $id::<int>(1) + $id::<int>(2);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $stripped = $parser->strip($source);
+        self::assertSame(strlen($source), strlen($stripped));
+        self::assertSame(substr_count($source, "\n"), substr_count($stripped, "\n"));
+    }
+
+    public function testSameLinePlainAndGenericHintsKeepTheirOwnMarkers(): void
+    {
+        // Line-keyed matching let the first-traversed same-spelling Name steal
+        // the generic hint's marker — specializing the WRONG parameter.
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+function f(Box $a, Box<int> $b): int { return $b->v; }
+function g(Box<int> $a, Box $b): int { return $a->v; }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $hints = [];
+        foreach ($finder->findInstanceOf($ast, Name::class) as $n) {
+            if ($n->toString() === 'Box') {
+                $hints[] = $n->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) !== null;
+            }
+        }
+        self::assertSame(
+            [false, true, true, false],
+            $hints,
+            'each generic hint must keep its own marker regardless of same-line order',
+        );
+    }
+
+    public function testSameLineSameNameStaticCallsDoNotCrossClaim(): void
+    {
+        // `Plain::pick(5) + Util::pick::<int>(4)` on one line: the line-range
+        // match let the PLAIN call steal the generic call's marker — both then
+        // rejected (bogus unresolved-call + missing-type-argument errors).
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Util { public static function pick<T>(T $x): T { return $x; } }
+class Plain { public static function pick(int $x): int { return $x; } }
+$r = Plain::pick(5) + Util::pick::<int>(4);
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $byClass = [];
+        foreach ($finder->findInstanceOf($ast, Node\Expr\StaticCall::class) as $call) {
+            assert($call->class instanceof Name);
+            $byClass[$call->class->toString()] =
+                $call->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
+        }
+        self::assertNull($byClass['Plain'], 'the plain call must not claim the marker');
+        self::assertIsArray($byClass['Util'], 'the generic call must keep its marker');
+        self::assertSame('int', $byClass['Util'][0]->name);
+    }
+
+    public function testReturnHintDoesNotStealANewTurbofishMarker(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+class Box<T> { public function __construct(public T $v) {} }
+function mk(): Box { return new Box::<int>(1); }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $finder = new \PhpParser\NodeFinder();
+        $fn = $finder->findFirstInstanceOf($ast, \PhpParser\Node\Stmt\Function_::class);
+        self::assertNotNull($fn);
+        assert($fn->returnType instanceof Name);
+        self::assertNull(
+            $fn->returnType->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS),
+            'the plain return hint must not claim the instantiation marker',
+        );
+        $new = $finder->findFirstInstanceOf($ast, Node\Expr\New_::class);
+        self::assertNotNull($new);
+        assert($new->class instanceof Name);
+        $args = $new->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+        self::assertIsArray($args);
+        self::assertSame('int', $args[0]->name);
+    }
+
+    public function testOneLineConditionalSameNameClassesBindTheRightMarker(): void
+    {
+        $source = <<<'PHP'
+<?php
+namespace App;
+if ($flag) { class B { } } else { class B<T> { public T $v; } }
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+        $ast = $parser->parse($source);
+
+        $classes = self::collectClasses($ast);
+        self::assertCount(2, $classes);
+        self::assertNull(
+            $classes[0]->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS),
+            'the plain class must not claim the generic clause',
+        );
+        self::assertSame(['T'], self::paramNames($classes[1]));
+    }
+
+    public function testUseFunctionImportNeverBecomesAGenericMarker(): void
+    {
+        // `use function b<T>;` is invalid code, but it must fail as PHP's own
+        // syntax error on the un-stripped `<` — not be silently swallowed
+        // (the clause used to strip, emitting `use function b ;`), and not be
+        // misreported as a transpiler bug by the unbound-marker backstop
+        // (an import never produces the Function_ node the marker binds to).
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        foreach (['use function b<T>;', 'use function b<T> as c;', 'use Foo\{function a<T>};'] as $import) {
+            $source = "<?php\nnamespace App;\n{$import}\n";
+            $stripped = $parser->strip($source);
+            self::assertMatchesRegularExpression(
+                '/<T>/',
+                $stripped,
+                "the clause in `{$import}` must survive into the cleaned source",
+            );
+            try {
+                $parser->parse($source);
+                self::fail("expected PHP's own parse error for `{$import}`");
+            } catch (\PhpParser\Error) {
+                // PHP's syntax error — the right blame, in both modes.
+            }
+        }
+
+        // Plain function imports keep compiling, including next to a genuine
+        // generic declaration.
+        $ast = $parser->parse("<?php\nnamespace App;\nuse function strlen;\nfunction f<T>(T \$x): T { return \$x; }\n");
+        self::assertNotEmpty($ast);
+    }
+
+    public function testUnboundDeclarationMarkerMessageIsNullWhenEverythingBound(): void
+    {
+        self::assertNull(XphpSourceParser::unboundDeclarationMarkerMessage([], []));
+    }
+
+    public function testUnboundClassMarkerProducesTheLoudBackstopError(): void
+    {
+        $msg = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [['line' => 7, 'name' => 'Box']],
+            [],
+        );
+        self::assertSame(
+            'The generic type-parameter clause for `Box` (line 7) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $msg,
+        );
+    }
+
+    public function testUnboundMethodAndClosureMarkersProduceTheLoudBackstopError(): void
+    {
+        $named = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [],
+            [['line' => 3, 'name' => 'wrap']],
+        );
+        self::assertSame(
+            'The generic type-parameter clause for `wrap` (line 3) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $named,
+        );
+
+        $anonymous = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [],
+            [['line' => 9, 'name' => '']],
+        );
+        self::assertSame(
+            'The generic type-parameter clause for an anonymous closure (line 9) was recognized but '
+            . 'never bound to its declaration — compiling on would silently drop the type parameters '
+            . 'from the emitted code. This is a transpiler bug; please report it. As a workaround, '
+            . 'keep the declaration header (attributes, modifiers, and name) on a single line.',
+            $anonymous,
+        );
+
+        // Class markers are reported first when both kinds survive.
+        $both = XphpSourceParser::unboundDeclarationMarkerMessage(
+            [['line' => 1, 'name' => 'A']],
+            [['line' => 2, 'name' => 'b']],
+        );
+        self::assertSame(
+            'The generic type-parameter clause for `A` (line 1) was recognized but never bound to '
+            . 'its declaration — compiling on would silently drop the type parameters from the '
+            . 'emitted code. This is a transpiler bug; please report it. As a workaround, keep the '
+            . 'declaration header (attributes, modifiers, and name) on a single line.',
+            $both,
+        );
+    }
+
     public function testGenericClosureDefaultIsAccepted(): void
     {
         // P5.7: defaults now allowed on anonymous closures; GMC pads
@@ -2757,6 +3515,19 @@ PHP;
         };
         $walker($ast);
         return $found;
+    }
+
+    /**
+     * @param array<int, mixed> $ast
+     * @return array<string, Class_>
+     */
+    private static function classesByName(array $ast): array
+    {
+        $byName = [];
+        foreach (self::collectClasses($ast) as $class) {
+            $byName[$class->name?->toString() ?? ''] = $class;
+        }
+        return $byName;
     }
 
     /**

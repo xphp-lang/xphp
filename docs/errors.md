@@ -37,7 +37,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 |------|---------|
 | `xphp.bound_violation` | a concrete type argument doesn't satisfy its parameter's bound |
 | `xphp.default_bound_violation` | a parameter's default doesn't satisfy its own bound |
-| `xphp.missing_type_argument` | a required type argument was omitted and has no default — including a **turbofish-less call** to a generic method, function, or closure (`$x->pick('a')` instead of `$x->pick::<string>('a')`): a method generic takes no inference, so the type argument must be supplied explicitly |
+| `xphp.missing_type_argument` | a required type argument was omitted and has no default — including a **turbofish-less call** to a generic method, function, or closure (`$x->pick('a')` instead of `$x->pick::<string>('a')`), and a **bare `new` of a generic without all-defaults** (`new Box(...)` where `Box<T>` has a required parameter, instead of `new Box::<int>(...)`): the type argument takes no inference, so it must be supplied explicitly |
 | `xphp.too_many_type_arguments` | more type arguments were supplied than the template declares (e.g. `Box::<int, string>` for a one-parameter `Box`) |
 | `xphp.variance_position` | an `out T` / `in T` parameter appears in a position its variance forbids |
 | `xphp.inner_variance` | variance is violated through another generic's slot (composition) |
@@ -46,12 +46,14 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 | `xphp.duplicate_generic_function` | the same generic function is declared in two files |
 | `xphp.closure_this_capture` | a generic closure/arrow used via turbofish captures `$this` (unsupported) |
 | `xphp.static_closure` | a generic `static` closure used via turbofish (unsupported) |
+| `xphp.unspecialized_generic_closure` | a generic closure/arrow is declared but no in-scope `$var::<...>(...)` call grounds its type parameters — the emitted value would keep raw hints naming non-existent classes (`App\T`) and fatal on first invocation, even when only handed away as a callable (which cannot ground it). Call it with a turbofish in the scope that declares it, or remove the `<...>` clause (also flagged when the parameters are never referenced — the clause is dead syntax) |
 | `xphp.unresolved_generic_call` | a turbofish method call (`$obj->m::<…>()` / `Foo::m::<…>()`) names a generic method that can't be resolved on the receiver's type — a typo or wrong receiver type, caught at compile time instead of fataling at runtime |
 | `xphp.bound_unprovable` | a method-generic bound that references an enclosing class type parameter (`contains<U : E>`) can't be proven because the receiver's type argument isn't determinable here — a raw `Box` with no argument, a branch whose arms disagree, a static call, or a `$this` self-call. Ground the receiver (bind it to a typed local) or the build fails |
 | `xphp.undetermined_receiver` | a turbofish method call's receiver has no statically-known type (an untyped `foreach` variable, a local whose type is ambiguous after a branch), so the call can't be specialized — it would emit a call to a stripped method that fatals at runtime. Give the receiver a declared type |
 | `xphp.unspecializable_self_call` | a `$this`-rooted self-call forwards a type parameter to a **non-erasable** generic method (one whose parameter is used nested, in the return, or structurally). Forwarding to an *erasable* method — parameter used only as a direct input — compiles and runs; otherwise move the call to a typed-receiver context |
 | `xphp.unschedulable_covariant_upcast` | a value is upcast to a covariant *interface* whose element-consuming method (`contains<U : E>`) needs a concrete implementation at the supertype argument that can neither be inherited through the covariant chain nor emitted directly onto the upcast source. Direct emission already covers the cases where inheritance can't carry it (the implementing class has another `extends` parent, implements only a parent of the interface, or reorders the clause); the upcast fails only when **no** emittable class body exists (a truly abstract or trait-only method), the method's **return type** names the element parameter (the widened argument would escape through a narrower return), or its parameters are bounded by **different** enclosing parameters (no single member can be derived). Provide a concrete implementation on a class — move a trait body onto the covariant base, or give the method a non-element return type |
-| `xphp.parse_error` | the file isn't valid PHP after the generic strip pass |
+| `xphp.closure_conformance` | a closure literal returned against a `Closure(...)` type doesn't conform to it — its parameters aren't wide enough, its return isn't narrow enough, its by-reference-ness differs, or its arity is incompatible |
+| `xphp.parse_error` | the source can't be parsed — either a PHP syntax error after the generic strip pass, or a parse-time xphp rejection (a variance marker on a method/closure, a malformed generic default, a generic clause on a `use` import, a `Closure(...)` signature with a defaulted or untyped parameter, or a `Closure(...)` signature type in an unsupported position such as a generic argument or bound), reported at the offending line |
 | `phpstan.*` | a PHPStan finding in the compiled output, mapped back to the template declaration (the code is `phpstan.` + PHPStan's own identifier, e.g. `phpstan.return.type`; a finding that carries no identifier falls back to the literal `phpstan.error`) — present only when the PHPStan pass runs |
 | `phpstan.unavailable` | (Warning) no phpstan binary was found, so the PHPStan pass was skipped |
 | `phpstan.run_failed` | (Warning) phpstan was found but couldn't complete (e.g. a config error) |
@@ -124,6 +126,10 @@ In CI (GitHub Actions), one step gates the build and annotates the diff:
 | `Cannot determine the receiver's type` | [Turbofish — receiver-type analysis](syntax/turbofish.md#receiver-type-analysis-instance-methods) — give the receiver a declared type. |
 | `Cannot specialize the self-call` | [Type bounds — ground or fail](syntax/type-bounds.md#ground-or-fail) — the forward targets a non-erasable method; forward to an erasable one or move the call to a typed-receiver context. |
 | `was instantiated with N type argument(s) but parameter ... has no default` | [Defaults](syntax/defaults.md) — supply all required args or add defaults |
+| `signature type is not supported as a generic` | [Closure types — known limitations](syntax/closure-types.md#known-limitations) — a `Closure(...)` signature can't be a generic type argument or bound; use a bare `\Closure` there. |
+| `signature parameter must have a type` | [Closure types — known limitations](syntax/closure-types.md#known-limitations) — every `Closure(...)` signature parameter needs a type; use `mixed` for an unconstrained slot. |
+| `signature type cannot give parameter` ... `a default value` | [Closure types](syntax/closure-types.md) — a signature describes the callable's shape; drop the `= ...` default. |
+| `Closure literal does not conform` | [Closure types — conformance checking](syntax/closure-types.md#conformance-checking) |
 | `Nested generic specialization exceeded depth` | A generic refers to itself transitively too deeply (compiler aborts at depth 16) — usually a recursive instantiation cycle. Refactor to break the cycle. |
 | `Parser returned null AST` | The source file isn't valid PHP after the generic strip pass. Run `php -l <file>.xphp` mentally on the cleaned source — most often a syntax error in the user code that's unrelated to generics. |
 
@@ -375,6 +381,52 @@ Generic template "<FQN>" was instantiated but never defined
 ```
 Nested generic specialization exceeded depth 16. Latest registry:
 <list>
+```
+
+### Closure-signature conformance
+
+```
+Closure literal does not conform to the declared `Closure(...)` type:
+<detail>
+```
+
+Emitted when a closure literal is returned against a `Closure(...)` return
+type it doesn't satisfy. The `<detail>` names the exact mismatch, e.g.
+`parameter 1: string is not wider than int` (a parameter must be the same
+as or **wider** than the target's — contravariance), `return type: A is not
+a subtype of B` (the return must be the same as or **narrower** — covariance),
+`by-reference-ness must match exactly`, or an arity message. See
+[closure types](syntax/closure-types.md). The check only ever reports a
+*provable* mismatch: an unresolved class, a still-abstract type parameter, an
+untyped (⇒ `mixed`) slot, a union/intersection, or a built-in supertype is
+accepted rather than falsely rejected.
+
+### Closure-signature parse rejects
+
+Each of these is a parse-time rejection (`xphp check` reports it as
+`xphp.parse_error`); see
+[closure types → known limitations](syntax/closure-types.md#known-limitations).
+
+```
+A Closure(...) signature type is not supported as a generic type argument
+(closure signatures are allowed only in parameter, return, and property
+types). Use a bare \Closure, or introduce a named type alias.
+```
+
+```
+A Closure(...) signature type is not supported as a generic bound (closure
+signatures are allowed only in parameter, return, and property types). Use
+a bare \Closure, or introduce a named type alias.
+```
+
+```
+A Closure(...) signature parameter must have a type (untyped signature
+parameters are not supported). Add a type, e.g. `Closure(int $x): int`.
+```
+
+```
+A Closure(...) signature type cannot give parameter <$name|N> a default
+value: a signature describes the callable's shape, not call-time values.
 ```
 
 ### Parse / AST

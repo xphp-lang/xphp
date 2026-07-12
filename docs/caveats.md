@@ -73,6 +73,12 @@ class Holder {
 
 ## `static` closures not supported
 
+`static` **arrows** work: `static fn<T>(T $x): T => $x` specializes
+exactly like a plain arrow (an arrow can never bind `$this`, so the
+`static` is inert; note the rewritten dispatcher closure is technically
+non-static — observable only through `Closure::bind` or reflection).
+The gap below is specific to the `static function` (closure) syntax.
+
 ### ❌ What doesn't work
 
 ```php
@@ -112,14 +118,59 @@ file-scope generic function side-steps it.
 
 ### ✅ Workaround
 
-Drop the `static` modifier, or lift the body to a named function:
+Use an arrow, drop the `static` modifier, or lift the body to a named
+function:
 
 ```php
+$f = static fn<T>(T $x): T => $x;               // works
 $f = function<T>(T $x): T { return $x; };       // works
 // or
 function id<T>(T $x): T { return $x; }
 id::<int>(42);                                    // works
 ```
+
+---
+
+## Closure signature types only in parameter, return, and property slots
+
+A `Closure(int $x): bool` signature type is accepted anywhere a plain
+type hint goes — a parameter, a return, a property, or nested inside
+another signature. Two positions are **not** supported: a generic type
+argument (`Box<Closure(int): int>`) and a generic bound
+(`class C<T : Closure(int): int>`). Each is a clear compile error:
+
+```
+A Closure(...) signature type is not supported as a generic type argument
+(closure signatures are allowed only in parameter, return, and property
+types). Use a bare \Closure, or introduce a named type alias.
+```
+
+A signature parameter must also carry a type and cannot have a default
+value — a signature describes the callable's shape, not call-time
+values.
+
+### Why
+
+A signature erases to a bare `\Closure` before specialization, but a
+generic argument or bound participates in specialization *itself*
+(naming, hashing, subtype edges), where a structural type has no
+identity to anchor to. Rejecting loudly keeps the cardinal rule: no
+silent miscompile. Lifting these positions is on the
+[roadmap](roadmap.md) as a discovery item.
+
+### ✅ Workaround
+
+Use a bare `\Closure` in the generic position — you lose the
+compile-time conformance check but keep a working type — or wrap the
+callable in a named class:
+
+```php
+class C<T : \Closure> {}                 // works: bare Closure bound
+$b = new Box::<\Closure>(fn() => 1);     // works: bare Closure argument
+```
+
+See [closure types → known limitations](syntax/closure-types.md#known-limitations)
+for the full list.
 
 ---
 

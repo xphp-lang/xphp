@@ -63,7 +63,16 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         $this->registry($collector)->recordInstantiation('App\\Consumer', [new TypeRef('App\\Book')]);
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('type parameter in T is contravariant', $collector->all()[0]->message);
+        self::assertSame(
+            <<<'TXT'
+            Variance edge cannot be proven while instantiating App\Consumer<App\Book>.
+              type parameter in T is contravariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the contravariant relationship silently does not apply at runtime.
+
+              Add App\Book to the source set the hierarchy is built from to enable the edge.
+            TXT,
+            $collector->all()[0]->message,
+        );
     }
 
     public function testProvableDeclaredLeafIsSilent(): void
@@ -138,7 +147,16 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         $this->registry($collector)->recordInstantiation('\\App\\Producer', [new TypeRef('App\\Book')]);
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('instantiating App\\Producer<App\\Book>', $collector->all()[0]->message);
+        self::assertSame(
+            <<<'TXT'
+            Variance edge cannot be proven while instantiating App\Producer<App\Book>.
+              type parameter out T is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
+
+              Add App\Book to the source set the hierarchy is built from to enable the edge.
+            TXT,
+            $collector->all()[0]->message,
+        );
     }
 
     public function testEarlierInvariantPositionDoesNotShortCircuitLaterVariant(): void
@@ -152,7 +170,16 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         );
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('App\\Author', $collector->all()[0]->message);
+        self::assertSame(
+            <<<'TXT'
+            Variance edge cannot be proven while instantiating App\Mixed<App\Book, App\Author>.
+              type parameter out B is covariant, but App\Author is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
+
+              Add App\Author to the source set the hierarchy is built from to enable the edge.
+            TXT,
+            $collector->all()[0]->message,
+        );
     }
 
     public function testEarlierScalarPositionDoesNotShortCircuitLaterVariant(): void
@@ -166,7 +193,16 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         );
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('App\\Book', $collector->all()[0]->message);
+        self::assertSame(
+            <<<'TXT'
+            Variance edge cannot be proven while instantiating App\Pair<int, App\Book>.
+              type parameter out B is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
+
+              Add App\Book to the source set the hierarchy is built from to enable the edge.
+            TXT,
+            $collector->all()[0]->message,
+        );
     }
 
     public function testEarlierDeclaredPositionDoesNotShortCircuitLaterVariant(): void
@@ -180,7 +216,16 @@ final class RegistryVarianceEdgeDiagnosticTest extends TestCase
         );
 
         self::assertCount(1, $collector->all());
-        self::assertStringContainsString('App\\Book', $collector->all()[0]->message);
+        self::assertSame(
+            <<<'TXT'
+            Variance edge cannot be proven while instantiating App\Pair<App\Banana, App\Book>.
+              type parameter out B is covariant, but App\Book is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),
+              so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the covariant relationship silently does not apply at runtime.
+
+              Add App\Book to the source set the hierarchy is built from to enable the edge.
+            TXT,
+            $collector->all()[0]->message,
+        );
     }
 
     public function testCompileModeNeverThrowsAndEmitsNothing(): void

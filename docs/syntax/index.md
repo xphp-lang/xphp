@@ -15,6 +15,7 @@ first.
 | [Classes and interfaces](classes-and-interfaces.md) | `class Box<T> {}`, generic interfaces and traits, marker-interface runtime behavior |
 | [Methods and functions](methods-and-functions.md) | Generic methods (static + instance), generic free functions, bare top-level |
 | [Closures and arrows](closures-and-arrows.md) | `function<T>(...)`, `fn<T>(...) => ...`, captures incl. by-ref |
+| [Closure types](closure-types.md) | `Closure(int $x): bool` signature types, erasure to `\Closure`, return-position conformance |
 | [Type bounds](type-bounds.md) | `T : Stringable`, `T : A & B`, `T : (A & B) \| C`, F-bounded `T : Box<T>` |
 | [Variance](variance.md) | `out T`, `in T`, position rules, subtype edges between specializations |
 | [Defaults](defaults.md) | `T = int`, forward refs `Pair<A, B = A>`, empty turbofish `$f::<>()` |
@@ -53,6 +54,11 @@ $pick::<int>(1, 2, true);
 // Generic arrow function
 $id = fn<T>(T $x): T => $x;
 $id::<string>('hi');
+
+// Closure signature type (erases to \Closure; literal checked for conformance)
+function adder(int $by): Closure(int $x): int {
+    return fn(int $x): int => $x + $by;
+}
 
 // Type bounds
 class Sortable<T : Comparable<T>> {}     // F-bounded

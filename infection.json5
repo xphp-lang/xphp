@@ -45,7 +45,11 @@
                 "XPHP\\FileSystem\\FilepathArray::__construct",
                 "XPHP\\FileSystem\\FilepathArray::filter",
                 "XPHP\\Transpiler\\Monomorphize\\BoundIntersection::__construct",
-                "XPHP\\Transpiler\\Monomorphize\\BoundUnion::__construct"
+                "XPHP\\Transpiler\\Monomorphize\\BoundUnion::__construct",
+                // ClosureLiteralSignature::extract: array_map over php-parser's
+                // already-0-indexed params list — the wrapper exists purely to
+                // prove list-ness to PHPStan; unwrapping it is a no-op.
+                "XPHP\\Transpiler\\Monomorphize\\ClosureLiteralSignature::extract"
             ]
         },
 
