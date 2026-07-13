@@ -373,6 +373,7 @@ final class GenericMethodCompiler
      * @param array<string, ClassLike> $classByFqn
      * @param array<string, Function_> $functionTemplates
      * @param array<string, ?Namespace_> $functionNamespaceByFqn  null = bare top-level
+     * @param array<string, Function_> $allFunctionsByFqn  every function (generic or not) by FQN
      * @param array<string, true> $alreadyGenerated
      * @param list<Function_> $topLevelAppends  out-param: specializations for null-namespace
      *   templates; the caller flushes these to the top-level AST after the traversal completes
