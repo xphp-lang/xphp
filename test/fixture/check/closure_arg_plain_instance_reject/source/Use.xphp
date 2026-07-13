@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\PlainArg;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+// NON-generic method with a Closure(...) parameter.
+class Registry
+{
+    public function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('x'));
+    }
+}
+
+function run(): void
+{
+    $r = new Registry();
+    // int is not wider than Book — a provable mismatch at a plain (non-turbofish) call.
+    $r->each(fn(int $x): string => 'z');
+}

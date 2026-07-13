@@ -198,6 +198,34 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testConformingPlainMethodClosureArgumentCompilesEraseAndRuns(): void
+    {
+        // A conforming closure literal handed to a NON-generic method's Closure(Book): string
+        // parameter compiles, erases to `\Closure`, and executes.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_plain_runtime/source',
+            'closure-arg-plain-run',
+        );
+        $fixture->registerAutoload('App\\PlainArgRun\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_arg_plain_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testNonConformingPlainMethodClosureArgumentFailsCompilation(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('parameter 1: int is not wider than App\\PlainArgReject\\Book');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_plain_reject/source',
+            'closure-arg-plain-reject',
+        );
+    }
+
+    #[RunInSeparateProcess]
     public function testGroundedGenericClosureConformsWhenTypeParameterResolves(): void
     {
         // `Closure(T): T` grounds to `Closure(int): int` under `Box<int>`; the

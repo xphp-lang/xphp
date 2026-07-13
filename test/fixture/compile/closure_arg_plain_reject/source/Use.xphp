@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\PlainArgReject;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Registry
+{
+    public function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('x'));
+    }
+}
+
+$r = new Registry();
+// int is not wider than Book — compile fails fast before any output is written.
+$r->each(fn(int $x): string => 'z');

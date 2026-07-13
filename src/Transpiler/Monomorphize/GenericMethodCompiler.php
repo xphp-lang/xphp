@@ -187,9 +187,13 @@ final class GenericMethodCompiler
         // Closure-template tracking happens lazily inside rewriteCallSites
         // (every Assign with a Closure-with-genericParams RHS is tracked), so
         // the early return must NOT fire just because the file has no named
-        // templates -- it might still have anonymous generic closures.
+        // templates -- it might still have anonymous generic closures. It must
+        // also stay alive when a `Closure(...)`-typed PARAMETER exists anywhere:
+        // a plain call to such a (non-generic) method still needs its closure-
+        // literal arguments conformance-checked (checkPlain*ClosureArgs).
         if ($methodTemplates === [] && $functionTemplates === []
             && !self::hasAnonymousGenericCallSite($astSet)
+            && !self::hasClosureTypedParameter($astSet)
         ) {
             return;
         }
@@ -1186,6 +1190,12 @@ final class GenericMethodCompiler
                 // `Sub::m::<...>()` and resolves via static-method inheritance.
                 $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
                 if ($resolved === null) {
+                    // Non-generic static method (no generic template): a non-turbofish call
+                    // still checks its closure-literal arguments. A turbofish here is an
+                    // unresolved-generic-call error, handled below.
+                    if (!is_array($args)) {
+                        $this->checkPlainStaticClosureArgs($node, $classFqn, $methodName);
+                    }
                     return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 [$template, $declaringFqn] = $resolved;
@@ -1329,6 +1339,12 @@ final class GenericMethodCompiler
                 // there and inherited (see resolveMethodTemplate).
                 $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
                 if ($resolved === null) {
+                    // Non-generic method (no generic template): a non-turbofish call still
+                    // checks its closure-literal arguments. A turbofish here is an
+                    // unresolved-generic-call error, handled below.
+                    if (!is_array($args)) {
+                        $this->checkPlainInstanceClosureArgs($node, $classFqn, $methodName);
+                    }
                     return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 [$template, $declaringFqn] = $resolved;
@@ -1543,6 +1559,61 @@ final class GenericMethodCompiler
                     }
                 }
                 return null;
+            }
+
+            /**
+             * Check the closure-literal arguments of a NON-turbofish call to a non-generic
+             * INSTANCE method. Reached only when {@see resolveMethodTemplate} found no generic
+             * template, so a generic call is never double-checked here. The receiver's class
+             * type arguments ground a `Closure(...)` parameter that references a class type
+             * parameter; a first-class callable, an unresolvable method, or an unresolvable
+             * receiver all stay gradual.
+             */
+            private function checkPlainInstanceClosureArgs(MethodCall|NullsafeMethodCall $node, string $classFqn, string $methodName): void
+            {
+                if ($this->closureValidator === null || $node->isFirstClassCallable()) {
+                    return;
+                }
+                $found = $this->findMethodDeclaration($classFqn, $methodName);
+                if ($found === null) {
+                    return;
+                }
+                [$method, $declaringFqn] = $found;
+                $subst = $this->classSubstitutionFor($classFqn, $this->resolveReceiverTypeArgs($node->var), $declaringFqn);
+                $this->closureValidator->checkCallArguments(
+                    array_values($method->params),
+                    $node->args,
+                    $subst,
+                    $this->nsContext,
+                    $this->currentFile,
+                    $this->diagnostics,
+                );
+            }
+
+            /**
+             * Check the closure-literal arguments of a NON-turbofish call to a non-generic
+             * STATIC method. A class type parameter is unbound in a static context, so the
+             * substitution is empty — a `Closure(...)` target on a non-generic class is fully
+             * concrete (checked), one referencing a class parameter stays abstract (gradual).
+             */
+            private function checkPlainStaticClosureArgs(StaticCall $node, string $classFqn, string $methodName): void
+            {
+                if ($this->closureValidator === null || $node->isFirstClassCallable()) {
+                    return;
+                }
+                $found = $this->findMethodDeclaration($classFqn, $methodName);
+                if ($found === null) {
+                    return;
+                }
+                [$method] = $found;
+                $this->closureValidator->checkCallArguments(
+                    array_values($method->params),
+                    $node->args,
+                    [],
+                    $this->nsContext,
+                    $this->currentFile,
+                    $this->diagnostics,
+                );
             }
 
             /**
@@ -2835,6 +2906,48 @@ final class GenericMethodCompiler
                 }
                 if (($node instanceof Closure || $node instanceof ArrowFunction)
                     && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
+                ) {
+                    $this->found = true;
+                }
+                return null;
+            }
+        });
+        foreach ($astSet as $ast) {
+            $traverser->traverse($ast);
+            if ($found) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether any parameter anywhere declares a `Closure(...)` signature type. Such a
+     * parameter is a call-argument conformance target ({@see checkPlainInstanceClosureArgs}
+     * / {@see checkPlainStaticClosureArgs}), so the rewrite pass must run to check calls
+     * to it even when the program declares no generic method / function / closure.
+     *
+     * @param array<string, list<Node\Stmt>> $astSet
+     */
+    private static function hasClosureTypedParameter(array $astSet): bool
+    {
+        $found = false;
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($found) extends NodeVisitorAbstract {
+            public function __construct(private bool &$found)
+            {
+            }
+
+            /**
+             * @infection-ignore-all -- inner anonymous visitor (Infection's blind spot);
+             * covered behaviorally by the non-generic closure-argument accept/reject fixtures,
+             * whose programs declare NO generics, so only this pre-scan keeps the pass alive.
+             */
+            public function enterNode(Node $node): null
+            {
+                if (!$this->found
+                    && $node instanceof Param
+                    && ClosureConformanceValidator::closureSigOf($node->type) !== null
                 ) {
                     $this->found = true;
                 }

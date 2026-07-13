@@ -1032,6 +1032,40 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(0, $this->check('closure_arg_free_fn_accept')->all());
     }
 
+    public function testClosureArgumentConformanceViolationAtPlainInstanceCallIsCollected(): void
+    {
+        // A closure literal passed to a NON-generic instance method's Closure(Book): string
+        // parameter at a plain (non-turbofish) call, whose int parameter is not wider than Book.
+        $diagnostics = $this->check('closure_arg_plain_instance_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\PlainArg\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testClosureArgumentConformanceViolationAtPlainStaticCallIsCollected(): void
+    {
+        // Same, at a plain static call to a non-generic static method.
+        $diagnostics = $this->check('closure_arg_plain_static_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\PlainArg\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingPlainMethodClosureArgumentsStayClean(): void
+    {
+        // Exact / wider / non-literal / grounded-on-a-generic-class / self:: static, plus the
+        // two receiver-reassignment cases that must NOT false-reject (a reassigned parameter
+        // resolves to its new type; a local reassigned from an untrackable call is gradual).
+        self::assertCount(0, $this->check('closure_arg_plain_accept')->all());
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));
