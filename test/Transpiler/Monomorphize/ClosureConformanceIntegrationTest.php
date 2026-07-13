@@ -170,6 +170,34 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testConformingFreeFunctionClosureArgumentCompilesEraseAndRuns(): void
+    {
+        // A conforming closure literal handed to a grounded `Closure(int): int` generic
+        // free-function parameter compiles, erases to `\Closure`, and executes.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_free_fn_runtime/source',
+            'closure-arg-free-fn-run',
+        );
+        $fixture->registerAutoload('App\\ClosureArgFnRun\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_arg_free_fn_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testNonConformingFreeFunctionClosureArgumentFailsCompilation(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('parameter 1: string is not wider than int');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_free_fn_reject/source',
+            'closure-arg-free-fn-reject',
+        );
+    }
+
+    #[RunInSeparateProcess]
     public function testGroundedGenericClosureConformsWhenTypeParameterResolves(): void
     {
         // `Closure(T): T` grounds to `Closure(int): int` under `Box<int>`; the

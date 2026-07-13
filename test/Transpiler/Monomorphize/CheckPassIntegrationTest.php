@@ -1009,6 +1009,29 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(0, $this->check('closure_arg_static_accept')->all());
     }
 
+    public function testClosureArgumentConformanceViolationAtFreeFunctionCallIsCollected(): void
+    {
+        // A closure literal passed to a generic free function's `Closure(R $x): R`
+        // parameter, grounded to `Closure(int): int`, whose `string` parameter is not
+        // wider than `int`.
+        $diagnostics = $this->check('closure_arg_free_fn_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingFreeFunctionClosureArgumentsStayClean(): void
+    {
+        // Conforming literals reached through a `use function` alias and a
+        // fully-qualified name both stay clean (callee resolves via the caller's
+        // function imports).
+        self::assertCount(0, $this->check('closure_arg_free_fn_accept')->all());
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));

@@ -2182,6 +2182,25 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         new SourceLocation($this->currentFile, $node->getStartLine()),
                     );
+
+                    // Check each closure-literal call argument against its paired parameter's
+                    // Closure(...) target, grounded through this call's type arguments. A free
+                    // function has no enclosing class, so the substitution carries only its own
+                    // (already-concrete) method type arguments.
+                    if ($this->closureValidator !== null) {
+                        $subst = [];
+                        foreach ($params as $i => $param) {
+                            $subst[$param->name] = $args[$i];
+                        }
+                        $this->closureValidator->checkCallArguments(
+                            array_values($template->params),
+                            $node->args,
+                            $subst,
+                            $this->nsContext,
+                            $this->currentFile,
+                            $this->diagnostics,
+                        );
+                    }
                 }
 
                 $funcName = $template->name->toString();
