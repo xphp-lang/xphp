@@ -545,6 +545,68 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    public function testReassignedParameterReceiverResolvesToTheNewType(): void
+    {
+        // A typed parameter reassigned to `new Other()` must resolve a later turbofish
+        // call against Other — the reassignment invalidates the declared parameter type,
+        // which otherwise masked the live local tracking and mis-resolved the call to the
+        // param's declared type (which lacks the generic method).
+        $dir = sys_get_temp_dir() . '/xphp-reassign-param-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ReassignParam;
+        class Plain { public function m(int $a): int { return $a; } }
+        class HasGen { public function pick<R>(R $a): R { return $a; } }
+        function run(Plain $x): int {
+            $x = new HasGen();
+            return $x->pick::<int>(5);
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            self::assertStringContainsString('pick_', $use, 'the call specialized against HasGen');
+            self::assertStringNotContainsString('pick::<', $use, 'the turbofish was rewritten');
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testReceiverReassignedFromAnUntrackableCallIsUndetermined(): void
+    {
+        // A local reassigned from a plain function call (an untrackable RHS) must drop
+        // its prior tracked type rather than keep the stale one. Before this was fixed
+        // the receiver mis-resolved to the stale `Plain` type and silently specialized
+        // against the WRONG class; now it is correctly undetermined (ground or fail).
+        $dir = sys_get_temp_dir() . '/xphp-reassign-untrackable-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ReassignUntrackable;
+        class Plain { public function pick<R>(R $a): R { return $a; } }
+        class HasGen { public function pick<R>(R $a): R { return $a; } }
+        function make(): HasGen { return new HasGen(); }
+        function run(): int {
+            $x = new Plain();
+            $x = make();
+            return $x->pick::<int>(5);
+        }
+        PHP);
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
+            $this->compileFrom($dir);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     public function testBranchingIntraBranchSpecializationStillWorks(): void
     {
         // Conservative branching analysis must NOT lose the intra-branch

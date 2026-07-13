@@ -774,9 +774,19 @@ final class GenericMethodCompiler
                         $top = count($this->branchSnapshots) - 1;
                         $this->branchSnapshots[$top]['assigned'][$assignedName] = true;
                     }
+                    // A reassignment invalidates the DECLARED parameter type for this name:
+                    // after `$x = …` the variable no longer holds its incoming parameter type,
+                    // so the param entry must stop masking the live local tracking below
+                    // (resolveReceiverFqn / resolveReceiverTypeArgs read param ?? local). The
+                    // new type is re-derived from the RHS in the chain that follows, or dropped
+                    // when the RHS is untrackable — never left as the stale declared type.
+                    unset(
+                        $this->currentScopeParamTypes[$assignedName],
+                        $this->currentScopeParamTypeArgs[$assignedName],
+                    );
                     // Update the live tracked type only when the RHS is `new ClassName(...)`
-                    // -- that's the one shape we can prove statically. Other RHS
-                    // shapes are conservatively ignored (they could be anything).
+                    // -- that's the one shape we can prove statically. Any other RHS is
+                    // untrackable and clears the slot (see the closing `else`).
                     if ($node->expr instanceof New_
                         && $node->expr->class instanceof Name
                     ) {
@@ -811,6 +821,15 @@ final class GenericMethodCompiler
                                 unset($this->currentScopeLocalTypeArgs[$assignedName]);
                             }
                         }
+                    } else {
+                        // Any other RHS (a free-function call, another variable, a ternary,
+                        // an array/property fetch, a closure literal) is untrackable — drop
+                        // any stale tracked type rather than leave a wrong one that a later
+                        // `$x->m(...)` would mis-resolve against.
+                        unset(
+                            $this->currentScopeLocalTypes[$assignedName],
+                            $this->currentScopeLocalTypeArgs[$assignedName],
+                        );
                     }
                     // Track anonymous generic templates: `$id = fn<T>(T $x) => $x`
                     // or `$id = function<T>(T $x): T { ... }`. The FuncCall-on-
