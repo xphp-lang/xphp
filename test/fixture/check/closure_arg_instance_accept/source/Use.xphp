@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureArgCheck;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Box<E>
+{
+    public function __construct(private E $value) {}
+
+    public function map<R>(Closure(E $x): R $fn): R
+    {
+        return $fn($this->value);
+    }
+}
+
+function run(): void
+{
+    $bookBox = new Box::<Book>(new Book('PHP'));
+    $bookBox->map::<string>(fn(Book $x): string => $x->name);   // exact — conforms
+    $bookBox->map::<string>(fn(object $x): string => 'x');      // wider param (contravariant)
+
+    // Grounding: the SAME shape grounds to Closure(int $x): string under Box<int>,
+    // where an `int` parameter conforms — so no diagnostic here.
+    $intBox = new Box::<int>(3);
+    $intBox->map::<string>(fn(int $x): string => (string) $x);
+}

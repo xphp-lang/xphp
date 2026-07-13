@@ -35,6 +35,7 @@ use PhpParser\Node\Stmt\Finally_;
 use PhpParser\Node\Stmt\For_;
 use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\If_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Property;
@@ -380,14 +381,25 @@ final class GenericMethodCompiler
         $hashLength = $this->hashLength;
         $hierarchy = $this->hierarchy;
         $diagnostics = $this->diagnostics;
+        // The conformance check needs a TypeHierarchy for the engine's class-subtype
+        // relations; without one (bare unit tests) closure-argument conformance is
+        // skipped (gradual), matching how bound validation degrades here.
+        $closureValidator = $hierarchy !== null ? new ClosureConformanceValidator($hierarchy) : null;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
+            /**
+             * Parallel to the raw `currentNamespace`/`useMap` tracking, kept in step so a
+             * closure-literal call argument resolves its own types against the CALLER's
+             * namespace + imports (where the literal is written) when fed to
+             * {@see ClosureConformanceValidator::checkCallArguments}.
+             */
+            private NamespaceContext $nsContext;
 
             /** @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_}> */
             public array $pendingAppends = [];
@@ -563,7 +575,9 @@ final class GenericMethodCompiler
                 public array &$topLevelAppends,
                 private readonly ?DiagnosticCollector $diagnostics,
                 private readonly string $currentFile,
+                private readonly ?ClosureConformanceValidator $closureValidator,
             ) {
+                $this->nsContext = new NamespaceContext();
             }
 
             public function enterNode(Node $node): null
@@ -572,6 +586,7 @@ final class GenericMethodCompiler
                     $this->currentNamespace = $node->name?->toString() ?? '';
                     $this->currentNamespaceNode = $node;
                     $this->useMap = [];
+                    $this->nsContext->enterNamespace($node->name?->toString());
                 }
                 if ($node instanceof Use_) {
                     foreach ($node->uses as $u) {
@@ -583,6 +598,13 @@ final class GenericMethodCompiler
                         $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
                         $this->useMap[$alias] = $fqn;
                     }
+                    $this->nsContext->indexUse($node);
+                }
+                if ($node instanceof GroupUse) {
+                    // A group import (`use N\{A, B}`) must reach the same NamespaceContext so a
+                    // group-imported class named in a closure-literal argument resolves to its
+                    // real FQN, not a current-namespace collision that could false-reject.
+                    $this->nsContext->indexGroupUse($node);
                 }
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $this->currentClassFqn = $this->currentNamespace !== ''
@@ -1341,6 +1363,28 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         $location,
                     );
+
+                    // Check each closure-literal call argument against its paired parameter's
+                    // Closure(...) target, grounded through the receiver's class type args and
+                    // this call's method-type arguments. Method params are layered LAST so a
+                    // method type parameter shadows a same-named class one (matching groundBounds
+                    // and PHP's inner-scope-wins rule). Runs before the erasable early-return so
+                    // `<U:E>` methods are still argument-checked, and outside the alreadyGenerated
+                    // dedup so every call site is checked — not only the one that specializes.
+                    if ($this->closureValidator !== null) {
+                        $subst = $this->classSubstitutionFor($classFqn, $receiverArgs, $declaringFqn);
+                        foreach ($params as $i => $param) {
+                            $subst[$param->name] = $args[$i];
+                        }
+                        $this->closureValidator->checkCallArguments(
+                            array_values($template->params),
+                            $node->args,
+                            $subst,
+                            $this->nsContext,
+                            $this->currentFile,
+                            $this->diagnostics,
+                        );
+                    }
 
                     // Erasable `<U : E>` method: the bound is checked above, but the call lowers to
                     // the E-mangled name keyed on the RECEIVER's element type (not the turbofish arg),

@@ -966,6 +966,27 @@ final class CheckPassIntegrationTest extends TestCase
         );
     }
 
+    public function testClosureArgumentConformanceViolationIsCollectedByCheck(): void
+    {
+        // A closure literal passed to a generic instance method's `Closure(E $x): R`
+        // parameter, grounded to `Closure(Book): string`, whose `int` parameter is not
+        // wider than `Book` — a provable contravariance violation at the call site.
+        $diagnostics = $this->check('closure_arg_instance_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\ClosureArgCheck\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingClosureArgumentsStayClean(): void
+    {
+        // Exact, wider-parameter, and grounded-to-int closure arguments all conform.
+        self::assertCount(0, $this->check('closure_arg_instance_accept')->all());
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));
