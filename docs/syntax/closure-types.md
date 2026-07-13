@@ -144,11 +144,34 @@ ancestry is user code with no built-in anywhere** is provably unrelated to a
 built-in target, and only that is rejected. This mirrors the RFC's runtime
 leniency — lenient while unresolved, decide only when provable.
 
-Only the return-position "factory" pattern above is checked, because that is
-the one place a closure literal statically meets a `Closure(...)` target: a
-default value cannot be a closure (PHP requires a constant expression), and a
-closure passed through a variable or a call argument is checked gradually
-(accepted).
+A closure **literal** is checked wherever it statically meets a `Closure(...)`
+target — both the return-position "factory" pattern above **and** a literal
+passed as a **call argument** to a `Closure(...)`-typed parameter, for every
+statically-resolvable callee: a generic instance / static / free-function
+turbofish call, and a plain (non-turbofish) call to a non-generic method or free
+function whose receiver/name resolves.
+
+```php
+function each<T>(Closure(T $x): string $fn, T $seed): string { return $fn($seed); }
+
+each::<int>(fn(int $x): string => (string) $x, 1);  // conforms
+each::<int>(fn(string $x): string => $x, 1);        // rejected: string is not wider than int
+```
+
+Only a callee the compiler cannot statically resolve keeps a call argument
+gradual (accepted): a callable held in a variable (`$fn(...)`), a built-in
+higher-order function (`array_map(...)`), or any other dynamic callee — the
+compiler cannot even see that the parameter is a `Closure(...)`. A default value
+is never a closure (PHP requires a constant expression), so it is not a site.
+
+When the callee sits inside a still-abstract generic template and its
+`Closure(...)` parameter references the enclosing type parameter, the argument is
+gradual at the template and **rechecked once the template specializes** — a
+`$this->m(...)` / `self::m(...)` self-call to a method of the same class is
+rejected or accepted per the concrete type argument, exactly like the
+return-position grounding. Two boundaries remain gradual here: a self-call to an
+**inherited** method, and a call through a **non-`$this` receiver** of the same
+generic type (e.g. `$other->m(...)` where `$other` is the enclosing `Box<E>`).
 
 ## Generic signatures
 
