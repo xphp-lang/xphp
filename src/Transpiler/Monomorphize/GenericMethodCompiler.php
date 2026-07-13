@@ -1223,6 +1223,26 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         $location,
                     );
+
+                    // Check each closure-literal call argument against its paired parameter's
+                    // Closure(...) target. In a static context a class type parameter is unbound
+                    // (no receiver to ground `E`), so the substitution carries only this call's
+                    // method-type arguments — a sig leaf referencing a class parameter stays
+                    // abstract ⇒ gradual, matching how bounds degrade here.
+                    if ($this->closureValidator !== null) {
+                        $subst = [];
+                        foreach ($params as $i => $param) {
+                            $subst[$param->name] = $args[$i];
+                        }
+                        $this->closureValidator->checkCallArguments(
+                            array_values($template->params),
+                            $node->args,
+                            $subst,
+                            $this->nsContext,
+                            $this->currentFile,
+                            $this->diagnostics,
+                        );
+                    }
                 }
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);

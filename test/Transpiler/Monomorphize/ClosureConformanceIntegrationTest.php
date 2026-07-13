@@ -142,6 +142,34 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testConformingStaticClosureArgumentCompilesEraseAndRuns(): void
+    {
+        // A conforming closure literal handed to a grounded `Closure(int): int`
+        // static-method parameter compiles, erases to `\Closure`, and executes.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_static_runtime/source',
+            'closure-arg-static-run',
+        );
+        $fixture->registerAutoload('App\\ClosureArgStaticRun\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_arg_static_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testNonConformingStaticClosureArgumentFailsCompilation(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('parameter 1: string is not wider than int');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_static_reject/source',
+            'closure-arg-static-reject',
+        );
+    }
+
+    #[RunInSeparateProcess]
     public function testGroundedGenericClosureConformsWhenTypeParameterResolves(): void
     {
         // `Closure(T): T` grounds to `Closure(int): int` under `Box<int>`; the

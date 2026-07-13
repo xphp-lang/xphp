@@ -987,6 +987,28 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(0, $this->check('closure_arg_instance_accept')->all());
     }
 
+    public function testClosureArgumentConformanceViolationAtStaticCallIsCollected(): void
+    {
+        // A closure literal passed to a static generic method's `Closure(R $x): R`
+        // parameter, grounded to `Closure(int): int` by the turbofish, whose `string`
+        // parameter is not wider than `int`.
+        $diagnostics = $this->check('closure_arg_static_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingStaticClosureArgumentsStayClean(): void
+    {
+        // A conforming method-generic target, and a class-parameter target that is
+        // unbound in a static context (⇒ gradual), both stay clean.
+        self::assertCount(0, $this->check('closure_arg_static_accept')->all());
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));

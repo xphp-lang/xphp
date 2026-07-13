@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureArgStaticReject;
+
+class Util<E>
+{
+    public static function apply<R>(Closure(R $x): R $fn, R $seed): R
+    {
+        return $fn($seed);
+    }
+}
+
+// string is not wider than int — compile fails fast before any output is written.
+Util::apply::<int>(fn(string $x): int => 0, 5);
