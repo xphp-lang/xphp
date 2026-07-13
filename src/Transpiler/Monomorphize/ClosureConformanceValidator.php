@@ -5,15 +5,20 @@ declare(strict_types=1);
 namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\Node;
+use PhpParser\Node\Arg;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
+use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
+use PhpParser\Node\Param;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Return_;
 use PhpParser\Node\Stmt\Use_;
+use PhpParser\Node\VariadicPlaceholder;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 use RuntimeException;
@@ -147,6 +152,131 @@ final class ClosureConformanceValidator
             $message,
             new SourceLocation($file, $literal->getStartLine()),
         ));
+    }
+
+    /**
+     * Check each closure-LITERAL call argument against its paired parameter's
+     * `Closure(...)` target type, grounding that target through `$subst` (the class-
+     * and method-level type-parameter substitution resolved at the call site). This
+     * is the shared call-argument site every statically-resolvable call shape feeds.
+     *
+     * A parameter without a `Closure(...)` type, an argument that is not a closure
+     * literal (a variable, a first-class callable, a spread value), and any position
+     * the pairing can't resolve all stay gradual (accepted). Arguments are paired to
+     * parameters PHP-faithfully: a named argument binds by parameter name; a spread
+     * (`...$x`) stops positional pairing (PHP rebinds every later position at call
+     * time), so the tail stays gradual; a trailing variadic parameter absorbs the
+     * positional arguments past the fixed arity.
+     *
+     * The candidate literal's own types are resolved against `$ctx` — the CALLER's
+     * namespace/use scope, where the literal is written — while `$target` arrives
+     * already resolved (at parse time, against the callee) and grounded here.
+     *
+     * @param list<Param> $calleeParams              the callee's declared value parameters
+     * @param array<int, Arg|VariadicPlaceholder> $callArgs  the call's arguments
+     * @param array<string, TypeRef> $subst          grounding map (class + method type params)
+     */
+    public function checkCallArguments(
+        array $calleeParams,
+        array $callArgs,
+        array $subst,
+        NamespaceContext $ctx,
+        string $file,
+        ?DiagnosticCollector $diagnostics,
+        bool $groundedTypesOnly = false,
+    ): void {
+        $position = 0;
+        $sawSpread = false;
+        foreach ($callArgs as $arg) {
+            // A first-class-callable placeholder (`foo(...)`) carries no value/name.
+            if (!$arg instanceof Arg) {
+                continue;
+            }
+            if ($arg->name instanceof Identifier) {
+                // Named argument: bind by the callee parameter's name, wherever it sits.
+                $this->checkOneCallArgument(
+                    self::paramByName($calleeParams, $arg->name->toString()),
+                    $arg->value, $subst, $ctx, $file, $diagnostics, $groundedTypesOnly,
+                );
+                continue;
+            }
+            // A spread rebinds every following positional slot at runtime, so once one
+            // is seen no later positional argument can be soundly paired — leave the
+            // tail gradual rather than risk checking a literal against the wrong slot.
+            if ($sawSpread) {
+                continue;
+            }
+            if ($arg->unpack) {
+                $sawSpread = true;
+                continue;
+            }
+            $this->checkOneCallArgument(
+                self::paramForPosition($calleeParams, $position),
+                $arg->value, $subst, $ctx, $file, $diagnostics, $groundedTypesOnly,
+            );
+            $position++;
+        }
+    }
+
+    /**
+     * Ground one parameter's `Closure(...)` target and check a single closure-literal
+     * argument against it. A null / typeless / non-`Closure(...)` parameter or a
+     * non-literal argument is a gradual no-op.
+     *
+     * @param array<string, TypeRef> $subst
+     */
+    private function checkOneCallArgument(
+        ?Param $param,
+        Node\Expr $value,
+        array $subst,
+        NamespaceContext $ctx,
+        string $file,
+        ?DiagnosticCollector $diagnostics,
+        bool $groundedTypesOnly,
+    ): void {
+        if ($param === null || !self::isLiteral($value)) {
+            return;
+        }
+        $target = self::closureSigOf($param->type);
+        if ($target === null) {
+            return;
+        }
+        $this->checkLiteral(
+            Specializer::substituteClosureSignature($target, $subst),
+            $value, $ctx, $file, $diagnostics, $groundedTypesOnly,
+        );
+    }
+
+    /**
+     * The callee parameter bound by a NAMED argument, or null when no parameter has
+     * that name (a stale / misspelled name is a PHP error elsewhere; here it is gradual).
+     *
+     * @param list<Param> $params
+     */
+    private static function paramByName(array $params, string $name): ?Param
+    {
+        foreach ($params as $param) {
+            if ($param->var instanceof Variable && $param->var->name === $name) {
+                return $param;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The callee parameter a POSITIONAL argument at `$index` binds: the parameter at
+     * that index, or a trailing variadic parameter that absorbs everything past the
+     * fixed arity, or null when the call over-supplies a non-variadic parameter list.
+     *
+     * @param list<Param> $params
+     */
+    private static function paramForPosition(array $params, int $index): ?Param
+    {
+        if (isset($params[$index])) {
+            return $params[$index];
+        }
+        $last = $params === [] ? null : $params[array_key_last($params)];
+        return $last !== null && $last->variadic ? $last : null;
     }
 
     private static function message(ClosureConformanceViolation $violation): string
