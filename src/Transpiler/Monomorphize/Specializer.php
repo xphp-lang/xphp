@@ -362,11 +362,14 @@ final class Specializer
                             XphpSourceParser::ATTR_CLOSURE_SIG,
                             Specializer::substituteClosureSignature($sig, $this->substitution),
                         );
-                        // Mark the target as grounded ONLY when a type-parameter leaf was
-                        // actually substituted, so the grounded conformance pass rechecks it
-                        // and skips concrete targets already decided pre-specialization.
+                        // Stash the pre-substitution signature ONLY when a type-parameter leaf
+                        // was actually substituted. Its presence tells the grounded conformance
+                        // pass to recheck this target (a concrete target carries none and is
+                        // left to the pre-specialization pass); its value lets that pass suppress
+                        // a violation already provable before grounding (a concrete leaf of a
+                        // partially-grounded target), so nothing is double-reported.
                         if (Specializer::closureSignatureGroundsAny($sig, $this->substitution)) {
-                            $node->setAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_GROUNDED, true);
+                            $node->setAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_TEMPLATE, $sig);
                         }
                     }
                 }

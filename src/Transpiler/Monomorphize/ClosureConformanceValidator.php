@@ -112,7 +112,7 @@ final class ClosureConformanceValidator
      * The `Closure(...)` target a type node carries, resolved for the pass mode.
      * In the grounded pass (`$groundedTypesOnly`) it returns the target ONLY when
      * specialization actually grounded a type-parameter leaf of it (the Name carries
-     * {@see XphpSourceParser::ATTR_CLOSURE_SIG_GROUNDED}); a concrete target was
+     * {@see XphpSourceParser::ATTR_CLOSURE_SIG_TEMPLATE}); a fully-concrete target was
      * already decided by the pre-specialization pass, so returning it here would
      * duplicate that diagnostic. Outside the grounded pass every target is returned.
      */
@@ -122,11 +122,27 @@ final class ClosureConformanceValidator
         if ($sig === null || !$groundedTypesOnly) {
             return $sig;
         }
-        $name = $type instanceof NullableType ? $type->type : $type;
-        return $name instanceof Name
-            && $name->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_GROUNDED) === true
-                ? $sig
-                : null;
+        return self::ungroundedTargetSig($type) !== null ? $sig : null;
+    }
+
+    /**
+     * The PRE-substitution `Closure(...)` signature a specialized type node carries
+     * (its {@see XphpSourceParser::ATTR_CLOSURE_SIG_TEMPLATE}), or null when the target
+     * was never grounded. The grounded pass checks a literal against this ungrounded
+     * form too: a violation provable here was already reported by the pre-specialization
+     * pass (it sits on a concrete leaf, unchanged by grounding), so the grounded pass
+     * suppresses it — only a NEWLY-provable, grounding-induced violation is reported.
+     */
+    public static function ungroundedTargetSig(?Node $type): ?ClosureSignature
+    {
+        if ($type instanceof NullableType) {
+            $type = $type->type;
+        }
+        if ($type instanceof Name) {
+            $sig = $type->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_TEMPLATE);
+            return $sig instanceof ClosureSignature ? $sig : null;
+        }
+        return null;
     }
 
     /**
@@ -185,6 +201,7 @@ final class ClosureConformanceValidator
         string $file,
         ?DiagnosticCollector $diagnostics,
         bool $groundedTypesOnly,
+        ?ClosureSignature $ungroundedTarget = null,
     ): void {
         if (!self::isLiteral($literal)) {
             return;
@@ -194,6 +211,15 @@ final class ClosureConformanceValidator
             ? $this->engine->checkTypesOnly($candidate, $target)
             : $this->engine->check($candidate, $target);
         if ($violation === null) {
+            return;
+        }
+        // A partially-grounded target (`Closure(int, E)`) can violate on a CONCRETE leaf
+        // that grounding never touched — the pre-specialization pass already reported it.
+        // Suppress here so it is not double-reported; only a grounding-induced violation
+        // (provable now but not against the ungrounded target) survives.
+        if ($ungroundedTarget !== null
+            && $this->engine->checkTypesOnly($candidate, $ungroundedTarget) !== null
+        ) {
             return;
         }
 
@@ -299,6 +325,7 @@ final class ClosureConformanceValidator
         $this->checkLiteral(
             Specializer::substituteClosureSignature($target, $subst),
             $value, $ctx, $file, $diagnostics, $groundedTypesOnly,
+            self::ungroundedTargetSig($param->type),
         );
     }
 
@@ -343,13 +370,15 @@ final class ClosureConformanceValidator
     {
         return new class($this, $ctx, $file, $diagnostics, $groundedTypesOnly) extends NodeVisitorAbstract {
             /**
-             * The `Closure(...)` return target of each enclosing function-like that
-             * can hold `return` statements, innermost last. An arrow function has no
-             * `return` body, so it never pushes a frame.
+             * The declared return-type NODE of each enclosing function-like that can
+             * hold `return` statements, innermost last (null when it declares none).
+             * Stored as the node so both the grounded target and its ungrounded template
+             * form are resolvable when a `return` literal is checked. An arrow function
+             * has no `return` body, so it never pushes a frame.
              *
-             * @var list<?ClosureSignature>
+             * @var list<?Node>
              */
-            private array $returnTargets = [];
+            private array $returnTypeNodes = [];
 
             /**
              * The value parameters of each enclosing class's own methods, keyed by
@@ -379,19 +408,16 @@ final class ClosureConformanceValidator
                 } elseif ($node instanceof ClassLike) {
                     $this->selfMethodParams[] = $this->indexOwnMethods($node);
                 } elseif ($node instanceof Function_ || $node instanceof ClassMethod || $node instanceof Closure) {
-                    $this->returnTargets[] = ClosureConformanceValidator::targetSigFor($node->returnType, $this->groundedTypesOnly);
+                    $this->returnTypeNodes[] = $node->returnType;
                 } elseif ($node instanceof ArrowFunction) {
                     // Arrow body: the body expression IS the returned value.
-                    $target = ClosureConformanceValidator::targetSigFor($node->returnType, $this->groundedTypesOnly);
-                    if ($target !== null) {
-                        $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics, $this->groundedTypesOnly);
-                    }
+                    $this->checkReturnLiteral($node->returnType, $node->expr);
                 } elseif ($node instanceof Return_) {
                     // Return position: the literal is the returned value of the
                     // innermost enclosing function-like.
-                    $target = $this->returnTargets === [] ? null : $this->returnTargets[count($this->returnTargets) - 1];
-                    if ($target !== null && $node->expr !== null) {
-                        $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics, $this->groundedTypesOnly);
+                    if ($node->expr !== null) {
+                        $rt = $this->returnTypeNodes === [] ? null : $this->returnTypeNodes[count($this->returnTypeNodes) - 1];
+                        $this->checkReturnLiteral($rt, $node->expr);
                     }
                 } else {
                     $this->checkSelfCall($node);
@@ -403,12 +429,35 @@ final class ClosureConformanceValidator
             public function leaveNode(Node $node): null
             {
                 if ($node instanceof Function_ || $node instanceof ClassMethod || $node instanceof Closure) {
-                    array_pop($this->returnTargets);
+                    array_pop($this->returnTypeNodes);
                 } elseif ($node instanceof ClassLike) {
                     array_pop($this->selfMethodParams);
                 }
 
                 return null;
+            }
+
+            /**
+             * Check a returned closure literal against a declared `Closure(...)` return
+             * type, in the pass's mode. The grounded pass passes the ungrounded template
+             * form alongside, so a violation already provable before grounding is not
+             * double-reported (see {@see ClosureConformanceValidator::checkLiteral}).
+             */
+            private function checkReturnLiteral(?Node $returnType, Node\Expr $literal): void
+            {
+                $target = ClosureConformanceValidator::targetSigFor($returnType, $this->groundedTypesOnly);
+                if ($target === null) {
+                    return;
+                }
+                $this->validator->checkLiteral(
+                    $target,
+                    $literal,
+                    $this->ctx,
+                    $this->file,
+                    $this->diagnostics,
+                    $this->groundedTypesOnly,
+                    ClosureConformanceValidator::ungroundedTargetSig($returnType),
+                );
             }
 
             /**

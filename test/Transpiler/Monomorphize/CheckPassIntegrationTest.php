@@ -1143,6 +1143,23 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(0, $this->check('closure_arg_bucket3_accept')->all());
     }
 
+    public function testPartiallyGroundedSelfCallTargetIsNotDoubleReported(): void
+    {
+        // A partially-grounded target `Closure(int, E): string`: a violation on the
+        // CONCRETE `int` leaf is reported once by the pre-specialization pass (not
+        // re-reported by the grounded pass), and a violation on the grounded `E` leaf is
+        // reported once by the grounded pass. Two methods, two distinct violations, no
+        // duplicate of the concrete-leaf one.
+        $diagnostics = $this->check('closure_arg_bucket3_partial_target');
+        $messages = array_map(static fn ($d): string => $d->message, $diagnostics->all());
+        sort($messages);
+
+        self::assertSame([
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 2: string is not wider than App\\Bucket3Partial\\Book',
+        ], $messages);
+    }
+
     public function testConcreteSelfCallTargetInGenericBodyIsReportedExactlyOnce(): void
     {
         // A `$this->concrete(...)` self-call whose target does NOT reference the class type
