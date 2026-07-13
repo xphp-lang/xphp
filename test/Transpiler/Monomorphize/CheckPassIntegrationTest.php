@@ -1103,6 +1103,20 @@ final class CheckPassIntegrationTest extends TestCase
         );
     }
 
+    public function testClosureArgumentConformanceAtGlobalFallbackFreeFunctionIsCollected(): void
+    {
+        // An unqualified call inside a NAMED namespace where the current-namespace function
+        // is undefined: resolution falls back to the global function (PHP's function
+        // fallback). The checker must follow the same fallback and reject the mismatch.
+        $diagnostics = $this->check('closure_arg_plain_fn_fallback_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));

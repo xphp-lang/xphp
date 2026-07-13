@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {
+    final class Book
+    {
+        public function __construct(public string $name) {}
+    }
+
+    function gEach(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('g'));
+    }
+}
+
+namespace App {
+    function run(): void
+    {
+        // An UNQUALIFIED call inside a NAMED namespace: `App\gEach` is undefined, so PHP's
+        // function fallback resolves it to the global `gEach`. The checker must follow the
+        // same fallback (the unqualified-name global fallback in checkPlainFreeFunctionClosureArgs)
+        // and reject the non-conforming literal — `int` is not wider than Book.
+        gEach(fn(int $b): string => 'z');
+    }
+}
