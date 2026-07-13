@@ -106,6 +106,27 @@ final class ClosureConformanceValidator
     }
 
     /**
+     * The `Closure(...)` target a type node carries, resolved for the pass mode.
+     * In the grounded pass (`$groundedTypesOnly`) it returns the target ONLY when
+     * specialization actually grounded a type-parameter leaf of it (the Name carries
+     * {@see XphpSourceParser::ATTR_CLOSURE_SIG_GROUNDED}); a concrete target was
+     * already decided by the pre-specialization pass, so returning it here would
+     * duplicate that diagnostic. Outside the grounded pass every target is returned.
+     */
+    public static function targetSigFor(?Node $type, bool $groundedTypesOnly): ?ClosureSignature
+    {
+        $sig = self::closureSigOf($type);
+        if ($sig === null || !$groundedTypesOnly) {
+            return $sig;
+        }
+        $name = $type instanceof NullableType ? $type->type : $type;
+        return $name instanceof Name
+            && $name->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_GROUNDED) === true
+                ? $sig
+                : null;
+    }
+
+    /**
      * Whether an expression is a closure literal — the only candidate shape this
      * validator can extract a signature from. A first-class callable
      * (`foo(...)`) is a `*Call` node, not a {@see Closure}, so it is not a literal.
@@ -237,7 +258,7 @@ final class ClosureConformanceValidator
         if ($param === null || !self::isLiteral($value)) {
             return;
         }
-        $target = self::closureSigOf($param->type);
+        $target = self::targetSigFor($param->type, $groundedTypesOnly);
         if ($target === null) {
             return;
         }
@@ -312,10 +333,10 @@ final class ClosureConformanceValidator
                 } elseif ($node instanceof Use_) {
                     $this->ctx->indexUse($node);
                 } elseif ($node instanceof Function_ || $node instanceof ClassMethod || $node instanceof Closure) {
-                    $this->returnTargets[] = ClosureConformanceValidator::closureSigOf($node->returnType);
+                    $this->returnTargets[] = ClosureConformanceValidator::targetSigFor($node->returnType, $this->groundedTypesOnly);
                 } elseif ($node instanceof ArrowFunction) {
                     // Arrow body: the body expression IS the returned value.
-                    $target = ClosureConformanceValidator::closureSigOf($node->returnType);
+                    $target = ClosureConformanceValidator::targetSigFor($node->returnType, $this->groundedTypesOnly);
                     if ($target !== null) {
                         $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics, $this->groundedTypesOnly);
                     }

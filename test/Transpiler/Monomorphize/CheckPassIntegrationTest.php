@@ -1117,6 +1117,21 @@ final class CheckPassIntegrationTest extends TestCase
         );
     }
 
+    public function testConcreteClosureReturnTargetInGenericBodyIsReportedExactlyOnce(): void
+    {
+        // A concrete closure return target (no type parameter) inside a generic class
+        // body is decided before specialization. The grounded pass over the specialized
+        // class must not re-report it — exactly one diagnostic, not a duplicate from
+        // `<specialized:…>`.
+        $diagnostics = $this->check('closure_return_concrete_target_no_dup');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));
