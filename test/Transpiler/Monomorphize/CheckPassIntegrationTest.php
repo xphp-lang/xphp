@@ -1117,6 +1117,47 @@ final class CheckPassIntegrationTest extends TestCase
         );
     }
 
+    public function testBucket3SelfCallClosureArgumentRejectedAfterGrounding(): void
+    {
+        // A `$this->each(fn(int): string)` self-call inside `Box<E>::describe()` whose target
+        // references E: gradual at the abstract template, provable once the class specializes.
+        // The SAME describe() source is instantiated as Box<Book> AND Box<int>; only the Book
+        // grounding is a violation ⇒ exactly one diagnostic (no double-report), at the
+        // specialized Book class.
+        $diagnostics = $this->check('closure_arg_bucket3_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\Bucket3\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testBucket3ConformingSelfCallClosureArgumentsStayClean(): void
+    {
+        // Under Box<Book>: exact / wider `$this->` instance self-call, a conforming `self::`
+        // static self-call, a `static::` call (gradual, not checked), a concrete-target
+        // self-call (decided pre-specialization, not re-reported), and a non-literal
+        // argument — all stay clean once grounded.
+        self::assertCount(0, $this->check('closure_arg_bucket3_accept')->all());
+    }
+
+    public function testConcreteSelfCallTargetInGenericBodyIsReportedExactlyOnce(): void
+    {
+        // A `$this->concrete(...)` self-call whose target does NOT reference the class type
+        // parameter is decided at the pre-specialization pass. The grounded self-call pass
+        // must not run before specialization (nor re-report the concrete target after) —
+        // exactly one diagnostic.
+        $diagnostics = $this->check('closure_arg_bucket3_concrete_once');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
     public function testConcreteClosureReturnTargetInGenericBodyIsReportedExactlyOnce(): void
     {
         // A concrete closure return target (no type parameter) inside a generic class

@@ -571,9 +571,8 @@ final class Specializer
                     return true;
                 }
             }
-            return false;
         }
-        // SigRaw is gradual — nothing to ground.
+        // No grounded leaf found (also the SigRaw case — gradual, nothing to ground).
         return false;
     }
 

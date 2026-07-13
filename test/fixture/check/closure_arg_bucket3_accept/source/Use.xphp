@@ -1,0 +1,63 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Bucket3Ok;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    public function each(Closure(E $x): string $fn): string
+    {
+        return $fn($this->v);
+    }
+
+    public static function estatic(Closure(E $x): string $fn, E $seed): string
+    {
+        return $fn($seed);
+    }
+
+    // A concrete self-call target (no E) — decided at the pre-specialization pass, so a
+    // conforming literal here stays clean and is NOT re-reported by the grounded pass.
+    public function concrete(Closure(int $n): string $fn): string
+    {
+        return $fn(1);
+    }
+
+    public function describe(): string
+    {
+        // Under Box<Book> every self-call below conforms once grounded.
+        $r = $this->each(fn(Book $b): string => $b->name);        // $this-> instance, exact
+        $r .= $this->each(fn(object $o): string => 'z');           // wider param (contravariant)
+        $r .= self::estatic(fn(Book $b): string => $b->name, $this->v); // self:: static, conforms
+        $r .= static::estatic(fn(int $x): string => 'z', $this->v);     // static:: — gradual, not checked
+        $r .= $this->concrete(fn(int $n): string => 'z');          // concrete target, conforms
+        return $r;
+    }
+
+    public function viaVar(\Closure $f): string
+    {
+        return $this->each($f);   // non-literal argument ⇒ gradual
+    }
+
+    public function viaOther(self $other): string
+    {
+        // A receiver other than `$this` — even though `$other` is the same class with an
+        // E-referencing target, a call through another variable is NOT a self-call and
+        // stays gradual. `fn(int)` would violate the grounded Closure(Book): string if it
+        // were checked here, so this pins that a non-`$this` receiver is left alone.
+        return $other->each(fn(int $x): string => 'z');
+    }
+}
+
+function run(): void
+{
+    $b = new Box::<Book>(new Book('x'));
+    $b->describe();
+}

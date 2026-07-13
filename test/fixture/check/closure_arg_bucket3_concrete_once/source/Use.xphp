@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Bucket3ConcreteOnce;
+
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    // A CONCRETE self-call target (no reference to E) inside a generic class body.
+    public function concrete(Closure(int $n): string $fn): string
+    {
+        return $fn(1);
+    }
+
+    public function describe(): string
+    {
+        // The target does not depend on E, so the violation is decided at the
+        // pre-specialization pass. It must be reported EXACTLY ONCE — the grounded
+        // self-call pass must not run before specialization (it would double-report).
+        return $this->concrete(fn(string $n): string => 'z');
+    }
+}
+
+function run(): void
+{
+    (new Box::<int>(1))->describe();
+}

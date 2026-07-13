@@ -8,11 +8,14 @@ use PhpParser\Node;
 use PhpParser\Node\Arg;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Closure;
+use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
 use PhpParser\Node\Param;
+use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Function_;
 use PhpParser\Node\Stmt\Namespace_;
@@ -124,6 +127,37 @@ final class ClosureConformanceValidator
             && $name->getAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_GROUNDED) === true
                 ? $sig
                 : null;
+    }
+
+    /**
+     * The (lower-cased) name of the enclosing-class method a self-call names, or null
+     * when the node is not a `$this->m(...)` / `self::m(...)` self-call the grounded
+     * pass rechecks. Restricted to `$this->` and `self::` — both bind to the enclosing
+     * class's own contract, exactly what PHP statically checks. A `static::` call is
+     * excluded: late static binding could resolve it to a wider override in a derived
+     * specialization, so checking the in-class method could over-reject. A dynamic
+     * method name, a non-`$this` / non-`self` target, and a first-class callable
+     * (`$this->m(...)`) all return null (gradual).
+     */
+    public static function selfCallMethodName(Node $node): ?string
+    {
+        if ($node instanceof MethodCall) {
+            return $node->var instanceof Variable
+                && $node->var->name === 'this'
+                && $node->name instanceof Identifier
+                && !$node->isFirstClassCallable()
+                    ? $node->name->toLowerString()
+                    : null;
+        }
+        if ($node instanceof StaticCall) {
+            return $node->class instanceof Name
+                && $node->class->toLowerString() === 'self'
+                && $node->name instanceof Identifier
+                && !$node->isFirstClassCallable()
+                    ? $node->name->toLowerString()
+                    : null;
+        }
+        return null;
     }
 
     /**
@@ -317,6 +351,16 @@ final class ClosureConformanceValidator
              */
             private array $returnTargets = [];
 
+            /**
+             * The value parameters of each enclosing class's own methods, keyed by
+             * method name, innermost class last. Lets a `$this->m(...)` / `self::m(...)`
+             * self-call inside a specialized class body reach `m`'s grounded parameters
+             * so its closure-literal arguments can be rechecked after specialization.
+             *
+             * @var list<array<string, list<Param>>>
+             */
+            private array $selfMethodParams = [];
+
             public function __construct(
                 private readonly ClosureConformanceValidator $validator,
                 private readonly NamespaceContext $ctx,
@@ -332,6 +376,8 @@ final class ClosureConformanceValidator
                     $this->ctx->enterNamespace($node->name?->toString());
                 } elseif ($node instanceof Use_) {
                     $this->ctx->indexUse($node);
+                } elseif ($node instanceof ClassLike) {
+                    $this->selfMethodParams[] = $this->indexOwnMethods($node);
                 } elseif ($node instanceof Function_ || $node instanceof ClassMethod || $node instanceof Closure) {
                     $this->returnTargets[] = ClosureConformanceValidator::targetSigFor($node->returnType, $this->groundedTypesOnly);
                 } elseif ($node instanceof ArrowFunction) {
@@ -347,6 +393,8 @@ final class ClosureConformanceValidator
                     if ($target !== null && $node->expr !== null) {
                         $this->validator->checkLiteral($target, $node->expr, $this->ctx, $this->file, $this->diagnostics, $this->groundedTypesOnly);
                     }
+                } else {
+                    $this->checkSelfCall($node);
                 }
 
                 return null;
@@ -356,9 +404,73 @@ final class ClosureConformanceValidator
             {
                 if ($node instanceof Function_ || $node instanceof ClassMethod || $node instanceof Closure) {
                     array_pop($this->returnTargets);
+                } elseif ($node instanceof ClassLike) {
+                    array_pop($this->selfMethodParams);
                 }
 
                 return null;
+            }
+
+            /**
+             * Check the closure-literal arguments of a `$this->m(...)` or `self::m(...)`
+             * call against the enclosing class's own `m` — the one call shape whose
+             * `Closure(...)` parameter can reference the class type parameter and so
+             * only becomes provable once the class specializes (bucket 3). The callee's
+             * parameters are already grounded on the specialized class, so no
+             * substitution is threaded (empty subst). A first-class callable, an
+             * unresolved method, or a receiver other than `$this` / `self` stays gradual.
+             *
+             * Restricted to `$this->` and `self::`: both bind to the enclosing class's
+             * own contract, which is exactly what PHP statically checks. `static::` is
+             * left gradual — late static binding could resolve it to a wider override in
+             * a derived specialization, which would make an in-class check over-reject.
+             */
+            private function checkSelfCall(Node $node): void
+            {
+                // Only in the grounded pass over specialized classes. In the raw
+                // pre-specialization pass the call-argument surface is owned by
+                // GenericMethodCompiler (WI-01…05); running here too would double-report.
+                // The per-argument grounded guard (targetSigFor) then limits this to
+                // targets specialization actually grounded — bucket 3.
+                if (!$this->groundedTypesOnly) {
+                    return;
+                }
+                $methodName = ClosureConformanceValidator::selfCallMethodName($node);
+                if ($methodName === null) {
+                    return;
+                }
+                // A self-call is always inside a class body, so the innermost frame exists;
+                // the `?? null` still covers the degenerate empty-stack case (index -1).
+                $params = $this->selfMethodParams[count($this->selfMethodParams) - 1][$methodName] ?? null;
+                if ($params === null) {
+                    return;
+                }
+                /** @var MethodCall|StaticCall $node — selfCallMethodName returns non-null only for these. */
+                $this->validator->checkCallArguments(
+                    $params,
+                    $node->args,
+                    [],
+                    $this->ctx,
+                    $this->file,
+                    $this->diagnostics,
+                    $this->groundedTypesOnly,
+                );
+            }
+
+            /**
+             * The value parameters of the class's own directly-declared methods, keyed
+             * by (lower-cased) method name. Inherited methods are not indexed — a
+             * self-call to an inherited method stays gradual (a documented follow-up).
+             *
+             * @return array<string, list<Param>>
+             */
+            private function indexOwnMethods(ClassLike $node): array
+            {
+                $index = [];
+                foreach ($node->getMethods() as $method) {
+                    $index[$method->name->toLowerString()] = array_values($method->params);
+                }
+                return $index;
             }
         };
     }

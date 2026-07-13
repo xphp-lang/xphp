@@ -254,6 +254,37 @@ final class ClosureConformanceIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testBucket3SelfCallClosureArgumentCompilesEraseAndRuns(): void
+    {
+        // A `$this->each(fn(int): string)` self-call inside `Box<E>::describe()` grounds to
+        // `Closure(int): string` under Box<int>; the conforming literal compiles, erases to
+        // `\Closure`, and executes.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_bucket3_runtime/source',
+            'closure-arg-bucket3-run',
+        );
+        $fixture->registerAutoload('App\\Bucket3Run\\');
+        try {
+            require __DIR__ . '/../../fixture/compile/closure_arg_bucket3_runtime/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testBucket3SelfCallClosureArgumentFailsCompilation(): void
+    {
+        // Under Box<Book> the same self-call grounds to `Closure(Book): string`; `fn(int)`
+        // is a provable violation that fails the compile before any output is written.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('parameter 1: int is not wider than App\\Bucket3Reject\\Book');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_arg_bucket3_reject/source',
+            'closure-arg-bucket3-reject',
+        );
+    }
+
+    #[RunInSeparateProcess]
     public function testGroundedGenericClosureConformsWhenTypeParameterResolves(): void
     {
         // `Closure(T): T` grounds to `Closure(int): int` under `Box<int>`; the
