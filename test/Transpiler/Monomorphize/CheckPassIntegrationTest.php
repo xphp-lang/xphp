@@ -1066,6 +1066,43 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertCount(0, $this->check('closure_arg_plain_accept')->all());
     }
 
+    public function testClosureArgumentConformanceViolationAtPlainFreeFunctionCallIsCollected(): void
+    {
+        // A closure literal passed, at a fully-qualified plain (turbofish-less) call, to a
+        // NON-generic free function's Closure(Book): string parameter in another namespace,
+        // whose int parameter is not wider than Book.
+        $diagnostics = $this->check('closure_arg_plain_fn_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than Lib\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingPlainFreeFunctionClosureArgumentsStayClean(): void
+    {
+        // Conforming literals reached through a `use function` alias and a fully-qualified
+        // name, plus a non-literal argument, all stay clean (the callee resolves via the
+        // caller's function imports).
+        self::assertCount(0, $this->check('closure_arg_plain_fn_accept')->all());
+    }
+
+    public function testClosureArgumentConformanceViolationAtGlobalNamespaceFreeFunctionIsCollected(): void
+    {
+        // A non-generic free function declared in an explicit unnamed (global) namespace
+        // block — its enclosing `Namespace_` node carries a null name, so the function
+        // indexes under its bare name. A non-conforming literal must still be rejected.
+        $diagnostics = $this->check('closure_arg_plain_fn_global_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));

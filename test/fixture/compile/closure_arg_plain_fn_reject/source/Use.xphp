@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Lib
+{
+    final class Book
+    {
+        public function __construct(public string $name) {}
+    }
+
+    // Declared before `each`, so a "return only the first indexed function" regression
+    // would drop `each` and let the non-conforming call below compile.
+    function alpha(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('a'));
+    }
+
+    function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('x'));
+    }
+}
+
+namespace App
+{
+    function run(): void
+    {
+        // Fully-qualified call to a non-generic free function in another namespace with
+        // a non-conforming literal — must fail the compile before any output is written.
+        \Lib\each(fn(int $b): string => 'z');
+    }
+}

@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+// An explicit unnamed (global) namespace block: the enclosing `Namespace_` node carries
+// a null name, so the function indexes under its bare name. A non-conforming literal at a
+// plain call must still be rejected.
+namespace {
+    final class Book
+    {
+        public function __construct(public string $name) {}
+    }
+
+    function gEach(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('g'));
+    }
+
+    function run(): void
+    {
+        // `int` is not wider than Book.
+        gEach(fn(int $b): string => 'z');
+    }
+}

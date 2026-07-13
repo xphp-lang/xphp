@@ -198,6 +198,11 @@ final class GenericMethodCompiler
             return;
         }
 
+        // Every free function by FQN (generic OR not), so a plain call to a NON-generic
+        // free function can reach its declared parameters for closure-argument conformance
+        // (checkPlainFreeFunctionClosureArgs). `$functionTemplates` holds generics only.
+        $allFunctionsByFqn = self::indexAllFunctions($astSet);
+
         /** @var array<string, true> $alreadyGenerated */
         $alreadyGenerated = [];
         foreach ($astSet as $astKey => &$ast) {
@@ -213,6 +218,7 @@ final class GenericMethodCompiler
                 $classByFqn,
                 $functionTemplates,
                 $functionNamespaceByFqn,
+                $allFunctionsByFqn,
                 $alreadyGenerated,
                 $topLevelAppends,
                 (string) $astKey,
@@ -377,6 +383,7 @@ final class GenericMethodCompiler
         array $classByFqn,
         array $functionTemplates,
         array $functionNamespaceByFqn,
+        array $allFunctionsByFqn,
         array &$alreadyGenerated,
         array &$topLevelAppends,
         string $currentFile,
@@ -392,7 +399,7 @@ final class GenericMethodCompiler
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $allFunctionsByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
@@ -565,6 +572,7 @@ final class GenericMethodCompiler
              * @param array<string, ClassLike> $classByFqn
              * @param array<string, Function_> $functionTemplates
              * @param array<string, ?Namespace_> $functionNamespaceByFqn
+             * @param array<string, Function_> $allFunctionsByFqn  every function (generic or not) by FQN
              * @param array<string, true> $alreadyGenerated
              * @param list<Function_> $topLevelAppends
              */
@@ -573,6 +581,7 @@ final class GenericMethodCompiler
                 private array $classByFqn,
                 private array $functionTemplates,
                 private array $functionNamespaceByFqn,
+                private array $allFunctionsByFqn,
                 private array &$alreadyGenerated,
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
@@ -1617,6 +1626,41 @@ final class GenericMethodCompiler
             }
 
             /**
+             * Check the closure-literal arguments of a bare call to a NON-generic FREE
+             * FUNCTION. The callee is resolved against the caller's function-name scope
+             * (`use function`, current namespace, then the global fallback for an
+             * unqualified name), so a non-generic higher-order function's `Closure(...)`
+             * parameters are checked. A free function has no type parameters, so the
+             * substitution is empty. An unresolved name stays gradual.
+             */
+            private function checkPlainFreeFunctionClosureArgs(FuncCall $node): void
+            {
+                if ($this->closureValidator === null || !$node->name instanceof Name) {
+                    return;
+                }
+                $fn = $this->allFunctionsByFqn[$this->nsContext->resolveFunctionName($node->name)] ?? null;
+                if ($fn === null
+                    && !$node->name->isQualified()
+                    && !$node->name->isFullyQualified()
+                ) {
+                    // An unqualified name absent from the current namespace resolves to the
+                    // global function of that name (PHP's fallback).
+                    $fn = $this->allFunctionsByFqn[$node->name->toString()] ?? null;
+                }
+                if ($fn === null) {
+                    return;
+                }
+                $this->closureValidator->checkCallArguments(
+                    array_values($fn->params),
+                    $node->args,
+                    [],
+                    $this->nsContext,
+                    $this->currentFile,
+                    $this->diagnostics,
+                );
+            }
+
+            /**
              * Handle a turbofish call whose generic method couldn't be resolved on
              * the receiver or any ancestor. A *turbofish* call (carries
              * ATTR_METHOD_GENERIC_ARGS) to a non-existent generic method is a real
@@ -2210,6 +2254,11 @@ final class GenericMethodCompiler
                                 $bare[1],
                                 new SourceLocation($this->currentFile, $node->getStartLine()),
                             );
+                        } else {
+                            // Not a generic template — a bare call to a NON-generic free
+                            // function. Check its closure-literal arguments against the
+                            // callee's Closure(...) parameters.
+                            $this->checkPlainFreeFunctionClosureArgs($node);
                         }
                     }
                     return null;
@@ -2961,6 +3010,48 @@ final class GenericMethodCompiler
             }
         }
         return false;
+    }
+
+    /**
+     * Index every free function in the program by its fully-qualified name, whether
+     * generic or not (`$functionTemplates` holds only generics). A plain call to a
+     * NON-generic free function needs its declared parameters to reach
+     * {@see checkPlainFreeFunctionClosureArgs} for closure-argument conformance.
+     *
+     * @param array<string, list<Node\Stmt>> $astSet
+     * @return array<string, Function_>  keyed by namespace\functionName
+     */
+    private static function indexAllFunctions(array $astSet): array
+    {
+        $index = [];
+        foreach ($astSet as $ast) {
+            $visitor = new class extends NodeVisitorAbstract {
+                private string $currentNamespace = '';
+                /** @var array<string, Function_> */
+                public array $functions = [];
+
+                public function enterNode(Node $node): null
+                {
+                    if ($node instanceof Namespace_) {
+                        $this->currentNamespace = $node->name?->toString() ?? '';
+                    }
+                    if ($node instanceof Function_) {
+                        $fqn = $this->currentNamespace !== ''
+                            ? $this->currentNamespace . '\\' . $node->name->toString()
+                            : $node->name->toString();
+                        $this->functions[$fqn] = $node;
+                    }
+                    return null;
+                }
+            };
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor($visitor);
+            $traverser->traverse($ast);
+            foreach ($visitor->functions as $fqn => $fn) {
+                $index[$fqn] = $fn;
+            }
+        }
+        return $index;
     }
 
     /**
