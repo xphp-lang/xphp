@@ -216,7 +216,11 @@ final class ClosureConformanceValidator
         // A partially-grounded target (`Closure(int, E)`) can violate on a CONCRETE leaf
         // that grounding never touched — the pre-specialization pass already reported it.
         // Suppress here so it is not double-reported; only a grounding-induced violation
-        // (provable now but not against the ungrounded target) survives.
+        // (provable now but not against the ungrounded target) survives. If the ungrounded
+        // form violates at all, the whole grounded report is dropped: the literal is
+        // already flagged once, and one diagnostic per literal is sufficient (PHP itself
+        // surfaces one error per closure), so a further grounding-induced violation on a
+        // different leaf of the same literal is intentionally not surfaced separately.
         if ($ungroundedTarget !== null
             && $this->engine->checkTypesOnly($candidate, $ungroundedTarget) !== null
         ) {
