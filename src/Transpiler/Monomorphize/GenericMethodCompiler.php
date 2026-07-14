@@ -203,6 +203,18 @@ final class GenericMethodCompiler
         // (checkPlainFreeFunctionClosureArgs). `$functionTemplates` holds generics only.
         $allFunctionsByFqn = self::indexAllFunctions($astSet);
 
+        // Bundle the five read-only symbol tables once, after the per-file merge, and thread
+        // them as a single value into the rewriter. The raw locals stay in scope here for the
+        // duplicate-declaration diagnostic (above) and the template-stripping loops (below),
+        // which iterate the maps — a responsibility outside this read-only value object.
+        $index = new TemplateIndex(
+            $methodTemplates,
+            $classByFqn,
+            $functionTemplates,
+            $functionNamespaceByFqn,
+            $allFunctionsByFqn,
+        );
+
         /** @var array<string, true> $alreadyGenerated */
         $alreadyGenerated = [];
         foreach ($astSet as $astKey => &$ast) {
@@ -214,11 +226,7 @@ final class GenericMethodCompiler
             $topLevelAppends = [];
             $this->rewriteCallSites(
                 $ast,
-                $methodTemplates,
-                $classByFqn,
-                $functionTemplates,
-                $functionNamespaceByFqn,
-                $allFunctionsByFqn,
+                $index,
                 $alreadyGenerated,
                 $topLevelAppends,
                 (string) $astKey,
@@ -369,22 +377,13 @@ final class GenericMethodCompiler
 
     /**
      * @param list<Node\Stmt> $ast
-     * @param array<string, ClassMethod> $methodTemplates
-     * @param array<string, ClassLike> $classByFqn
-     * @param array<string, Function_> $functionTemplates
-     * @param array<string, ?Namespace_> $functionNamespaceByFqn  null = bare top-level
-     * @param array<string, Function_> $allFunctionsByFqn  every function (generic or not) by FQN
      * @param array<string, true> $alreadyGenerated
      * @param list<Function_> $topLevelAppends  out-param: specializations for null-namespace
      *   templates; the caller flushes these to the top-level AST after the traversal completes
      */
     private function rewriteCallSites(
         array $ast,
-        array $methodTemplates,
-        array $classByFqn,
-        array $functionTemplates,
-        array $functionNamespaceByFqn,
-        array $allFunctionsByFqn,
+        TemplateIndex $index,
         array &$alreadyGenerated,
         array &$topLevelAppends,
         string $currentFile,
@@ -400,7 +399,7 @@ final class GenericMethodCompiler
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $allFunctionsByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
+        $visitor = new class($index, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
@@ -569,20 +568,11 @@ final class GenericMethodCompiler
             private array $branchSnapshots = [];
 
             /**
-             * @param array<string, ClassMethod> $methodTemplates
-             * @param array<string, ClassLike> $classByFqn
-             * @param array<string, Function_> $functionTemplates
-             * @param array<string, ?Namespace_> $functionNamespaceByFqn
-             * @param array<string, Function_> $allFunctionsByFqn  every function (generic or not) by FQN
              * @param array<string, true> $alreadyGenerated
              * @param list<Function_> $topLevelAppends
              */
             public function __construct(
-                private array $methodTemplates,
-                private array $classByFqn,
-                private array $functionTemplates,
-                private array $functionNamespaceByFqn,
-                private array $allFunctionsByFqn,
+                private readonly TemplateIndex $index,
                 private array &$alreadyGenerated,
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
@@ -1294,7 +1284,7 @@ final class GenericMethodCompiler
                         $overlay[$param->name] = $args[$i];
                     }
                     $specialized = (new Specializer())->specializeMethod($template, Substitution::of($overlay), $mangled);
-                    $owner = $this->classByFqn[$declaringFqn] ?? null;
+                    $owner = $this->index->classLike($declaringFqn);
                     if ($owner !== null) {
                         // Buffer the append (see rewriteFuncCall for the rationale).
                         $this->pendingAppends[] = [$owner, $specialized];
@@ -1458,7 +1448,7 @@ final class GenericMethodCompiler
                     // and the member is emitted by the Specializer per class instantiation — so there
                     // is no per-call append here. Both sides key on EnclosingBoundErasure::mangleArgs,
                     // producing the same name.
-                    $declaringClass = $this->classByFqn[$declaringFqn] ?? null;
+                    $declaringClass = $this->index->classLike($declaringFqn);
                     $classParams = $declaringClass?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
                     if (is_array($classParams)) {
                         /** @var list<TypeParam> $classParams */
@@ -1490,7 +1480,7 @@ final class GenericMethodCompiler
                         $overlay[$param->name] = $args[$i];
                     }
                     $specialized = (new Specializer())->specializeMethod($template, Substitution::of($overlay), $mangled);
-                    $owner = $this->classByFqn[$declaringFqn] ?? null;
+                    $owner = $this->index->classLike($declaringFqn);
                     if ($owner !== null) {
                         $this->pendingAppends[] = [$owner, $specialized];
                         $this->alreadyGenerated[$generatedKey] = true;
@@ -1518,7 +1508,7 @@ final class GenericMethodCompiler
              */
             private function resolveMethodTemplate(string $receiverFqn, string $methodName): ?array
             {
-                $direct = $this->methodTemplates[$receiverFqn . '::' . $methodName] ?? null;
+                $direct = $this->index->methodTemplate($receiverFqn, $methodName);
                 if ($direct !== null) {
                     return [$direct, $receiverFqn];
                 }
@@ -1526,7 +1516,7 @@ final class GenericMethodCompiler
                     return null;
                 }
                 foreach ($this->hierarchy->ancestorChain($receiverFqn) as $ancestorFqn) {
-                    $inherited = $this->methodTemplates[$ancestorFqn . '::' . $methodName] ?? null;
+                    $inherited = $this->index->methodTemplate($ancestorFqn, $methodName);
                     if ($inherited !== null) {
                         return [$inherited, $ancestorFqn];
                     }
@@ -1561,7 +1551,7 @@ final class GenericMethodCompiler
 
             private function findMethodOn(string $classFqn, string $methodName): ?ClassMethod
             {
-                $owner = $this->classByFqn[$classFqn] ?? null;
+                $owner = $this->index->classLike($classFqn);
                 if ($owner === null) {
                     return null;
                 }
@@ -1641,15 +1631,7 @@ final class GenericMethodCompiler
                 if ($this->closureValidator === null || !$node->name instanceof Name) {
                     return;
                 }
-                $fn = $this->allFunctionsByFqn[$this->nsContext->resolveFunctionName($node->name)] ?? null;
-                if ($fn === null
-                    && !$node->name->isQualified()
-                    && !$node->name->isFullyQualified()
-                ) {
-                    // An unqualified name absent from the current namespace resolves to the
-                    // global function of that name (PHP's fallback).
-                    $fn = $this->allFunctionsByFqn[$node->name->toString()] ?? null;
-                }
+                $fn = $this->index->resolveFunction($node->name, $this->nsContext);
                 if ($fn === null) {
                     return;
                 }
@@ -1802,7 +1784,7 @@ final class GenericMethodCompiler
              */
             private function isErasableTarget(ClassMethod $template, array $params, string $declaringFqn): bool
             {
-                $class = $this->classByFqn[$declaringFqn] ?? null;
+                $class = $this->index->classLike($declaringFqn);
                 $classParams = $class?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
                 if (!is_array($classParams)) {
                     return false;
@@ -1840,7 +1822,7 @@ final class GenericMethodCompiler
                 ) {
                     // `$this->prop->method::<T>(...)` -- look up `prop`'s declared
                     // type on the current class.
-                    $owner = $this->classByFqn[$this->currentClassFqn] ?? null;
+                    $owner = $this->index->classLike($this->currentClassFqn);
                     if ($owner !== null) {
                         $propName = $receiver->name->toString();
                         foreach ($owner->stmts as $stmt) {
@@ -1912,7 +1894,7 @@ final class GenericMethodCompiler
                 if ($receiver instanceof Variable && is_string($receiver->name)) {
                     if ($receiver->name === 'this') {
                         $owner = $this->currentClassFqn !== null
-                            ? ($this->classByFqn[$this->currentClassFqn] ?? null)
+                            ? ($this->index->classLike($this->currentClassFqn))
                             : null;
                         $params = $owner?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
                         if (!is_array($params)) {
@@ -1934,7 +1916,7 @@ final class GenericMethodCompiler
                     && $receiver->name instanceof Identifier
                     && $this->currentClassFqn !== null
                 ) {
-                    $owner = $this->classByFqn[$this->currentClassFqn] ?? null;
+                    $owner = $this->index->classLike($this->currentClassFqn);
                     if ($owner !== null) {
                         $propName = $receiver->name->toString();
                         foreach ($owner->stmts as $stmt) {
@@ -2207,7 +2189,7 @@ final class GenericMethodCompiler
                 if ($declArgs === null) {
                     return Substitution::empty();
                 }
-                $owner = $this->classByFqn[$declaringFqn] ?? null;
+                $owner = $this->index->classLike($declaringFqn);
                 $params = $owner?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
                 if (!is_array($params) || count($params) !== count($declArgs)) {
                     return Substitution::empty();
@@ -2307,7 +2289,7 @@ final class GenericMethodCompiler
                 if (!is_string($fqn)) {
                     return null;
                 }
-                $template = $this->functionTemplates[$fqn] ?? null;
+                $template = $this->index->functionTemplate($fqn);
                 if ($template === null) {
                     return null;
                 }
@@ -2360,7 +2342,7 @@ final class GenericMethodCompiler
                         $overlay[$param->name] = $args[$i];
                     }
                     $specialized = (new Specializer())->specializeFunction($template, Substitution::of($overlay), $mangled);
-                    $namespaceNode = $this->functionNamespaceByFqn[$fqn] ?? null;
+                    $namespaceNode = $this->index->functionNamespaceNode($fqn);
                     if ($namespaceNode !== null) {
                         // Buffer the append — modifying $namespaceNode->stmts mid-traversal
                         // doesn't reliably propagate through nikic's NodeTraverser. The
@@ -2641,8 +2623,8 @@ final class GenericMethodCompiler
                     if ($fqn === null) {
                         return null;
                     }
-                    $params = $this->functionTemplates[$fqn]
-                        ->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                    $params = $this->index->functionTemplate($fqn)
+                        ?->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                     /** @var list<TypeParam>|null $params */
                     return is_array($params) ? [$params, $fqn] : null;
                 }
@@ -2673,23 +2655,23 @@ final class GenericMethodCompiler
             {
                 if ($name instanceof FullyQualified || str_starts_with($name->toString(), '\\')) {
                     $fqn = ltrim($name->toString(), '\\');
-                    return isset($this->functionTemplates[$fqn]) ? $fqn : null;
+                    return $this->index->hasFunctionTemplate($fqn) ? $fqn : null;
                 }
                 $raw = $name->toString();
                 $first = self::firstSegment($raw);
                 if (isset($this->useMap[$first])) {
                     $fqn = $this->useMap[$first] . substr($raw, strlen($first));
-                    return isset($this->functionTemplates[$fqn]) ? $fqn : null;
+                    return $this->index->hasFunctionTemplate($fqn) ? $fqn : null;
                 }
                 if ($this->currentNamespace !== '') {
                     $namespaced = $this->currentNamespace . '\\' . $raw;
-                    if (isset($this->functionTemplates[$namespaced])) {
+                    if ($this->index->hasFunctionTemplate($namespaced)) {
                         return $namespaced;
                     }
                 }
                 // Global-scope fallback (PHP resolves an unqualified function to global when the
                 // namespaced one doesn't exist).
-                return isset($this->functionTemplates[$raw]) ? $raw : null;
+                return $this->index->hasFunctionTemplate($raw) ? $raw : null;
             }
 
             /**
