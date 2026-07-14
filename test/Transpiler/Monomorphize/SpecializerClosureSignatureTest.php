@@ -122,6 +122,128 @@ final class SpecializerClosureSignatureTest extends TestCase
         self::assertNull($grounded->return, 'an absent return stays absent');
     }
 
+    // ---- closureSignatureGroundsAny (the grounded-flag predicate) --------
+
+    public function testGroundsAnyDetectsAGroundedParameterLeaf(): void
+    {
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigTypeRef(self::typeParam('E')))],
+            new SigTypeRef(self::scalar('string')),
+        );
+
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyDetectsAGroundedReturnLeafWhenParametersAreConcrete(): void
+    {
+        // Return-only grounding: the parameter is concrete, only the return references E.
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigTypeRef(self::scalar('int')))],
+            new SigTypeRef(self::typeParam('E')),
+        );
+
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyIsFalseForAFullyConcreteSignature(): void
+    {
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigTypeRef(self::scalar('int')))],
+            new SigTypeRef(self::scalar('string')),
+        );
+
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyIsFalseForATypeParameterAbsentFromTheSubstitution(): void
+    {
+        // A type-parameter leaf whose name is NOT a substitution key is not grounded by
+        // this substitution — the predicate must require BOTH isTypeParam AND membership.
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigTypeRef(self::typeParam('U')))],
+            null,
+        );
+
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyIsFalseForANonTypeParameterLeafNamedLikeASubstitutionKey(): void
+    {
+        // A concrete class leaf that happens to be named `E` is not a type parameter, so
+        // the substitution does not ground it.
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigTypeRef(new TypeRef('E')))],
+            null,
+        );
+
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyRecursesIntoANestedClosureLeaf(): void
+    {
+        // `Closure(Closure(E): string): string` — grounding lives one closure deep.
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigClosure(new ClosureSignature(
+                [new ClosureSignatureParam(new SigTypeRef(self::typeParam('E')))],
+                new SigTypeRef(self::scalar('string')),
+            )))],
+            new SigTypeRef(self::scalar('string')),
+        );
+
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyDetectsAGroundedUnionMember(): void
+    {
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigUnion([
+                new SigTypeRef(self::scalar('int')),
+                new SigTypeRef(self::typeParam('E')),
+            ]))],
+            null,
+        );
+
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyDetectsAGroundedIntersectionMember(): void
+    {
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigIntersection([
+                new SigTypeRef(new TypeRef('App\\Countable')),
+                new SigTypeRef(self::typeParam('E')),
+            ]))],
+            null,
+        );
+
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyIsFalseForAConcreteUnionWithNoTypeParameter(): void
+    {
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigUnion([
+                new SigTypeRef(self::scalar('int')),
+                new SigTypeRef(self::scalar('string')),
+            ]))],
+            null,
+        );
+
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
+    public function testGroundsAnyIsFalseForAGradualRawLeaf(): void
+    {
+        // A SigRaw (unstructured DNF / scalar-bearing intersection) is gradual — it
+        // grounds nothing, and must be handled without being mistaken for a union.
+        $sig = new ClosureSignature(
+            [new ClosureSignatureParam(new SigRaw('(A&B)|C'))],
+            null,
+        );
+
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+    }
+
     // ---- Helpers ---------------------------------------------------------
 
     private static function typeParam(string $name): TypeRef

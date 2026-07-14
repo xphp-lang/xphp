@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Bucket3Run;
+
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    public function each(Closure(E $x): string $fn): string
+    {
+        return $fn($this->v);
+    }
+
+    public function describe(): string
+    {
+        // Under Box<int>, `each` grounds to Closure(int): string; the self-call literal
+        // conforms, compiles, erases to `\Closure`, and runs.
+        return $this->each(fn(int $x): string => 'value=' . $x);
+    }
+}
+
+$result = (new Box::<int>(42))->describe();

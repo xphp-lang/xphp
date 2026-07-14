@@ -91,6 +91,17 @@ final class XphpSourceParser
     // Carries a ClosureSignature; read by the compile-time conformance validator.
     public const ATTR_CLOSURE_SIG = 'xphp:closureSig';
 
+    // The PRE-substitution ClosureSignature, stamped (alongside the now-grounded
+    // ATTR_CLOSURE_SIG) on a specialized `\Closure` Name when specialization actually
+    // GROUNDED one of the signature's type-parameter leaves (`Closure(E): R` under
+    // `E=Book`). Its presence marks a genuinely-grounded target that the grounded
+    // conformance pass (Phase 2.4) rechecks — a fully-concrete target carries none and
+    // is left to the pre-specialization pass. The signature it carries lets that pass
+    // suppress a violation already provable BEFORE grounding (a concrete leaf the
+    // pre-specialization pass has already reported), so a partially-grounded target
+    // (`Closure(int, E)`) is never double-reported.
+    public const ATTR_CLOSURE_SIG_TEMPLATE = 'xphp:closureSigTemplate';
+
     // A bare, single-segment, non-imported class-name used inside a generic context
     // (a template or generic method/function/closure) that is NOT a declared type
     // parameter. Carries the resolved FQN. The undeclared-type-parameter validator

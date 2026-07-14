@@ -4,6 +4,14 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Node\Arg;
+use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\Identifier;
+use PhpParser\Node\Name;
+use PhpParser\Node\Scalar\Int_;
+use PhpParser\Node\VariadicPlaceholder;
 use PhpParser\ParserFactory;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -433,6 +441,58 @@ final class ClosureConformanceValidatorTest extends TestCase
         self::assertInstanceOf(ClosureSignature::class, ClosureConformanceValidator::closureSigOf($params[0]->type));
         self::assertNull(ClosureConformanceValidator::closureSigOf($params[1]->type), 'a plain scalar carries no target');
         self::assertNull(ClosureConformanceValidator::closureSigOf(null));
+    }
+
+    public function testSelfCallMethodNameRecognisesThisAndSelfCalls(): void
+    {
+        $arg = [new Arg(new Int_(1))];
+
+        // `$this->each(1)` and `self::est(1)` are the two recognised self-calls.
+        self::assertSame(
+            'each',
+            ClosureConformanceValidator::selfCallMethodName(
+                new MethodCall(new Variable('this'), new Identifier('each'), $arg),
+            ),
+        );
+        self::assertSame(
+            'est',
+            ClosureConformanceValidator::selfCallMethodName(
+                new StaticCall(new Name('self'), new Identifier('est'), $arg),
+            ),
+        );
+        // Case-insensitive (PHP method names): the returned name is lower-cased.
+        self::assertSame(
+            'each',
+            ClosureConformanceValidator::selfCallMethodName(
+                new MethodCall(new Variable('this'), new Identifier('EACH'), $arg),
+            ),
+        );
+    }
+
+    public function testSelfCallMethodNameRejectsEverythingElse(): void
+    {
+        $arg = [new Arg(new Int_(1))];
+        $fcc = [new VariadicPlaceholder()];
+
+        $cases = [
+            'non-$this receiver' => new MethodCall(new Variable('other'), new Identifier('each'), $arg),
+            'dynamic method name' => new MethodCall(new Variable('this'), new Variable('m'), $arg),
+            'first-class callable (instance)' => new MethodCall(new Variable('this'), new Identifier('each'), $fcc),
+            'static:: (late static binding)' => new StaticCall(new Name('static'), new Identifier('est'), $arg),
+            'parent:: call' => new StaticCall(new Name('parent'), new Identifier('est'), $arg),
+            'foreign class static' => new StaticCall(new Name('Other'), new Identifier('est'), $arg),
+            'dynamic static class' => new StaticCall(new Variable('cls'), new Identifier('est'), $arg),
+            'dynamic static name' => new StaticCall(new Name('self'), new Variable('m'), $arg),
+            'first-class callable (static)' => new StaticCall(new Name('self'), new Identifier('est'), $fcc),
+            'not a call at all' => new Variable('this'),
+        ];
+
+        foreach ($cases as $label => $node) {
+            self::assertNull(
+                ClosureConformanceValidator::selfCallMethodName($node),
+                "{$label} must not be treated as a checkable self-call",
+            );
+        }
     }
 
     // ---- Helpers ---------------------------------------------------------

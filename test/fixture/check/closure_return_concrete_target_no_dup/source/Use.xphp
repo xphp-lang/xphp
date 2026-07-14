@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\RetNoDup;
+
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    // A CONCRETE closure return target (Closure(int): string — no reference to E) inside a
+    // generic class body. The returned literal is a provable contravariance violation,
+    // decidable BEFORE specialization. It must be reported EXACTLY ONCE (at the
+    // pre-specialization pass); the grounded pass over the specialized class must not
+    // re-report a target that specialization never grounded.
+    public function make(): Closure(int $x): string
+    {
+        return fn(string $x): string => 'z';
+    }
+}
+
+function run(): void
+{
+    $b = new Box::<int>(1);
+    $b->make();
+}

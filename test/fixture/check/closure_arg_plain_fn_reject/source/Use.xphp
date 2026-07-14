@@ -1,0 +1,36 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Lib
+{
+    final class Book
+    {
+        public function __construct(public string $name) {}
+    }
+
+    // Declared BEFORE `each`, so a "return only the first indexed function" regression
+    // would drop `each` from the index and silently accept the bad call below.
+    function alpha(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('a'));
+    }
+
+    // A NON-generic free function with a Closure(Book): string parameter.
+    function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('x'));
+    }
+}
+
+namespace App
+{
+    function run(): void
+    {
+        // A fully-qualified call to the SECOND-indexed function in another namespace,
+        // with a non-conforming literal: `int` is not wider than Book. Fully-qualified
+        // resolution skips the unqualified fallback, so correct namespace keying of the
+        // function index is load-bearing for this rejection.
+        \Lib\each(fn(int $b): string => 'z');
+    }
+}

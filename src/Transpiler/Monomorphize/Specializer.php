@@ -362,6 +362,15 @@ final class Specializer
                             XphpSourceParser::ATTR_CLOSURE_SIG,
                             Specializer::substituteClosureSignature($sig, $this->substitution),
                         );
+                        // Stash the pre-substitution signature ONLY when a type-parameter leaf
+                        // was actually substituted. Its presence tells the grounded conformance
+                        // pass to recheck this target (a concrete target carries none and is
+                        // left to the pre-specialization pass); its value lets that pass suppress
+                        // a violation already provable before grounding (a concrete leaf of a
+                        // partially-grounded target), so nothing is double-reported.
+                        if (Specializer::closureSignatureGroundsAny($sig, $this->substitution)) {
+                            $node->setAttribute(XphpSourceParser::ATTR_CLOSURE_SIG_TEMPLATE, $sig);
+                        }
                     }
                 }
 
@@ -526,6 +535,48 @@ final class Specializer
         // SigRaw (an unstructured DNF / scalar-bearing intersection) is gradual;
         // there is nothing to ground.
         return $type;
+    }
+
+    /**
+     * Whether substituting `$subst` into `$sig` actually grounds at least one leaf —
+     * i.e. the signature carries a type-parameter leaf whose name is a key of the
+     * substitution. Distinguishes a target that CHANGES under specialization (a
+     * genuine bucket-3 case, gradual before, provable after) from a fully-concrete
+     * target that was already decided pre-specialization. The grounded conformance
+     * pass rechecks only the former, so it does not duplicate the latter's diagnostic.
+     *
+     * @param array<string, TypeRef> $subst
+     */
+    public static function closureSignatureGroundsAny(ClosureSignature $sig, array $subst): bool
+    {
+        foreach ($sig->params as $p) {
+            if (self::sigTypeGroundsAny($p->type, $subst)) {
+                return true;
+            }
+        }
+        return $sig->return !== null && self::sigTypeGroundsAny($sig->return, $subst);
+    }
+
+    /**
+     * @param array<string, TypeRef> $subst
+     */
+    private static function sigTypeGroundsAny(SigType $type, array $subst): bool
+    {
+        if ($type instanceof SigTypeRef) {
+            return $type->type->isTypeParam && isset($subst[$type->type->name]);
+        }
+        if ($type instanceof SigClosure) {
+            return self::closureSignatureGroundsAny($type->signature, $subst);
+        }
+        if ($type instanceof SigUnion || $type instanceof SigIntersection) {
+            foreach ($type->members as $m) {
+                if (self::sigTypeGroundsAny($m, $subst)) {
+                    return true;
+                }
+            }
+        }
+        // No grounded leaf found (also the SigRaw case — gradual, nothing to ground).
+        return false;
     }
 
     /**

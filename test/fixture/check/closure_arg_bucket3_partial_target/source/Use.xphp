@@ -1,0 +1,44 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Bucket3Partial;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    // A partially-grounded target: `int` is concrete, `E` references the class parameter.
+    public function pair(Closure(int $a, E $b): string $fn): string
+    {
+        return $fn(1, $this->v);
+    }
+
+    public function concreteLeafViolation(): string
+    {
+        // The literal violates parameter 1 (the CONCRETE `int` leaf) — provable BEFORE
+        // grounding, so the pre-specialization pass reports it. The grounded pass must
+        // NOT re-report it: exactly one diagnostic total.
+        return $this->pair(fn(string $a, Book $b): string => 'z');
+    }
+
+    public function groundedLeafViolation(): string
+    {
+        // Parameter 1 conforms; the literal violates parameter 2 (the `E` leaf) only once
+        // it grounds to Book — provable ONLY after specialization, reported by the grounded
+        // pass. Exactly one diagnostic.
+        return $this->pair(fn(int $a, string $b): string => 'z');
+    }
+}
+
+function run(): void
+{
+    $b = new Box::<Book>(new Book('x'));
+    $b->concreteLeafViolation();
+    $b->groundedLeafViolation();
+}

@@ -35,6 +35,7 @@ use PhpParser\Node\Stmt\Finally_;
 use PhpParser\Node\Stmt\For_;
 use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\If_;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Property;
@@ -186,12 +187,21 @@ final class GenericMethodCompiler
         // Closure-template tracking happens lazily inside rewriteCallSites
         // (every Assign with a Closure-with-genericParams RHS is tracked), so
         // the early return must NOT fire just because the file has no named
-        // templates -- it might still have anonymous generic closures.
+        // templates -- it might still have anonymous generic closures. It must
+        // also stay alive when a `Closure(...)`-typed PARAMETER exists anywhere:
+        // a plain call to such a (non-generic) method still needs its closure-
+        // literal arguments conformance-checked (checkPlain*ClosureArgs).
         if ($methodTemplates === [] && $functionTemplates === []
             && !self::hasAnonymousGenericCallSite($astSet)
+            && !self::hasClosureTypedParameter($astSet)
         ) {
             return;
         }
+
+        // Every free function by FQN (generic OR not), so a plain call to a NON-generic
+        // free function can reach its declared parameters for closure-argument conformance
+        // (checkPlainFreeFunctionClosureArgs). `$functionTemplates` holds generics only.
+        $allFunctionsByFqn = self::indexAllFunctions($astSet);
 
         /** @var array<string, true> $alreadyGenerated */
         $alreadyGenerated = [];
@@ -208,6 +218,7 @@ final class GenericMethodCompiler
                 $classByFqn,
                 $functionTemplates,
                 $functionNamespaceByFqn,
+                $allFunctionsByFqn,
                 $alreadyGenerated,
                 $topLevelAppends,
                 (string) $astKey,
@@ -362,6 +373,7 @@ final class GenericMethodCompiler
      * @param array<string, ClassLike> $classByFqn
      * @param array<string, Function_> $functionTemplates
      * @param array<string, ?Namespace_> $functionNamespaceByFqn  null = bare top-level
+     * @param array<string, Function_> $allFunctionsByFqn  every function (generic or not) by FQN
      * @param array<string, true> $alreadyGenerated
      * @param list<Function_> $topLevelAppends  out-param: specializations for null-namespace
      *   templates; the caller flushes these to the top-level AST after the traversal completes
@@ -372,6 +384,7 @@ final class GenericMethodCompiler
         array $classByFqn,
         array $functionTemplates,
         array $functionNamespaceByFqn,
+        array $allFunctionsByFqn,
         array &$alreadyGenerated,
         array &$topLevelAppends,
         string $currentFile,
@@ -380,14 +393,25 @@ final class GenericMethodCompiler
         $hashLength = $this->hashLength;
         $hierarchy = $this->hierarchy;
         $diagnostics = $this->diagnostics;
+        // The conformance check needs a TypeHierarchy for the engine's class-subtype
+        // relations; without one (bare unit tests) closure-argument conformance is
+        // skipped (gradual), matching how bound validation degrades here.
+        $closureValidator = $hierarchy !== null ? new ClosureConformanceValidator($hierarchy) : null;
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile) extends NodeVisitorAbstract {
+        $visitor = new class($methodTemplates, $classByFqn, $functionTemplates, $functionNamespaceByFqn, $allFunctionsByFqn, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
             private string $currentNamespace = '';
             private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
             private array $useMap = [];
+            /**
+             * Parallel to the raw `currentNamespace`/`useMap` tracking, kept in step so a
+             * closure-literal call argument resolves its own types against the CALLER's
+             * namespace + imports (where the literal is written) when fed to
+             * {@see ClosureConformanceValidator::checkCallArguments}.
+             */
+            private NamespaceContext $nsContext;
 
             /** @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_}> */
             public array $pendingAppends = [];
@@ -549,6 +573,7 @@ final class GenericMethodCompiler
              * @param array<string, ClassLike> $classByFqn
              * @param array<string, Function_> $functionTemplates
              * @param array<string, ?Namespace_> $functionNamespaceByFqn
+             * @param array<string, Function_> $allFunctionsByFqn  every function (generic or not) by FQN
              * @param array<string, true> $alreadyGenerated
              * @param list<Function_> $topLevelAppends
              */
@@ -557,13 +582,16 @@ final class GenericMethodCompiler
                 private array $classByFqn,
                 private array $functionTemplates,
                 private array $functionNamespaceByFqn,
+                private array $allFunctionsByFqn,
                 private array &$alreadyGenerated,
                 private int $hashLength,
                 private ?TypeHierarchy $hierarchy,
                 public array &$topLevelAppends,
                 private readonly ?DiagnosticCollector $diagnostics,
                 private readonly string $currentFile,
+                private readonly ?ClosureConformanceValidator $closureValidator,
             ) {
+                $this->nsContext = new NamespaceContext();
             }
 
             public function enterNode(Node $node): null
@@ -572,6 +600,7 @@ final class GenericMethodCompiler
                     $this->currentNamespace = $node->name?->toString() ?? '';
                     $this->currentNamespaceNode = $node;
                     $this->useMap = [];
+                    $this->nsContext->enterNamespace($node->name?->toString());
                 }
                 if ($node instanceof Use_) {
                     foreach ($node->uses as $u) {
@@ -583,6 +612,13 @@ final class GenericMethodCompiler
                         $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
                         $this->useMap[$alias] = $fqn;
                     }
+                    $this->nsContext->indexUse($node);
+                }
+                if ($node instanceof GroupUse) {
+                    // A group import (`use N\{A, B}`) must reach the same NamespaceContext so a
+                    // group-imported class named in a closure-literal argument resolves to its
+                    // real FQN, not a current-namespace collision that could false-reject.
+                    $this->nsContext->indexGroupUse($node);
                 }
                 if ($node instanceof ClassLike && $node->name !== null) {
                     $this->currentClassFqn = $this->currentNamespace !== ''
@@ -752,9 +788,19 @@ final class GenericMethodCompiler
                         $top = count($this->branchSnapshots) - 1;
                         $this->branchSnapshots[$top]['assigned'][$assignedName] = true;
                     }
+                    // A reassignment invalidates the DECLARED parameter type for this name:
+                    // after `$x = …` the variable no longer holds its incoming parameter type,
+                    // so the param entry must stop masking the live local tracking below
+                    // (resolveReceiverFqn / resolveReceiverTypeArgs read param ?? local). The
+                    // new type is re-derived from the RHS in the chain that follows, or dropped
+                    // when the RHS is untrackable — never left as the stale declared type.
+                    unset(
+                        $this->currentScopeParamTypes[$assignedName],
+                        $this->currentScopeParamTypeArgs[$assignedName],
+                    );
                     // Update the live tracked type only when the RHS is `new ClassName(...)`
-                    // -- that's the one shape we can prove statically. Other RHS
-                    // shapes are conservatively ignored (they could be anything).
+                    // -- that's the one shape we can prove statically. Any other RHS is
+                    // untrackable and clears the slot (see the closing `else`).
                     if ($node->expr instanceof New_
                         && $node->expr->class instanceof Name
                     ) {
@@ -789,6 +835,15 @@ final class GenericMethodCompiler
                                 unset($this->currentScopeLocalTypeArgs[$assignedName]);
                             }
                         }
+                    } else {
+                        // Any other RHS (a free-function call, another variable, a ternary,
+                        // an array/property fetch, a closure literal) is untrackable — drop
+                        // any stale tracked type rather than leave a wrong one that a later
+                        // `$x->m(...)` would mis-resolve against.
+                        unset(
+                            $this->currentScopeLocalTypes[$assignedName],
+                            $this->currentScopeLocalTypeArgs[$assignedName],
+                        );
                     }
                     // Track anonymous generic templates: `$id = fn<T>(T $x) => $x`
                     // or `$id = function<T>(T $x): T { ... }`. The FuncCall-on-
@@ -1145,6 +1200,12 @@ final class GenericMethodCompiler
                 // `Sub::m::<...>()` and resolves via static-method inheritance.
                 $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
                 if ($resolved === null) {
+                    // Non-generic static method (no generic template): a non-turbofish call
+                    // still checks its closure-literal arguments. A turbofish here is an
+                    // unresolved-generic-call error, handled below.
+                    if (!is_array($args)) {
+                        $this->checkPlainStaticClosureArgs($node, $classFqn, $methodName);
+                    }
                     return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 [$template, $declaringFqn] = $resolved;
@@ -1201,6 +1262,26 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         $location,
                     );
+
+                    // Check each closure-literal call argument against its paired parameter's
+                    // Closure(...) target. In a static context a class type parameter is unbound
+                    // (no receiver to ground `E`), so the substitution carries only this call's
+                    // method-type arguments — a sig leaf referencing a class parameter stays
+                    // abstract ⇒ gradual, matching how bounds degrade here.
+                    if ($this->closureValidator !== null) {
+                        $subst = [];
+                        foreach ($params as $i => $param) {
+                            $subst[$param->name] = $args[$i];
+                        }
+                        $this->closureValidator->checkCallArguments(
+                            array_values($template->params),
+                            $node->args,
+                            $subst,
+                            $this->nsContext,
+                            $this->currentFile,
+                            $this->diagnostics,
+                        );
+                    }
                 }
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
@@ -1268,6 +1349,12 @@ final class GenericMethodCompiler
                 // there and inherited (see resolveMethodTemplate).
                 $resolved = $this->resolveMethodTemplate($classFqn, $methodName);
                 if ($resolved === null) {
+                    // Non-generic method (no generic template): a non-turbofish call still
+                    // checks its closure-literal arguments. A turbofish here is an
+                    // unresolved-generic-call error, handled below.
+                    if (!is_array($args)) {
+                        $this->checkPlainInstanceClosureArgs($node, $classFqn, $methodName);
+                    }
                     return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 [$template, $declaringFqn] = $resolved;
@@ -1341,6 +1428,28 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         $location,
                     );
+
+                    // Check each closure-literal call argument against its paired parameter's
+                    // Closure(...) target, grounded through the receiver's class type args and
+                    // this call's method-type arguments. Method params are layered LAST so a
+                    // method type parameter shadows a same-named class one (matching groundBounds
+                    // and PHP's inner-scope-wins rule). Runs before the erasable early-return so
+                    // `<U:E>` methods are still argument-checked, and outside the alreadyGenerated
+                    // dedup so every call site is checked — not only the one that specializes.
+                    if ($this->closureValidator !== null) {
+                        $subst = $this->classSubstitutionFor($classFqn, $receiverArgs, $declaringFqn);
+                        foreach ($params as $i => $param) {
+                            $subst[$param->name] = $args[$i];
+                        }
+                        $this->closureValidator->checkCallArguments(
+                            array_values($template->params),
+                            $node->args,
+                            $subst,
+                            $this->nsContext,
+                            $this->currentFile,
+                            $this->diagnostics,
+                        );
+                    }
 
                     // Erasable `<U : E>` method: the bound is checked above, but the call lowers to
                     // the E-mangled name keyed on the RECEIVER's element type (not the turbofish arg),
@@ -1460,6 +1569,96 @@ final class GenericMethodCompiler
                     }
                 }
                 return null;
+            }
+
+            /**
+             * Check the closure-literal arguments of a NON-turbofish call to a non-generic
+             * INSTANCE method. Reached only when {@see resolveMethodTemplate} found no generic
+             * template, so a generic call is never double-checked here. The receiver's class
+             * type arguments ground a `Closure(...)` parameter that references a class type
+             * parameter; a first-class callable, an unresolvable method, or an unresolvable
+             * receiver all stay gradual.
+             */
+            private function checkPlainInstanceClosureArgs(MethodCall|NullsafeMethodCall $node, string $classFqn, string $methodName): void
+            {
+                if ($this->closureValidator === null || $node->isFirstClassCallable()) {
+                    return;
+                }
+                $found = $this->findMethodDeclaration($classFqn, $methodName);
+                if ($found === null) {
+                    return;
+                }
+                [$method, $declaringFqn] = $found;
+                $subst = $this->classSubstitutionFor($classFqn, $this->resolveReceiverTypeArgs($node->var), $declaringFqn);
+                $this->closureValidator->checkCallArguments(
+                    array_values($method->params),
+                    $node->args,
+                    $subst,
+                    $this->nsContext,
+                    $this->currentFile,
+                    $this->diagnostics,
+                );
+            }
+
+            /**
+             * Check the closure-literal arguments of a NON-turbofish call to a non-generic
+             * STATIC method. A class type parameter is unbound in a static context, so the
+             * substitution is empty — a `Closure(...)` target on a non-generic class is fully
+             * concrete (checked), one referencing a class parameter stays abstract (gradual).
+             */
+            private function checkPlainStaticClosureArgs(StaticCall $node, string $classFqn, string $methodName): void
+            {
+                if ($this->closureValidator === null || $node->isFirstClassCallable()) {
+                    return;
+                }
+                $found = $this->findMethodDeclaration($classFqn, $methodName);
+                if ($found === null) {
+                    return;
+                }
+                [$method] = $found;
+                $this->closureValidator->checkCallArguments(
+                    array_values($method->params),
+                    $node->args,
+                    [],
+                    $this->nsContext,
+                    $this->currentFile,
+                    $this->diagnostics,
+                );
+            }
+
+            /**
+             * Check the closure-literal arguments of a bare call to a NON-generic FREE
+             * FUNCTION. The callee is resolved against the caller's function-name scope
+             * (`use function`, current namespace, then the global fallback for an
+             * unqualified name), so a non-generic higher-order function's `Closure(...)`
+             * parameters are checked. A free function has no type parameters, so the
+             * substitution is empty. An unresolved name stays gradual.
+             */
+            private function checkPlainFreeFunctionClosureArgs(FuncCall $node): void
+            {
+                if ($this->closureValidator === null || !$node->name instanceof Name) {
+                    return;
+                }
+                $fn = $this->allFunctionsByFqn[$this->nsContext->resolveFunctionName($node->name)] ?? null;
+                if ($fn === null
+                    && !$node->name->isQualified()
+                    && !$node->name->isFullyQualified()
+                ) {
+                    // An unqualified name absent from the current namespace resolves to the
+                    // global function of that name (PHP's fallback).
+                    $fn = $this->allFunctionsByFqn[$node->name->toString()] ?? null;
+                }
+                if ($fn === null) {
+                    return;
+                }
+                $this->closureValidator->checkCallArguments(
+                    array_values($fn->params),
+                    $node->args,
+                    [],
+                    $this->nsContext,
+                    $this->currentFile,
+                    $this->diagnostics,
+                );
             }
 
             /**
@@ -2056,6 +2255,11 @@ final class GenericMethodCompiler
                                 $bare[1],
                                 new SourceLocation($this->currentFile, $node->getStartLine()),
                             );
+                        } else {
+                            // Not a generic template — a bare call to a NON-generic free
+                            // function. Check its closure-literal arguments against the
+                            // callee's Closure(...) parameters.
+                            $this->checkPlainFreeFunctionClosureArgs($node);
                         }
                     }
                     return null;
@@ -2118,6 +2322,25 @@ final class GenericMethodCompiler
                         $this->diagnostics,
                         new SourceLocation($this->currentFile, $node->getStartLine()),
                     );
+
+                    // Check each closure-literal call argument against its paired parameter's
+                    // Closure(...) target, grounded through this call's type arguments. A free
+                    // function has no enclosing class, so the substitution carries only its own
+                    // (already-concrete) method type arguments.
+                    if ($this->closureValidator !== null) {
+                        $subst = [];
+                        foreach ($params as $i => $param) {
+                            $subst[$param->name] = $args[$i];
+                        }
+                        $this->closureValidator->checkCallArguments(
+                            array_values($template->params),
+                            $node->args,
+                            $subst,
+                            $this->nsContext,
+                            $this->currentFile,
+                            $this->diagnostics,
+                        );
+                    }
                 }
 
                 $funcName = $template->name->toString();
@@ -2746,6 +2969,90 @@ final class GenericMethodCompiler
             }
         }
         return false;
+    }
+
+    /**
+     * Whether any parameter anywhere declares a `Closure(...)` signature type. Such a
+     * parameter is a call-argument conformance target ({@see checkPlainInstanceClosureArgs}
+     * / {@see checkPlainStaticClosureArgs}), so the rewrite pass must run to check calls
+     * to it even when the program declares no generic method / function / closure.
+     *
+     * @param array<string, list<Node\Stmt>> $astSet
+     */
+    private static function hasClosureTypedParameter(array $astSet): bool
+    {
+        $found = false;
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class($found) extends NodeVisitorAbstract {
+            public function __construct(private bool &$found)
+            {
+            }
+
+            /**
+             * @infection-ignore-all -- inner anonymous visitor (Infection's blind spot);
+             * covered behaviorally by the non-generic closure-argument accept/reject fixtures,
+             * whose programs declare NO generics, so only this pre-scan keeps the pass alive.
+             */
+            public function enterNode(Node $node): null
+            {
+                if (!$this->found
+                    && $node instanceof Param
+                    && ClosureConformanceValidator::closureSigOf($node->type) !== null
+                ) {
+                    $this->found = true;
+                }
+                return null;
+            }
+        });
+        foreach ($astSet as $ast) {
+            $traverser->traverse($ast);
+            if ($found) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Index every free function in the program by its fully-qualified name, whether
+     * generic or not (`$functionTemplates` holds only generics). A plain call to a
+     * NON-generic free function needs its declared parameters to reach
+     * {@see checkPlainFreeFunctionClosureArgs} for closure-argument conformance.
+     *
+     * @param array<string, list<Node\Stmt>> $astSet
+     * @return array<string, Function_>  keyed by namespace\functionName
+     */
+    private static function indexAllFunctions(array $astSet): array
+    {
+        $index = [];
+        foreach ($astSet as $ast) {
+            $visitor = new class extends NodeVisitorAbstract {
+                private string $currentNamespace = '';
+                /** @var array<string, Function_> */
+                public array $functions = [];
+
+                public function enterNode(Node $node): null
+                {
+                    if ($node instanceof Namespace_) {
+                        $this->currentNamespace = $node->name?->toString() ?? '';
+                    }
+                    if ($node instanceof Function_) {
+                        $fqn = $this->currentNamespace !== ''
+                            ? $this->currentNamespace . '\\' . $node->name->toString()
+                            : $node->name->toString();
+                        $this->functions[$fqn] = $node;
+                    }
+                    return null;
+                }
+            };
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor($visitor);
+            $traverser->traverse($ast);
+            foreach ($visitor->functions as $fqn => $fn) {
+                $index[$fqn] = $fn;
+            }
+        }
+        return $index;
     }
 
     /**

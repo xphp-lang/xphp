@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\PlainArgRun;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Registry
+{
+    public function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('PHP'));
+    }
+}
+
+$r = new Registry();
+$result = $r->each(fn(Book $b): string => $b->name);

@@ -966,6 +966,230 @@ final class CheckPassIntegrationTest extends TestCase
         );
     }
 
+    public function testClosureArgumentConformanceViolationIsCollectedByCheck(): void
+    {
+        // A closure literal passed to a generic instance method's `Closure(E $x): R`
+        // parameter, grounded to `Closure(Book): string`, whose `int` parameter is not
+        // wider than `Book` — a provable contravariance violation at the call site.
+        $diagnostics = $this->check('closure_arg_instance_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\ClosureArgCheck\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingClosureArgumentsStayClean(): void
+    {
+        // Exact, wider-parameter, and grounded-to-int closure arguments all conform.
+        self::assertCount(0, $this->check('closure_arg_instance_accept')->all());
+    }
+
+    public function testClosureArgumentConformanceViolationAtStaticCallIsCollected(): void
+    {
+        // A closure literal passed to a static generic method's `Closure(R $x): R`
+        // parameter, grounded to `Closure(int): int` by the turbofish, whose `string`
+        // parameter is not wider than `int`.
+        $diagnostics = $this->check('closure_arg_static_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingStaticClosureArgumentsStayClean(): void
+    {
+        // A conforming method-generic target, and a class-parameter target that is
+        // unbound in a static context (⇒ gradual), both stay clean.
+        self::assertCount(0, $this->check('closure_arg_static_accept')->all());
+    }
+
+    public function testClosureArgumentConformanceViolationAtFreeFunctionCallIsCollected(): void
+    {
+        // A closure literal passed to a generic free function's `Closure(R $x): R`
+        // parameter, grounded to `Closure(int): int`, whose `string` parameter is not
+        // wider than `int`.
+        $diagnostics = $this->check('closure_arg_free_fn_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingFreeFunctionClosureArgumentsStayClean(): void
+    {
+        // Conforming literals reached through a `use function` alias and a
+        // fully-qualified name both stay clean (callee resolves via the caller's
+        // function imports).
+        self::assertCount(0, $this->check('closure_arg_free_fn_accept')->all());
+    }
+
+    public function testClosureArgumentConformanceViolationAtPlainInstanceCallIsCollected(): void
+    {
+        // A closure literal passed to a NON-generic instance method's Closure(Book): string
+        // parameter at a plain (non-turbofish) call, whose int parameter is not wider than Book.
+        $diagnostics = $this->check('closure_arg_plain_instance_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\PlainArg\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testClosureArgumentConformanceViolationAtPlainStaticCallIsCollected(): void
+    {
+        // Same, at a plain static call to a non-generic static method.
+        $diagnostics = $this->check('closure_arg_plain_static_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\PlainArg\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingPlainMethodClosureArgumentsStayClean(): void
+    {
+        // Exact / wider / non-literal / grounded-on-a-generic-class / self:: static, plus the
+        // two receiver-reassignment cases that must NOT false-reject (a reassigned parameter
+        // resolves to its new type; a local reassigned from an untrackable call is gradual).
+        self::assertCount(0, $this->check('closure_arg_plain_accept')->all());
+    }
+
+    public function testClosureArgumentConformanceViolationAtPlainFreeFunctionCallIsCollected(): void
+    {
+        // A closure literal passed, at a fully-qualified plain (turbofish-less) call, to a
+        // NON-generic free function's Closure(Book): string parameter in another namespace,
+        // whose int parameter is not wider than Book.
+        $diagnostics = $this->check('closure_arg_plain_fn_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than Lib\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConformingPlainFreeFunctionClosureArgumentsStayClean(): void
+    {
+        // Conforming literals reached through a `use function` alias and a fully-qualified
+        // name, plus a non-literal argument, all stay clean (the callee resolves via the
+        // caller's function imports).
+        self::assertCount(0, $this->check('closure_arg_plain_fn_accept')->all());
+    }
+
+    public function testClosureArgumentConformanceViolationAtGlobalNamespaceFreeFunctionIsCollected(): void
+    {
+        // A non-generic free function declared in an explicit unnamed (global) namespace
+        // block — its enclosing `Namespace_` node carries a null name, so the function
+        // indexes under its bare name. A non-conforming literal must still be rejected.
+        $diagnostics = $this->check('closure_arg_plain_fn_global_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testClosureArgumentConformanceAtGlobalFallbackFreeFunctionIsCollected(): void
+    {
+        // An unqualified call inside a NAMED namespace where the current-namespace function
+        // is undefined: resolution falls back to the global function (PHP's function
+        // fallback). The checker must follow the same fallback and reject the mismatch.
+        $diagnostics = $this->check('closure_arg_plain_fn_fallback_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testBucket3SelfCallClosureArgumentRejectedAfterGrounding(): void
+    {
+        // A `$this->each(fn(int): string)` self-call inside `Box<E>::describe()` whose target
+        // references E: gradual at the abstract template, provable once the class specializes.
+        // The SAME describe() source is instantiated as Box<Book> AND Box<int>; only the Book
+        // grounding is a violation ⇒ exactly one diagnostic (no double-report), at the
+        // specialized Book class.
+        $diagnostics = $this->check('closure_arg_bucket3_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(ClosureConformanceValidator::CODE, $diagnostics->all()[0]->code);
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: int is not wider than App\\Bucket3\\Book',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testBucket3ConformingSelfCallClosureArgumentsStayClean(): void
+    {
+        // Under Box<Book>: exact / wider `$this->` instance self-call, a conforming `self::`
+        // static self-call, a `static::` call (gradual, not checked), a concrete-target
+        // self-call (decided pre-specialization, not re-reported), and a non-literal
+        // argument — all stay clean once grounded.
+        self::assertCount(0, $this->check('closure_arg_bucket3_accept')->all());
+    }
+
+    public function testPartiallyGroundedSelfCallTargetIsNotDoubleReported(): void
+    {
+        // A partially-grounded target `Closure(int, E): string`: a violation on the
+        // CONCRETE `int` leaf is reported once by the pre-specialization pass (not
+        // re-reported by the grounded pass), and a violation on the grounded `E` leaf is
+        // reported once by the grounded pass. Two methods, two distinct violations, no
+        // duplicate of the concrete-leaf one.
+        $diagnostics = $this->check('closure_arg_bucket3_partial_target');
+        $messages = array_map(static fn ($d): string => $d->message, $diagnostics->all());
+        sort($messages);
+
+        self::assertSame([
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 2: string is not wider than App\\Bucket3Partial\\Book',
+        ], $messages);
+    }
+
+    public function testConcreteSelfCallTargetInGenericBodyIsReportedExactlyOnce(): void
+    {
+        // A `$this->concrete(...)` self-call whose target does NOT reference the class type
+        // parameter is decided at the pre-specialization pass. The grounded self-call pass
+        // must not run before specialization (nor re-report the concrete target after) —
+        // exactly one diagnostic.
+        $diagnostics = $this->check('closure_arg_bucket3_concrete_once');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
+    public function testConcreteClosureReturnTargetInGenericBodyIsReportedExactlyOnce(): void
+    {
+        // A concrete closure return target (no type parameter) inside a generic class
+        // body is decided before specialization. The grounded pass over the specialized
+        // class must not re-report it — exactly one diagnostic, not a duplicate from
+        // `<specialized:…>`.
+        $diagnostics = $this->check('closure_return_concrete_target_no_dup');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            'Closure literal does not conform to the declared `Closure(...)` type: parameter 1: string is not wider than int',
+            $diagnostics->all()[0]->message,
+        );
+    }
+
     private function check(string $fixture): DiagnosticCollector
     {
         return $this->buildCompiler()->check($this->sources($fixture));

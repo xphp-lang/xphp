@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Lib
+{
+    final class Book
+    {
+        public function __construct(public string $name) {}
+    }
+
+    // Non-generic free function with a Closure(Book): string parameter.
+    function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('x'));
+    }
+}
+
+namespace App
+{
+    use function Lib\each;
+    use Lib\Book;
+
+    function conforms(): void
+    {
+        // Reached through a `use function` alias — the callee resolves via the caller's
+        // function imports; the conforming (exact and wider-param) literals are accepted.
+        each(fn(Book $b): string => $b->name);      // exact
+        each(fn(object $o): string => 'z');          // wider param (contravariant)
+        \Lib\each(fn(Book $b): string => $b->name);  // fully-qualified, also conforms
+    }
+
+    function nonLiteral(\Closure $f): void
+    {
+        each($f);   // non-literal argument ⇒ gradual (accepted)
+    }
+}

@@ -14,14 +14,19 @@ _In progress on this branch — content still accumulating; date set at tag time
 - **`Closure(...)` signature types.** A type hint such as `Closure(int $x, string $y):
   bool` may appear in any parameter, return, or property position; it documents the
   callable a slot expects and **erases to a bare `\Closure`** in the emitted PHP.
-  Where a closure literal is returned against a `Closure(...)` return type (a
-  typed-closure factory), xphp checks conformance — parameters contravariant, return
+  Where a closure literal meets a `Closure(...)` target — **returned** against a
+  `Closure(...)` return type (a typed-closure factory) or **passed as a call argument**
+  to a `Closure(...)` parameter of any statically-resolvable callee (a generic
+  instance / static / free-function turbofish call, or a plain call to a non-generic
+  method or free function) — xphp checks conformance — parameters contravariant, return
   covariant, by-reference exact, arity compatible — and fails the build on a
   **provable** mismatch (`xphp.closure_conformance`), while accepting anything it can't
   prove wrong (untyped ⇒ `mixed`, an unresolved or built-in supertype, a
-  still-abstract type parameter, a union/intersection). A signature that references an
-  enclosing type parameter is **grounded** per specialization, so `Registry<int>` and
-  `Registry<string>` check the same factory against different concrete targets. A flat
+  still-abstract type parameter, a union/intersection) or reach (a callable held in a
+  variable, a built-in higher-order function, or any dynamic callee). A signature that
+  references an enclosing type parameter is **grounded** per specialization, so
+  `Registry<int>` and `Registry<string>` check the same factory — or the same
+  `$this->m(...)` self-call argument — against different concrete targets. A flat
   union / intersection / nullable inside a signature (`Closure(int|string $x): void`,
   `Closure(): A&B`, `?int`) is variance-checked member by member, following PHP's own
   union/intersection subtyping; an intersection in a parameter position stays gradual

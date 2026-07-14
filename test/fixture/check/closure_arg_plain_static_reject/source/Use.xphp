@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\PlainArg;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Registry
+{
+    public static function sEach(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('y'));
+    }
+}
+
+function run(): void
+{
+    Registry::sEach(fn(int $x): string => 'z');
+}
