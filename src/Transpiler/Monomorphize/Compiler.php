@@ -209,6 +209,11 @@ final readonly class Compiler
         // class ASTs would need to be fed back through the method compiler with their
         // enclosing namespace preserved so FQN keying still works.
         foreach ($specializedAsts as $generatedFqn => $classAst) {
+            // Last-resort safety net: no generic marker may survive into emitted output. A
+            // surviving turbofish/closure marker is a site the pipeline could not ground —
+            // it would print type-parameter hints as references to non-existent classes (a
+            // runtime TypeError). Fail loud here instead. (Compile-only; `check` never emits.)
+            GenericMarkerLeakGuard::assertNoLeak($classAst, $generatedFqn);
             $this->specializedClassGenerator->emit($classAst, $generatedFqn, $cacheDir);
         }
 

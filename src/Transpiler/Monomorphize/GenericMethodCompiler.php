@@ -2737,9 +2737,17 @@ final class GenericMethodCompiler
         $this->finalizeClosureDispatchers($visitor, $hashLength);
 
         // Apply buffered appends now that the traversal has finished, so we don't fight
-        // nikic's NodeTraverser's child-array iteration semantics mid-walk.
+        // nikic's NodeTraverser's child-array iteration semantics mid-walk. Each appended
+        // node is a fully specialized function/method: guard it against a surviving generic
+        // marker (a site that could not be grounded) before it reaches emitted output — the
+        // function-shaped counterpart to the specialized-class backstop in Compiler's emit
+        // loop. Compile-only: the `!$emit` gate above already returned for `check`.
         foreach ($visitor->pendingAppends as [$container, $stmt]) {
             $container->stmts[] = $stmt;
+            GenericMarkerLeakGuard::assertNoLeak($stmt, $currentFile . ' (' . $stmt->name->toString() . ')');
+        }
+        foreach ($topLevelAppends as $stmt) {
+            GenericMarkerLeakGuard::assertNoLeak($stmt, $currentFile . ' (' . $stmt->name->toString() . ')');
         }
     }
 
