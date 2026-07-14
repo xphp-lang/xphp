@@ -259,12 +259,12 @@ final class ClosureConformanceValidator
      *
      * @param list<Param> $calleeParams              the callee's declared value parameters
      * @param array<int, Arg|VariadicPlaceholder> $callArgs  the call's arguments
-     * @param array<string, TypeRef> $subst          grounding map (class + method type params)
+     * @param Substitution $subst          grounding map (class + method type params)
      */
     public function checkCallArguments(
         array $calleeParams,
         array $callArgs,
-        array $subst,
+        Substitution $subst,
         NamespaceContext $ctx,
         string $file,
         ?DiagnosticCollector $diagnostics,
@@ -308,12 +308,12 @@ final class ClosureConformanceValidator
      * argument against it. A null / typeless / non-`Closure(...)` parameter or a
      * non-literal argument is a gradual no-op.
      *
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
     private function checkOneCallArgument(
         ?Param $param,
         Node\Expr $value,
-        array $subst,
+        Substitution $subst,
         NamespaceContext $ctx,
         string $file,
         ?DiagnosticCollector $diagnostics,
@@ -502,7 +502,7 @@ final class ClosureConformanceValidator
                 $this->validator->checkCallArguments(
                     $params,
                     $node->args,
-                    [],
+                    Substitution::empty(),
                     $this->ctx,
                     $this->file,
                     $this->diagnostics,

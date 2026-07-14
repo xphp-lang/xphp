@@ -362,7 +362,7 @@ final class VisitorGuardsTest extends TestCase
             'T' => new TypeRef('App\\Models\\Plastic'),
         ];
 
-        $specialized = (new Specializer())->specialize($template, $subst);
+        $specialized = (new Specializer())->specialize($template, Substitution::of($subst));
 
         // T should be replaced with FullyQualified \App\Models\Plastic.
         $aProp = $specialized->stmts[0];
@@ -391,7 +391,7 @@ final class VisitorGuardsTest extends TestCase
         $tParam = new Property(0, [new PropertyItem('a')], type: new Name('T'));
         $template = new Class_(new Identifier('Template'), ['stmts' => [$tParam]]);
 
-        $specialized = (new Specializer())->specialize($template, ['U' => new TypeRef('App\\Other')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of(['U' => new TypeRef('App\\Other')]));
 
         $aProp = $specialized->stmts[0];
         self::assertInstanceOf(Name::class, $aProp->type);
@@ -415,7 +415,7 @@ final class VisitorGuardsTest extends TestCase
         $template = new Class_(new Identifier('Wrapper'), ['stmts' => [$property]]);
 
         // Substitution map keyed by 'T'.
-        $specialized = (new Specializer())->specialize($template, ['T' => new TypeRef('App\\Plastic')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of(['T' => new TypeRef('App\\Plastic')]));
 
         $aProp = $specialized->stmts[0];
         $resolvedArgs = $aProp->type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
@@ -439,7 +439,7 @@ final class VisitorGuardsTest extends TestCase
         $template = new Class_(new Identifier('Template'), ['stmts' => [$method]]);
 
         // Should not throw / crash.
-        $specialized = (new Specializer())->specialize($template, ['T' => new TypeRef('App\\Plastic')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of(['T' => new TypeRef('App\\Plastic')]));
 
         // Foo stays as plain Name.
         $methodOut = $specialized->stmts[0];
@@ -464,9 +464,9 @@ final class VisitorGuardsTest extends TestCase
             'stmts' => [new Property(0, [new PropertyItem('a')], type: new Name('T'))],
         ]);
 
-        $specialized = (new Specializer())->specialize($template, [
+        $specialized = (new Specializer())->specialize($template, Substitution::of([
             'T' => new TypeRef('\\App\\Plastic'),
-        ]);
+        ]));
 
         $aProp = $specialized->stmts[0];
         self::assertInstanceOf(Property::class, $aProp);
@@ -483,9 +483,9 @@ final class VisitorGuardsTest extends TestCase
         ]);
 
         $genericSubst = new TypeRef('\\App\\Containers\\Collection', [new TypeRef('App\\Models\\Plastic')]);
-        $specialized = (new Specializer())->specialize($template, [
+        $specialized = (new Specializer())->specialize($template, Substitution::of([
             'T' => $genericSubst,
-        ]);
+        ]));
 
         $nameNode = $specialized->stmts[0]->type;
         self::assertInstanceOf(Name::class, $nameNode);

@@ -373,7 +373,7 @@ final class Registry
             foreach ($padded as $j => $concrete) {
                 $subst[$params[$j]->name] = $concrete;
             }
-            $padded[] = Specializer::substituteTypeRef($params[$i]->default, $subst);
+            $padded[] = Specializer::substituteTypeRef($params[$i]->default, Substitution::of($subst));
         }
         return $padded;
     }
@@ -856,9 +856,9 @@ final class Registry
      * stays a type-param signals an ungroundable bound to the caller). `Bound*` are immutable,
      * so a fresh tree is built; the compound branches recurse so DNF shapes ground throughout.
      *
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
-    public static function substituteBound(BoundExpr $bound, array $subst): BoundExpr
+    public static function substituteBound(BoundExpr $bound, Substitution $subst): BoundExpr
     {
         if ($bound instanceof BoundLeaf) {
             return new BoundLeaf(Specializer::substituteTypeRef($bound->type, $subst));
@@ -895,10 +895,7 @@ final class Registry
         if (count($params) !== count($args)) {
             return $params;
         }
-        $subst = [];
-        foreach ($params as $i => $param) {
-            $subst[$param->name] = $args[$i];
-        }
+        $subst = Substitution::fromParams($params, $args);
 
         return array_map(
             static fn (TypeParam $p): TypeParam => $p->bound === null

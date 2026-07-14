@@ -22,7 +22,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(self::typeParam('T')),
         );
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => self::scalar('int')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => self::scalar('int')]));
 
         self::assertSame('int', self::leafName($grounded->params[0]->type));
         self::assertSame('int', self::leafName($grounded->return));
@@ -35,7 +35,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(new TypeRef('App\\Fruit')),
         );
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => self::scalar('int')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => self::scalar('int')]));
 
         self::assertSame('string', self::leafName($grounded->params[0]->type));
         self::assertSame('App\\Fruit', self::leafName($grounded->return));
@@ -51,7 +51,7 @@ final class SpecializerClosureSignatureTest extends TestCase
         );
         $sig = new ClosureSignature([new ClosureSignatureParam(new SigClosure($inner))], null);
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => self::scalar('int')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => self::scalar('int')]));
 
         $outerParam = $grounded->params[0]->type;
         self::assertInstanceOf(SigClosure::class, $outerParam);
@@ -70,7 +70,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => new TypeRef('App\\Apple')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => new TypeRef('App\\Apple')]));
 
         $param = $grounded->params[0]->type;
         self::assertInstanceOf(SigUnion::class, $param);
@@ -85,7 +85,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(new TypeRef('App\\Countable')),
         ]));
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => new TypeRef('App\\Apple')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => new TypeRef('App\\Apple')]));
 
         $ret = $grounded->return;
         self::assertInstanceOf(SigIntersection::class, $ret);
@@ -98,7 +98,7 @@ final class SpecializerClosureSignatureTest extends TestCase
         $raw = new SigRaw('int|string');
         $sig = new ClosureSignature([new ClosureSignatureParam($raw)], null);
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => self::scalar('int')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => self::scalar('int')]));
 
         self::assertSame($raw, $grounded->params[0]->type, 'a gradual raw leaf is untouched');
     }
@@ -114,7 +114,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             nullable: true,
         );
 
-        $grounded = Specializer::substituteClosureSignature($sig, ['T' => self::scalar('int')]);
+        $grounded = Specializer::substituteClosureSignature($sig, Substitution::of(['T' => self::scalar('int')]));
 
         self::assertTrue($grounded->params[0]->byRef);
         self::assertTrue($grounded->params[1]->variadic);
@@ -131,7 +131,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(self::scalar('string')),
         );
 
-        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyDetectsAGroundedReturnLeafWhenParametersAreConcrete(): void
@@ -142,7 +142,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(self::typeParam('E')),
         );
 
-        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyIsFalseForAFullyConcreteSignature(): void
@@ -152,7 +152,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(self::scalar('string')),
         );
 
-        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyIsFalseForATypeParameterAbsentFromTheSubstitution(): void
@@ -164,7 +164,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyIsFalseForANonTypeParameterLeafNamedLikeASubstitutionKey(): void
@@ -176,7 +176,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyRecursesIntoANestedClosureLeaf(): void
@@ -190,7 +190,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             new SigTypeRef(self::scalar('string')),
         );
 
-        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyDetectsAGroundedUnionMember(): void
@@ -203,7 +203,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyDetectsAGroundedIntersectionMember(): void
@@ -216,7 +216,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertTrue(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyIsFalseForAConcreteUnionWithNoTypeParameter(): void
@@ -229,7 +229,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     public function testGroundsAnyIsFalseForAGradualRawLeaf(): void
@@ -241,7 +241,7 @@ final class SpecializerClosureSignatureTest extends TestCase
             null,
         );
 
-        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, ['E' => self::scalar('int')]));
+        self::assertFalse(Specializer::closureSignatureGroundsAny($sig, Substitution::of(['E' => self::scalar('int')])));
     }
 
     // ---- Helpers ---------------------------------------------------------
