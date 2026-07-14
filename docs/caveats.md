@@ -756,3 +756,83 @@ public function valuesList(): iterable { return array_values($this->entries); }
 The element type is `mixed` past that seam (re-narrow with `instanceof` where a typed
 bucket is needed) — the same trade a `dyn` boundary makes. Or **split the derivation**
 so the growing type is never reached through an unbounded chain.
+
+---
+
+## Generic turbofish grounded by an enclosing type parameter
+
+A turbofish whose type argument is supplied by an **enclosing** generic scope — a
+function type parameter or a class type parameter — cannot yet be specialized. All
+three shapes below are rejected with a loud compile error rather than emitted as
+runtime-fatal code; each may be lifted in a future version.
+
+### ❌ What doesn't work
+
+A generic **closure** grounded by an enclosing function type parameter:
+
+```php
+function relay<S>(S $v): S
+{
+    $inner = fn<I>(I $x): I => $x;
+    return $inner::<S>($v);          // ❌ `S` is not concrete here
+}
+```
+
+```
+Generic closure call `$inner::<S>(...)` cannot be specialized: its type argument(s)
+are grounded only by an enclosing generic scope and are not concrete here …
+```
+
+A **concrete** inner closure turbofish, but written **inside a generic function body**:
+
+```php
+function outer<T>(T $seed): int
+{
+    $f = fn<U>(U $x): U => $x;
+    return $f::<int>(41);            // ❌ the same call works at file scope, not here
+}
+```
+
+A **method/static turbofish grounded by an enclosing class type parameter**:
+
+```php
+class Box<T>
+{
+    public function make(T $v): T { return self::gen::<T>($v); }   // ❌ `T` from the class
+    public static function gen<U>(U $x): U { return $x; }
+}
+```
+
+```
+A generic turbofish/closure marker survived specialization into the emitted output …
+[xphp.unspecialized_generic_leak]
+```
+
+### Why
+
+Variable-turbofish and method-turbofish dispatch is **call-site-driven**: a site is
+specialized only when its type arguments are concrete *at that site*. When the argument
+comes from an enclosing type parameter it is still abstract when the inner site is
+visited, so no concrete dispatch can be built; and the concrete-inner case (`outer`)
+only fails because the closure sits inside a *generic function* body, which the current
+dispatch pass does not re-enter per specialization. Left un-grounded, each would emit
+PHP that names a non-existent type-parameter class (`App\I`, `App\U`, or a stripped
+`gen()` method) and fatal on first use. Rather than emit that, xphp fails the build: the
+closure form is caught at the source seam in both `xphp check` and `xphp compile`
+(`xphp.unspecialized_generic_closure`); the two shapes that reach code generation are
+caught by a compile-time backstop over the emitted output
+(`xphp.unspecialized_generic_leak`). Grounding these shapes so they *run* is tracked
+for a later release; today the guarantee is only that they never miscompile silently.
+
+### ✅ Workaround
+
+Call the inner generic with an **explicit concrete** turbofish at a scope where the type
+is known, or lift it out of the enclosing generic scope:
+
+```php
+$inner = fn<I>(I $x): I => $x;
+echo $inner::<int>(41);              // works at file / plain-function scope
+
+function gen<U>(U $x): U { return $x; }
+Box::useGen(gen::<int>(5));          // ground the generic where the type is concrete
+```

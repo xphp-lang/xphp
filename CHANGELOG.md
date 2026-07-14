@@ -193,6 +193,20 @@ _In progress on this branch — content still accumulating; date set at tag time
 
 ### Fixed
 
+- **A generic turbofish grounded by an enclosing type parameter is rejected instead of
+  miscompiled.** Three shapes that supply an inner turbofish's type argument from an
+  enclosing generic scope used to compile clean and then fatal at runtime: a generic
+  closure grounded by an enclosing function parameter (`$inner::<S>` in `relay<S>`), a
+  *concrete* inner closure turbofish written inside a generic function body (`$f::<int>`
+  in `outer<T>`), and a method/static turbofish grounded by an enclosing class parameter
+  (`self::gen::<T>()` in `Box<T>`). None can be specialized yet — the argument is still
+  abstract when the inner site is visited — so the emitted PHP named a non-existent
+  type-parameter class and fataled on first use, behind a clean `compile` and `check`.
+  The closure form is now rejected at the source seam in **both** `check` and `compile`
+  (`xphp.unspecialized_generic_closure`); the two shapes that reach code generation are
+  caught by a compile-time backstop over the emitted output
+  (`xphp.unspecialized_generic_leak`). Grounding them so they *run* is tracked for a
+  later release; see the [caveats](docs/caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter).
 - **A turbofish on a dynamically-named call is rejected instead of silently dropped.**
   A type-argument turbofish on a method or static call whose name is a runtime value —
   `$o->$m::<int>()`, the nullsafe `$o?->$m::<int>()`, the variable-variable
