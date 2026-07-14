@@ -251,6 +251,44 @@ fail:
 - **Parameters bounded by different enclosing parameters** — `pick<U : E, V : F>`.
   No single member can be derived for a non-uniform bound.
 
+## No supertype (lower) bounds
+
+Every bound above is an **upper** bound: it constrains the concrete type to be a
+*subtype* of the bound. There is no *lower* bound — no way to say "`S` must be a
+**supertype** of `X`" (Scala's `[S >: T]`). A `<S : super E>` clause is a **parse
+error**, by design ([ADR-0022](../adr/0022-bounds-are-upper-only.md)).
+
+This matters for one shape: a **widening** operation on a covariant collection —
+a `reduce` / `fold`-to-supertype whose accumulator/result `S` may be *wider* than
+the element (the first element seeds the accumulator, so the element must be
+assignable to it). Express it as a **static** generic with a **sibling upper
+bound**, where the element parameter `T` is bounded above by the accumulator `S`:
+
+```php
+final class Reducing {
+    // T : S — the element is a subtype of the accumulator S (so S is a supertype of T).
+    public static function reduceOrNull<S, T : S>(Closure(S $acc, T $x): S $op, T ...$items): ?S
+    { $a = null; foreach ($items as $i) { $a = $a === null ? $i : $op($a, $i); } return $a; }
+}
+class Product {}
+class Book extends Product {}
+
+// Accumulate Books into a Product accumulator — the widening `T : S` expresses.
+Reducing::reduceOrNull::<Product, Book>(fn(Product $a, Book $x): Product => $a, new Book());  // ✓
+// T = Product is not a subtype of S = Book — rejected (xphp.bound_violation):
+Reducing::reduceOrNull::<Book, Product>(fn(Book $a, Product $x): Book => $a, new Product());  // ✗
+```
+
+Because both `S` and `T` are free type parameters, the ordinary upper bound
+`T : S` carries the whole widening relationship — the same way Kotlin types its
+`reduce` (`<S, T : S>`), just as a static helper rather than an extension method.
+The one thing this can't do is live as a *fluent member* of a fixed-element
+`List<out E>`: there is no free `T` to bound against the class's `E`, so a member
+would need a lower bound (`<S : super E>`), which xphp does not have. Making that
+widening operation a member (`$list->reduceOrNull::<Product>(…)`) is a roadmap
+possibility, not a current feature — see [ADR-0022](../adr/0022-bounds-are-upper-only.md)
+and the roadmap [Discovery → type system breadth](../roadmap.md#type-system-breadth).
+
 ## Caveats
 
 - > ⚠️ Bounds aren't checked across trait `use` boundaries — if a

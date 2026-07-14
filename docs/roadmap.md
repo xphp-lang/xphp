@@ -81,6 +81,7 @@ timeline
                 : Discriminated unions
                 : Generic enums and sum types
                 : Variadic type parameters
+                : Supertype lower bounds
                 : Per-arg specialization
         Ecosystem
                 : Live transpilation via stream wrapper
@@ -321,6 +322,14 @@ Gaps in already-shipped generics, deferred rather than designed out:
 - Discriminated unions with exhaustiveness checks.
 - Generic enums / sum types (Option of T, Result of T E).
 - Variadic type parameters.
+- **Supertype (lower) bounds** on a type parameter (`<S : super E>`, Scala's
+  `[S >: T]`): let a *widening* operation — a `reduce` / `fold`-to-supertype on a
+  covariant collection — be a fluent member (`$list->reduceOrNull::<Product>(…)`)
+  instead of the static sibling-bound helper (`<S, T : S>`) that expresses the same
+  capability today. The gap is member ergonomics only; bounds are otherwise
+  upper-only by design — see
+  [ADR-0022](./adr/0022-bounds-are-upper-only.md) and
+  [type bounds → no supertype bounds](./syntax/type-bounds.md#no-supertype-lower-bounds).
 - Per-arg specialization (different body when T = int).
 
 ### Ecosystem
