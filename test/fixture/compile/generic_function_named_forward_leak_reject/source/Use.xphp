@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A named generic free function forwarded a type argument grounded only by an enclosing
+// function type parameter: `identity::<T>($v)` depends on `wrap`'s `T`, which is not
+// concrete here. The named-call turbofish is not specialized (its args are non-concrete),
+// so the emitted `wrap_T_<hash>` calls `identity()` with the type parameter still leaked.
+// Rejected by the emitted-marker backstop before that fatal-able code is written.
+function identity<U>(U $x): U
+{
+    return $x;
+}
+
+function wrap<T>(T $v): T
+{
+    return identity::<T>($v);
+}
+
+wrap::<int>(3);

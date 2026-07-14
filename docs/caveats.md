@@ -762,9 +762,11 @@ so the growing type is never reached through an unbounded chain.
 ## Generic turbofish grounded by an enclosing type parameter
 
 A turbofish whose type argument is supplied by an **enclosing** generic scope — a
-function type parameter or a class type parameter — cannot yet be specialized. All
-three shapes below are rejected with a loud compile error rather than emitted as
-runtime-fatal code; each may be lifted in a future version.
+function type parameter or a class type parameter — cannot yet be specialized. Every
+such shape is rejected with a loud compile error rather than emitted as runtime-fatal
+code; the representative cases below are not exhaustive (a named free-function forward
+grounded by an enclosing parameter, `return identity::<T>($v)` inside `wrap<T>`, is the
+same class of shape and rejected the same way). Each may be lifted in a future version.
 
 ### ❌ What doesn't work
 
@@ -823,6 +825,15 @@ closure form is caught at the source seam in both `xphp check` and `xphp compile
 caught by a compile-time backstop over the emitted output
 (`xphp.unspecialized_generic_leak`). Grounding these shapes so they *run* is tracked
 for a later release; today the guarantee is only that they never miscompile silently.
+
+**`xphp check` catches only the closure form.** The two shapes that surface at code
+generation (`outer`, `Box::make`, and the named free-function forward above) are caught
+by the emit-time backstop, which `xphp check` does not run — it validates without
+emitting. So `check` reports **zero** diagnostics for those, while `compile` rejects
+them loudly. A CI pipeline that gates on `xphp compile` (or runs it after `check`) is
+fully covered; one that gates on `xphp check` alone will see green on code that
+`compile` will reject. This is a completeness gap in `check`, never a runtime-safety
+hole: no fatal-able code is ever emitted.
 
 ### ✅ Workaround
 

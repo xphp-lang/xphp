@@ -53,4 +53,21 @@ final class GenericMarkerLeakIntegrationTest extends TestCase
             'generic-class-method-turbofish-leak',
         );
     }
+
+    #[RunInSeparateProcess]
+    public function testNamedFreeFunctionForwardGroundedByEnclosingParamIsRejected(): void
+    {
+        // A named generic free function forwarded a non-concrete type argument from an
+        // enclosing function parameter (`identity::<T>($v)` inside `wrap<T>`). The named-call
+        // turbofish is not a variable turbofish, so it slips past the source seam and reaches
+        // emit as an appended `wrap_T_<hash>` with the marker still present — caught by the
+        // backstop. Same class of shape as the concrete-inner-turbofish case.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_named_forward_leak_reject/source',
+            'generic-function-named-forward-leak',
+        );
+    }
 }
