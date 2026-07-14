@@ -40,7 +40,7 @@ final class SpecializerMethodGenericArgsTest extends TestCase
 
         $specialized = (new Specializer())->specializeFunction(
             $template,
-            ['S' => new TypeRef('int', [], isScalar: true)],
+            Substitution::of(['S' => new TypeRef('int', [], isScalar: true)]),
             'relay_T_int',
         );
 
@@ -70,7 +70,7 @@ final class SpecializerMethodGenericArgsTest extends TestCase
 
         $specialized = (new Specializer())->specializeFunction(
             $template,
-            ['S' => new TypeRef('string', [], isScalar: true)],
+            Substitution::of(['S' => new TypeRef('string', [], isScalar: true)]),
             'keep_T_string',
         );
 

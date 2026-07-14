@@ -184,7 +184,7 @@ final class EnclosingBoundErasureTest extends TestCase
     public function testMangleArgsKeysOnTheBoundsConcreteValue(): void
     {
         $fruit = new TypeRef('App\\Fruit');
-        $classConcrete = ['E' => $fruit];
+        $classConcrete = Substitution::of(['E' => $fruit]);
 
         // <U : E> → [Fruit]
         $u = new TypeParam('U', new BoundLeaf(new TypeRef('E', isTypeParam: true)));
@@ -201,7 +201,7 @@ final class EnclosingBoundErasureTest extends TestCase
         // multi-class-param: <U : V> on Map keyed on V's concrete.
         $banana = new TypeRef('App\\Banana');
         $uv = new TypeParam('U', new BoundLeaf(new TypeRef('V', isTypeParam: true)));
-        self::assertEquals([$banana], EnclosingBoundErasure::mangleArgs([$uv], ['K' => new TypeRef('App\\Key'), 'V' => $banana]));
+        self::assertEquals([$banana], EnclosingBoundErasure::mangleArgs([$uv], Substitution::of(['K' => new TypeRef('App\\Key'), 'V' => $banana])));
     }
 
     public function testRefTreeHasBoundedDirectly(): void

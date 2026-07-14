@@ -1269,14 +1269,14 @@ final class GenericMethodCompiler
                     // method-type arguments — a sig leaf referencing a class parameter stays
                     // abstract ⇒ gradual, matching how bounds degrade here.
                     if ($this->closureValidator !== null) {
-                        $subst = [];
+                        $overlay = [];
                         foreach ($params as $i => $param) {
-                            $subst[$param->name] = $args[$i];
+                            $overlay[$param->name] = $args[$i];
                         }
                         $this->closureValidator->checkCallArguments(
                             array_values($template->params),
                             $node->args,
-                            $subst,
+                            Substitution::of($overlay),
                             $this->nsContext,
                             $this->currentFile,
                             $this->diagnostics,
@@ -1289,11 +1289,11 @@ final class GenericMethodCompiler
                 // inherit the single specialization; dedup by the declaring FQN.
                 $generatedKey = $declaringFqn . '::' . $mangled;
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
-                    $substitution = [];
+                    $overlay = [];
                     foreach ($params as $i => $param) {
-                        $substitution[$param->name] = $args[$i];
+                        $overlay[$param->name] = $args[$i];
                     }
-                    $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
+                    $specialized = (new Specializer())->specializeMethod($template, Substitution::of($overlay), $mangled);
                     $owner = $this->classByFqn[$declaringFqn] ?? null;
                     if ($owner !== null) {
                         // Buffer the append (see rewriteFuncCall for the rationale).
@@ -1437,10 +1437,12 @@ final class GenericMethodCompiler
                     // `<U:E>` methods are still argument-checked, and outside the alreadyGenerated
                     // dedup so every call site is checked — not only the one that specializes.
                     if ($this->closureValidator !== null) {
-                        $subst = $this->classSubstitutionFor($classFqn, $receiverArgs, $declaringFqn);
+                        $overlay = [];
                         foreach ($params as $i => $param) {
-                            $subst[$param->name] = $args[$i];
+                            $overlay[$param->name] = $args[$i];
                         }
+                        $subst = $this->classSubstitutionFor($classFqn, $receiverArgs, $declaringFqn)
+                            ->withOverrides(Substitution::of($overlay));
                         $this->closureValidator->checkCallArguments(
                             array_values($template->params),
                             $node->args,
@@ -1463,7 +1465,7 @@ final class GenericMethodCompiler
                         $classParamNames = array_map(static fn (TypeParam $p): string => $p->name, $classParams);
                         if (EnclosingBoundErasure::isErasable($template, $params, $classParamNames)) {
                             $classConcrete = $this->classSubstitutionFor($classFqn, $receiverArgs, $declaringFqn);
-                            if ($classConcrete !== []) {
+                            if (!$classConcrete->isEmpty()) {
                                 $erased = self::mangleName(
                                     $methodName,
                                     EnclosingBoundErasure::mangleArgs($params, $classConcrete),
@@ -1483,11 +1485,11 @@ final class GenericMethodCompiler
                 // copy. Keying by receiver would append a duplicate per subclass.
                 $generatedKey = $declaringFqn . '::' . $mangled;
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
-                    $substitution = [];
+                    $overlay = [];
                     foreach ($params as $i => $param) {
-                        $substitution[$param->name] = $args[$i];
+                        $overlay[$param->name] = $args[$i];
                     }
-                    $specialized = (new Specializer())->specializeMethod($template, $substitution, $mangled);
+                    $specialized = (new Specializer())->specializeMethod($template, Substitution::of($overlay), $mangled);
                     $owner = $this->classByFqn[$declaringFqn] ?? null;
                     if ($owner !== null) {
                         $this->pendingAppends[] = [$owner, $specialized];
@@ -1619,7 +1621,7 @@ final class GenericMethodCompiler
                 $this->closureValidator->checkCallArguments(
                     array_values($method->params),
                     $node->args,
-                    [],
+                    Substitution::empty(),
                     $this->nsContext,
                     $this->currentFile,
                     $this->diagnostics,
@@ -1654,7 +1656,7 @@ final class GenericMethodCompiler
                 $this->closureValidator->checkCallArguments(
                     array_values($fn->params),
                     $node->args,
-                    [],
+                    Substitution::empty(),
                     $this->nsContext,
                     $this->currentFile,
                     $this->diagnostics,
@@ -2060,7 +2062,7 @@ final class GenericMethodCompiler
                 // receiver yields `Box<Fruit>`. A concrete return parameterisation has no class-param
                 // leaves, so the substitution is a no-op for it.
                 $classSubst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
-                if ($classSubst !== []) {
+                if (!$classSubst->isEmpty()) {
                     $returnArgs = array_map(
                         static fn (TypeRef $arg): TypeRef => Specializer::substituteTypeRef($arg, $classSubst),
                         $returnArgs,
@@ -2110,13 +2112,15 @@ final class GenericMethodCompiler
                 string $context,
                 SourceLocation $location,
             ): array {
-                $subst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
+                $classSubst = $this->classSubstitutionFor($receiverFqn, $receiverArgs, $declaringFqn);
                 // Method-own params shadow class params of the same name, so they are layered last.
+                $overlay = [];
                 foreach ($params as $i => $param) {
                     if (isset($methodArgs[$i])) {
-                        $subst[$param->name] = $methodArgs[$i];
+                        $overlay[$param->name] = $methodArgs[$i];
                     }
                 }
+                $subst = $classSubst->withOverrides(Substitution::of($overlay));
 
                 $checked = [];
                 foreach ($params as $param) {
@@ -2187,33 +2191,33 @@ final class GenericMethodCompiler
             }
 
             /**
-             * The declaring-class-parameter => receiver-argument substitution, or `[]` when the
+             * The declaring-class-parameter => receiver-argument substitution, or the empty
+             * substitution when the
              * receiver's arguments can't be threaded to the declaring class (no hierarchy, an
              * unreachable/ambiguous chain, an arity mismatch, or a missing declaring class).
              *
              * @param list<TypeRef> $receiverArgs
-             * @return array<string, TypeRef>
              */
-            private function classSubstitutionFor(string $receiverFqn, array $receiverArgs, string $declaringFqn): array
+            private function classSubstitutionFor(string $receiverFqn, array $receiverArgs, string $declaringFqn): Substitution
             {
                 if ($this->hierarchy === null) {
-                    return [];
+                    return Substitution::empty();
                 }
                 $declArgs = $this->hierarchy->resolveInheritedArgs($receiverFqn, $receiverArgs, $declaringFqn);
                 if ($declArgs === null) {
-                    return [];
+                    return Substitution::empty();
                 }
                 $owner = $this->classByFqn[$declaringFqn] ?? null;
                 $params = $owner?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
                 if (!is_array($params) || count($params) !== count($declArgs)) {
-                    return [];
+                    return Substitution::empty();
                 }
                 /** @var list<TypeParam> $params */
                 $subst = [];
                 foreach ($params as $i => $param) {
                     $subst[$param->name] = $declArgs[$i];
                 }
-                return $subst;
+                return Substitution::of($subst);
             }
 
             /**
@@ -2328,14 +2332,14 @@ final class GenericMethodCompiler
                     // function has no enclosing class, so the substitution carries only its own
                     // (already-concrete) method type arguments.
                     if ($this->closureValidator !== null) {
-                        $subst = [];
+                        $overlay = [];
                         foreach ($params as $i => $param) {
-                            $subst[$param->name] = $args[$i];
+                            $overlay[$param->name] = $args[$i];
                         }
                         $this->closureValidator->checkCallArguments(
                             array_values($template->params),
                             $node->args,
-                            $subst,
+                            Substitution::of($overlay),
                             $this->nsContext,
                             $this->currentFile,
                             $this->diagnostics,
@@ -2351,11 +2355,11 @@ final class GenericMethodCompiler
                 $generatedKey = 'fn::' . $mangledFqn;
 
                 if (!isset($this->alreadyGenerated[$generatedKey])) {
-                    $substitution = [];
+                    $overlay = [];
                     foreach ($params as $i => $param) {
-                        $substitution[$param->name] = $args[$i];
+                        $overlay[$param->name] = $args[$i];
                     }
-                    $specialized = (new Specializer())->specializeFunction($template, $substitution, $mangled);
+                    $specialized = (new Specializer())->specializeFunction($template, Substitution::of($overlay), $mangled);
                     $namespaceNode = $this->functionNamespaceByFqn[$fqn] ?? null;
                     if ($namespaceNode !== null) {
                         // Buffer the append — modifying $namespaceNode->stmts mid-traversal

@@ -44,7 +44,7 @@ use PhpParser\NodeVisitorAbstract;
 final class Specializer
 {
     /**
-     * @param array<string, TypeRef> $substitution Type-param name → concrete TypeRef.
+     * @param Substitution $substitution Type-param name → concrete TypeRef.
      *
      * Type parameters in every position — including constructor parameters — are
      * substituted to their *concrete* type; nothing is erased. PHP exempts
@@ -63,7 +63,7 @@ final class Specializer
      * The cloned class's `name` is intentionally NOT set here — SpecializedClassGenerator::emit
      * is the single source of truth for the final shortname (derived from the generated FQCN).
      */
-    public function specialize(ClassLike $template, array $substitution, int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH): ClassLike
+    public function specialize(ClassLike $template, Substitution $substitution, int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH): ClassLike
     {
         $originalTemplateFqn = $template->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
 
@@ -142,12 +142,12 @@ final class Specializer
      * non-method statements pass through unchanged.
      *
      * @param array<\PhpParser\Node\Stmt> $stmts
-     * @param array<string, TypeRef> $classConcrete class-parameter name → concrete TypeRef
+     * @param Substitution $classConcrete class-parameter name → concrete TypeRef
      * @return list<\PhpParser\Node\Stmt>
      */
-    private function lowerErasableMethods(array $stmts, array $classConcrete, int $hashLength): array
+    private function lowerErasableMethods(array $stmts, Substitution $classConcrete, int $hashLength): array
     {
-        $classParamNames = array_keys($classConcrete);
+        $classParamNames = $classConcrete->names();
 
         // First pass: every erasable method's E-mangled name. Used to rewrite `$this->m::<...>()`
         // self-calls between erasable methods to the same names the call sites produce.
@@ -188,20 +188,21 @@ final class Specializer
      * `$this->m::<...>()` self-call to a fellow erasable method to that method's E-mangled name.
      *
      * @param list<TypeParam> $methodParams
-     * @param array<string, TypeRef> $classConcrete
+     * @param Substitution $classConcrete
      * @param array<string, string> $erasedNames  erasable method name → its E-mangled name
      */
-    private function eraseMethod(ClassMethod $method, array $methodParams, array $classConcrete, string $mangled, array $erasedNames): ClassMethod
+    private function eraseMethod(ClassMethod $method, array $methodParams, Substitution $classConcrete, string $mangled, array $erasedNames): ClassMethod
     {
-        $subst = $classConcrete;
+        $overlay = [];
         foreach ($methodParams as $param) {
             // @infection-ignore-all — invariantly true: isErasable guarantees every method parameter
             // is a single-leaf enclosing-class bound, so `$param->bound` IS a BoundLeaf and its
             // referent IS a key of $classConcrete. The guard is defensive against a non-erasable call.
-            if ($param->bound instanceof BoundLeaf && isset($classConcrete[$param->bound->type->name])) {
-                $subst[$param->name] = $classConcrete[$param->bound->type->name];
+            if ($param->bound instanceof BoundLeaf && ($concrete = $classConcrete->get($param->bound->type->name)) !== null) {
+                $overlay[$param->name] = $concrete;
             }
         }
+        $subst = $classConcrete->withOverrides(Substitution::of($overlay));
 
         $lowered = $this->specializeMethod($method, $subst, $mangled);
         self::rewriteErasableSelfCalls($lowered, $erasedNames);
@@ -264,9 +265,9 @@ final class Specializer
      * hashing scheme stays in one place — Specializer is dumb about the naming
      * convention.
      *
-     * @param array<string, TypeRef> $substitution
+     * @param Substitution $substitution
      */
-    public function specializeMethod(ClassMethod $template, array $substitution, string $mangledName): ClassMethod
+    public function specializeMethod(ClassMethod $template, Substitution $substitution, string $mangledName): ClassMethod
     {
         /** @var ClassMethod $cloned */
         $cloned = self::deepClone($template);
@@ -282,9 +283,9 @@ final class Specializer
      * Specialize a free generic function. Same substitution shape as specializeMethod;
      * the only difference is the AST node kind (Function_ vs ClassMethod).
      *
-     * @param array<string, TypeRef> $substitution
+     * @param Substitution $substitution
      */
-    public function specializeFunction(Function_ $template, array $substitution, string $mangledName): Function_
+    public function specializeFunction(Function_ $template, Substitution $substitution, string $mangledName): Function_
     {
         /** @var Function_ $cloned */
         $cloned = self::deepClone($template);
@@ -299,9 +300,9 @@ final class Specializer
     /**
      * Run the shared substitution visitor over a cloned template. Mutates `$cloned` in place.
      *
-     * @param array<string, TypeRef> $substitution
+     * @param Substitution $substitution
      */
-    private static function runSubstitutingVisitor(Node $cloned, array $substitution): void
+    private static function runSubstitutingVisitor(Node $cloned, Substitution $substitution): void
     {
         $traverser = new NodeTraverser();
         $traverser->addVisitor(self::buildSubstitutingVisitor($substitution));
@@ -318,13 +319,13 @@ final class Specializer
      *    `Box<T>` inside `class Wrapper<T> { ... }` (or `function wrap<T>(...): Box<T>`)
      *    end up as `Box<int>` after specialization, ready for the call-site rewriter.
      *
-     * @param array<string, TypeRef> $substitution
+     * @param Substitution $substitution
      */
-    private static function buildSubstitutingVisitor(array $substitution): NodeVisitorAbstract
+    private static function buildSubstitutingVisitor(Substitution $substitution): NodeVisitorAbstract
     {
         return new class($substitution) extends NodeVisitorAbstract {
-            /** @param array<string, TypeRef> $substitution */
-            public function __construct(private array $substitution)
+            /** @param Substitution $substitution */
+            public function __construct(private Substitution $substitution)
             {
             }
 
@@ -381,8 +382,7 @@ final class Specializer
                     // wrong signatures (`namespace\Thing $x` becoming `int $x`).
                     if (!$node->isFullyQualified() && !$node->isRelative()) {
                         $parts = $node->getParts();
-                        if (count($parts) === 1 && isset($this->substitution[$parts[0]])) {
-                            $concrete = $this->substitution[$parts[0]];
+                        if (count($parts) === 1 && ($concrete = $this->substitution->get($parts[0])) !== null) {
                             return Specializer::typeRefToNode($concrete, $node->getAttributes());
                         }
                     }
@@ -463,12 +463,12 @@ final class Specializer
      * Public for the same reason as `typeRefToNode` — the anonymous-class visitor
      * calls back into Specializer to avoid duplicating the logic.
      *
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
-    public static function substituteTypeRef(TypeRef $ref, array $subst): TypeRef
+    public static function substituteTypeRef(TypeRef $ref, Substitution $subst): TypeRef
     {
-        if ($ref->isTypeParam && isset($subst[$ref->name])) {
-            return $subst[$ref->name];
+        if ($ref->isTypeParam && ($t = $subst->get($ref->name)) !== null) {
+            return $t;
         }
         if ($ref->args === []) {
             return $ref;
@@ -490,9 +490,9 @@ final class Specializer
      * Public for the same reason as {@see substituteTypeRef} — the shared
      * anonymous-class visitor calls back into Specializer.
      *
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
-    public static function substituteClosureSignature(ClosureSignature $sig, array $subst): ClosureSignature
+    public static function substituteClosureSignature(ClosureSignature $sig, Substitution $subst): ClosureSignature
     {
         $params = array_map(
             static fn (ClosureSignatureParam $p): ClosureSignatureParam => new ClosureSignatureParam(
@@ -509,9 +509,9 @@ final class Specializer
     }
 
     /**
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
-    private static function substituteSigType(SigType $type, array $subst): SigType
+    private static function substituteSigType(SigType $type, Substitution $subst): SigType
     {
         if ($type instanceof SigTypeRef) {
             return new SigTypeRef(self::substituteTypeRef($type->type, $subst));
@@ -545,9 +545,9 @@ final class Specializer
      * target that was already decided pre-specialization. The grounded conformance
      * pass rechecks only the former, so it does not duplicate the latter's diagnostic.
      *
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
-    public static function closureSignatureGroundsAny(ClosureSignature $sig, array $subst): bool
+    public static function closureSignatureGroundsAny(ClosureSignature $sig, Substitution $subst): bool
     {
         foreach ($sig->params as $p) {
             if (self::sigTypeGroundsAny($p->type, $subst)) {
@@ -558,12 +558,12 @@ final class Specializer
     }
 
     /**
-     * @param array<string, TypeRef> $subst
+     * @param Substitution $subst
      */
-    private static function sigTypeGroundsAny(SigType $type, array $subst): bool
+    private static function sigTypeGroundsAny(SigType $type, Substitution $subst): bool
     {
         if ($type instanceof SigTypeRef) {
-            return $type->type->isTypeParam && isset($subst[$type->type->name]);
+            return $type->type->isTypeParam && $subst->has($type->type->name);
         }
         if ($type instanceof SigClosure) {
             return self::closureSignatureGroundsAny($type->signature, $subst);

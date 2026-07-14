@@ -147,7 +147,7 @@ final class ClosureCallArgumentConformanceTest extends TestCase
 
         $validator = new ClosureConformanceValidator(TypeHierarchy::fromAstPerFile(['test.xphp' => $ast]));
         $diagnostics = new DiagnosticCollector();
-        $validator->checkCallArguments($params, $this->callArgs($ast), [], new NamespaceContext(), 'test.xphp', $diagnostics);
+        $validator->checkCallArguments($params, $this->callArgs($ast), Substitution::empty(), new NamespaceContext(), 'test.xphp', $diagnostics);
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(self::PREFIX . 'parameter 1: string is not wider than int', $diagnostics->all()[0]->message);
@@ -246,7 +246,7 @@ final class ClosureCallArgumentConformanceTest extends TestCase
         $validator->checkCallArguments(
             $this->calleeParams($ast),
             $this->callArgs($ast),
-            $subst,
+            Substitution::of($subst),
             new NamespaceContext(),
             'test.xphp',
             $diagnostics,

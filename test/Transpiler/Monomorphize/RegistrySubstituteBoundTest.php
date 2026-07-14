@@ -17,7 +17,7 @@ final class RegistrySubstituteBoundTest extends TestCase
     /** @param array<string, TypeRef> $subst */
     private static function ground(BoundExpr $bound, array $subst): BoundExpr
     {
-        return Registry::substituteBound($bound, $subst);
+        return Registry::substituteBound($bound, Substitution::of($subst));
     }
 
     public function testLeafTypeParamIsGroundedToConcrete(): void

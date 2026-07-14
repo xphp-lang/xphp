@@ -344,7 +344,7 @@ final readonly class Compiler
                     continue;
                 }
 
-                $substitution = array_combine($definition->typeParamNames(), $instantiation->concreteTypes);
+                $substitution = Substitution::fromNames($definition->typeParamNames(), $instantiation->concreteTypes);
                 if ($resilient) {
                     try {
                         $specialized = $this->specializer->specialize($definition->templateAst, $substitution, $this->hashLength);

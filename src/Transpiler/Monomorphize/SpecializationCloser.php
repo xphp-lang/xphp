@@ -272,10 +272,12 @@ final readonly class SpecializationCloser
                 sprintf('its body class "%s" can\'t be grounded against the upcast source', $declaringFqn),
             ));
         }
-        $subst = array_combine($declaringDef->typeParamNames(), $declaringConcrete);
+        $subst = Substitution::fromNames($declaringDef->typeParamNames(), $declaringConcrete);
+        $overlay = [];
         foreach ($declaringParams as $param) {
-            $subst[$param->name] = $superValue; // the bounded method param widens to the supertype arg
+            $overlay[$param->name] = $superValue; // the bounded method param widens to the supertype arg
         }
+        $subst = $subst->withOverrides(Substitution::of($overlay));
 
         $member = $this->specializer->specializeMethod($declaringMethod, $subst, $mangled);
         $upcastAst->stmts[] = $member;
@@ -458,7 +460,7 @@ final readonly class SpecializationCloser
         return [
             Registry::mangledMethodName(
                 $methodName,
-                EnclosingBoundErasure::mangleArgs($interfaceParams, [$boundReferent => $superValue]),
+                EnclosingBoundErasure::mangleArgs($interfaceParams, Substitution::of([$boundReferent => $superValue])),
                 $this->hashLength,
             ),
             $superValue,

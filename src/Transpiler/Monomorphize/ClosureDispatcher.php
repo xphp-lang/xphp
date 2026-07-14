@@ -183,7 +183,7 @@ final class ClosureDispatcher
             $substitution[$param->name] = $args[$i];
         }
 
-        $specialized = $this->specializer->specializeFunction($synthetic, $substitution, $mangled);
+        $specialized = $this->specializer->specializeFunction($synthetic, Substitution::of($substitution), $mangled);
 
         return [
             'function'   => $specialized,

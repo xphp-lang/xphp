@@ -188,15 +188,15 @@ final class EnclosingBoundErasure
      * they produce the byte-identical mangled name (`contains_T_<hash>`) — the cross-cutting invariant.
      *
      * @param list<TypeParam> $methodParams
-     * @param array<string, TypeRef> $classConcrete class-parameter name → its concrete TypeRef
+     * @param Substitution $classConcrete class-parameter name → its concrete TypeRef
      * @return list<TypeRef>
      */
-    public static function mangleArgs(array $methodParams, array $classConcrete): array
+    public static function mangleArgs(array $methodParams, Substitution $classConcrete): array
     {
         $out = [];
         foreach ($methodParams as $param) {
-            if ($param->bound instanceof BoundLeaf && isset($classConcrete[$param->bound->type->name])) {
-                $out[] = $classConcrete[$param->bound->type->name];
+            if ($param->bound instanceof BoundLeaf && ($concrete = $classConcrete->get($param->bound->type->name)) !== null) {
+                $out[] = $concrete;
             }
         }
         return $out;

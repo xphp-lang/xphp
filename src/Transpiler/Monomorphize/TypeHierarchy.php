@@ -280,10 +280,7 @@ final readonly class TypeHierarchy
         if (count($params) !== count($args)) {
             return; // arity mismatch (incl. a non-parameterized hop carrying args) — a gap.
         }
-        $subst = [];
-        foreach ($params as $i => $name) {
-            $subst[$name] = $args[$i];
-        }
+        $subst = Substitution::fromNames($params, $args);
         // @infection-ignore-all TrueValue -- the on-path guard keys on isset() (existence, not
         // value), so the assigned literal is immaterial; the cycle/expansive tests pin termination.
         $onPath[$fqn] = true;
