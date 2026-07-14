@@ -103,9 +103,12 @@ final class TemplateIndexTest extends TestCase
 
     public function testResolveFunctionDoesNotGlobalFallbackForAQualifiedName(): void
     {
-        // A bare global `thing` exists, but the call is `Sub\thing` — qualified names
-        // resolve their leading segment as a namespace and never take the global fallback.
-        $index = self::index(allFunctionsByFqn: ['thing' => new Function_('thing')]);
+        // A function is indexed under the exact `Sub\thing` key the fallback would use
+        // ($name->toString()) — so ONLY the qualified-name guard keeps this unresolved.
+        // A qualified name resolves its leading segment as a namespace (here `App\Sub\thing`,
+        // which is absent) and must never take the global fallback. Drop the guard and this
+        // call would wrongly return the function.
+        $index = self::index(allFunctionsByFqn: ['Sub\\thing' => new Function_('thing')]);
         $ctx = new NamespaceContext();
         $ctx->enterNamespace('App');
 
