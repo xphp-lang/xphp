@@ -2259,18 +2259,41 @@ final class GenericMethodCompiler
                     return null;
                 }
                 if ($isVarTurbofish && $args !== [] && !self::allConcrete($args)) {
-                    // The author DID write a turbofish for this template — its
-                    // args just aren't concrete at this point (`$f::<T>($v)`
-                    // inside a still-abstract enclosing template). Mark it
-                    // attempted so the unspecialized-closure orphan check does
-                    // not misdiagnose it as never-called; how such a call
-                    // grounds when the enclosing template specializes is that
-                    // pipeline's own (tracked, pre-existing) concern.
+                    // The author DID write a turbofish for this template, but its type
+                    // arguments are not concrete here (`$inner::<S>($v)` where `S` is grounded
+                    // only by a still-abstract enclosing template). The variable-turbofish
+                    // dispatcher can ground only concrete arguments, so this site cannot be
+                    // specialized: the closure's type-parameter hints would reach the emitted
+                    // code as references to non-existent classes and fatal on invocation. Reject
+                    // it loudly in BOTH modes (the compile-only emitted-marker backstop is the
+                    // last-resort net for the shapes that never reach this branch — e.g. a
+                    // *concrete* inner turbofish inside a generic function). Still mark the
+                    // template attempted so the orphan check does not additionally misdiagnose
+                    // it as never-called (a double report for the same template).
                     $template = $this->currentScopeClosureTemplates[$node->name->name] ?? null;
                     if ($template !== null) {
                         $this->attemptedClosureTemplates[spl_object_id($template)] = true;
                     }
-                    return null;
+                    $message = sprintf(
+                        'Generic closure call `$%s::<%s>(...)` cannot be specialized: its type '
+                        . 'argument(s) are grounded only by an enclosing generic scope and are not '
+                        . 'concrete here, so the closure\'s type-parameter hints would reach the '
+                        . 'emitted code as references to non-existent classes. Call it with an '
+                        . 'explicit concrete turbofish, or restructure so the closure is not '
+                        . 'grounded by an enclosing type parameter.',
+                        $node->name->name,
+                        self::formatArgList($args),
+                    );
+                    if ($this->diagnostics !== null) {
+                        $this->diagnostics->add(new Diagnostic(
+                            Severity::Error,
+                            GenericMethodCompiler::CODE_UNSPECIALIZED_GENERIC_CLOSURE,
+                            $message,
+                            new SourceLocation($this->currentFile, $node->getStartLine()),
+                        ));
+                        return null;
+                    }
+                    throw new RuntimeException($message);
                 }
                 // Variable turbofish `$var::<T>(...)` / `$var::<>(...)`:
                 // dispatched to a separate path that looks up the variable's

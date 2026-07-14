@@ -217,6 +217,30 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         }
     }
 
+    public function testGenericClosureGroundedByEnclosingParamIsRejected(): void
+    {
+        // A generic closure whose turbofish is grounded only by an enclosing FUNCTION type
+        // parameter (`$inner::<S>` inside `relay<S>`): the type argument `S` is not concrete
+        // at the call site, so the dispatcher cannot ground it. Emitted, it would keep
+        // `fn(I $x): I` naming the non-existent class `App\I` and fatal on invocation. It is
+        // rejected loudly at the source seam (both check and compile) instead.
+        $dir = $this->mkdir('disp-enclosing-param');
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        function relay<S>(S $v): S { $inner = fn<I>(I $x): I => $x; return $inner::<S>($v); }
+        relay::<int>(3);
+        PHP);
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('cannot be specialized');
+            $this->compile($dir);
+        } finally {
+            $this->rrmdir(dirname($dir));
+        }
+    }
+
     public function testNestedScopeCallsShareDispatcher(): void
     {
         // The SAME `$pair` template is called twice: once in main scope,

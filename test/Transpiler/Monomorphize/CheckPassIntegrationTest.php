@@ -143,6 +143,21 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame(12, $d->location->line);
     }
 
+    public function testEnclosingParamGroundedGenericClosureIsCollectedByCheck(): void
+    {
+        // Parity with compile (which throws): a generic closure grounded only by an enclosing
+        // function type parameter (`$inner::<S>` inside `relay<S>`) cannot be specialized. Check
+        // must collect it as `xphp.unspecialized_generic_closure`, not silently accept — a silent
+        // accept would let a runtime-fatal shape through the validate-only gate.
+        $diagnostics = $this->check('enclosing_param_closure_reject');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(GenericMethodCompiler::CODE_UNSPECIALIZED_GENERIC_CLOSURE, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+    }
+
     public function testMissingTypeArgumentIsCollectedByCheck(): void
     {
         $diagnostics = $this->check('missing_arg');

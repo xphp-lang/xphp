@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A generic closure grounded only by an enclosing function type parameter: `$inner::<S>`
+// depends on `relay`'s `S`, which is not concrete at the call site. `check` must collect
+// the same rejection `compile` throws — it cannot be grounded, so its type-parameter hints
+// would reach emitted code as references to the non-existent class `App\I`.
+function relay<S>(S $v): S
+{
+    $inner = fn<I>(I $x): I => $x;
+    return $inner::<S>($v);
+}
+
+relay::<int>(3);
