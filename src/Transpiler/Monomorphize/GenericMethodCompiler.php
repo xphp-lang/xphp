@@ -248,10 +248,8 @@ final class GenericMethodCompiler
 
         // Strip the original method templates from their owning classes.
         foreach ($methodTemplates as $key => $template) {
-            // @infection-ignore-all — explode limit 2 vs 3: the key never contains
-            // more than one `::` so the third capture would be empty in either case.
-            [$classFqn, $methodName] = explode('::', $key, 2);
-            $class = $classByFqn[$classFqn] ?? null;
+            $parsed = MethodKey::parse($key);
+            $class = $classByFqn[$parsed->classFqn] ?? null;
             if ($class === null) {
                 continue;
             }
@@ -259,7 +257,7 @@ final class GenericMethodCompiler
             // it into a concrete `contains_T_<hash>(E)` member per instantiation. The generic class is
             // lowered to a marker interface in the user file, so the kept template never reaches output.
             if (!self::isErasableMethodOnClass($template, $class)) {
-                $this->stripMethod($class, $methodName);
+                $this->stripMethod($class, $parsed->method);
             }
         }
 
@@ -329,7 +327,7 @@ final class GenericMethodCompiler
                 if ($node instanceof ClassMethod) {
                     $params = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                     if (is_array($params) && $params !== [] && $this->currentClassFqn !== null) {
-                        $key = $this->currentClassFqn . '::' . $node->name->toString();
+                        $key = (string) new MethodKey($this->currentClassFqn, $node->name->toString());
                         $this->methodTemplates[$key] = $node;
                     }
                 }

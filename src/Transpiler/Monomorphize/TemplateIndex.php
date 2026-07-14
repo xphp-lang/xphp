@@ -41,7 +41,7 @@ final readonly class TemplateIndex
     /** The generic-method template for `$classFqn::$method`, or null when none is indexed. */
     public function methodTemplate(string $classFqn, string $method): ?ClassMethod
     {
-        return $this->methodTemplates[$classFqn . '::' . $method] ?? null;
+        return $this->methodTemplates[(string) new MethodKey($classFqn, $method)] ?? null;
     }
 
     /** The class-like declaration for `$fqn`, or null when it isn't indexed. */
