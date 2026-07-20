@@ -7,11 +7,19 @@
 # targets here.
 
 .PHONY: test/unit
-# Default runtime is PHP 8.4 (composer requires ^8.4). Tests exercising
-# newer-PHP syntax are tagged `@group php85` and excluded here; they run
-# on an 8.5 runtime via `make test/unit/php85`.
+# Default runtime is PHP 8.4 (composer requires ^8.4). Two groups are excluded
+# here: `php85` (newer-PHP syntax; runs on 8.5 via `make test/unit/php85`) and
+# `phpstan` (the `xphp check` PHPStan pass, which shells out to a real phpstan
+# subprocess and is slow; runs via `make test/phpstan-pass`).
 test/unit:
-	php vendor/bin/phpunit --exclude-group php85
+	php vendor/bin/phpunit --exclude-group php85 --exclude-group phpstan
+
+.PHONY: test/phpstan-pass
+# The `xphp check` PHPStan-integration tests (tagged `@group phpstan`). They
+# shell out to the consumer's phpstan binary and self-skip when vendor/bin/phpstan
+# is absent. NOTE: distinct from `lint/phpstan`, which runs PHPStan over src/.
+test/phpstan-pass:
+	php vendor/bin/phpunit --group phpstan
 
 .PHONY: test/unit/php85
 # Runs only the PHP 8.5-specific syntax tests (e.g. the pipe operator).
@@ -34,6 +42,15 @@ lint/phpstan:
 # repo is stable enough that no new test gaps are expected.
 test/mutation:
 	php -d memory_limit=-1 vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
+
+.PHONY: test/check
+# End-to-end self-test of the `check` gate: runs the real bin/xphp binary
+# against the check fixtures and asserts the 0/1/2 exit contract plus that the
+# text/json/github renderers all emit. Reused by release.yml against the built
+# PHAR (override XPHP_BIN="php dist/xphp.phar"). Complements the in-process
+# CheckCommandTest, which can't observe the shipped binary's process exit code.
+test/check:
+	sh test/smoke/check.sh
 
 # Humbug Box is the standard tool for compiling a Composer-managed
 # PHP project into a single self-contained PHAR.  Pinned to a known-

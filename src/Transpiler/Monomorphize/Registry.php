@@ -14,9 +14,21 @@ use PhpParser\Node\NullableType;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\UnionType;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\Diagnostics\SourceLocation;
 
 final class Registry
 {
+    /** Stable diagnostic codes (machine identifiers tooling can match on). */
+    public const CODE_BOUND_VIOLATION = 'xphp.bound_violation';
+    public const CODE_MISSING_TYPE_ARGUMENT = 'xphp.missing_type_argument';
+    public const CODE_TOO_MANY_TYPE_ARGUMENTS = 'xphp.too_many_type_arguments';
+    public const CODE_DEFAULT_BOUND_VIOLATION = 'xphp.default_bound_violation';
+    public const CODE_UNDEFINED_TEMPLATE = 'xphp.undefined_template';
+    public const CODE_VARIANCE_EDGE_UNPROVABLE = 'xphp.variance_edge_unprovable';
+
     /**
      * All specialized classes live under this namespace prefix; the full target FQCN
      * mirrors the original template's namespace and ends with a hash-based class name.
@@ -36,12 +48,49 @@ final class Registry
     /** @var array<string, GenericDefinition> Keyed by template FQN. */
     private array $definitions = [];
 
+    /**
+     * FQNs that also have a NON-generic class/interface/trait declaration (a plain `class B {}`
+     * alongside a generic `class B<T> {}`, e.g. in mutually exclusive conditional branches). A
+     * bare `new B` on such a name resolves to the plain class at runtime, so the bare-new guard
+     * must NOT reject it. Keyed by the namespace-normalized FQN (no leading `\`); value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $nonGenericClassNames = [];
+
+    /**
+     * FQNs of free functions defined in the compilation unit, keyed by the FULLY lowercased
+     * FQN (PHP function names — and namespace segments — are case-insensitive). Drives the
+     * re-qualification of unqualified free-function calls in relocated generic template bodies:
+     * a call is fully-qualified only when its resolved target is known here, so builtins and any
+     * name the unit does not define keep PHP's global fallback. Value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $functionNames = [];
+
+    /**
+     * FQNs of free constants defined in the compilation unit, keyed with the namespace portion
+     * lowercased and the const short-name preserved (const names are case-sensitive; namespaces
+     * are not). Same role as {@see $functionNames} for `ConstFetch` names. Value always true.
+     *
+     * @var array<string, true>
+     */
+    private array $constNames = [];
+
     /** @var array<string, GenericInstantiation> Keyed by full generated FQCN. */
     private array $instantiations = [];
 
+    /**
+     * @param ?DiagnosticCollector $diagnostics When null (the default, used by `xphp compile`),
+     *   validation failures throw as before — byte-identical behavior. When provided (by
+     *   `xphp check`), bound violations are appended to the collector and recording continues,
+     *   so every error of the validation phase is reported in one run.
+     */
     public function __construct(
         private readonly int $hashLength = self::DEFAULT_HASH_HEX_LENGTH,
         private readonly ?TypeHierarchy $hierarchy = null,
+        private readonly ?DiagnosticCollector $diagnostics = null,
     ) {
         self::validateHashLength($this->hashLength);
     }
@@ -57,6 +106,11 @@ final class Registry
         string $sourceFile,
     ): void {
         if (isset($this->definitions[$templateFqn])) {
+            // NB: cross-file duplicate class templates are filtered out earlier by
+            // RegistryCollector's `!isAlreadyRecorded()` guard, so this throw is only
+            // reachable via the generic-function path. Surfacing duplicate definitions in
+            // `xphp check` would require reworking that guard (and would change compile-mode
+            // semantics), so it is intentionally NOT part of the collector seam — deferred.
             throw new RuntimeException(sprintf(
                 'Generic template "%s" already declared (in %s); duplicate declaration in %s.',
                 $templateFqn,
@@ -87,18 +141,25 @@ final class Registry
      * generated FQCN, throws with a self-contained error message explaining how to raise XPHP_HASH_LENGTH.
      *
      * @param list<TypeRef> $args
+     * @param ?SourceLocation $callSite The `.xphp` position of the instantiation site, used to
+     *   locate a bound-violation diagnostic in check-mode. Nested sub-instantiations inherit the
+     *   enclosing site (they have no distinct source token). Ignored in throw-mode.
      */
-    public function recordInstantiation(string $templateFqn, array $args): GenericInstantiation
-    {
-        $args = $this->padWithDefaults($templateFqn, $args);
+    public function recordInstantiation(
+        string $templateFqn,
+        array $args,
+        ?SourceLocation $callSite = null,
+    ): GenericInstantiation {
+        $args = $this->padWithDefaults($templateFqn, $args, $callSite);
 
         foreach ($args as $arg) {
             if ($arg->isGeneric()) {
-                $this->recordInstantiation($arg->name, $arg->args);
+                $this->recordInstantiation($arg->name, $arg->args, $callSite);
             }
         }
 
-        $this->validateBounds($templateFqn, $args);
+        $this->validateBounds($templateFqn, $args, $callSite);
+        $this->validateVarianceEdgeProvability($templateFqn, $args, $callSite);
 
         $generatedFqn = self::generatedFqn($templateFqn, $args, $this->hashLength);
         $template = ltrim($templateFqn, '\\');
@@ -137,7 +198,7 @@ final class Registry
      * @param list<TypeRef> $args
      * @return list<TypeRef>
      */
-    private function padWithDefaults(string $templateFqn, array $args): array
+    private function padWithDefaults(string $templateFqn, array $args, ?SourceLocation $callSite = null): array
     {
         $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
         if ($definition === null) {
@@ -147,6 +208,101 @@ final class Registry
             $definition->typeParams,
             $args,
             ltrim($templateFqn, '\\'),
+            $this->diagnostics,
+            $callSite,
+        );
+    }
+
+    /**
+     * Record that `$fqn` has a non-generic class/interface/trait declaration. See
+     * {@see $nonGenericClassNames}. `$fqn` is already namespace-normalized (no leading `\`) by
+     * every caller, and is looked up verbatim in {@see reportMissingTypeArgumentsForBareNew}.
+     */
+    public function recordNonGenericClass(string $fqn): void
+    {
+        $this->nonGenericClassNames[$fqn] = true;
+    }
+
+    /**
+     * Record a free function defined in the compilation unit. `$fqn` is namespace-normalized
+     * (no leading `\`). Keyed case-insensitively (function + namespace names).
+     */
+    public function recordFunction(string $fqn): void
+    {
+        $this->functionNames[strtolower($fqn)] = true;
+    }
+
+    /** Whether the unit defines a free function with this (namespace-normalized) FQN. */
+    public function hasFunction(string $fqn): bool
+    {
+        // Value-check (not isset): so a mutated `recordFunction` storing a non-true value is caught.
+        return ($this->functionNames[strtolower($fqn)] ?? false) === true;
+    }
+
+    /**
+     * Record a free constant defined in the compilation unit. `$fqn` is namespace-normalized
+     * (no leading `\`). Keyed with a case-insensitive namespace and a case-sensitive short name.
+     */
+    public function recordConst(string $fqn): void
+    {
+        $this->constNames[self::constKey($fqn)] = true;
+    }
+
+    /** Whether the unit defines a free constant with this (namespace-normalized) FQN. */
+    public function hasConst(string $fqn): bool
+    {
+        // Value-check (not isset): so a mutated `recordConst` storing a non-true value is caught.
+        return ($this->constNames[self::constKey($fqn)] ?? false) === true;
+    }
+
+    /**
+     * @infection-ignore-all — constKey is a symmetric key-derivation used by BOTH recordConst and
+     * hasConst, so any structural mutation (substr bounds, concat order/removal) transforms every
+     * key uniformly and preserves the exact membership + case relationships the behavioral tests
+     * assert (namespace-insensitive, short-name-sensitive) — the mutants are equivalent. The
+     * SEMANTIC contract is pinned by RegistryTest::testConstMembershipHasCaseInsensitiveNamespace…
+     * (the `strtolower` itself is a plain call, not mutated here).
+     */
+    private static function constKey(string $fqn): string
+    {
+        $pos = strrpos($fqn, '\\');
+        // A global const (no namespace) is keyed by its case-sensitive short name alone.
+        return $pos === false
+            ? $fqn
+            : strtolower(substr($fqn, 0, $pos)) . substr($fqn, $pos);
+    }
+
+    /**
+     * Report a bare `new` of a generic template that supplies no type arguments and cannot pad
+     * entirely from defaults (some parameter is required). Routes through the canonical
+     * `padArgsWithDefaults`, so the code (`xphp.missing_type_argument`), message, and
+     * throw-vs-collect duality match the function/method call path exactly. The padded result is
+     * discarded — a bare `new` of a non-all-defaults generic is a hard error, not an instantiation,
+     * so nothing is recorded (recording the partial tuple would store a bogus specialization and
+     * draw spurious secondary diagnostics). A no-op when the template isn't recorded, or when a
+     * non-generic class of the same name also exists (the bare `new` resolves to that at runtime).
+     *
+     * `$templateFqn` is the resolveName-normalized name (no leading `\`), matching the keys of both
+     * `$definitions` and `$nonGenericClassNames`.
+     */
+    public function reportMissingTypeArgumentsForBareNew(string $templateFqn, ?SourceLocation $callSite): void
+    {
+        $definition = $this->definitions[$templateFqn] ?? null;
+        if ($definition === null) {
+            return;
+        }
+        // A plain class of the same name also exists (conditional same-name declaration): the bare
+        // `new` resolves to the instantiable class at runtime, so rejecting it would be a false
+        // reject. The generic twin is emitted as a marker interface; the plain class is what runs.
+        if (($this->nonGenericClassNames[$templateFqn] ?? false) === true) {
+            return;
+        }
+        self::padArgsWithDefaults(
+            $definition->typeParams,
+            [],
+            $templateFqn,
+            $this->diagnostics,
+            $callSite,
         );
     }
 
@@ -158,9 +314,10 @@ final class Registry
      * templates) so the padding semantics stay identical regardless of
      * the call-site shape.
      *
-     * Throws when a non-defaulted param is missing and there are fewer
-     * supplied args than required. Returns `$args` unchanged when the
-     * supplied count already matches or exceeds the param count.
+     * When `$diagnostics` is null (compile, and every `GenericMethodCompiler` call) a missing
+     * non-defaulted param throws as before. With a collector (check) it appends a Diagnostic and
+     * returns the partial padding gathered so far, so the run continues to surface other errors.
+     * Returns `$args` unchanged when the supplied count already matches or exceeds the param count.
      *
      * @param list<TypeParam> $params
      * @param list<TypeRef> $args
@@ -170,33 +327,91 @@ final class Registry
         array $params,
         array $args,
         string $templateLabel,
+        ?DiagnosticCollector $diagnostics = null,
+        ?SourceLocation $callSite = null,
     ): array {
         $supplied = count($args);
         $needed = count($params);
-        if ($supplied >= $needed) {
+        if ($supplied > $needed) {
+            // Over-arity: more type arguments than the template declares. Reported
+            // instead of silently truncating the extras. Returning $args unchanged
+            // lets the downstream arity guards skip specialization for this instantiation.
+            $message = self::tooManyTypeArgumentsMessage($templateLabel, $supplied, $needed);
+            if ($diagnostics !== null) {
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_TOO_MANY_TYPE_ARGUMENTS,
+                    $message,
+                    $callSite,
+                ));
+
+                return $args;
+            }
+            throw new RuntimeException($message);
+        }
+        if ($supplied === $needed) {
             return $args;
         }
 
         $padded = $args;
         for ($i = $supplied; $i < $needed; $i++) {
             if ($params[$i]->default === null) {
-                throw new RuntimeException(sprintf(
-                    'Generic template "%s" was instantiated with %d type argument(s) '
-                    . 'but parameter `%s` (position %d) has no default; supply it '
-                    . 'explicitly or add defaults to every preceding required parameter.',
-                    $templateLabel,
-                    $supplied,
-                    $params[$i]->name,
-                    $i + 1,
-                ));
+                $message = self::missingTypeArgumentMessage($templateLabel, $supplied, $params[$i]->name, $i + 1);
+                if ($diagnostics !== null) {
+                    $diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        self::CODE_MISSING_TYPE_ARGUMENT,
+                        $message,
+                        $callSite,
+                    ));
+
+                    return $padded;
+                }
+                throw new RuntimeException($message);
             }
             $subst = [];
             foreach ($padded as $j => $concrete) {
                 $subst[$params[$j]->name] = $concrete;
             }
-            $padded[] = Specializer::substituteTypeRef($params[$i]->default, $subst);
+            $padded[] = Specializer::substituteTypeRef($params[$i]->default, Substitution::of($subst));
         }
         return $padded;
+    }
+
+    /**
+     * Single source of truth for the too-many-type-arguments message.
+     */
+    private static function tooManyTypeArgumentsMessage(
+        string $templateLabel,
+        int $supplied,
+        int $needed,
+    ): string {
+        return sprintf(
+            'Generic template "%s" declares %d type parameter(s) but was instantiated with %d type argument(s); remove the extra argument(s).',
+            $templateLabel,
+            $needed,
+            $supplied,
+        );
+    }
+
+    /**
+     * Single source of truth for the missing-required-type-argument message.
+     */
+    private static function missingTypeArgumentMessage(
+        string $templateLabel,
+        int $supplied,
+        string $paramName,
+        int $position,
+    ): string {
+        return sprintf(
+            'Generic template "%s" was instantiated with %d type argument(s) '
+            . 'but parameter `%s` (position %d) has no default; supply it '
+            . 'explicitly or add defaults to every preceding required parameter.',
+            $templateLabel,
+            $supplied,
+            $paramName,
+            $position,
+        );
     }
 
     /**
@@ -223,6 +438,15 @@ final class Registry
                 if (!$param->default->isConcrete()) {
                     continue;
                 }
+                // A bound that references a sibling type parameter (`U : T`) can't be validated at
+                // declaration time -- the sibling is abstract here. It is grounded and checked at
+                // instantiation (validateBounds substitutes the concrete sibling arg), so defer it.
+                // (A template that is never instantiated therefore never checks such a default; that
+                // is inherent -- you can't prove `default <: T` without a concrete `T` -- and admits
+                // no unsafe instantiation, since every actual use is checked.)
+                if (self::boundReferencesSiblingParam($param->bound)) {
+                    continue;
+                }
                 $verdict = self::evaluateBound(
                     $param->bound,
                     $param->default,
@@ -241,354 +465,158 @@ final class Registry
                         . 'it satisfies "%s".',
                         $boundDisplay,
                     );
-                throw new RuntimeException(sprintf(
-                    "Default for generic parameter `%s` of \"%s\" violates the parameter's bound.\n"
-                    . "  bound:   %s\n"
-                    . "  default: %s\n"
-                    . "  reason:  %s",
+                $message = self::defaultBoundViolationMessage(
                     $param->name,
                     $definition->templateFqn,
                     $boundDisplay,
                     $defaultDisplay,
                     $reason,
+                );
+                if ($this->diagnostics !== null) {
+                    $this->diagnostics->add(new Diagnostic(
+                        Severity::Error,
+                        self::CODE_DEFAULT_BOUND_VIOLATION,
+                        $message,
+                        new SourceLocation($definition->sourceFile, $definition->templateAst->getStartLine()),
+                    ));
+                    continue;
+                }
+                throw new RuntimeException($message);
+            }
+        }
+    }
+
+    /**
+     * Report every recorded instantiation whose template was never defined. In `xphp compile`
+     * this surfaces as a thrown error inside the specialization loop; `xphp check` doesn't run
+     * that loop, so it detects the same condition here by comparing recorded instantiations
+     * against the definition set. No source location is attached — the instantiation does not
+     * retain its call site — but the message names the template and its generated FQCN.
+     */
+    public function collectUndefinedTemplates(DiagnosticCollector $diagnostics): void
+    {
+        foreach ($this->instantiations as $generatedFqn => $instantiation) {
+            if (!isset($this->definitions[$instantiation->templateFqn])) {
+                $diagnostics->add(new Diagnostic(
+                    Severity::Error,
+                    self::CODE_UNDEFINED_TEMPLATE,
+                    self::undefinedTemplateMessage($instantiation->templateFqn, $generatedFqn),
                 ));
             }
         }
     }
 
     /**
-     * Inner-template variance composition pass. Runs after `collectDefinitions`
-     * but before `collectInstantiations`, so every template's variance markers
-     * are known and a bad declaration fails before any padded instantiation
-     * amplifies the error.
+     * Single source of truth for the "instantiated but never defined" message, shared by the
+     * compile-time throw (Compiler) and the check-time diagnostic.
+     */
+    public static function undefinedTemplateMessage(string $templateFqn, string $generatedFqn): string
+    {
+        return sprintf(
+            'Generic template "%s" was instantiated but never defined (generated as: %s).',
+            $templateFqn,
+            $generatedFqn,
+        );
+    }
+
+    /**
+     * Single source of truth for the default-violates-bound message.
+     */
+    private static function defaultBoundViolationMessage(
+        string $paramName,
+        string $templateFqn,
+        string $boundDisplay,
+        string $defaultDisplay,
+        string $reason,
+    ): string {
+        return sprintf(
+            "Default for generic parameter `%s` of \"%s\" violates the parameter's bound.\n"
+            . "  bound:   %s\n"
+            . "  default: %s\n"
+            . "  reason:  %s",
+            $paramName,
+            $templateFqn,
+            $boundDisplay,
+            $defaultDisplay,
+            $reason,
+        );
+    }
+
+    /**
+     * Variance-position check over every collected definition (moved out of the parser so
+     * `xphp check` can collect all violations across files in one run). Delegates to
+     * {@see VariancePositionValidator}: with this Registry's collector it gathers diagnostics
+     * at each offending member; without one (compile) it throws the first violation.
      *
-     * The parse-time validator at `VariancePositionValidator` already rejects
-     * direct misuses like `class P<+T> { function f(T $x): void }` (T as param
-     * with covariance). It also recurses into `xphp:genericArgs` but propagates
-     * the SAME outer allowed-list -- which is wrong: when T appears as the i-th
-     * arg of an inner template `Container<X>` whose X is invariant, T's
-     * effective position is *invariant* regardless of the outer position.
+     * @return list<string> Template FQNs that had at least one position violation, so the
+     *   inner-variance pass can skip them (the issue is already reported) — mirroring
+     *   compile-mode, where the position check fails fast before inner-variance runs.
+     */
+    public function validateVariancePositions(): array
+    {
+        $flagged = [];
+        foreach ($this->definitions as $templateFqn => $definition) {
+            $hadViolation = VariancePositionValidator::assertPositions(
+                $definition->templateAst,
+                $definition->typeParams,
+                $this->diagnostics,
+                $definition->sourceFile,
+            );
+            if ($hadViolation) {
+                $flagged[] = $templateFqn;
+            }
+        }
+
+        return $flagged;
+    }
+
+    /**
+     * Undeclared-type check over every collected definition (delegates to
+     * {@see UndeclaredTypeParameterValidator}): a generic member naming a type
+     * that is neither a declared type parameter nor a known type — e.g. the `T`
+     * in `interface Foo<Z> { add(T $x): void; }`. With this Registry's collector
+     * it gathers every finding (each at the offending member); without one
+     * (compile) it throws the first. Skipped when no hierarchy was attached
+     * (bare-Registry tests have nothing to resolve names against).
+     */
+    public function validateUndeclaredTypeParameters(): void
+    {
+        if ($this->hierarchy === null) {
+            return;
+        }
+
+        foreach ($this->definitions as $templateFqn => $definition) {
+            UndeclaredTypeParameterValidator::assert(
+                $definition->templateAst,
+                $definition->typeParams,
+                $templateFqn,
+                $this->hierarchy,
+                $this->diagnostics,
+                $definition->sourceFile,
+            );
+        }
+    }
+
+    /**
+     * Inner-template variance composition check over every collected definition (delegates to
+     * {@see InnerVarianceValidator}). With this Registry's collector it gathers every violation
+     * (each located at the offending member); without one (compile) it throws the first.
      *
-     * This pass tightens the verdict whenever the inner template is in the
-     * registry, applying the composition rule:
-     *
-     *   compose(V_outer_position, V_inner_slot):
-     *     V_inner == Invariant     -> Invariant      (inner forces strict)
-     *     V_inner == Covariant     -> V_outer        (transparent)
-     *     V_inner == Contravariant -> flip(V_outer)  (covariant <-> contravariant)
-     *
-     * The leaf check is "T's declared variance must be in the allowed-list for
-     * the effective position":
-     *
-     *   allowed_for(Invariant)     = {Invariant}
-     *   allowed_for(Covariant)     = {Invariant, Covariant}
-     *   allowed_for(Contravariant) = {Invariant, Contravariant}
-     *
-     * Conservative-unknown: when the inner template isn't in the registry
-     * (vendor classes, in-progress files), treat its slots as Invariant.
-     * Sound (rejects more than necessary); users with vendor templates can
-     * either register them or remove variance markers on the outer template.
-     *
-     * @infection-ignore-all -- surviving mutants in this method, the walkers,
-     *  and assertLeaf are all semantic equivalents:
-     *    - `strtolower((string) $method->name)` -- PHP method names are
-     *      case-insensitive at dispatch, but PhpParser stores them as
-     *      written. No fixture uses an uppercased `__CONSTRUCT`, so the
-     *      `strtolower` mutator survives without observable difference.
-     *    - Fall-through `return` removals on `Identifier`, post-`Name`,
-     *      post-`NullableType` -- the next branch checks `instanceof X` and
-     *      fails for the prior type, so removing the `return` is a no-op.
-     *    - `$x?->prop ?? $default` -- PHP 8.4's `??` suppresses property-on-null
-     *      errors, so the NullSafe mutator (`?->` -> `->`) is observably
-     *      identical to the original.
-     *    - InstanceOf_ / LogicalOr swaps on `Union||Intersection` -- both
-     *      `->types`/`->operands` branches walk the same way; for inputs
-     *      that aren't either, the prior `Name`/`BoundLeaf` branches already
-     *      returned.
-     *    - LogicalAnd in `$ref->isTypeParam && isset($map[$ref->name])` --
-     *      no fixture creates a stray type-param ref outside the variance
-     *      map, so the OR variant produces the same accept/reject decision.
-     *    - MatchArmRemoval on `Variance::Invariant => ''` in the sigil
-     *      builder -- Invariant declared never reaches the throw (Invariant
-     *      passes every allowed-list), so the arm is observably unreachable.
+     * Runs on every definition: this composing pass and {@see validateVariancePositions} own disjoint
+     * responsibilities — the position pass reports DIRECT occurrences of a variant type-param, this one
+     * the type-constructor-NESTED occurrences (composing the inner slot's variance) — so there is no
+     * double-reporting and no template to skip.
      */
     public function validateInnerVariance(): void
     {
         foreach ($this->definitions as $definition) {
-            $varianceMap = self::buildVarianceMap($definition->typeParams);
-            if ($varianceMap === []) {
-                continue;
-            }
-            $label = $definition->templateShortName;
-            foreach ($definition->templateAst->getMethods() as $method) {
-                $isCtor = strtolower((string) $method->name) === '__construct';
-                foreach ($method->params as $param) {
-                    // Constructor params (promoted or not) get Invariant outer
-                    // position -- PHP's class-compat rules enforce invariance on
-                    // ctor signatures regardless of param flavor. `getProperties()`
-                    // below skips promoted ones (they're `Param`, not `Property`),
-                    // so each promoted property is walked exactly once.
-                    $outerPos = $isCtor ? Variance::Invariant : Variance::Contravariant;
-                    if ($param->type !== null) {
-                        $this->walkPhpType($param->type, $varianceMap, $outerPos, $label, null, null);
-                    }
-                }
-                if ($method->returnType !== null) {
-                    $this->walkPhpType(
-                        $method->returnType,
-                        $varianceMap,
-                        Variance::Covariant,
-                        $label,
-                        null,
-                        null,
-                    );
-                }
-            }
-            foreach ($definition->templateAst->getProperties() as $prop) {
-                if ($prop->type !== null) {
-                    $this->walkPhpType(
-                        $prop->type,
-                        $varianceMap,
-                        Variance::Invariant,
-                        $label,
-                        null,
-                        null,
-                    );
-                }
-            }
-            foreach ($definition->typeParams as $typeParam) {
-                if ($typeParam->bound !== null) {
-                    $this->walkBoundExpr($typeParam->bound, $varianceMap, $label);
-                }
-                if ($typeParam->default !== null) {
-                    $this->walkTypeRef(
-                        $typeParam->default,
-                        $varianceMap,
-                        Variance::Invariant,
-                        $label,
-                        null,
-                        null,
-                    );
-                }
-            }
-        }
-    }
-
-    /**
-     * @param list<TypeParam> $typeParams
-     * @return array<string, Variance>
-     *
-     * @infection-ignore-all -- FalseValue mutator on `$hasVariance = false`
-     * is observably identical: for all-Invariant templates, walking is a
-     * no-op (Invariant is allowed at every effective position), so the
-     * "skip the walk" optimization isn't testable.
-     */
-    private static function buildVarianceMap(array $typeParams): array
-    {
-        $hasVariance = false;
-        $map = [];
-        foreach ($typeParams as $tp) {
-            $map[$tp->name] = $tp->variance;
-            if ($tp->variance !== Variance::Invariant) {
-                $hasVariance = true;
-            }
-        }
-        return $hasVariance ? $map : [];
-    }
-
-    /**
-     * @param array<string, Variance> $varianceMap
-     *
-     * @infection-ignore-all -- see `validateInnerVariance` docblock for the
-     * catalog of semantic-equivalent mutants in this walker (fall-through
-     * returns, `??`-suppressed null-safe ops, Union/Intersection swaps).
-     */
-    private function walkPhpType(
-        Node $type,
-        array $varianceMap,
-        Variance $position,
-        string $outerLabel,
-        ?string $innerLabel,
-        ?int $innerSlot,
-    ): void {
-        if ($type instanceof Identifier) {
-            return;
-        }
-        if ($type instanceof Name) {
-            $parts = $type->getParts();
-            if (count($parts) === 1 && isset($varianceMap[$parts[0]])) {
-                self::assertLeaf(
-                    $parts[0],
-                    $varianceMap[$parts[0]],
-                    $position,
-                    $outerLabel,
-                    $innerLabel,
-                    $innerSlot,
-                );
-            }
-            $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
-            if (is_array($args)) {
-                $innerFqn = $type->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-                $innerDef = is_string($innerFqn)
-                    ? ($this->definitions[ltrim($innerFqn, '\\')] ?? null)
-                    : null;
-                $nextInnerLabel = $innerDef !== null ? $innerDef->templateShortName : $type->toString();
-                foreach ($args as $i => $arg) {
-                    if (!$arg instanceof TypeRef) {
-                        continue;
-                    }
-                    $slotVariance = $innerDef?->typeParams[$i]->variance ?? Variance::Invariant;
-                    $this->walkTypeRef(
-                        $arg,
-                        $varianceMap,
-                        self::compose($position, $slotVariance),
-                        $outerLabel,
-                        $nextInnerLabel,
-                        $i,
-                    );
-                }
-            }
-            return;
-        }
-        if ($type instanceof NullableType) {
-            $this->walkPhpType($type->type, $varianceMap, $position, $outerLabel, $innerLabel, $innerSlot);
-            return;
-        }
-        if ($type instanceof UnionType || $type instanceof IntersectionType) {
-            foreach ($type->types as $sub) {
-                $this->walkPhpType($sub, $varianceMap, $position, $outerLabel, $innerLabel, $innerSlot);
-            }
-            return;
-        }
-        if ($type instanceof ComplexType) {
-            return;
-        }
-    }
-
-    /**
-     * @param array<string, Variance> $varianceMap
-     *
-     * @infection-ignore-all -- same equivalence rationale as `walkPhpType`.
-     */
-    private function walkTypeRef(
-        TypeRef $ref,
-        array $varianceMap,
-        Variance $position,
-        string $outerLabel,
-        ?string $innerLabel,
-        ?int $innerSlot,
-    ): void {
-        if ($ref->isScalar) {
-            return;
-        }
-        if ($ref->isTypeParam && isset($varianceMap[$ref->name])) {
-            self::assertLeaf(
-                $ref->name,
-                $varianceMap[$ref->name],
-                $position,
-                $outerLabel,
-                $innerLabel,
-                $innerSlot,
+            InnerVarianceValidator::assertComposition(
+                $definition,
+                $this->definitions,
+                $this->diagnostics,
+                $definition->sourceFile,
             );
         }
-        if ($ref->args === []) {
-            return;
-        }
-        $innerDef = $this->definitions[ltrim($ref->name, '\\')] ?? null;
-        $nextInnerLabel = $innerDef !== null ? $innerDef->templateShortName : $ref->name;
-        foreach ($ref->args as $i => $sub) {
-            $slotVariance = $innerDef?->typeParams[$i]->variance ?? Variance::Invariant;
-            $this->walkTypeRef(
-                $sub,
-                $varianceMap,
-                self::compose($position, $slotVariance),
-                $outerLabel,
-                $nextInnerLabel,
-                $i,
-            );
-        }
-    }
-
-    /**
-     * @param array<string, Variance> $varianceMap
-     *
-     * @infection-ignore-all -- BoundUnion / BoundIntersection share the same
-     * `operands` walk; the InstanceOf_ / LogicalOr mutants on the discriminator
-     * are observably identical for any non-Leaf bound expression.
-     */
-    private function walkBoundExpr(
-        BoundExpr $expr,
-        array $varianceMap,
-        string $outerLabel,
-    ): void {
-        if ($expr instanceof BoundLeaf) {
-            $this->walkTypeRef(
-                $expr->type,
-                $varianceMap,
-                Variance::Invariant,
-                $outerLabel,
-                null,
-                null,
-            );
-            return;
-        }
-        if ($expr instanceof BoundUnion || $expr instanceof BoundIntersection) {
-            foreach ($expr->operands as $operand) {
-                $this->walkBoundExpr($operand, $varianceMap, $outerLabel);
-            }
-        }
-    }
-
-    private static function compose(Variance $position, Variance $innerSlot): Variance
-    {
-        return match ($innerSlot) {
-            Variance::Invariant     => Variance::Invariant,
-            Variance::Covariant     => $position,
-            Variance::Contravariant => match ($position) {
-                Variance::Covariant     => Variance::Contravariant,
-                Variance::Contravariant => Variance::Covariant,
-                Variance::Invariant     => Variance::Invariant,
-            },
-        };
-    }
-
-    /**
-     * @infection-ignore-all -- the `Variance::Invariant => ''` arm of the
-     * sigil-builder `match` is unreachable: Invariant declared variance
-     * passes every allowed-list, so this method early-returns before the
-     * sigil construction. MatchArmRemoval on that arm is observably
-     * identical.
-     */
-    private static function assertLeaf(
-        string $paramName,
-        Variance $declared,
-        Variance $effective,
-        string $outerLabel,
-        ?string $innerLabel,
-        ?int $innerSlot,
-    ): void {
-        $allowed = match ($effective) {
-            Variance::Invariant     => [Variance::Invariant],
-            Variance::Covariant     => [Variance::Invariant, Variance::Covariant],
-            Variance::Contravariant => [Variance::Invariant, Variance::Contravariant],
-        };
-        if (in_array($declared, $allowed, true)) {
-            return;
-        }
-        // $declared is Covariant or Contravariant at this point — the Invariant
-        // case passes every allowed-list and early-returns above.
-        $sigil = $declared === Variance::Covariant ? '+' : '-';
-        $where = $innerLabel !== null
-            ? sprintf(' (via slot %d of %s)', $innerSlot, $innerLabel)
-            : '';
-        throw new RuntimeException(sprintf(
-            'Variance violation in template %s: type-parameter %s%s appears in %s-only position%s.',
-            $outerLabel,
-            $sigil,
-            $paramName,
-            $effective->value,
-            $where,
-        ));
     }
 
     /**
@@ -609,7 +637,7 @@ final class Registry
      *
      * @param list<TypeRef> $args
      */
-    private function validateBounds(string $templateFqn, array $args): void
+    private function validateBounds(string $templateFqn, array $args, ?SourceLocation $callSite = null): void
     {
         if ($this->hierarchy === null) {
             return;
@@ -619,10 +647,104 @@ final class Registry
             return;
         }
         self::checkBounds(
-            $definition->typeParams,
+            self::groundSiblingBounds($definition->typeParams, $args),
             $args,
             $this->hierarchy,
             self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+            $this->diagnostics,
+            $callSite,
+        );
+    }
+
+    /**
+     * Warn (don't fail) when a variant template is instantiated over an element type the
+     * compiler can't see, so its covariant/contravariant `extends` edge is silently dropped.
+     *
+     * A covariant/contravariant `extends` edge between two specializations only emits when
+     * `TypeHierarchy::isSubtype` can *prove* the element relationship. When an element type is
+     * not in the `.xphp` source set and not a PHP built-in, that verdict is `null` and
+     * `VarianceEdgeEmitter` skips the edge — autoload-safe, but the author gets no signal and
+     * covariance degrades into a runtime `TypeError` far from the cause. The *bounds* path
+     * already rejects the same `null` verdict loudly; this mirrors that contract for variance
+     * with a non-failing Warning.
+     *
+     * Per-instantiation, single-endpoint: each unprovable element type is flagged at its own
+     * instantiation site, which collectively covers every unprovable edge while keeping the
+     * call-site location (a deferred pass would lose it — `GenericInstantiation` doesn't retain
+     * it). Leaf-only: a nested same-template generic arg (`Producer<Box<Book>>`) is covered when
+     * its own recursive instantiation is recorded above, where `Box`'s own `Book` arg is checked.
+     *
+     * A Warning only has a sink in check-mode (a collector is attached); `xphp compile` builds
+     * the Registry without one, and its edge-skipping output is unchanged. (Note: `CallSiteRewriter`
+     * re-records instantiations location-less in compile Phase 3 — harmless while compile has no
+     * sink; a future compile sink must account for it.)
+     *
+     * @param list<TypeRef> $args
+     */
+    private function validateVarianceEdgeProvability(string $templateFqn, array $args, ?SourceLocation $callSite = null): void
+    {
+        if ($this->hierarchy === null || $this->diagnostics === null) {
+            return;
+        }
+        $definition = $this->definitions[ltrim($templateFqn, '\\')] ?? null;
+        if ($definition === null || count($definition->typeParams) !== count($args)) {
+            return;
+        }
+        foreach ($definition->typeParams as $i => $param) {
+            // Only covariant/contravariant positions form `extends` edges; an invariant
+            // position requires identical args, so an unprovable type loses no edge there.
+            if ($param->variance === Variance::Invariant) {
+                continue;
+            }
+            $arg = $args[$i];
+            // Scalars and type-params never form class edges; a generic arg is leaf-only-deferred
+            // (its inner leaves are checked when its own instantiation is recorded).
+            if ($arg->isScalar || $arg->isTypeParam || $arg->isGeneric()) {
+                continue;
+            }
+            // A type known to the hierarchy (in-source or a PHP built-in) yields a provable
+            // true/false verdict — only the "not declared" case is the unprovable `null`.
+            if ($this->hierarchy->isDeclared($arg->name)) {
+                continue;
+            }
+            $this->diagnostics->add(new Diagnostic(
+                Severity::Warning,
+                self::CODE_VARIANCE_EDGE_UNPROVABLE,
+                self::varianceEdgeUnprovableMessage(
+                    self::formatInstantiation(ltrim($templateFqn, '\\'), $args),
+                    $param->name,
+                    $param->variance,
+                    $arg->toDisplayString(),
+                ),
+                $callSite,
+            ));
+        }
+    }
+
+    /**
+     * User-facing text for an unprovable variance edge. Mirrors the bounds "not in the source
+     * set … cannot prove" phrasing so the two read consistently; kept as its own builder because
+     * the variance message names the parameter's variance rather than a bound.
+     */
+    private static function varianceEdgeUnprovableMessage(
+        string $instantiationLabel,
+        string $paramName,
+        Variance $variance,
+        string $typeDisplay,
+    ): string {
+        $marker = $variance === Variance::Covariant ? 'out ' : 'in ';
+        return sprintf(
+            "Variance edge cannot be proven while instantiating %s.\n"
+            . "  type parameter %s%s is %s, but %s is not in the source set the hierarchy was built from (and is not a recognized PHP built-in),\n"
+            . "  so the compiler cannot prove its subtype edges — this specialization is not linked to related ones and the %s relationship silently does not apply at runtime.\n\n"
+            . "  Add %s to the source set the hierarchy is built from to enable the edge.",
+            $instantiationLabel,
+            $marker,
+            $paramName,
+            $variance->value,
+            $typeDisplay,
+            $variance->value,
+            $typeDisplay,
         );
     }
 
@@ -637,6 +759,11 @@ final class Registry
      * `$instantiationLabel` is the human-readable context string that opens the error
      * (e.g. `"App\Box<int>"` or `"App\Util::identity<int>"`).
      *
+     * When `$diagnostics` is null (the default — `xphp compile`, and every `GenericMethodCompiler`
+     * call site) a violation throws as before (byte-identical message). When a collector is
+     * supplied (`xphp check`), each violation is appended as a `Diagnostic` and the loop continues,
+     * so all violating parameters of one instantiation are reported in a single run.
+     *
      * @param list<TypeParam> $typeParams
      * @param list<TypeRef> $args
      */
@@ -645,9 +772,12 @@ final class Registry
         array $args,
         TypeHierarchy $hierarchy,
         string $instantiationLabel,
+        ?DiagnosticCollector $diagnostics = null,
+        ?SourceLocation $callSite = null,
     ): void {
-        // Arity mismatch is a different error class (caught upstream); skip silently here
-        // so that the existing pipeline can produce the more specific message.
+        // Arity mismatch is a different error class, reported upstream by
+        // padArgsWithDefaults (under-arity → missing-type-argument, over-arity →
+        // too-many-type-arguments); skip the bound check here for the partial tuple.
         if (count($typeParams) !== count($args)) {
             return;
         }
@@ -675,18 +805,126 @@ final class Registry
                     $concrete->toDisplayString(),
                     $boundDisplay,
                 );
-            throw new RuntimeException(sprintf(
-                "Generic bound violated while instantiating %s.\n"
-                . "  type parameter %s is bounded by %s\n"
-                . "  but the supplied concrete type is %s\n\n"
-                . "  %s",
+            $message = self::boundViolationMessage(
                 $instantiationLabel,
                 $param->name,
                 $boundDisplay,
                 $concrete->toDisplayString(),
                 $detail,
+            );
+            if ($diagnostics !== null) {
+                $diagnostics->add(new Diagnostic(Severity::Error, self::CODE_BOUND_VIOLATION, $message, $callSite));
+                continue;
+            }
+            throw new RuntimeException($message);
+        }
+    }
+
+    /**
+     * Build the user-facing bound-violation message. Single source of truth shared by the
+     * throw path (`xphp compile`) and the diagnostic path (`xphp check`) so the two can never
+     * drift — the exact text is pinned by `expectExceptionMessage` assertions.
+     */
+    private static function boundViolationMessage(
+        string $instantiationLabel,
+        string $paramName,
+        string $boundDisplay,
+        string $concreteDisplay,
+        string $detail,
+    ): string {
+        return sprintf(
+            "Generic bound violated while instantiating %s.\n"
+            . "  type parameter %s is bounded by %s\n"
+            . "  but the supplied concrete type is %s\n\n"
+            . "  %s",
+            $instantiationLabel,
+            $paramName,
+            $boundDisplay,
+            $concreteDisplay,
+            $detail,
+        );
+    }
+
+    /**
+     * Substitute type-param leaves inside a BoundExpr tree, returning a fresh tree.
+     *
+     * Grounds a method-generic bound that references an enclosing class type parameter
+     * (`<U : E>`) against the receiver's concrete type arguments before the bound is
+     * checked: each `BoundLeaf`'s `TypeRef` is rewritten via
+     * {@see Specializer::substituteTypeRef}, so a leaf `E` becomes the receiver's concrete
+     * `Product`, while a leaf the map does not mention is returned unchanged (and a leaf that
+     * stays a type-param signals an ungroundable bound to the caller). `Bound*` are immutable,
+     * so a fresh tree is built; the compound branches recurse so DNF shapes ground throughout.
+     *
+     * @param Substitution $subst
+     */
+    public static function substituteBound(BoundExpr $bound, Substitution $subst): BoundExpr
+    {
+        if ($bound instanceof BoundLeaf) {
+            return new BoundLeaf(Specializer::substituteTypeRef($bound->type, $subst));
+        }
+        if ($bound instanceof BoundIntersection) {
+            return new BoundIntersection(...array_map(
+                static fn (BoundExpr $op): BoundExpr => self::substituteBound($op, $subst),
+                $bound->operands,
             ));
         }
+        if ($bound instanceof BoundUnion) {
+            return new BoundUnion(...array_map(
+                static fn (BoundExpr $op): BoundExpr => self::substituteBound($op, $subst),
+                $bound->operands,
+            ));
+        }
+        // Defensive: BoundExpr is an abstract base and we own every subtype. Unreachable in
+        // any test, but keep the return shape consistent (mirrors evaluateBound).
+        return $bound;
+    }
+
+    /**
+     * Ground each type parameter's bound against the supplied (padded) args, so a bound that
+     * references a sibling parameter (`class Pair<T, U : T>`) is checked against the concrete arg,
+     * not the literal parameter name. Counts must match -- an arity mismatch is reported upstream
+     * (padArgsWithDefaults) and is left ungrounded so checkBounds early-returns on it.
+     *
+     * @param list<TypeParam> $params
+     * @param list<TypeRef> $args
+     * @return list<TypeParam>
+     */
+    private static function groundSiblingBounds(array $params, array $args): array
+    {
+        if (count($params) !== count($args)) {
+            return $params;
+        }
+        $subst = Substitution::fromParams($params, $args);
+
+        return array_map(
+            static fn (TypeParam $p): TypeParam => $p->bound === null
+                ? $p
+                : new TypeParam($p->name, self::substituteBound($p->bound, $subst), $p->default, $p->variance),
+            $params,
+        );
+    }
+
+    /**
+     * Whether the bound has a top-level leaf that is a bare type parameter (a sibling reference like
+     * `U : T`) -- which can only be checked once that parameter is bound. A leaf naming a real class
+     * with type-param ARGS (an F-bound `T : Comparable<T>`) is NOT such a reference: it is checked
+     * erased on the leaf name, so it stays a declaration-time check.
+     */
+    private static function boundReferencesSiblingParam(BoundExpr $bound): bool
+    {
+        if ($bound instanceof BoundLeaf) {
+            return $bound->type->isTypeParam;
+        }
+        if ($bound instanceof BoundIntersection || $bound instanceof BoundUnion) {
+            foreach ($bound->operands as $operand) {
+                if (self::boundReferencesSiblingParam($operand)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -745,8 +983,11 @@ final class Registry
      *   - Intersection    -> "A & B & C"
      *   - Union           -> "A | B | C"
      *   - DNF             -> "(A & B) | C"  (parens around inner intersections)
+     *
+     * Public so the method-generic compiler can render the same bound form in its
+     * "bound unprovable" diagnostic.
      */
-    private static function formatBound(BoundExpr $bound): string
+    public static function formatBound(BoundExpr $bound): string
     {
         if ($bound instanceof BoundLeaf) {
             return $bound->type->name;
@@ -924,6 +1165,18 @@ final class Registry
         self::validateHashLength($hashLength);
         $canonical = implode('|', array_map(static fn (TypeRef $r): string => $r->canonical(), $args));
         return substr(hash('sha256', $canonical), 0, $hashLength);
+    }
+
+    /**
+     * The single source of truth for a mangled generic-method name: `m_T_<canonicalHash(args)>`. The
+     * call site and the Specializer both build erased-method names through here so they agree byte for
+     * byte (the cross-cutting invariant that a rewritten call resolves to the emitted member).
+     *
+     * @param list<TypeRef> $args
+     */
+    public static function mangledMethodName(string $shortName, array $args, int $hashLength = self::DEFAULT_HASH_HEX_LENGTH): string
+    {
+        return $shortName . '_T_' . self::canonicalHash($args, $hashLength);
     }
 
     /**

@@ -143,6 +143,47 @@ compile. `dist/` holds your rewritten code; `.xphp-cache/Generated/`
 holds the specialized classes. Both can be gitignored and rebuilt
 in CI.
 
+For a real project — and **required** once you consume another package's
+generics — drop an `xphp.json` manifest at the project root instead of
+repeating the paths on every invocation:
+
+```json
+{
+  "sources": ["src"],
+  "include": ["vendor/**"],
+  "target": "dist",
+  "cache": ".xphp-cache"
+}
+```
+
+Then `compile`/`check` take no positional source — they resolve the
+manifest (auto-detected in the working directory, or via `--config`):
+
+```bash
+vendor/bin/xphp compile        # compiles this package + every included one
+vendor/bin/xphp check
+```
+
+`include` globs auto-discover installed xphp packages (`vendor/**` finds
+every one, at any depth, with no edit when you add another), so the
+downstream build compiles the whole union into its own output. See
+[Getting started](docs/getting-started.md#the-recommended-project-setup-an-xphpjson-manifest)
+for the distribution model. The single-directory form above keeps working
+unchanged.
+
+To validate generics without emitting anything — a CI gate that reports
+every bound/variance/etc. problem with a `file:line`:
+
+```bash
+vendor/bin/xphp check src            # exit 1 if any error; --format=text|json|github
+```
+
+`check` runs all of xphp's generic validation (the specialization-loop guards
+aside) and then, when those pass, runs **your** PHPStan over the compiled output
+and maps the findings back to the `.xphp` template — one config, one gate (pass
+`--no-phpstan` to skip it). You still run `compile` to emit the PHP. See
+[Errors and diagnostics](docs/errors.md#xphp-check--validate-without-emitting).
+
 ## See also
 
 - [Getting started](docs/getting-started.md) -- full walkthrough including PSR-4 details, runtime semantics, and what the generated PHP looks like

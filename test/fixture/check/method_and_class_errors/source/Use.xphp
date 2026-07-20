@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\MethodAndClass;
+
+// Method-level: int does not satisfy \Stringable.
+$r = needsStringable::<int>(1);

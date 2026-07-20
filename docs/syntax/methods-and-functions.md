@@ -75,22 +75,62 @@ swap_T_e5f3...(1, 'one');
 - Receiver-type analysis picks the right specialization when the
   receiver is `$this`, a typed param, a typed property, or a local
   `$x = new Foo()` assignment.
+- A generic method declared on a base class is callable through
+  inheritance — see below.
+
+## Inheritance
+
+A generic method declared on a base (or abstract) class is callable via
+turbofish on a **subclass** receiver, for instance, static, and nullsafe
+calls. Resolution walks the receiver's ancestor chain (nearest first), and
+the specialization is emitted **once** on the declaring class, so every
+subclass inherits the single body. A subclass that redeclares the method
+shadows the inherited one.
+
+```php
+abstract class AbstractCollection<T> {
+    // A generic helper shared by every concrete collection.
+    public function wrap<U>(U $value): U {
+        return $value;
+    }
+}
+class Collection<T> extends AbstractCollection<T> {}
+
+$c = new Collection::<int>();
+// `wrap` isn't declared on Collection — it resolves to
+// AbstractCollection::wrap, specialized once on the base and inherited:
+$s = $c->wrap::<string>('hi');
+```
+
+A turbofish call to a generic method that exists on neither the receiver
+nor any of its ancestors is a **compile-time error**
+([`xphp.unresolved_generic_call`](../errors.md#diagnostic-codes)), caught at
+build time instead of fataling at runtime with "Call to undefined method".
+
+> Resolution follows `extends`/`implements` ancestors. A generic method
+> reached only through a `use`d trait is not resolved through inheritance.
 
 ## Caveats
 
 - > ⚠️ Branching narrowing precision: if `$x` is reassigned inside a
-  branch and the arms disagree on the class, post-branch calls drop
-  to a non-specialized path rather than picking a possibly-wrong
-  class. See
+  branch and the arms disagree on the class, the receiver's type is
+  undetermined and a post-branch turbofish call is a compile error
+  (`xphp.undetermined_receiver`) rather than a silently de-specialized
+  call. See
   [caveats](../caveats.md#branching-narrowing-precision-loss).
 
-- > ⚠️ Receiver-type tracking only follows local-scope assignments
-  and parameter types. A `$this->prop` that flows through a getter
-  doesn't propagate its concrete class to later call sites.
+- > ⚠️ Receiver-type tracking follows declared parameter and property
+  types, `$this`, local `new` assignments, a value returned by a
+  **method** or chained call (`$x = $repo->get(); $x->m::<T>()`), and a
+  branch whose arms agree. A value from a **free function** (`$x = make()`)
+  isn't tracked — give such a local a typed parameter/property hop, or
+  the turbofish call fails as an undetermined receiver.
 
 ## See also
 
 - Test fixture: `test/fixture/compile/generic_method/`
 - Test fixture: `test/fixture/compile/generic_function/`
+- Test fixture: `test/fixture/compile/generic_method_through_inheritance/`
+- Test fixture: `test/fixture/compile/generic_static_method_through_inheritance/`
 - Related: [closures and arrows](closures-and-arrows.md),
   [turbofish](turbofish.md)

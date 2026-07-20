@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Positions;
+
+// An untyped closure-signature parameter — unsupported.
+function g(Closure($x): int $cb): void
+{
+}

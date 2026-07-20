@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// The covariant upcast: `probe` takes a `Collection<Product>`, but is called with a
+// `ListColl<Book>` (Book extends Product). The erased `contains_<Product>` declared (abstract) on
+// Collection<Product> must be implemented for ListColl<Book> — through the covariant chain, via an
+// AbstractColl<Product> specialization that is NEVER instantiated explicitly here.
+function probe(Collection<Product> $c): bool
+{
+    return $c->contains::<Product>(new Product());
+}
+
+$books = new ListColl::<Book>(new Book());
+$found = probe($books);

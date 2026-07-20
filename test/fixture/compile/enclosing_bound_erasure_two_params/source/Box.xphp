@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Box<out E>
+{
+    // Two enclosing-bounded method params: both erase to E; the member mangles on [E, E].
+    public function bothAreFruit<U : E, V : E>(U $a, V $b): bool
+    {
+        return $a instanceof Fruit && $b instanceof Fruit;
+    }
+}

@@ -23,8 +23,8 @@ namespace XPHP\Transpiler\Monomorphize;
  * type-param references in the default.
  *
  * `variance` controls whether subtype edges are emitted between specializations.
- * `Invariant` (no prefix) is the default. `Covariant` (`+T`) lifts `T1 <: T2`
- * to `Box<T1> <: Box<T2>`. `Contravariant` (`-T`) flips the direction.
+ * `Invariant` (no marker) is the default. `Covariant` (`out T`) lifts `T1 <: T2`
+ * to `Box<T1> <: Box<T2>`. `Contravariant` (`in T`) flips the direction.
  *
  * Both expressions are built by `XphpSourceParser::resolveAndAttach` after
  * resolving each leaf class name against the file's namespace + use map.

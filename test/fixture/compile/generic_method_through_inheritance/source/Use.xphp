@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodThroughInheritance;
+
+$d = new Derived::<int>();
+$s = $d->identity::<string>('hi');
+$n = $d->identity::<int>(7);

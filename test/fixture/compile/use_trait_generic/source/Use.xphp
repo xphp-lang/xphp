@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\UseTraitGeneric;
+
+// A generic TRAIT-use (`use Holder<int>`) inside a class body is NOT a namespace
+// import: it specializes the trait and inlines its members. The WI-08 use-import
+// reject must leave it untouched -- compiled and executed end-to-end here.
+trait Holder<T>
+{
+    public function label(): string
+    {
+        return 'held';
+    }
+}
+
+class Box
+{
+    use Holder<int>;
+}
+
+$box = new Box();
+$label = $box->label();

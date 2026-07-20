@@ -21,6 +21,7 @@ timeline
         Generic templates
                 : classes and interfaces and traits
                 : methods on static and instance receivers
+                : methods inherited from base classes
                 : free functions at any scope
                 : closures and arrow functions
         Bounds
@@ -41,22 +42,33 @@ timeline
         Pseudo-types
                 : self static parent in type positions
                 : constructor turbofish forms
+        Closure signature types
+                : typed callable hints in parameter return and property slots
+                : erasure to a bare Closure
+                : return-position conformance for closure literals
+                : signatures grounded per specialization
         Reified T
                 : runtime instanceof T
                 : marker interface per template
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
-    section Next
-        Editor and tooling
-                : Live transpilation via stream wrapper
-        Compiler ergonomics
-                : Source maps back to xphp lines
+        Validation and diagnostics
+                : xphp check validate-only gate
+                : collect-all diagnostics with text json github renderers
+                : undeclared-type and arity validation
+                : unresolved-generic-call detection
+                : PHPStan over the compiled output
     section Discovery
         Generic surface
                 : Generic type aliases
                 : Variance edges on trait-owned templates
                 : Branching narrowing precision
+        Generic completeness
+                : this-capturing and static generic closures
+                : generic methods inherited via traits
+                : trait composition for variance and bounds
+                : closure signatures in generic args and bounds
         Module surface
                 : internal visibility modifier
                 : composer-package boundary
@@ -69,9 +81,11 @@ timeline
                 : Discriminated unions
                 : Generic enums and sum types
                 : Variadic type parameters
+                : Supertype lower bounds
                 : Per-arg specialization
         Ecosystem
-                : phpstan bridge
+                : Live transpilation via stream wrapper
+                : Source maps back to xphp lines
                 : REPL and playground
                 : Migration tooling from PHPDoc
         Explorations
@@ -108,14 +122,27 @@ upcoming one.
 ### Function-level generics
 
 - Generic methods on static and instance receivers.
+- Generic methods resolved through inheritance: a method declared on a
+  base (or abstract) class is callable via turbofish on a subclass
+  receiver (instance, static, nullsafe), emitted once on the declaring
+  class and inherited.
 - Generic free functions at namespace scope and bare top-level.
 - Nullsafe instance turbofish (`$obj?->m::<T>()`).
 - Receiver-type analysis for `$this`, typed parameters, typed
-  properties, and local `$x = new Foo()` assignments.
-- Conservative branching: post-branch calls de-specialize on
-  reassignment rather than risking a wrong dispatch.
+  properties, local `new` assignments, and a value returned by a
+  method / chained call / `self`-`static` factory.
+- Conservative branching: when a post-branch receiver can't be proved
+  to a single type, a turbofish call is a compile error
+  (`xphp.undetermined_receiver`) rather than a runtime-broken dispatch.
 - Same-class merge: post-branch type kept when every reachable arm
   assigns the same class.
+- Enclosing-parameter method bounds (`contains<U : E>`) grounded against
+  the receiver, or a compile error (`xphp.bound_unprovable`) when the
+  element type can't be determined.
+- Erasure lowering of a direct-input `<U : E>` method (one `E`-typed member
+  per instantiation), so a forwarded self-call
+  (`probe<U : E>{ $this->contains::<U>(…) }`) compiles and runs; a forward to
+  a non-erasable method is a compile error (`xphp.unspecializable_self_call`).
 
 ### Anonymous templates
 
@@ -145,10 +172,17 @@ upcoming one.
 
 ### Variance
 
-- `+T` and `-T` markers on type parameters.
-- Position rules enforced at parse time (covariant in return,
-  contravariant in param, both forbidden in properties, ctor,
-  bounds, defaults).
+- `out T` and `in T` markers on type parameters.
+- Position rules enforced at compile time (covariant in return,
+  contravariant in param, any variance in a plain non-promoted
+  constructor parameter or a *private* property — declared or promoted;
+  both forbidden in public/protected properties — including
+  public/protected promoted constructor params — by-reference params,
+  bounds, and defaults).
+- Real-typed construction: a `out T`/`in T` constructor parameter keeps its
+  concrete type (nothing erased), so construction is runtime-type-checked.
+- A `final` variant class is rejected (a `final` class can't anchor the
+  `extends` edge).
 - Subtype edges emitted between specializations
   (`Producer<Banana>` actually extends `Producer<Fruit>` when
   `Banana extends Fruit`).
@@ -159,6 +193,24 @@ upcoming one.
 - `self<T>` / `static<T>` / `parent<T>` in type-hint positions.
 - `new self::<T>(...)`, `new parent::<T>(...)`,
   `new static::<T>(...)` at constructor sites.
+
+### Closure signature types
+
+- `Closure(int $x, string $y): bool` accepted in parameter, return, and
+  property positions (including nested inside another signature);
+  erases to a bare `\Closure` in the emitted PHP.
+- Return-position conformance for closure literals: parameters
+  contravariant, return covariant, by-reference exact, arity
+  compatible — only a *provable* mismatch is rejected
+  (`xphp.closure_conformance`).
+- Signatures that reference an enclosing type parameter are grounded
+  per specialization; `compile` and `check` apply the identical check.
+- Flat union / intersection / nullable members are variance-checked
+  member by member; DNF and array-sugar leaves stay gradual (accepted).
+- Unsupported forms (a signature as a generic type argument or
+  bound, an untyped or defaulted signature parameter) are clear
+  compile errors, never miscompiles — see
+  [closure types → known limitations](syntax/closure-types.md#known-limitations).
 
 ### Reified T
 
@@ -179,17 +231,26 @@ upcoming one.
 - RFC-aligned call-site syntax (`Name::<...>` turbofish).
 - Empty turbofish (`Name::<>`) for all-defaults templates.
 
----
+### Validation and diagnostics
 
-## Next
-
-### Editor and tooling
-
-- Live transpilation via stream wrapper (no build step in dev).
-
-### Compiler ergonomics
-
-- Source maps (stack traces back to `.xphp` lines).
+- `xphp check` — a validate-only gate that emits no code: it runs
+  every generic validation and reports **all** problems in one pass
+  (collect-all), each with a `file:line` location and a stable code,
+  exiting 0 (clean) / 1 (errors) / 2 (bad input).
+- Structured diagnostics with `text`, `json`, and `github`
+  (Actions-annotation) renderers, so the same check drives both local
+  use and CI.
+- Undeclared-type-parameter and over-arity validation (a member,
+  bound, or default that names a stray/typo'd type; more type
+  arguments than the template declares).
+- Unresolved-generic-call detection: a turbofish method call whose
+  generic method exists on neither the receiver nor any ancestor is a
+  compile-time error instead of a silent runtime fatal.
+- PHPStan over the compiled output: `check` compiles to a throwaway
+  directory, runs *your* PHPStan over the monomorphized code (one
+  representative per template), and maps findings back to the `.xphp`
+  template. Opt-out via `--no-phpstan`; an absent binary degrades to a
+  non-failing Warning; never bundled in the PHAR.
 
 ---
 
@@ -205,8 +266,35 @@ to ship.
 
 - Generic type aliases (e.g. `type Pair<A, B> = ...`).
 - Variance edges on trait-owned templates.
-- Branching narrowing precision: today conservatively de-specializes
-  when arms disagree; will track unions with runtime dispatch instead.
+- Branching narrowing precision: today a turbofish call on a receiver
+  whose branch arms disagree is a compile error; could track unions with
+  runtime dispatch instead.
+- Per-instantiation checking of a **direct concrete** `$this`-self-call's
+  enclosing-parameter bound (`$this->contains::<Banana>()`, today a compile
+  error), to accept the calls that hold for the instantiations actually used.
+  (The common *forwarding* shape already works via erasure lowering — see
+  Shipped.)
+
+### Generic completeness
+
+Gaps in already-shipped generics, deferred rather than designed out:
+
+- `$this`-capturing and `static` generic closures: both are rejected
+  today; lifting them (rewrite `$this->x` to a passed parameter; route
+  `static` closures through the dispatcher) is planned.
+- Generic methods inherited through traits: resolution follows
+  `extends` / `implements` ancestors, but a generic method reached only
+  via a `use`d trait is not yet resolved.
+- Trait composition for variance and bounds: the variance-position
+  validator doesn't walk trait-imported method signatures, and bound
+  satisfaction doesn't follow trait chains — both currently unmodeled.
+- Closure signature types as generic type arguments and bounds
+  (`Box<Closure(int): int>`, `class C<T : Closure(int): int>`): both
+  rejected today with a closure-specific error; lifting them is a
+  candidate. A bare `\Closure` works in every such position now.
+- Structuring a DNF leaf inside a `Closure(...)` signature
+  (`Closure((A&B)|C $x)`) into variance-checked members — today it
+  stays gradual (accepted, never the cause of a rejection).
 
 ### Module surface
 
@@ -234,11 +322,21 @@ to ship.
 - Discriminated unions with exhaustiveness checks.
 - Generic enums / sum types (Option of T, Result of T E).
 - Variadic type parameters.
+- **Supertype (lower) bounds** on a type parameter (`<S : super E>`, Scala's
+  `[S >: T]`): let a *widening* operation — a `reduce` / `fold`-to-supertype on a
+  covariant collection — be a fluent member (`$list->reduceOrNull::<Product>(…)`)
+  instead of the static sibling-bound helper (`<S, T : S>`) that expresses the same
+  capability today. The gap is member ergonomics only; bounds are otherwise
+  upper-only by design — see
+  [ADR-0022](./adr/0022-bounds-are-upper-only.md) and
+  [type bounds → no supertype bounds](./syntax/type-bounds.md#no-supertype-lower-bounds).
 - Per-arg specialization (different body when T = int).
 
 ### Ecosystem
 
-- phpstan / psalm bridge.
+- Live transpilation via stream wrapper (no build step in dev).
+- Source maps (stack traces back to `.xphp` lines).
+- Psalm bridge (the PHPStan bridge has shipped — see Shipped above).
 - REPL / playground.
 - Migration tooling: lift PHPDoc `@template` annotations to xphp
   generic params.

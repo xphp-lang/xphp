@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureArgFnRun;
+
+function apply<R>(Closure(R $x): R $fn, R $seed): R
+{
+    return $fn($seed);
+}
+
+$result = apply::<int>(fn(int $x): int => $x + 40, 2); // 2 + 40 = 42

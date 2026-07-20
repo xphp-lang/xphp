@@ -18,7 +18,7 @@ composer require --dev xphp-lang/xphp
 ```
 
 This puts the compiler at `vendor/bin/xphp` and pulls in the runtime
-dependencies (`nikic/php-parser`, `symfony/console`).
+dependencies (`nikic/php-parser`, `symfony/console`, `symfony/process`).
 
 ## 2. Set up the PSR-4 autoload
 
@@ -113,6 +113,63 @@ After the compile completes you'll have:
 Both `dist/` and `.xphp-cache/` can be gitignored — they're
 generated artifacts your CI/CD pipeline rebuilds on every deploy.
 
+**Safe by default:** `compile` runs the same validation gate as
+[`check`](errors.md#xphp-check--validate-without-emitting) — the generic validators plus PHPStan over the compiled
+output — *before* emitting, and fails the build (writing nothing) if it
+finds an error, so a typo'd or undeclared type never reaches runtime. For a
+fast iteration build — when you've already run `check` and just want to
+re-emit — skip the gate with `--no-check`:
+
+```bash
+vendor/bin/xphp compile src dist .xphp-cache --no-check   # transpile only, no gate
+```
+
+### The recommended project setup: an `xphp.json` manifest
+
+The single-directory form above is the quickest way to compile one
+self-contained tree (and it keeps working unchanged). But for any **real
+project** — and **required** the moment you *consume* another package's
+templates or *ship* your own — the recommended setup is an **`xphp.json`**
+manifest at the project root. It's the project config (like `composer.json`):
+it records your source roots and dependencies once, so `compile`/`check` take
+no positional arguments, and it's what lets the compiler pull several source
+roots together instead of staging them into one tree:
+
+```json
+{
+  "sources": ["src"],
+  "include": ["vendor/**"],
+  "target": "dist",
+  "cache": ".xphp-cache"
+}
+```
+
+- `sources` — this package's own `.xphp` roots (relative to the manifest).
+  Omitted ⇒ `["."]`.
+- `include` — other packages to pull in, transitively. Each entry is a directory
+  or a **glob**: `*`/`?`/`[…]` match within one path segment, and `**` (globstar)
+  matches recursively. A glob auto-discovers: any matched directory that has its
+  own `xphp.json` is compiled in, others are skipped — so `"vendor/**"` picks up
+  every installed xphp package at any depth and needs no edit when you add another.
+  (`"vendor/*/*"` also works for Composer's flat `vendor/<org>/<pkg>` layout.) An
+  explicit (non-glob) entry without an `xphp.json` is an error.
+- `target`/`cache` — optional output dirs (CLI `--target`/`--cache` override).
+
+Then compile (or check) against the manifest — `--config`, or just run where the
+`xphp.json` is auto-detected:
+
+```bash
+vendor/bin/xphp compile --config xphp.json     # or: vendor/bin/xphp compile  (auto-detect)
+vendor/bin/xphp check  --config xphp.json
+```
+
+**Distribution model.** A library ships its `.xphp` *sources* plus its `xphp.json`
+(via Composer). A downstream build pulls those sources and compiles the whole
+union into its own output — so the upstream's marker interfaces and the
+specializations your call sites need all get emitted, and everything runs without
+the library being pre-compiled. The single-directory `compile src dist cache` form
+above keeps working unchanged.
+
 ## 5. Run it
 
 Any normal PHP runtime that loads Composer's autoload will pick up
@@ -158,4 +215,4 @@ ever has to know the generated class names.
   message.
 - [How it works](guides/how-it-works.md) — the compile pipeline,
   end to end.
-- [Roadmap](roadmap.md) — what's coming next.
+- [Roadmap](roadmap.md) — what's shipped, what's in discovery.

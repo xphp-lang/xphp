@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\PlainFnArgRun;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+function each(Closure(Book $b): string $fn): string
+{
+    return $fn(new Book('PHP'));
+}
+
+$result = each(fn(Book $b): string => $b->name);

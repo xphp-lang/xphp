@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Modifiers;
 use PhpParser\Node;
 use PhpParser\Node\ComplexType;
 use PhpParser\Node\Expr\ArrowFunction;
@@ -13,11 +14,16 @@ use PhpParser\Node\IntersectionType;
 use PhpParser\Node\Name;
 use PhpParser\Node\NullableType;
 use PhpParser\Node\Param;
+use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Property;
 use PhpParser\Node\UnionType;
 use RuntimeException;
+use XPHP\Diagnostics\Diagnostic;
+use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Declaration-time check that every appearance of a variance-marked type
@@ -25,131 +31,211 @@ use RuntimeException;
  *
  * Position rules (PHP-compat surface):
  *
- *  - Property type (mutable OR readonly) -> Invariant only
- *  - Constructor parameter type          -> Invariant only
- *  - Method/function parameter type      -> Invariant or Contravariant
- *  - Method/function return type         -> Invariant or Covariant
- *  - Bound expression                    -> Invariant only
- *  - Default expression                  -> Invariant only
+ *  - Public/protected property (mutable OR readonly) -> Invariant only
+ *  - Private property (mutable OR readonly)          -> any variance
+ *  - Promoted constructor parameter (public/protected) -> Invariant only (it is a visible property)
+ *  - Promoted constructor parameter (private)        -> any variance (private property)
+ *  - Non-promoted constructor parameter              -> any variance (emitted with real type)
+ *  - Method/function parameter type                  -> Invariant or Contravariant
+ *  - Method/function return type                     -> Invariant or Covariant
+ *  - Bound expression                                -> Invariant only
+ *  - Default expression                              -> Invariant only
  *
- * Why properties are strict-invariant: PHP enforces invariant property types
- * across the `extends` chain regardless of `readonly`. A covariant +T in a
- * subtype property declaration would PHP-fatal at autoload when the variance
- * edge `Producer_Banana extends Producer_Fruit` lands. The semantic
- * argument ("readonly = output-only") doesn't override PHP's static-type
- * rule. Users who need a covariant getter use a `mixed`-typed (or
- * bound-typed) backing field + a method `get(): T`.
+ * Why public/protected properties are strict-invariant: PHP enforces invariant
+ * property types across the `extends` chain regardless of `readonly`. A covariant
+ * `out T` in a subtype property declaration would PHP-fatal at autoload when the
+ * variance edge `Producer_Banana extends Producer_Fruit` lands. The semantic
+ * argument ("readonly = output-only") doesn't override PHP's static-type rule.
  *
- * Why constructors are strict-invariant: PHP applies LSP signature
- * compatibility to `__construct` at autoload time on `extends` chains.
- * A covariant param would PHP-fatal -- same shape as the property case.
+ * Why a PRIVATE property may carry any variance: PHP does NOT type-check private
+ * property types across an `extends` chain — a private slot is per-declaring-scope
+ * and is never inherited/overridden, so `Producer_Banana` may declare
+ * `private Banana $item` while `Producer_Fruit` declares `private Fruit $item`
+ * with no fatal. It is also invisible to the externally-visible variance surface.
+ * The Specializer emits the real substituted type there, and each specialization
+ * re-emits its own field + accessor, so no inherited method ever reads a
+ * divergent-typed private slot. This is what lets the covariant getter pattern
+ * `class Producer<out T> { public function __construct(private T $item) {} … }` be
+ * both real-typed and sound.
  *
- * F-bounded variance (`class Sortable<+T : Comparable<T>>`) is rejected
- * because `+T` appears inside its own bound (an invariant position).
+ * Why a non-promoted constructor parameter may carry any variance: a
+ * constructor isn't part of the externally-visible variance surface (it's
+ * never reached through an upcast reference, the same reason Kotlin exempts
+ * constructor parameters), and PHP exempts `__construct` from LSP signature
+ * checks, so each specialization's constructor may legitimately differ. The
+ * Specializer emits the real substituted type there -- nothing is erased. A
+ * *promoted* constructor parameter is a property, so it falls under the property
+ * rules above: strict-invariant when public/protected, any variance when private.
+ *
+ * F-bounded variance (`class Sortable<out T : Comparable<T>>`) is rejected
+ * because `out T` appears inside its own bound (an invariant position).
  *
  * Errors include the param name, variance marker, and the position class
  * so the user sees what's wrong without reading the implementation.
+ *
+ * Runs over collected definitions (`Registry::validateVariancePositions`), not
+ * in the parser. With a `DiagnosticCollector` it gathers every violation in the
+ * class (each located at the offending member) and continues; without one it
+ * throws the first violation — byte-identical to the previous parse-time check.
  */
 final class VariancePositionValidator
 {
+    /** Stable diagnostic code for a variance-position violation. */
+    public const CODE_VARIANCE_POSITION = 'xphp.variance_position';
+
+    /** @var array<string, Variance> */
+    private array $varianceByName;
+
+    /** @var list<array{message: string, line: ?int}> */
+    private array $violations = [];
+
+    /**
+     * @param array<string, Variance> $varianceByName
+     */
+    private function __construct(array $varianceByName)
+    {
+        $this->varianceByName = $varianceByName;
+    }
+
     /**
      * @param list<TypeParam> $params
+     * @return bool True iff at least one violation was found (in check-mode; compile-mode
+     *   throws before returning). Lets the caller skip the inner-variance pass for a
+     *   definition already flagged here, avoiding a double report of the same issue.
      */
-    public static function assertPositions(ClassLike $node, array $params): void
-    {
+    public static function assertPositions(
+        ClassLike $node,
+        array $params,
+        ?DiagnosticCollector $diagnostics = null,
+        ?string $file = null,
+    ): bool {
         $varianceByName = [];
         foreach ($params as $param) {
             if ($param->variance !== Variance::Invariant) {
                 $varianceByName[$param->name] = $param->variance;
             }
         }
+        // @infection-ignore-all FalseValue -- returning true here (no variance markers) would
+        // only add this definition to the caller's "flagged" set, which merely skips the
+        // inner-variance pass for it; but a no-variance definition is already a no-op in
+        // inner-variance (empty variance map), so flagging it changes nothing observable.
         if ($varianceByName === []) {
-            return;
+            return false;
         }
 
-        // 1. Bound and default positions are invariant by RFC. Walk each
-        // param's bound expression + default TypeRef tree; reject if any
-        // referenced leaf carries a name whose variance isn't Invariant.
+        $validator = new self($varianceByName);
+        $validator->collect($node, $params);
+        if ($validator->violations === []) {
+            return false;
+        }
+
+        if ($diagnostics === null) {
+            // Compile-mode: fail fast on the first violation (byte-identical message).
+            throw new RuntimeException($validator->violations[0]['message']);
+        }
+
+        foreach ($validator->violations as $violation) {
+            $location = ($violation['line'] !== null && $file !== null)
+                ? new SourceLocation($file, $violation['line'])
+                : null;
+            $diagnostics->add(new Diagnostic(
+                Severity::Error,
+                self::CODE_VARIANCE_POSITION,
+                $violation['message'],
+                $location,
+            ));
+        }
+
+        return true;
+    }
+
+    /**
+     * @param list<TypeParam> $params
+     */
+    private function collect(ClassLike $node, array $params): void
+    {
+        $declarationLine = $node->getStartLine();
+
+        // 0. A variant class cannot be `final`. Its specializations participate
+        // in real `extends` subtype edges, which a `final` class cannot anchor.
+        // Rejecting it (rather than silently stripping `final` from the generated
+        // class — which would make ReflectionClass::isFinal lie) keeps source and
+        // emitted output honest. Only reached for variant definitions, since
+        // assertPositions early-returns when there are no variance markers.
+        if ($node instanceof Class_ && $node->isFinal()) {
+            // One string literal (not concatenated) keeps the message stable.
+            $this->record(
+                'A variant class cannot be declared `final`: its specializations participate in `extends` subtype edges that a `final` class cannot anchor. Remove `final`.',
+                $declarationLine,
+            );
+        }
+
+        // 1. Bound and default positions are invariant by RFC.
         foreach ($params as $param) {
             if ($param->bound !== null) {
-                self::checkBoundExpr($param->bound, $varianceByName, $param->name, 'bound');
+                $this->checkBoundExpr($param->bound, $param->name, 'bound', $declarationLine);
             }
             if ($param->default !== null) {
-                self::checkTypeRef($param->default, $varianceByName, $param->name, 'default');
+                $this->checkTypeRef($param->default, $param->name, 'default', $declarationLine);
             }
         }
 
         // 2. Class-body positions: properties and methods.
         foreach ($node->getProperties() as $property) {
-            self::checkProperty($property, $varianceByName);
+            $this->checkProperty($property);
         }
         foreach ($node->getMethods() as $method) {
-            self::checkMethod($method, $varianceByName);
+            $this->checkMethod($method);
         }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkBoundExpr(
-        BoundExpr $bound,
-        array $varianceByName,
-        string $hostParam,
-        string $hostPosition,
-    ): void {
+    private function checkBoundExpr(BoundExpr $bound, string $hostParam, string $hostPosition, int $line): void
+    {
         if ($bound instanceof BoundLeaf) {
-            self::checkTypeRef($bound->type, $varianceByName, $hostParam, $hostPosition);
+            $this->checkTypeRef($bound->type, $hostParam, $hostPosition, $line);
             return;
         }
         assert($bound instanceof BoundIntersection || $bound instanceof BoundUnion);
         foreach ($bound->operands as $operand) {
-            self::checkBoundExpr($operand, $varianceByName, $hostParam, $hostPosition);
+            $this->checkBoundExpr($operand, $hostParam, $hostPosition, $line);
         }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkTypeRef(
-        TypeRef $ref,
-        array $varianceByName,
-        string $hostParam,
-        string $hostPosition,
-    ): void {
-        if ($ref->isTypeParam && isset($varianceByName[$ref->name])) {
-            $variance = $varianceByName[$ref->name];
-            throw self::violationError(
-                paramName: $ref->name,
-                variance: $variance,
-                position: $hostPosition,
-                hostParam: $hostParam,
+    private function checkTypeRef(TypeRef $ref, string $hostParam, string $hostPosition, int $line): void
+    {
+        // Direct occurrence only: a bare type-param as a bound/default (`U : T`, `U = T`). A type-param
+        // NESTED inside a type constructor in a bound/default (`U : Box<T>`) is the composing pass's job
+        // (its effective variance depends on the inner slot) — descending here with the uncomposed
+        // position would mis-judge it and double-report against InnerVarianceValidator.
+        if ($ref->isTypeParam && isset($this->varianceByName[$ref->name])) {
+            $this->record(
+                self::violationMessage($ref->name, $this->varianceByName[$ref->name], $hostPosition, $hostParam),
+                $line,
             );
         }
-        foreach ($ref->args as $inner) {
-            self::checkTypeRef($inner, $varianceByName, $hostParam, $hostPosition);
-        }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkProperty(Property $property, array $varianceByName): void
+    private function checkProperty(Property $property): void
     {
         $type = $property->type;
         if ($type === null) {
             return;
         }
-        // PHP enforces invariant property types across `extends` chains
-        // regardless of `readonly`. Even +T on a readonly property would
-        // PHP-fatal at autoload when the variance edge lands.
+        // A private property is exempt: PHP does not type-check private property
+        // types across an `extends` chain (the slot is per-declaring-scope, never
+        // inherited), and it is invisible to the variance surface. So a private
+        // `T` property may carry any variance — like a non-promoted ctor param.
+        if ($property->isPrivate()) {
+            return;
+        }
+        // Public/protected: PHP enforces invariant property types across `extends`
+        // chains regardless of `readonly`. Even `out T` on a readonly property
+        // would PHP-fatal at autoload when the variance edge lands.
         $position = $property->isReadonly() ? 'readonly property' : 'mutable property';
-        self::checkPhpType($type, $varianceByName, [Variance::Invariant], $position);
+        $this->checkPhpType($type, [Variance::Invariant], $position);
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     */
-    private static function checkMethod(ClassMethod $method, array $varianceByName): void
+    private function checkMethod(ClassMethod $method): void
     {
         $name = $method->name->toLowerString();
         $isConstructor = $name === '__construct';
@@ -160,22 +246,51 @@ final class VariancePositionValidator
             ? [Variance::Invariant]
             : [Variance::Invariant, Variance::Contravariant];
         $paramPosition = $isConstructor ? 'constructor parameter' : 'method parameter';
+        // A variant class (≥1 covariant/contravariant type-param) may carry its
+        // type-param in a constructor parameter at any variance UNLESS the param is
+        // a *visible* (public/protected) promoted property. A constructor parameter
+        // is not part of the externally-visible variance surface (you can't call a
+        // constructor through an upcast reference), and PHP exempts `__construct`
+        // from LSP, so the specializer emits the real substituted type there with no
+        // soundness or autoload hazard. A *promoted* constructor param is also a
+        // property: a public/protected one stays strictly invariant (it would
+        // PHP-fatal across the chain), but a *private* promoted property is exempt
+        // (PHP doesn't type-check private slots across the chain).
+        $classIsVariant = $this->varianceByName !== [];
         foreach ($method->params as $param) {
             // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
             if (!$param instanceof Param) {
                 continue;
             }
-            if ($param->type !== null) {
-                self::checkPhpType($param->type, $varianceByName, $paramAllowed, $paramPosition);
+            if ($param->type === null) {
+                continue;
             }
+            // A by-reference parameter is read AND written back through the
+            // caller's variable, so it's an invariant position regardless of
+            // method vs constructor — neither `out T` nor `in T` is sound there.
+            // Checked before the variant-constructor any-variance branch so
+            // `in T &$x` in a constructor is rejected too.
+            if ($param->byRef) {
+                $this->checkPhpType($param->type, [Variance::Invariant], 'by-reference parameter');
+                continue;
+            }
+            $isPromoted = $param->flags !== 0;
+            // A *visible* promoted property is public or protected: it carries a
+            // visibility bit other than PRIVATE. Detect via the PRIVATE bit, not the
+            // mere absence of a bit — a `readonly`-only promoted param has flags with
+            // no visibility bit and is implicitly public, so it must stay invariant.
+            $isVisibleProperty = $isPromoted && ($param->flags & Modifiers::PRIVATE) === 0;
+            $allowed = ($isConstructor && !$isVisibleProperty && $classIsVariant)
+                ? [Variance::Invariant, Variance::Covariant, Variance::Contravariant]
+                : $paramAllowed;
+            $this->checkPhpType($param->type, $allowed, $paramPosition);
         }
 
         // Return type. Constructors don't have one; for the rest, invariant
         // or covariant.
         if (!$isConstructor && $method->returnType !== null) {
-            self::checkPhpType(
+            $this->checkPhpType(
                 $method->returnType,
-                $varianceByName,
                 [Variance::Invariant, Variance::Covariant],
                 'method return',
             );
@@ -190,7 +305,7 @@ final class VariancePositionValidator
         // then nested closures have no type-params and every name in their
         // signature is an outer reference.
         if ($method->stmts !== null) {
-            self::walkBodyForNestedClosures($method->stmts, $varianceByName);
+            $this->walkBodyForNestedClosures($method->stmts);
         }
     }
 
@@ -201,27 +316,28 @@ final class VariancePositionValidator
      *
      * Cheap hand-rolled recursive walk -- avoids spinning up a NodeTraverser
      * inside the per-class validator hot path.
-     *
-     * @param array<string, Variance> $varianceByName
      */
-    private static function walkBodyForNestedClosures(mixed $node, array $varianceByName): void
+    private function walkBodyForNestedClosures(mixed $node): void
     {
         if ($node instanceof Closure || $node instanceof ArrowFunction) {
             foreach ($node->params as $param) {
                 // @phpstan-ignore-next-line instanceof.alwaysTrue — defensive guard against nikic/php-parser PHPDoc-narrowed param collection element.
                 if ($param instanceof Param && $param->type !== null) {
-                    self::checkPhpType(
+                    // A by-reference param is an invariant position (read + written
+                    // back), even inside a nested closure/arrow.
+                    $allowed = $param->byRef
+                        ? [Variance::Invariant]
+                        : [Variance::Invariant, Variance::Contravariant];
+                    $this->checkPhpType(
                         $param->type,
-                        $varianceByName,
-                        [Variance::Invariant, Variance::Contravariant],
-                        'nested closure/arrow parameter',
+                        $allowed,
+                        $param->byRef ? 'by-reference parameter' : 'nested closure/arrow parameter',
                     );
                 }
             }
             if ($node->returnType !== null) {
-                self::checkPhpType(
+                $this->checkPhpType(
                     $node->returnType,
-                    $varianceByName,
                     [Variance::Invariant, Variance::Covariant],
                     'nested closure/arrow return',
                 );
@@ -231,13 +347,13 @@ final class VariancePositionValidator
 
         if (is_array($node)) {
             foreach ($node as $child) {
-                self::walkBodyForNestedClosures($child, $varianceByName);
+                $this->walkBodyForNestedClosures($child);
             }
             return;
         }
         if ($node instanceof Node) {
             foreach ($node->getSubNodeNames() as $subName) {
-                self::walkBodyForNestedClosures($node->$subName, $varianceByName);
+                $this->walkBodyForNestedClosures($node->$subName);
             }
         }
     }
@@ -247,15 +363,10 @@ final class VariancePositionValidator
      * UnionType / IntersectionType), checking every Name's parts against
      * the variance map.
      *
-     * @param array<string, Variance> $varianceByName
      * @param list<Variance> $allowed
      */
-    private static function checkPhpType(
-        Node $type,
-        array $varianceByName,
-        array $allowed,
-        string $position,
-    ): void {
+    private function checkPhpType(Node $type, array $allowed, string $position): void
+    {
         if ($type instanceof Identifier) {
             return; // scalar / pseudo type; never a type-param ref.
         }
@@ -263,38 +374,31 @@ final class VariancePositionValidator
             $parts = $type->getParts();
             if (count($parts) === 1) {
                 $name = $parts[0];
-                if (isset($varianceByName[$name])) {
-                    $variance = $varianceByName[$name];
+                if (isset($this->varianceByName[$name])) {
+                    $variance = $this->varianceByName[$name];
                     if (!in_array($variance, $allowed, true)) {
-                        throw self::violationError(
-                            paramName: $name,
-                            variance: $variance,
-                            position: $position,
-                            hostParam: null,
+                        $this->record(
+                            self::violationMessage($name, $variance, $position, null),
+                            $type->getStartLine(),
                         );
                     }
                 }
             }
-            // Generic args attached via xphp:genericArgs are TypeRef trees;
-            // recurse into them so `Box<T>` in a parameter position is
-            // checked too.
-            $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
-            if (is_array($args)) {
-                foreach ($args as $arg) {
-                    if ($arg instanceof TypeRef) {
-                        self::checkInnerTypeRef($arg, $varianceByName, $allowed, $position);
-                    }
-                }
-            }
+            // A type-param NESTED inside a type constructor (`Box<T>`, `Comparator<E>`) is NOT judged
+            // here: its effective variance is the composition of this position with the referenced
+            // type's slot variance, which only InnerVarianceValidator resolves. Descending with this
+            // (uncomposed) position would wrongly reject a sound `Comparator<E>` on a covariant `out E`
+            // (contra ∘ contra = covariant) and wrongly pass an unsound one. This validator owns only
+            // DIRECT occurrences; the composing pass owns the nested ones.
             return;
         }
         if ($type instanceof NullableType) {
-            self::checkPhpType($type->type, $varianceByName, $allowed, $position);
+            $this->checkPhpType($type->type, $allowed, $position);
             return;
         }
         if ($type instanceof UnionType || $type instanceof IntersectionType) {
             foreach ($type->types as $inner) {
-                self::checkPhpType($inner, $varianceByName, $allowed, $position);
+                $this->checkPhpType($inner, $allowed, $position);
             }
             return;
         }
@@ -303,52 +407,31 @@ final class VariancePositionValidator
         }
     }
 
-    /**
-     * @param array<string, Variance> $varianceByName
-     * @param list<Variance> $allowed
-     */
-    private static function checkInnerTypeRef(
-        TypeRef $ref,
-        array $varianceByName,
-        array $allowed,
-        string $position,
-    ): void {
-        if ($ref->isTypeParam && isset($varianceByName[$ref->name])) {
-            $variance = $varianceByName[$ref->name];
-            if (!in_array($variance, $allowed, true)) {
-                throw self::violationError(
-                    paramName: $ref->name,
-                    variance: $variance,
-                    position: $position,
-                    hostParam: null,
-                );
-            }
-        }
-        foreach ($ref->args as $inner) {
-            self::checkInnerTypeRef($inner, $varianceByName, $allowed, $position);
-        }
+    private function record(string $message, ?int $line): void
+    {
+        $this->violations[] = ['message' => $message, 'line' => $line];
     }
 
-    private static function violationError(
+    private static function violationMessage(
         string $paramName,
         Variance $variance,
         string $position,
         ?string $hostParam,
-    ): RuntimeException {
+    ): string {
         $marker = match ($variance) {
-            Variance::Covariant => '+',
-            Variance::Contravariant => '-',
+            Variance::Covariant => 'out ',
+            Variance::Contravariant => 'in ',
             Variance::Invariant => '',
         };
         $context = $hostParam !== null
             ? sprintf(' inside the %s of generic parameter `%s`', $position, $hostParam)
             : sprintf(' in %s position', $position);
-        return new RuntimeException(sprintf(
+        return sprintf(
             'Generic parameter `%s%s` appears%s, which is not allowed for %s variance.',
             $marker,
             $paramName,
             $context,
             $variance->value,
-        ));
+        );
     }
 }

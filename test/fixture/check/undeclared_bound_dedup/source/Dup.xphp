@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\DupBound;
+
+// The same undeclared name in both the bound and the default → one finding.
+class Dup<T: Bad = Bad>
+{
+}

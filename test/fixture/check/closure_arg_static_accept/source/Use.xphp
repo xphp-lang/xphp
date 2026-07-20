@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureArgStatic;
+
+class Util<E>
+{
+    public static function apply<R>(Closure(R $x): R $fn, R $seed): R
+    {
+        return $fn($seed);
+    }
+
+    // Its closure target references the CLASS parameter E, which is unbound in a
+    // static context — so the target stays gradual and is accepted.
+    public static function onClass<R>(Closure(E $x): R $fn): int
+    {
+        return 1;
+    }
+}
+
+function run(): void
+{
+    Util::apply::<int>(fn(int $x): int => $x + 1, 5);       // exact — conforms
+    Util::onClass::<string>(fn(int $x): string => 'z');     // E unbound ⇒ gradual
+}

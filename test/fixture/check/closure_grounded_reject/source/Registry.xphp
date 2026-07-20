@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Grounded;
+
+// The closure signature names the enclosing type parameter T. While T is
+// abstract the int-parameter literal is gradually accepted; grounding T to
+// `string` (below) makes `int is not wider than string` provable. `check` must
+// catch this grounded mismatch the same way `compile` does.
+class Registry<T>
+{
+    public function factory(): Closure(T $value): bool
+    {
+        return fn(int $value): bool => $value > 0;
+    }
+}
+
+new Registry::<string>();

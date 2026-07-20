@@ -15,6 +15,8 @@ use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Property;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
+use XPHP\Diagnostics\DiagnosticCollector;
 
 /**
  * Targets the LogicalAnd → LogicalOr guard-condition mutations in the three Monomorphize
@@ -31,17 +33,28 @@ final class VisitorGuardsTest extends TestCase
     // CallSiteRewriter
     // =====================================================================
 
-    public function testCallSiteRewriterIgnoresFullyQualifiedNames(): void
+    public function testCallSiteRewriterRewritesFullyQualifiedGenericNamesExactlyOnce(): void
     {
+        // A fully-qualified name carrying generic attributes is a real call
+        // site (`new \App\Box::<int>` after stripping) and MUST rewrite —
+        // skipping it would leave the emitted code newing the stripped marker
+        // interface. Idempotence across the specialized-AST re-rewrite comes
+        // from stripping the generic attributes off the replacement node, not
+        // from skipping FullyQualified names.
         $registry = new Registry();
-        $fq = new FullyQualified('App\\Models\\Plastic');
+        $fq = new FullyQualified('App\\Containers\\Box');
         $fq->setAttribute(XphpSourceParser::ATTR_GENERIC_ARGS, [new TypeRef('App\\Plastic')]);
         $fq->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'App\\Containers\\Box');
 
         $ast = self::wrapNameInStmt($fq);
-        (new CallSiteRewriter($registry))->rewrite($ast);
+        $result = (new CallSiteRewriter($registry))->rewrite($ast);
 
-        self::assertSame([], $registry->instantiations(), 'already-FullyQualified nodes must not be re-rewritten');
+        self::assertCount(1, $registry->instantiations(), 'the FQ call site must record its instantiation');
+
+        // The replacement must carry no generic attributes, so a second pass
+        // (the Phase-3.5 re-rewrite of specialized ASTs) records nothing new.
+        (new CallSiteRewriter($registry))->rewrite($result);
+        self::assertCount(1, $registry->instantiations(), 'the rewrite must be idempotent');
     }
 
     public function testCallSiteRewriterIgnoresNameWithoutGenericArgs(): void
@@ -183,23 +196,56 @@ final class VisitorGuardsTest extends TestCase
         self::assertSame([], $registry->instantiations());
     }
 
-    public function testCollectorBareNewSynthesisSkipsTemplatesWithRequiredParams(): void
+    public function testCollectorBareNewOnNonDefaultsTemplateThrowsInCompileMode(): void
     {
-        // `class Box<T>` (no default) -- a bare `new Box;` must NOT synthesize
-        // a zero-arg instantiation. Only all-defaults templates are eligible.
+        // `class Box<T>` (no default) -- a bare `new Box;` cannot pad from defaults, so it
+        // is a hard error, NOT a silent skip (the old behavior left the site pointing at
+        // the stripped marker interface -> a runtime fatal). Compile mode (no collector)
+        // throws, and nothing is recorded.
         $registry = new Registry();
+
+        try {
+            (new RegistryCollector($registry))->collect(self::classAndBareNew(), '/x.xphp');
+            self::fail('expected a RuntimeException for a bare new of a non-defaults generic');
+        } catch (RuntimeException $e) {
+            self::assertSame(
+                'Generic template "Box" was instantiated with 0 type argument(s) but parameter `T` (position 1) has no default; supply it explicitly or add defaults to every preceding required parameter.',
+                $e->getMessage(),
+            );
+        }
+
+        self::assertSame([], $registry->instantiations(), 'a rejected bare new records no instantiation');
+    }
+
+    public function testCollectorBareNewOnNonDefaultsTemplateCollectsInCheckMode(): void
+    {
+        // Check mode (with a collector) reports the missing-type-argument diagnostic and
+        // continues -- still recording no instantiation for the rejected site.
+        $diagnostics = new DiagnosticCollector();
+        $registry = new Registry(Registry::DEFAULT_HASH_HEX_LENGTH, null, $diagnostics);
+
+        (new RegistryCollector($registry))->collect(self::classAndBareNew(), '/x.xphp');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(Registry::CODE_MISSING_TYPE_ARGUMENT, $diagnostics->all()[0]->code);
+        self::assertSame([], $registry->instantiations());
+    }
+
+    /**
+     * `class Box<T>` (required param, no default) followed by a bare `new Box;`.
+     *
+     * @return list<Node\Stmt>
+     */
+    private static function classAndBareNew(): array
+    {
         $class = new Class_(new Identifier('Box'));
         $class->setAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS, [new TypeParam('T')]);
         $class->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, 'Box');
-        $bareNew = new \PhpParser\Node\Expr\New_(new Name('Box'));
-        $ast = [
+
+        return [
             $class,
-            new \PhpParser\Node\Stmt\Expression($bareNew),
+            new \PhpParser\Node\Stmt\Expression(new \PhpParser\Node\Expr\New_(new Name('Box'))),
         ];
-
-        (new RegistryCollector($registry))->collect($ast, '/x.xphp');
-
-        self::assertSame([], $registry->instantiations(), 'bare new on a non-defaulted template must not synthesize an instantiation');
     }
 
     public function testCollectorBareNewSynthesisRecordsAllDefaultsTemplate(): void
@@ -259,11 +305,13 @@ final class VisitorGuardsTest extends TestCase
         self::assertTrue($only->concreteTypes[0]->isScalar);
     }
 
-    public function testCollectorBareNewSynthesisSkipsFullyQualifiedName(): void
+    public function testCollectorBareNewSynthesisIncludesFullyQualifiedName(): void
     {
-        // FullyQualified Name nodes already point at an explicit class -- no
-        // namespace + use-map resolution needed, and they're not a synthesis
-        // target. Pin that the collector ignores them.
+        // A FullyQualified bare new of an all-defaults generic is a real
+        // instantiation: skipping it emitted the stripped marker interface
+        // and KEPT the `new \Cache(...)` call site — a guaranteed runtime
+        // fatal behind a clean gate. It must synthesize the defaults tuple
+        // exactly like the bare spelling (without doubling the namespace).
         $registry = new Registry();
         $class = new Class_(new Identifier('Cache'));
         $class->setAttribute(
@@ -279,7 +327,14 @@ final class VisitorGuardsTest extends TestCase
 
         (new RegistryCollector($registry))->collect($ast, '/x.xphp');
 
-        self::assertSame([], $registry->instantiations(), 'FullyQualified bare new must not be synthesized');
+        $instantiations = $registry->instantiations();
+        self::assertCount(1, $instantiations, 'FQ bare new of an all-defaults generic must synthesize');
+        self::assertSame('Cache', reset($instantiations)->templateFqn);
+        self::assertSame(
+            [],
+            $bareNew->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS),
+            'the synthesized marker must attach so the call-site rewriter fires',
+        );
     }
 
     // =====================================================================
@@ -307,7 +362,7 @@ final class VisitorGuardsTest extends TestCase
             'T' => new TypeRef('App\\Models\\Plastic'),
         ];
 
-        $specialized = (new Specializer())->specialize($template, $subst);
+        $specialized = (new Specializer())->specialize($template, Substitution::of($subst));
 
         // T should be replaced with FullyQualified \App\Models\Plastic.
         $aProp = $specialized->stmts[0];
@@ -336,7 +391,7 @@ final class VisitorGuardsTest extends TestCase
         $tParam = new Property(0, [new PropertyItem('a')], type: new Name('T'));
         $template = new Class_(new Identifier('Template'), ['stmts' => [$tParam]]);
 
-        $specialized = (new Specializer())->specialize($template, ['U' => new TypeRef('App\\Other')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of(['U' => new TypeRef('App\\Other')]));
 
         $aProp = $specialized->stmts[0];
         self::assertInstanceOf(Name::class, $aProp->type);
@@ -360,7 +415,7 @@ final class VisitorGuardsTest extends TestCase
         $template = new Class_(new Identifier('Wrapper'), ['stmts' => [$property]]);
 
         // Substitution map keyed by 'T'.
-        $specialized = (new Specializer())->specialize($template, ['T' => new TypeRef('App\\Plastic')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of(['T' => new TypeRef('App\\Plastic')]));
 
         $aProp = $specialized->stmts[0];
         $resolvedArgs = $aProp->type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
@@ -384,7 +439,7 @@ final class VisitorGuardsTest extends TestCase
         $template = new Class_(new Identifier('Template'), ['stmts' => [$method]]);
 
         // Should not throw / crash.
-        $specialized = (new Specializer())->specialize($template, ['T' => new TypeRef('App\\Plastic')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of(['T' => new TypeRef('App\\Plastic')]));
 
         // Foo stays as plain Name.
         $methodOut = $specialized->stmts[0];
@@ -409,9 +464,9 @@ final class VisitorGuardsTest extends TestCase
             'stmts' => [new Property(0, [new PropertyItem('a')], type: new Name('T'))],
         ]);
 
-        $specialized = (new Specializer())->specialize($template, [
+        $specialized = (new Specializer())->specialize($template, Substitution::of([
             'T' => new TypeRef('\\App\\Plastic'),
-        ]);
+        ]));
 
         $aProp = $specialized->stmts[0];
         self::assertInstanceOf(Property::class, $aProp);
@@ -427,17 +482,17 @@ final class VisitorGuardsTest extends TestCase
             'stmts' => [new Property(0, [new PropertyItem('a')], type: new Name('T'))],
         ]);
 
-        $genericSubst = new TypeRef('\\App\\Containers\\Lst', [new TypeRef('App\\Models\\Plastic')]);
-        $specialized = (new Specializer())->specialize($template, [
+        $genericSubst = new TypeRef('\\App\\Containers\\Collection', [new TypeRef('App\\Models\\Plastic')]);
+        $specialized = (new Specializer())->specialize($template, Substitution::of([
             'T' => $genericSubst,
-        ]);
+        ]));
 
         $nameNode = $specialized->stmts[0]->type;
         self::assertInstanceOf(Name::class, $nameNode);
         self::assertNotInstanceOf(FullyQualified::class, $nameNode);
-        self::assertSame('App\\Containers\\Lst', $nameNode->toString(), 'Name() ctor must receive ltrim-normalized name (line 80)');
+        self::assertSame('App\\Containers\\Collection', $nameNode->toString(), 'Name() constructor must receive ltrim-normalized name (line 80)');
         self::assertSame(
-            'App\\Containers\\Lst',
+            'App\\Containers\\Collection',
             $nameNode->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN),
             'ATTR_TEMPLATE_FQN attribute must be ltrim-normalized (line 82)',
         );

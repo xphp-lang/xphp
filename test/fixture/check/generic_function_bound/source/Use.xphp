@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\GenericFunctionBound;
+
+// int does not satisfy the \Stringable bound on the generic function.
+$r = needsStringable::<int>(1);

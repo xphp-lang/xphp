@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\BareNewSelfInGenericBody;
+
+// `new self` (no turbofish) inside a NON-defaults generic body must NOT be rejected
+// by the bare-new guard: `self` resolves to no template, and the Specializer rewrites
+// it to the specialized class per instantiation. The guard only fires on a bare `new`
+// of the *template name*.
+class Node<T>
+{
+    public function __construct(public T $v)
+    {
+    }
+
+    public function copy(): self
+    {
+        return new self($this->v);
+    }
+}
+
+$n = new Node::<int>(5);
+$c = $n->copy();

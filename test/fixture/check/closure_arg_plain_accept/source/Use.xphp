@@ -1,0 +1,82 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\PlainArg;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Registry
+{
+    public function each(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('x'));
+    }
+
+    public static function sEach(Closure(Book $b): string $fn): string
+    {
+        return $fn(new Book('y'));
+    }
+
+    // A self:: static call whose closure conforms.
+    public function callSelf(): string
+    {
+        return self::sEach(fn(Book $b): string => $b->name);
+    }
+}
+
+// A non-generic method on a GENERIC class — its Closure target references E.
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    public function each(Closure(E $x): string $fn): string
+    {
+        return $fn($this->v);
+    }
+}
+
+function conforms(): void
+{
+    $r = new Registry();
+    $r->each(fn(Book $b): string => $b->name);   // exact
+    $r->each(fn(object $o): string => 'z');       // wider param (contravariant)
+    Registry::sEach(fn(Book $b): string => $b->name);
+}
+
+function nonLiteral(Registry $r, Closure(Book $b): string $f): void
+{
+    $r->each($f);   // non-literal argument ⇒ gradual
+}
+
+function groundedInt(): void
+{
+    $b = new Box::<int>(3);
+    $b->each(fn(int $x): string => 'z');   // grounded to Closure(int): string — conforms
+}
+
+function reassignedParameter(Registry $x): void
+{
+    // The declared parameter type is Registry, but $x is reassigned to Box<int>.
+    // The call MUST resolve against Box<int>::each (E=int), where fn(int) conforms —
+    // not the stale Registry::each (which wants Book) that would false-reject it.
+    $x = new Box::<int>(3);
+    $x->each(fn(int $x): string => 'z');
+}
+
+function reassignedLocalUntrackable(): void
+{
+    // A local reassigned from a plain function call is untrackable ⇒ the receiver is
+    // undetermined ⇒ gradual. It must NOT be checked against the stale Registry type.
+    $x = new Registry();
+    $x = makeRegistry();
+    $x->each(fn(int $x): string => 'z');
+}
+
+function makeRegistry(): Registry
+{
+    return new Registry();
+}

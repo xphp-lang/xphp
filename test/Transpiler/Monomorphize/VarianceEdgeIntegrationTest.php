@@ -6,11 +6,13 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\CompiledFixture;
 use XPHP\TestSupport\SnapshotHash;
 
 final class VarianceEdgeIntegrationTest extends TestCase
@@ -34,9 +36,251 @@ final class VarianceEdgeIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testCovariantImmutableCollectionTakesTypedConstructorInput(): void
+    {
+        // A covariant immutable collection `ImmutableList<out T>` with a `T`-typed
+        // constructor. The constructor param keeps its REAL element type on each
+        // specialization (`Fruit ...` / `Banana ...`) — PHP exempts `__construct`
+        // from LSP, so `ImmutableList<Banana>` extends `ImmutableList<Fruit>` with
+        // NO autoload fatal, a Banana list is usable where a Fruit list is
+        // expected, and construction is runtime-type-checked.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_covariant_immutable_constructor/source',
+            'variance-covariant-constructor',
+        );
+        try {
+            $specializationDir = $fixture->cacheDir . '/Generated/App/CovariantConstructor/ImmutableList';
+            $files = glob($specializationDir . '/T_*.php') ?: [];
+            self::assertCount(2, $files, 'two ImmutableList specializations (Fruit, Banana)');
+
+            $combined = '';
+            $extendsEdges = 0;
+            foreach ($files as $file) {
+                $content = file_get_contents($file);
+                self::assertIsString($content);
+                $combined .= $content;
+                if (str_contains($content, 'extends \\XPHP\\Generated\\App\\CovariantConstructor\\ImmutableList\\T_')) {
+                    $extendsEdges++;
+                }
+            }
+            // Each specialization keeps its REAL element type in the constructor.
+            self::assertSame(
+                1,
+                preg_match_all('/function __construct\(\\\\App\\\\CovariantConstructor\\\\Fruit \.\.\.\$items\)/', $combined),
+                'Fruit specialization constructor keeps `Fruit ...$items`',
+            );
+            self::assertSame(
+                1,
+                preg_match_all('/function __construct\(\\\\App\\\\CovariantConstructor\\\\Banana \.\.\.\$items\)/', $combined),
+                'Banana specialization constructor keeps `Banana ...$items`',
+            );
+            self::assertStringNotContainsString('mixed ...$items', $combined, 'nothing is erased to mixed');
+            // Exactly one specialization extends the other — the covariant edge.
+            self::assertSame(1, $extendsEdges, 'ImmutableList<Banana> extends ImmutableList<Fruit>');
+            // A variant class can't be `final` (rejected at compile time), so no
+            // specialization is `final` — the edge's parent isn't a final class
+            // (which would PHP-fatal at autoload).
+            self::assertStringNotContainsString('final class', $combined);
+
+            $fixture->registerAutoload('App\\CovariantConstructor');
+            require __DIR__ . '/../../fixture/compile/generic_covariant_immutable_constructor/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testCovariantPrivatePropertyStoresRealTypeAndIsRuntimeChecked(): void
+    {
+        // A covariant container `Box<out T>` that stores its element in a PRIVATE
+        // promoted property of type `T`. Each specialization keeps the REAL slot
+        // type (`private Banana $item` / `private Fruit $item`), the variance edge
+        // `Box<Banana> extends Box<Fruit>` autoloads with NO fatal (PHP doesn't
+        // type-check private property types across the chain), a Banana box is
+        // usable where a Fruit box is expected, and construction is runtime-checked.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_covariant_private_property/source',
+            'variance-covariant-private-property',
+        );
+        try {
+            $specializationDir = $fixture->cacheDir . '/Generated/App/CovariantPrivateProperty/Box';
+            $files = glob($specializationDir . '/T_*.php') ?: [];
+            self::assertCount(2, $files, 'two Box specializations (Fruit, Banana)');
+
+            $combined = '';
+            $extendsEdges = 0;
+            foreach ($files as $file) {
+                $content = file_get_contents($file);
+                self::assertIsString($content);
+                $combined .= $content;
+                if (str_contains($content, 'extends \\XPHP\\Generated\\App\\CovariantPrivateProperty\\Box\\T_')) {
+                    $extendsEdges++;
+                }
+            }
+            // Each specialization keeps its REAL private slot type — nothing erased.
+            self::assertSame(
+                1,
+                preg_match_all('/private \\\\App\\\\CovariantPrivateProperty\\\\Fruit \$item/', $combined),
+                'Fruit specialization stores `private Fruit $item`',
+            );
+            self::assertSame(
+                1,
+                preg_match_all('/private \\\\App\\\\CovariantPrivateProperty\\\\Banana \$item/', $combined),
+                'Banana specialization stores `private Banana $item`',
+            );
+            self::assertStringNotContainsString('private mixed $item', $combined, 'nothing is erased to mixed');
+            // Exactly one specialization extends the other — the covariant edge.
+            self::assertSame(1, $extendsEdges, 'Box<Banana> extends Box<Fruit>');
+            self::assertStringNotContainsString('final class', $combined);
+
+            $fixture->registerAutoload('App\\CovariantPrivateProperty');
+            require __DIR__ . '/../../fixture/compile/generic_covariant_private_property/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testCrossTemplateGenericArgUpcastEmitsEdgeAndRunsAtRuntime(): void
+    {
+        // A covariant `Couple<out A, out B> implements Tuple<A, B>` holding a covariant container
+        // `ImmutableList<Book>` as its first type-argument is upcast to `Tuple<Collection<Product>,
+        // Tag>`. That requires the covariant edge `Tuple<ImmutableList<Book>, Tag> ⊑
+        // Tuple<Collection<Product>, Tag>`, whose per-argument check must recognize `ImmutableList<Book>
+        // ⊑ Collection<Product>` ACROSS DIFFERENT TEMPLATES (ImmutableList implements Collection, both
+        // covariant). Before the cross-template case in `isNestedSubtype`, the edge was silently
+        // omitted: `xphp check` passed, then the upcast fatal'd at runtime. This proves the edge is now
+        // emitted AND the covariance holds when the program actually runs.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/cross_template_generic_arg_upcast/source',
+            'cross-template-arg',
+        );
+        try {
+            // The interface `Tuple` specializations carry the cross-template covariant edge: the
+            // `Tuple<ImmutableList<Book>, Tag>` spec must `extends` the `Tuple<Collection<Product>, Tag>`
+            // spec (an interface-to-interface variance edge). Pre-fix there is no such edge at all.
+            $tupleDir = $fixture->cacheDir . '/Generated/App/Tuple';
+            $tupleFiles = glob($tupleDir . '/T_*.php') ?: [];
+            self::assertGreaterThanOrEqual(2, count($tupleFiles), 'two Tuple specializations exist');
+            $crossEdges = 0;
+            foreach ($tupleFiles as $file) {
+                $content = file_get_contents($file);
+                self::assertIsString($content);
+                // A Tuple spec whose `extends` clause references ANOTHER generated Tuple spec is the
+                // cross-template covariant edge (`Tuple<ImmutableList<Book>,Tag> extends
+                // Tuple<Collection<Product>,Tag>`). The supertype spec extends only `\App\Tuple`.
+                if (str_contains($content, '\\XPHP\\Generated\\App\\Tuple\\T_')) {
+                    $crossEdges++;
+                }
+            }
+            self::assertGreaterThanOrEqual(
+                1,
+                $crossEdges,
+                'the cross-template covariant edge between the two Tuple specializations is emitted',
+            );
+
+            $fixture->registerAutoload('App\\');
+            require __DIR__ . '/../../fixture/compile/cross_template_generic_arg_upcast/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testComparatorParamOnCovariantClassCompilesAndRunsUnderUpcast(): void
+    {
+        // A covariant `Box<out E>` with a `pick(Comparator<E> $c): ?E` consuming method — the sound shape
+        // where `E` sits in a contravariant slot (Comparator<in T>) inside a contravariant parameter
+        // (contra ∘ contra = covariant). Previously rejected `xphp.variance_position` even though sound;
+        // the composing variance pass now accepts it. A `Box<Book>` is upcast to `Box<Product>` and
+        // `pick` is called with a `ById` (a Comparator<Product>, hence by contravariance a
+        // Comparator<Book>): it loads, runs, and returns the max Book — proving the acceptance is sound.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/comparator_param_covariant_upcast/source',
+            'comparator-param-covariant',
+        );
+        try {
+            $fixture->registerAutoload('App\\');
+            require __DIR__ . '/../../fixture/compile/comparator_param_covariant_upcast/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testBoundedCovariantConstructorKeepsConcreteType(): void
+    {
+        // A bounded covariant constructor param keeps its REAL substituted type (the
+        // concrete arg, not the bound and not `mixed`) — constructors are LSP-exempt.
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_covariant_bounded_constructor/source');
+        self::assertStringContainsString('__construct(\\App\\BoundConstructor\\Tag ...$items)', $generated);
+        self::assertStringNotContainsString('__construct(mixed', $generated);
+        self::assertStringNotContainsString('__construct(\\Stringable', $generated);
+    }
+
+    public function testMixedVarianceConstructorKeepsConcreteTypes(): void
+    {
+        // `Pair<out A, B>`: the covariant `A` constructor param keeps its concrete type, the
+        // invariant `B` param keeps its concrete substituted type, and a plain
+        // scalar param (`int $tag`) is left untouched (it isn't a type-param).
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_mixed_variance_constructor/source');
+        self::assertMatchesRegularExpression('/__construct\(\\\\App\\\\MixedConstructor\\\\Apple \$a, \\\\App\\\\MixedConstructor\\\\Apple \$b, int \$tag\)/', $generated);
+        self::assertStringNotContainsString('mixed $a', $generated);
+    }
+
+    public function testContravariantConstructorParamKeepsConcreteType(): void
+    {
+        // Symmetry with the covariant case: a `in T` constructor param keeps its real type
+        // too, and the contravariant edge (Consumer<Fruit> extends Consumer<Banana>)
+        // stays valid because constructors are LSP-exempt.
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_contravariant_constructor/source');
+        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContravariantConstructor\\\\Banana \.\.\.\$items\)/', $generated));
+        self::assertSame(1, preg_match_all('/function __construct\(\\\\App\\\\ContravariantConstructor\\\\Fruit \.\.\.\$items\)/', $generated));
+        self::assertStringNotContainsString('mixed ...$items', $generated);
+        self::assertStringContainsString('extends \\XPHP\\Generated\\App\\ContravariantConstructor\\Consumer\\T_', $generated);
+    }
+
+    public function testNonBareVariantConstructorParamShapesAreRejected(): void
+    {
+        // Only a *bare* variance-marked type-param is currently supported in a
+        // constructor parameter. Richer shapes are still rejected by the
+        // inner-variance check (not yet supported in constructor position):
+        //   - `?T`        — nullable, not a bare Name
+        //   - `Box<T>`    — T through another generic's invariant slot
+        //   - `(T $a, ?T $b)` — the allowed leading `T` must not stop the walk from
+        //                       reaching the bad trailing `?T`
+        $fixtures = [
+            'check/variance_constructor_nullable/source',
+            'check/variance_constructor_nested_generic/source',
+            'check/variance_constructor_mixed_params/source',
+        ];
+        foreach ($fixtures as $fixture) {
+            $this->compileFixtureExpectingVarianceViolation($fixture);
+        }
+    }
+
+    public function testTwoCovariantParamsBothKeepConcreteTypes(): void
+    {
+        // Two covariant params: BOTH `T`-typed constructor params keep their real
+        // substituted types (pins that nothing is erased for any variant constructor param).
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_two_covariant_constructor/source');
+        self::assertSame(1, preg_match_all('/__construct\(\\\\App\\\\TwoConstructor\\\\Apple \$a, \\\\App\\\\TwoConstructor\\\\Apple \$b\)/', $generated));
+        self::assertStringNotContainsString('mixed $a', $generated);
+    }
+
+    public function testInvariantClassConstructorIsNotErasedAndKeepsFinal(): void
+    {
+        // An invariant class is not variance-erased (constructor param keeps its concrete
+        // type) and its `final` modifier is preserved (no edges → no LSP hazard).
+        $generated = $this->compileFixtureAndReadGenerated('compile/generic_invariant_constructor/source');
+        self::assertStringContainsString('final class', $generated);
+        self::assertStringContainsString('App\\InvariantConstructor\\Apple $item', $generated);
+        self::assertStringNotContainsString('mixed $item', $generated);
+    }
+
     public function testCovariantSubtypeEdgeIsEmittedAsExtendsForClassSpecializations(): void
     {
-        // Fixture: `variance_covariant_happy/`. Producer<+T>, Banana <: Fruit.
+        // Fixture: `variance_covariant_happy/`. Producer<out T>, Banana <: Fruit.
         // Two specializations; Producer_Banana extends Producer_Fruit because
         // +T is covariant.
         $sourceDir = realpath(__DIR__ . '/../../fixture/compile/variance_covariant_happy/source')
@@ -74,7 +318,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testContravariantSubtypeEdgeFlipsDirection(): void
     {
-        // Fixture: `variance_contravariant_happy/`. Consumer<-T>, Dog <: Animal.
+        // Fixture: `variance_contravariant_happy/`. Consumer<in T>, Dog <: Animal.
         // With contravariance, the edge flips: Consumer_Animal extends
         // Consumer_Dog (not the other way around).
         $sourceDir = realpath(__DIR__ . '/../../fixture/compile/variance_contravariant_happy/source')
@@ -140,6 +384,50 @@ final class VarianceEdgeIntegrationTest extends TestCase
         self::assertContains('OK', $output);
     }
 
+    public function testContravariantConstructorChainAutoloadsAndConstructsWithoutPhpFatal(): void
+    {
+        // The CONTRAVARIANT counterpart of the autoload proof, with a real-typed
+        // constructor. The edge flips: `Consumer<Fruit>` extends `Consumer<Banana>`,
+        // so the child constructor (`Fruit ...$items`) WIDENS the parent's (`Banana ...`).
+        // PHP exempts `__construct` from LSP, so the chain must both autoload AND
+        // construct instances of each specialization without a fatal — empirically
+        // confirming the same exemption holds in the contravariant direction.
+        $src = realpath(__DIR__ . '/../../fixture/compile/generic_contravariant_constructor/source')
+            ?: throw new RuntimeException('Fixture missing');
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($src)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $src, $this->targetDir, $this->cacheDir);
+
+        $bananaFqn = Registry::generatedFqn('App\\ContravariantConstructor\\Consumer', [new TypeRef('App\\ContravariantConstructor\\Banana')]);
+        $fruitFqn = Registry::generatedFqn('App\\ContravariantConstructor\\Consumer', [new TypeRef('App\\ContravariantConstructor\\Fruit')]);
+        $prefixes = [
+            'XPHP\\Generated\\' => $this->cacheDir . '/Generated',
+            'App\\ContravariantConstructor\\' => $this->targetDir,
+        ];
+
+        $loader = $this->workDir . '/contra-load.php';
+        $script = "<?php\n"
+            . "spl_autoload_register(function (string \$c): void {\n"
+            . "    foreach (" . var_export($prefixes, true) . " as \$p => \$base) {\n"
+            . "        if (str_starts_with(\$c, \$p)) {\n"
+            . "            \$f = \$base . '/' . str_replace('\\\\', '/', substr(\$c, strlen(\$p))) . '.php';\n"
+            . "            if (is_file(\$f)) { require_once \$f; }\n"
+            . "        }\n"
+            . "    }\n"
+            . "});\n"
+            . "new (" . var_export($bananaFqn, true) . ")(new \\App\\ContravariantConstructor\\Banana());\n"
+            . "new (" . var_export($fruitFqn, true) . ")(new \\App\\ContravariantConstructor\\Fruit());\n"
+            . "echo \"OK\\n\";\n";
+        file_put_contents($loader, $script);
+
+        $output = [];
+        $exitCode = 0;
+        exec('php ' . escapeshellarg($loader) . ' 2>&1', $output, $exitCode);
+        self::assertSame(0, $exitCode, "Contravariant constructor chain fataled:\n" . implode("\n", $output));
+        self::assertContains('OK', $output);
+    }
+
     public function testNoEdgeBetweenUnrelatedSpecializations(): void
     {
         // Banana and Apple both extend Fruit but not each other. The edge
@@ -151,7 +439,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/Containers/Producer.xphp', <<<'PHP'
         <?php
         namespace App\Containers;
-        class Producer<+T>
+        class Producer<out T>
         {
             public function get(): T { throw new \LogicException; }
         }
@@ -205,7 +493,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testScalarArgsSkipVarianceEdgeEmission(): void
     {
-        // `Producer<+T>` instantiated with int and string -- no PHP-level
+        // `Producer<out T>` instantiated with int and string -- no PHP-level
         // subtype relationship between scalars, so no edge is emitted in
         // either direction.
         $sourceDir = $this->workDir . '/src-scalar';
@@ -213,7 +501,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/Producer.xphp', <<<'PHP'
         <?php
         namespace App;
-        class Producer<+T>
+        class Producer<out T>
         {
             public function get(): T { throw new \LogicException; }
         }
@@ -252,7 +540,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testTransitiveEdgesCollapseToDirectParent(): void
     {
-        // Banana <: Apple <: Fruit. Three specializations of Producer<+T>.
+        // Banana <: Apple <: Fruit. Three specializations of Producer<out T>.
         // The variance edges form a chain: Producer_Banana extends Producer_Apple,
         // Producer_Apple extends Producer_Fruit. Producer_Banana does NOT need a
         // direct edge to Producer_Fruit (PHP resolves it transitively).
@@ -261,7 +549,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
         file_put_contents($sourceDir . '/P.xphp', <<<'PHP'
         <?php
         namespace App;
-        class P<+T> { public function get(): T { throw new \LogicException; } }
+        class P<out T> { public function get(): T { throw new \LogicException; } }
         PHP);
         file_put_contents($sourceDir . '/Fruit.xphp', <<<'PHP'
         <?php
@@ -312,7 +600,7 @@ final class VarianceEdgeIntegrationTest extends TestCase
 
     public function testAllThreeFeaturesCompose(): void
     {
-        // Fixture: `variance_with_defaults_and_bounds/`. `Cache<+K : Stringable
+        // Fixture: `variance_with_defaults_and_bounds/`. `Cache<out K : Stringable
         // & Countable, V = mixed>` composes covariance + intersection bound
         // + default. Verifies the integration: parse succeeds, bound is
         // checked, default pads, variance edges emit (single specialization
@@ -345,12 +633,12 @@ final class VarianceEdgeIntegrationTest extends TestCase
         // extends [Apple] only, NOT [Apple, Fruit]. The filter-direct-supers
         // pass is exercised here on a multi-extends path that single-extends
         // Class_ tests don't cover.
-        $sourceDir = $this->workDir . '/src-iface-transitive';
+        $sourceDir = $this->workDir . '/src-interface-transitive';
         mkdir($sourceDir, 0o755, true);
         file_put_contents($sourceDir . '/IProducer.xphp', <<<'PHP'
         <?php
         namespace App;
-        interface IProducer<+T> { public function get(): T; }
+        interface IProducer<out T> { public function get(): T; }
         PHP);
         file_put_contents($sourceDir . '/Fruit.xphp', <<<'PHP'
         <?php
@@ -503,6 +791,60 @@ final class VarianceEdgeIntegrationTest extends TestCase
         $body .= "echo \"OK\\n\";\n";
         file_put_contents($loader, $body);
         return $loader;
+    }
+
+    /**
+     * Compile a tracked fixture's `source/` dir and return the concatenated text of
+     * every generated specialization, for asserting on emitted constructor signatures.
+     *
+     * @param string $relFixtureDir path under `test/fixture/`, e.g. `compile/foo/source`
+     */
+    private function compileFixtureAndReadGenerated(string $relFixtureDir): string
+    {
+        $src = realpath(__DIR__ . '/../../fixture/' . $relFixtureDir)
+            ?: throw new RuntimeException("missing fixture: {$relFixtureDir}");
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($src)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $compiler->compile($sources, $src, $this->targetDir, $this->cacheDir);
+
+        $generatedDir = $this->cacheDir . '/Generated';
+        if (!is_dir($generatedDir)) {
+            return '';
+        }
+        $out = '';
+        $iter = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($generatedDir));
+        foreach ($iter as $file) {
+            if ($file->isFile() && str_ends_with($file->getFilename(), '.php')) {
+                $out .= file_get_contents($file->getPathname()) . "\n";
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Compile a tracked fixture's `source/` dir and assert it raises a variance
+     * violation (compile-mode, fail-fast).
+     *
+     * @param string $relFixtureDir path under `test/fixture/`, e.g. `check/foo/source`
+     */
+    private function compileFixtureExpectingVarianceViolation(string $relFixtureDir): void
+    {
+        $src = realpath(__DIR__ . '/../../fixture/' . $relFixtureDir)
+            ?: throw new RuntimeException("missing fixture: {$relFixtureDir}");
+        $dir = sys_get_temp_dir() . '/xphp-iv-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        $compiler = $this->buildCompiler();
+        $sources = (new NativeFileFinder())->find($src)
+            ->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        try {
+            $compiler->compile($sources, $src, $dir . '/dist', $dir . '/cache');
+            self::fail('expected a variance violation, none thrown');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('Variance violation', $e->getMessage());
+        } finally {
+            self::rrmdir($dir);
+        }
     }
 
     private function fqnToPath(string $fqn): string

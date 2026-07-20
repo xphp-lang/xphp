@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ContravariantConstructor;
+
+$a = new Consumer::<Banana>(new Banana());
+$b = new Consumer::<Fruit>(new Fruit());

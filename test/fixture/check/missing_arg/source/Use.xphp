@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\MissingArg;
+
+// Only one type argument supplied; parameter `B` has no default.
+$p = new Pair::<int>(1, 2);

@@ -1,0 +1,11 @@
+<?php
+declare(strict_types=1);
+namespace App;
+abstract class AbstractColl<out E> implements Collection<E>, Lookup<E>
+{
+    /** @var list<mixed> */
+    protected array $items;
+    public function __construct(E ...$items) { $this->items = $items; }
+    public function contains<S : E>(S $element): bool { return \in_array($element, $this->items, true); }
+    public function indexOf<S : E>(S $element): int { $i = \array_search($element, $this->items, true); return $i === false ? -1 : (int) $i; }
+}

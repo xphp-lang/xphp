@@ -1,5 +1,10 @@
 {
     "$schema": "vendor/infection/infection/resources/schema.json",
+    // Per-mutant timeout. Raised from the 10s default because the StaticAnalysis
+    // (PHPStan) tests shell out to a real `phpstan` subprocess, so a mutant whose
+    // covering set includes them needs well over 10s to run — otherwise it false-
+    // times-out instead of being killed by the fast pure tests in the same set.
+    "timeout": 120,
     "source": {
         "directories": [
             "src"
@@ -40,7 +45,11 @@
                 "XPHP\\FileSystem\\FilepathArray::__construct",
                 "XPHP\\FileSystem\\FilepathArray::filter",
                 "XPHP\\Transpiler\\Monomorphize\\BoundIntersection::__construct",
-                "XPHP\\Transpiler\\Monomorphize\\BoundUnion::__construct"
+                "XPHP\\Transpiler\\Monomorphize\\BoundUnion::__construct",
+                // ClosureLiteralSignature::extract: array_map over php-parser's
+                // already-0-indexed params list — the wrapper exists purely to
+                // prove list-ness to PHPStan; unwrapping it is a no-op.
+                "XPHP\\Transpiler\\Monomorphize\\ClosureLiteralSignature::extract"
             ]
         },
 
@@ -291,8 +300,14 @@
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specialize",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeMethod",
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::specializeFunction",
+                // InnerVarianceValidator::isExemptVariantConstructorParam: the promoted-param
+                // `return false` guard is unreachable in practice — a covariant class with a
+                // promoted (property) type-param is flagged by the variance-POSITION pass
+                // first, and inner-variance skips position-flagged definitions, so this branch
+                // never decides anything observable.
+                "XPHP\\Transpiler\\Monomorphize\\InnerVarianceValidator::isExemptVariantConstructorParam",
                 // Specializer::substituteTypeRef: dropping `return $ref` on the empty-args
-                // branch falls through to array_map over empty + ctor, producing an
+                // branch falls through to array_map over empty + constructor, producing an
                 // equivalent TypeRef.  Pure micro-optimisation, no observable difference.
                 "XPHP\\Transpiler\\Monomorphize\\Specializer::substituteTypeRef",
                 // ByteOffsetMap::fromReplacements: removing the `return self::identity()`
@@ -763,12 +778,14 @@
         // Inside the cycle-safe BFS of TypeHierarchy::isSubtype, `$visited[$cur] = true`
         // is only consumed via `isset($visited[$cur])` — the value is never read. The
         // TrueValue → false mutation is observationally identical (the KEY is what tracks
-        // visit-state, not the VALUE).
+        // visit-state, not the VALUE). TypeHierarchy::ancestorChain uses the same
+        // `$seen[$next] = true` + `isset()` dedup, so its TrueValue mutant is equivalent too.
         // Same pattern in GenericMethodCompiler::rewriteCallSites — `$alreadyGenerated[key] = true`
         // is consumed via `isset()`, never via value read.
         "TrueValue": {
             "ignore": [
                 "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::isSubtype",
+                "XPHP\\Transpiler\\Monomorphize\\TypeHierarchy::ancestorChain",
                 "XPHP\\Transpiler\\Monomorphize\\GenericMethodCompiler",
                 // VarianceEdgeEmitter::filterDirectSupers: the
                 // `$impliedByAnother = true; break;` shortcut. Mutating

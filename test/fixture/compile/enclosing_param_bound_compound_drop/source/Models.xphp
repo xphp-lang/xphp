@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Fruit {}
+
+// Banana is a valid element (Banana <: Fruit) but is NOT `\Stringable` (it has no `__toString`) — so
+// it satisfies the `E` half of a `\Stringable & E` bound while violating the `\Stringable` half.
+class Banana extends Fruit {}

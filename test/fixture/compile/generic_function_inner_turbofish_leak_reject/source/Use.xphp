@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A *concrete* inner closure turbofish (`$f::<int>`) that works at top-level or in a
+// plain function, but NOT inside a generic function body: the variable-turbofish
+// dispatch does not run for a closure enclosed by a generic function, so the emitted
+// `outer_T_<hash>` keeps `fn(U $x): U` referencing the non-existent `App\U`. Rejected.
+function outer<T>(T $seed): int
+{
+    $f = fn<U>(U $x): U => $x;
+    return $f::<int>(41);
+}
+
+outer::<string>('hi');

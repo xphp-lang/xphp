@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// The covariant upcast of a Comparator-consuming covariant container: `choose` takes a
+// `Box<Product>` and a `Comparator<Product>`, but is called with a `Box<Book>` and a `ById`
+// (a Comparator<Product>, hence by contravariance a Comparator<Book>). The Box<Book>'s `pick`
+// compares its Book elements through the Product comparator — sound under the covariant upcast.
+function choose(Box<Product> $b, Comparator<Product> $c): ?Product
+{
+    return $b->pick($c);
+}
+
+$books = new Box::<Book>(new Book(1), new Book(3), new Book(2));
+$best = choose($books, new ById());

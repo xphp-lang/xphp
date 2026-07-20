@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace XPHP\Transpiler\Monomorphize;
 
+use PhpParser\Node\Identifier;
+use PhpParser\Node\Name;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\Node\UseItem;
 
@@ -18,8 +21,12 @@ use PhpParser\Node\UseItem;
 final class NamespaceContext
 {
     private string $currentNamespace = '';
-    /** @var array<string, string> alias → FQN */
+    /** @var array<string, string> alias → FQN (class/namespace `use` imports) */
     private array $useMap = [];
+    /** @var array<string, string> alias → FQN (`use function` imports) */
+    private array $functionUseMap = [];
+    /** @var array<string, string> alias → FQN (`use const` imports) */
+    private array $constUseMap = [];
 
     /**
      * Push a new enclosing namespace. `$name` is the namespace string
@@ -33,6 +40,8 @@ final class NamespaceContext
         // never observably differs from '' in the test suite.
         $this->currentNamespace = $name ?? '';
         $this->useMap = [];
+        $this->functionUseMap = [];
+        $this->constUseMap = [];
     }
 
     /**
@@ -48,8 +57,124 @@ final class NamespaceContext
             }
             $fqn = $u->name->toString();
             $alias = $u->alias?->toString() ?? self::lastSegment($fqn);
+            // The class/namespace map keeps EVERY import (including function/const,
+            // as it always has) so class resolution and isImported() are unchanged.
             $this->useMap[$alias] = $fqn;
+            // Additionally route `use function` / `use const` into their own maps so
+            // function/const resolution honours PHP's separate symbol namespaces — a
+            // class `use App\Helper;` must never capture a `helper()` call. The item's
+            // own type wins when set (mixed groups), else the statement's type.
+            $type = $u->type !== Use_::TYPE_UNKNOWN ? $u->type : $use->type;
+            $this->routeSymbolImport($type, $alias, $fqn);
         }
+    }
+
+    /**
+     * Index a `GroupUse` (`use N\{a, function b, const C}`). Each member is stored in the
+     * class/namespace useMap (as {@see indexUse} does for every single import), so a
+     * group-imported CLASS or namespace resolves identically to its single-import form —
+     * a relocated generic body that references it re-qualifies to the import target instead
+     * of falling back to the current namespace (and fatalling). `use function` / `use const`
+     * members are ADDITIONALLY routed into their own symbol maps, honouring PHP's separate
+     * symbol namespaces. Each member FQN is the group prefix joined with the member name;
+     * the alias is the member's `as` name, else the last segment of the member name.
+     */
+    public function indexGroupUse(GroupUse $use): void
+    {
+        $prefix = $use->prefix->toString();
+        foreach ($use->uses as $u) {
+            // @phpstan-ignore-next-line instanceof.alwaysTrue — mirrors indexUse's defensive guard against php-parser's PHPDoc-narrowed use-item type.
+            if (!$u instanceof UseItem) {
+                continue;
+            }
+            $member = $u->name->toString();
+            $fqn = $prefix . '\\' . $member;
+            $alias = $u->alias?->toString() ?? self::lastSegment($member);
+            // The class/namespace map keeps EVERY member, exactly as indexUse does for a
+            // single import — this is what a relocated body's class-name resolution reads.
+            $this->useMap[$alias] = $fqn;
+            // The item's own type wins when set (mixed `use N\{function a, const B}`),
+            // else the group statement's type (`use function N\{a, b}`).
+            $type = $u->type !== Use_::TYPE_UNKNOWN ? $u->type : $use->type;
+            $this->routeSymbolImport($type, $alias, $fqn);
+        }
+    }
+
+    /**
+     * Route a single import into the callable/const symbol maps by its resolved type.
+     * A class/namespace import (any other type) contributes to neither.
+     */
+    private function routeSymbolImport(int $type, string $alias, string $fqn): void
+    {
+        if ($type === Use_::TYPE_FUNCTION) {
+            $this->functionUseMap[$alias] = $fqn;
+        } elseif ($type === Use_::TYPE_CONSTANT) {
+            $this->constUseMap[$alias] = $fqn;
+        }
+    }
+
+    /**
+     * Resolve a php-parser Name used as a FREE-FUNCTION callee to its FQN,
+     * honouring PHP's function-resolution rules: an unqualified name binds a
+     * `use function` import first, else the current namespace (with a global
+     * fallback the caller preserves by NOT rewriting when the FQN is unknown);
+     * a qualified name's leading segment is a NAMESPACE, resolved via the
+     * class/namespace `use` map — never the function-import map.
+     */
+    public function resolveFunctionName(Name $name): string
+    {
+        return $this->resolveCallable($name->toCodeString(), $this->functionUseMap);
+    }
+
+    /**
+     * Resolve a php-parser Name used as a CONST fetch to its FQN, the same way
+     * as {@see resolveFunctionName} but against the `use const` map.
+     */
+    public function resolveConstName(Name $name): string
+    {
+        return $this->resolveCallable($name->toCodeString(), $this->constUseMap);
+    }
+
+    /**
+     * Shared function/const resolution. `$symbolUseMap` is the `use function`
+     * or `use const` alias map consulted for UNqualified names only; qualified
+     * names resolve their leading namespace segment via the class/namespace map.
+     *
+     * @param array<string, string> $symbolUseMap
+     */
+    private function resolveCallable(string $code, array $symbolUseMap): string
+    {
+        if (str_starts_with($code, '\\')) {
+            return ltrim($code, '\\');
+        }
+        if (strncasecmp($code, 'namespace\\', 10) === 0) {
+            $rest = substr($code, 10);
+            return $this->currentNamespace !== ''
+                ? $this->currentNamespace . '\\' . $rest
+                : $rest;
+        }
+        if (!str_contains($code, '\\')) {
+            // Unqualified: a `use function` / `use const` import binds it; else the
+            // current namespace. (No leading backslash is added — the caller's
+            // in-set guard decides whether to fully-qualify, so PHP's global
+            // fallback survives for names the unit does not define.)
+            if (isset($symbolUseMap[$code])) {
+                return $symbolUseMap[$code];
+            }
+            return $this->currentNamespace !== ''
+                ? $this->currentNamespace . '\\' . $code
+                : $code;
+        }
+        // Qualified `A\b`: the leading segment is a namespace, brought into scope
+        // by a class/namespace `use` (never a function/const import), else it is
+        // relative to the current namespace.
+        $first = self::firstSegment($code);
+        if (isset($this->useMap[$first])) {
+            return $this->useMap[$first] . substr($code, strlen($first));
+        }
+        return $this->currentNamespace !== ''
+            ? $this->currentNamespace . '\\' . $code
+            : $code;
     }
 
     /**
@@ -69,6 +194,16 @@ final class NamespaceContext
         if (str_starts_with($name, '\\')) {
             return ltrim($name, '\\');
         }
+        // `namespace\Foo` binds to the CURRENT namespace by PHP's rules — never
+        // to a `use` alias, and never as a literal first segment (`namespace`
+        // is a reserved word, so no real class name can start with it). The
+        // keyword is case-insensitive.
+        if (strncasecmp($name, 'namespace\\', 10) === 0) {
+            $rest = substr($name, 10);
+            return $this->currentNamespace !== ''
+                ? $this->currentNamespace . '\\' . $rest
+                : $rest;
+        }
         $first = self::firstSegment($name);
         if (isset($this->useMap[$first])) {
             $rest = substr($name, strlen($first));
@@ -79,9 +214,37 @@ final class NamespaceContext
             : $name;
     }
 
+    /**
+     * Resolve a php-parser Name (or Identifier) honoring the node's own
+     * qualification: `toCodeString()` yields `\App\Box` for a fully-qualified
+     * name (the leading-backslash branch), `namespace\Box` for a relative name
+     * (the relative-binding branch — a `use` alias NEVER applies to either,
+     * per PHP's rules), and the plain spelling otherwise. Flattening a Name
+     * with `toString()` before resolving is exactly the bug this seam removes:
+     * it drops both prefixes, doubling the namespace on fully-qualified names
+     * and letting the alias map capture relative ones.
+     */
+    public function resolveName(Name|Identifier $name): string
+    {
+        return $this->resolveAgainstContext(
+            $name instanceof Name ? $name->toCodeString() : $name->toString(),
+        );
+    }
+
     public function currentNamespace(): string
     {
         return $this->currentNamespace;
+    }
+
+    /**
+     * Whether a bare name's first segment is brought into scope by a `use`
+     * import. Used to spare imported (and therefore deliberate) class references
+     * from the undeclared-type-parameter check: an imported name is the author's
+     * explicit statement that the type lives elsewhere, so it's never "suspect".
+     */
+    public function isImported(string $name): bool
+    {
+        return isset($this->useMap[self::firstSegment($name)]);
     }
 
     private static function firstSegment(string $name): string

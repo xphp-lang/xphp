@@ -6,12 +6,14 @@ namespace XPHP\Transpiler\Monomorphize;
 
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
 use XPHP\FileSystem\FileWriter\NativeFileWriter;
+use XPHP\TestSupport\CompiledFixture;
 use XPHP\TestSupport\SnapshotHash;
 
 final class BoundedGenericIntegrationTest extends TestCase
@@ -242,6 +244,281 @@ final class BoundedGenericIntegrationTest extends TestCase
         // that flip the union's $sawNull initialization / ternary direction.
         $this->expectExceptionMessage('does not satisfy');
         $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
+    public function testScalarUnionBoundAcceptsScalarArguments(): void
+    {
+        // A scalar-union bound `<T : int|string>` must accept scalar type arguments. Each scalar operand of
+        // the bound is recognised as a builtin (left unqualified, flagged isScalar) rather than
+        // namespace-qualified as a phantom class `App\int` -- so the bound check compares
+        // scalar-against-scalar and both `::<int>` and `::<string>` specialize.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : int|string>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $i = new Box::<int>(7);
+        $s = new Box::<string>('x');
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $result = $compiler->compile(new FilepathArray($boxFile, $useFile), $sourceDir, $this->targetDir, $this->cacheDir);
+
+        self::assertSame(2, $result->generatedCount, 'both int and string satisfy the int|string bound');
+    }
+
+    public function testScalarUnionBoundRejectsClassArgument(): void
+    {
+        // The dual of the accept case: a class argument does NOT satisfy a scalar-union bound, and the
+        // diagnostic renders the bound with its scalar operands unqualified (`int | string`, not
+        // `App\int | App\string`).
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : int|string>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $thingFile = $sourceDir . '/Thing.xphp';
+        file_put_contents($thingFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Thing {}
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $t = new Box::<Thing>(new Thing());
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($boxFile, $thingFile, $useFile);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated');
+        $this->expectExceptionMessage('int | string');
+        $this->expectExceptionMessage('does not satisfy');
+        $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
+    public function testSingleScalarBoundRejectsDifferentScalar(): void
+    {
+        // A single scalar bound `<T : string>` rejects a different scalar (`int`) -- the bound is a concrete
+        // scalar, so only that scalar (or a subtype, of which scalars have none) satisfies it.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : string>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $b = new Box::<int>(7);
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $sources = new FilepathArray($boxFile, $useFile);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated');
+        $this->expectExceptionMessage('int');
+        $compiler->compile($sources, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
+    public function testNonReservedScalarAliasResolvesAsClassBoundNotScalar(): void
+    {
+        // Regression guard: `integer`/`boolean`/`double` are LEGAL class names (not reserved PHP keywords),
+        // so they are kept out of SCALAR_TYPES. A bound `<T : Double>` must resolve `Double` to the class,
+        // not be mistaken for the scalar `double` -- otherwise a valid subtype argument would be falsely
+        // rejected.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $modelFile = $sourceDir . '/Models.xphp';
+        file_put_contents($modelFile, <<<'PHP'
+        <?php
+        namespace App;
+        class Double {}
+        final class Sub extends Double {}
+        PHP);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : Double>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $b = new Box::<Sub>(new Sub());
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $result = $compiler->compile(new FilepathArray($boxFile, $modelFile, $useFile), $sourceDir, $this->targetDir, $this->cacheDir);
+
+        self::assertSame(1, $result->generatedCount, 'Sub extends Double, so the class bound <T : Double> is satisfied');
+    }
+
+    public function testMixedCaseScalarBoundIsRecognisedCaseInsensitively(): void
+    {
+        // PHP type keywords are case-insensitive, so a bound written `<T : Int|String>` must be recognised
+        // as the scalar union, not namespace-qualified as classes `App\Int` / `App\String`. The leaf
+        // lowercases the name before matching the keyword list, exactly as the signature-type resolver does.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        $boxFile = $sourceDir . '/Box.xphp';
+        file_put_contents($boxFile, <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T : Int|String>
+        {
+            public function __construct(public readonly T $value) {}
+        }
+        PHP);
+        $useFile = $sourceDir . '/Use.xphp';
+        file_put_contents($useFile, <<<'PHP'
+        <?php
+        namespace App;
+        $i = new Box::<int>(7);
+        $s = new Box::<string>('x');
+        PHP);
+
+        $compiler = $this->buildCompiler();
+        $result = $compiler->compile(new FilepathArray($boxFile, $useFile), $sourceDir, $this->targetDir, $this->cacheDir);
+
+        self::assertSame(2, $result->generatedCount, 'Int|String is the scalar union regardless of letter case');
+    }
+
+    #[RunInSeparateProcess]
+    public function testScalarAliasClassTypeArgumentsResolveAndRunAtRuntime(): void
+    {
+        // The headline behavioural gate: `Double`/`Integer`/`Boolean` are real classes whose names alias the
+        // gettype-style scalar names. Used as generic type ARGUMENTS they must resolve to the classes, so
+        // each `Box<…>` specialization is typed on `\App\Double` etc. Before the fix the alias was mistaken
+        // for the scalar and emitted `public readonly double $value` -- which PHP reads as a non-existent
+        // class and fatals at construction. Compiled and executed end-to-end.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/scalar_alias_class_resolves/source',
+            'scalar-alias',
+        );
+        try {
+            $fixture->registerAutoload('App');
+            require __DIR__ . '/../../fixture/compile/scalar_alias_class_resolves/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testScalarAliasClassInSignaturePositionResolvesToClass(): void
+    {
+        // The signature-position twin: a class named `Double` used as a member type inside a generic template
+        // must resolve to the fully-qualified class (`?\App\Double`), not the bare scalar keyword `double`
+        // (which would emit a phantom type in the generated namespace).
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        file_put_contents($sourceDir . '/Double.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        final class Double { public function __construct(public readonly float $f) {} }
+        PHP);
+        file_put_contents($sourceDir . '/Pair.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        final class Pair<T> { public function __construct(public readonly T $t, public ?Double $d = null) {} }
+        PHP);
+        file_put_contents($sourceDir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        $p = new Pair::<int>(3, new Double(1.0));
+        PHP);
+
+        $files = (new NativeFileFinder())->find($sourceDir)->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $this->buildCompiler()->compile($files, $sourceDir, $this->targetDir, $this->cacheDir);
+
+        $specs = glob($this->cacheDir . '/Generated/App/Pair/*.php') ?: [];
+        self::assertNotEmpty($specs, 'Pair<int> must specialize');
+        $content = file_get_contents($specs[0]);
+        self::assertStringContainsString('\\App\\Double', $content, 'the aliased class must resolve to the FQ class');
+        self::assertStringNotContainsString('?double ', $content, 'must not emit the bare scalar keyword as the member type');
+    }
+
+    public function testUndeclaredScalarAliasInMemberPositionIsRejected(): void
+    {
+        // The undeclared-type check is no longer fooled by the alias: an alias-named class used as a member
+        // type but NOT declared in the source set is a genuine undeclared type. Before the fix it was
+        // silently absorbed as the scalar `double`; it now fails loudly.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        file_put_contents($sourceDir . '/Pair.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        final class Pair<T> { public ?Double $d = null; public function __construct(public readonly T $t) {} }
+        PHP);
+        file_put_contents($sourceDir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        $p = new Pair::<int>(3);
+        PHP);
+
+        $files = (new NativeFileFinder())->find($sourceDir)->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+
+        $this->expectException(RuntimeException::class);
+        // Single matcher: the diagnostic must name the offending type AND classify it as undeclared.
+        // (expectExceptionMessage is assign-only, so two calls would assert only the second.)
+        $this->expectExceptionMessageMatches('/`Double`.*is not a declared type parameter/');
+        $this->buildCompiler()->compile($files, $sourceDir, $this->targetDir, $this->cacheDir);
+    }
+
+    public function testRealScalarTypeArgumentStaysScalarAfterAliasFix(): void
+    {
+        // Guard against over-narrowing the keyword list: a genuine scalar argument must still specialize as
+        // the scalar, not be qualified into a phantom class `\App\int`.
+        $sourceDir = $this->workDir . '/src';
+        mkdir($sourceDir, 0o755, true);
+        file_put_contents($sourceDir . '/Box.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        final class Box<T> { public function __construct(public readonly T $value) {} }
+        PHP);
+        file_put_contents($sourceDir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        $b = new Box::<int>(7);
+        PHP);
+
+        $files = (new NativeFileFinder())->find($sourceDir)->filter(static fn (string $f): bool => str_ends_with($f, '.xphp'));
+        $this->buildCompiler()->compile($files, $sourceDir, $this->targetDir, $this->cacheDir);
+
+        $specs = glob($this->cacheDir . '/Generated/App/Box/*.php') ?: [];
+        self::assertNotEmpty($specs);
+        $content = file_get_contents($specs[0]);
+        self::assertStringContainsString('int $value', $content, 'a real scalar arg stays the scalar keyword');
+        self::assertStringNotContainsString('App\\int', $content, 'a real scalar must not be namespace-qualified');
     }
 
     public function testUnionBoundWithUnknownOperandYieldsNullVerdict(): void

@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\VarianceEdgeProvable;
+
+// `Fruit` is in the source set, so its variance edges are provable — no warning.
+$p = new Producer::<Fruit>();

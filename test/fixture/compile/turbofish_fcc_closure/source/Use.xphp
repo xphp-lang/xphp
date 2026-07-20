@@ -1,0 +1,40 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\TurbofishFccClosure;
+
+// A first-class callable of a turbofish specialization (`$f::<int>(...)`) must emit a
+// valid forwarding closure that routes through the dispatcher -- not `$f('T_…', ...)`,
+// which does not parse. Every shape below is compiled and executed.
+
+// Implicit-capture arrow: the FCC must forward THROUGH the dispatcher so the captured
+// $mul stays bound.
+$mul = 10;
+$f = fn<T>(T $x): T => $x * $mul;
+$g = $f::<int>(...);
+$viaCall = $g(5);                          // 50
+$viaMap = array_map($g, [1, 2, 3]);        // [10, 20, 30]
+
+// Named argument rides the `...` placeholder through to the specialized param `$x`.
+$id = fn<T>(T $x): T => $x;
+$h = $id::<int>(...);
+$named = $h(x: 42);                         // 42
+
+// Empty-turbofish all-defaults FCC.
+$d = fn<T = int>(T $y): T => $y;
+$e = $d::<>(...);
+$defaulted = $e(7);                         // 7
+
+// A direct turbofish call AND an FCC of the same tag share one dispatcher.
+$twice = fn<T>(T $x): T => $x;
+$direct = $twice::<int>(4);                 // 4
+$fcc = $twice::<int>(...);
+$viaFcc = $fcc(8);                          // 8
+
+// Collision guard: the dispatcher variable is literally named like the reserved
+// forwarding param. The forwarding param must be suffixed so it does not shadow the
+// captured dispatcher inside the closure body.
+$__xphp_fcc_args = fn<T>(T $x): T => $x;
+$collide = $__xphp_fcc_args::<int>(...);
+$collided = $collide(9);                     // 9

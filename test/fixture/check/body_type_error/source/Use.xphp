@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\BodyTypeError;
+
+$box = new Box::<int>(1);
+$box->get();
+$box->broken();

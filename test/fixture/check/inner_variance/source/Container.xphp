@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\InnerVariance;
+
+// Invariant slot: T appears in a mutable property, so Container's slot 0 is invariant.
+class Container<T>
+{
+    public function __construct(public T $value)
+    {
+    }
+}

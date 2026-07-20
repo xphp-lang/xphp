@@ -73,6 +73,12 @@ class Holder {
 
 ## `static` closures not supported
 
+`static` **arrows** work: `static fn<T>(T $x): T => $x` specializes
+exactly like a plain arrow (an arrow can never bind `$this`, so the
+`static` is inert; note the rewritten dispatcher closure is technically
+non-static — observable only through `Closure::bind` or reflection).
+The gap below is specific to the `static function` (closure) syntax.
+
 ### ❌ What doesn't work
 
 ```php
@@ -100,16 +106,23 @@ to a named function.
 
 ### Why
 
-The dispatcher closure that xphp emits to route specialized calls
-needs a `$this`-binding target for one of the planned future
-extensions. `static` closures explicitly block `$this` binding,
-which removes that hook.
+Specializing an anonymous template at its call site landed in stages.
+Plain generic closures and arrows are rewritten through the dispatcher
+today; `static` closures (alongside explicit `use (...)` closures) are
+a still-unimplemented branch of that rewrite. It's a capability gap,
+not a binding one — a `static` closure has no `$this` to begin with, so
+this is unrelated to the [`$this`-capture
+rejection](#this-capturing-arrows-and-closures-rejected) above. The
+named-function path is already complete, so lifting the body to a
+file-scope generic function side-steps it.
 
 ### ✅ Workaround
 
-Drop the `static` modifier, or lift the body to a named function:
+Use an arrow, drop the `static` modifier, or lift the body to a named
+function:
 
 ```php
+$f = static fn<T>(T $x): T => $x;               // works
 $f = function<T>(T $x): T { return $x; };       // works
 // or
 function id<T>(T $x): T { return $x; }
@@ -118,39 +131,87 @@ id::<int>(42);                                    // works
 
 ---
 
+## Closure signature types only in parameter, return, and property slots
+
+A `Closure(int $x): bool` signature type is accepted anywhere a plain
+type hint goes — a parameter, a return, a property, or nested inside
+another signature. Two positions are **not** supported: a generic type
+argument (`Box<Closure(int): int>`) and a generic bound
+(`class C<T : Closure(int): int>`). Each is a clear compile error:
+
+```
+A Closure(...) signature type is not supported as a generic type argument
+(closure signatures are allowed only in parameter, return, and property
+types). Use a bare \Closure, or introduce a named type alias.
+```
+
+A signature parameter must also carry a type and cannot have a default
+value — a signature describes the callable's shape, not call-time
+values.
+
+### Why
+
+A signature erases to a bare `\Closure` before specialization, but a
+generic argument or bound participates in specialization *itself*
+(naming, hashing, subtype edges), where a structural type has no
+identity to anchor to. Rejecting loudly keeps the cardinal rule: no
+silent miscompile. Lifting these positions is on the
+[roadmap](roadmap.md) as a discovery item.
+
+### ✅ Workaround
+
+Use a bare `\Closure` in the generic position — you lose the
+compile-time conformance check but keep a working type — or wrap the
+callable in a named class:
+
+```php
+class C<T : \Closure> {}                 // works: bare Closure bound
+$b = new Box::<\Closure>(fn() => 1);     // works: bare Closure argument
+```
+
+See [closure types → known limitations](syntax/closure-types.md#known-limitations)
+for the full list.
+
+---
+
 ## Variance markers are class-level only
 
 ### ❌ What doesn't work
 
 ```php
-function process<+T>(T $x): T { /* ... */ }     // free function
+function process<out T>(T $x): T { /* ... */ }     // free function
 class Box<T> {
-    public function map<+U>(callable $f): Box<U> { /* ... */ }     // method
+    public function map<out U>(callable $f): Box<U> { /* ... */ }     // method
 }
-$producer = function<+T>(): T { /* ... */ };     // closure
-$arrow    = fn<+T>(T $x): T => $x;               // arrow
+$producer = function<out T>(): T { /* ... */ };     // closure
+$arrow    = fn<out T>(T $x): T => $x;               // arrow
 ```
 
 ```
-Variance markers `+T` / `-T` are not yet supported on methods,
-functions, closures, or arrow functions; move the generic to a
-class-level type parameter.
+Variance markers `out T` / `in T` are not supported on methods, functions,
+closures, or arrow functions — variance is a class-level-only feature by
+design: a function or closure specialization has no stable class identity
+to anchor a subtype `extends` edge to. Move the generic to a class-level
+type parameter.
 ```
 
 ### Why
 
-Variance turns into real `extends` chains between specialized classes
-(see [variance](syntax/variance.md)). Methods, functions, closures,
-and arrows don't have a stable identity to anchor an `extends` chain
-to — their specializations are functions, not classes, so there's
-nothing for the subtype edge to attach to.
+This is a **permanent design boundary**, not a pending feature. Variance turns
+into real `extends` chains between specialized classes (see
+[variance](syntax/variance.md)). Methods, functions, closures, and arrows
+don't have a stable class identity to anchor an `extends` chain to — their
+specializations are functions, not classes, so there's nothing for the subtype
+edge to attach to. (This matches Kotlin, whose `fun <R> map(...)` is likewise
+invariant.) Keep variance at the class level and let method-level type
+parameters stay invariant.
 
 ### ✅ Workaround
 
 Put the template on a named class and use its method:
 
 ```php
-class Producer<+T> {
+class Producer<out T> {
     public function __invoke(): T { /* ... */ }
 }
 ```
@@ -267,22 +328,25 @@ $x = new Foo();
 if ($cond) {
     $x = new Bar();
 }
-$x->m::<int>($arg);     // de-specializes -- not a Foo or Bar method call
+$x->m::<int>($arg);     // compile error: xphp.undetermined_receiver
 ```
 
-The post-branch call drops to a non-specialized path because the
-analysis can't prove a single class for `$x`.
+The post-branch call **fails to compile**: the analysis can't prove a
+single class for `$x`, and a turbofish call can only be specialized
+against a known receiver type.
 
-> This is a **precision** issue, not a soundness one. xphp will NOT
-> pick the wrong class — it just gives up on the specialization.
+> This is a **conservatism** issue, not a soundness one. xphp will NOT
+> pick the wrong class, and it will NOT emit a runtime-broken call — it
+> refuses at compile time and tells you to give `$x` a known type.
 
 ### Why
 
-Receiver-type analysis is conservative: when `$x` is reassigned
-inside a branch and the arms don't agree on a class, post-branch
-calls fall back to a non-specialized path. Otherwise the compiler
-could pick a class that doesn't match what the variable actually
-holds at runtime.
+Receiver-type analysis is conservative: when `$x` is reassigned inside a
+branch and the arms don't agree on a class, the receiver's type is
+undetermined. The generic method is stripped from its class at compile
+time, so a non-specialized `$x->m(...)` would call a method that no
+longer exists and fatal at runtime — so the compiler reports
+`xphp.undetermined_receiver` instead of emitting it (ground or fail).
 
 The same-arms-agree shape IS supported:
 
@@ -330,7 +394,7 @@ trait HasItem<T> {
     public function set(T $item): void { /* ... */ }
 }
 
-class Container<+T> {     // covariant
+class Container<out T> {     // covariant
     use HasItem<T>;
     // The `set(T $item)` from the trait places T in a contravariant
     // position. The validator should reject -- but it doesn't, because
@@ -353,6 +417,72 @@ at compile time; the AST we walk pre-stitching doesn't see them.
 Manually audit traits used by variant generic classes. If you control
 the trait, copy the body into the class directly so the validator
 can see it.
+
+---
+
+## Covariant `array`-backed collections trip the `xphp check` PHPStan pass
+
+> **Scope:** this affects only a *multi-element* covariant collection backed by an
+> `array` field, at **PHPStan level 6 and above**. A covariant **single-value**
+> container no longer hits this — store the element in a `private T` property (PHP
+> doesn't type-check private slots across the `extends` edge), and the emitted
+> `get(): T` over a real-typed `private T` field is PHPStan-clean at every level.
+> See the [`Producer<out T>`](syntax/variance.md#example) example.
+
+### ❌ What gets flagged
+
+```php
+class ImmutableList<out T> {
+    private array $items;                       // many elements → `array` backing, not `T`
+    public function __construct(T ...$items) { $this->items = $items; }
+    public function get(int $i): T { return $this->items[$i]; }
+}
+
+$list = new ImmutableList::<Banana>(new Banana());   // compiles + runs fine
+```
+
+`xphp compile` is happy and the runtime is correct, but `xphp check`'s
+optional [PHPStan-over-the-compiled-output pass](errors.md#phpstan-over-the-compiled-output),
+**at level 6 or higher**, reports on the `ImmutableList<Banana>` specialization:
+
+```
+Property ...\ImmutableList\T_<hash>::$items type has no value type specified
+in iterable type array.
+[missingType.iterableValue]
+```
+
+(At level ≤5 it is clean — the missing-iterable-value-type rule only switches on at
+level 6.)
+
+### Why
+
+A collection holds *many* elements in one field, so the backing must be an `array`
+(you can't fit them in a single `private T` slot). xphp substitutes type parameters
+in **signatures** (the emitted `get(): Banana` is correct) but emits the backing as
+a plain `private array $items` with **no value-type annotation** — PHP has no native
+typed array, and xphp doesn't synthesise a `@var Banana[]` docblock for the
+specialization. From level 6 PHPStan requires a value type on every iterable, so it
+flags the untyped `array` property. This is the PHPStan pass being stricter than
+xphp's own generic checks, not a generics error. (The element read
+`return $this->items[$i]` is `mixed`, but PHPStan reports the *property*'s missing
+value type rather than the return.)
+
+A single-value container avoids this entirely because its backing field can be a
+real-typed `private T` (a private property is variance-exempt — see the
+[variance](syntax/variance.md) rules), so there is no untyped `array` at all. The
+limitation is specific to the `array`-backed collection shape.
+
+### ✅ Workaround
+
+- Run the generic checks without the PHPStan pass: `xphp check src --no-phpstan`
+  (the generics themselves still validate).
+- Or analyse at level ≤5 (the missing-iterable-value-type rule is off there).
+- Or scope a PHPStan ignore to the generated property in your `phpstan.neon`
+  (e.g. `ignoreErrors` on
+  `#Property .*::\$items type has no value type specified in iterable type array#`).
+
+The construction side is unaffected — the constructor parameter keeps its real
+type and is runtime-type-checked.
 
 ---
 
@@ -387,16 +517,41 @@ class Map<K, V> {
 }
 ```
 
-If you need a typed key/value container, build it from a generic
-class:
+PHP array keys are `int|string` only, so `$this->items[$k] = $v` works
+only when `K` is a string/int — it **fatals for object keys**. For a
+container keyed on (or deduplicating) arbitrary objects, define your own
+value-equality contract as a generic interface and bound on it, keying on
+`hashCode()` internally. xphp special-cases nothing here — this is the same
+pattern as a `Comparable<T>` ordering bound (see [type bounds](syntax/type-bounds.md)):
 
 ```php
-class Map<K, V> {
-    private array $items = [];
-    public function set(K $k, V $v): void { $this->items[$k] = $v; }
-    public function get(K $k): V { return $this->items[$k]; }
+// Your library/app declares the contract — xphp ships no `Hashable`.
+interface Hashable<T> {
+    public function hashCode(): int|string;
+    public function equals(T $other): bool;
+}
+
+final class Money implements Hashable {                // bare marker — no LSP friction
+    public function __construct(private int $cents) {}
+    public function hashCode(): int|string { return $this->cents; }
+    public function equals(Money $other): bool { return $other->cents === $this->cents; }
+}
+
+// F-bounded: K must be hashable to its own kind.
+class Map<K: Hashable<K>, V> {
+    private array $buckets = [];
+    public function set(K $k, V $v): void { $this->buckets[$k->hashCode()] = [$k, $v]; }
+    public function get(K $k): V { return $this->buckets[$k->hashCode()][1]; }
 }
 ```
+
+Because a generic interface lowers to an **empty marker** (see ADR-0004), the
+implementing class declares `equals(Money $other)` with its **concrete** type and
+PHP imposes no signature constraint — exactly how a `Comparable<T>` implementer
+writes `compareTo(Money $other)`. The deduping/keying logic itself is ordinary
+runtime code in your container; the bound just gives it a compile-time-checked
+contract. (The container above is illustrative — xphp is a transpiler and ships
+no collection types.)
 
 ---
 
@@ -525,3 +680,170 @@ PHP 8.5 for the pipe operator. Plain (non-generic) code, including
 newer-PHP syntax, passes straight through untouched. Note the emitted
 PHP still requires a runtime that supports those features to *execute*;
 the supported floor for xphp itself is PHP 8.4 (`composer.json`).
+
+---
+
+## Self-reintroducing specialization (list ↔ map derivations)
+
+### ❌ What doesn't work
+
+A derivation whose result type re-wraps the receiver's own type family in a
+*growing* form does not compile once that result is instantiated:
+
+```php
+class ImmutableList<out E> {
+    // Seeds a map of sub-lists: the result type reintroduces the receiver's own
+    // family (ImmutableList) one level deeper.
+    public function groupBy<L>(callable $keyOf): ImmutableMap<L, ImmutableList<E>> { /* ... */ }
+}
+class ImmutableMap<K, out V> {
+    public function values(): OrderedCollection<V> { /* ... */ }   // re-exposes the value as a list
+}
+
+// Aborts as soon as the result map is instantiated: specializing it walks its view
+// bodies (values()/entries() construct deeper lists) even if you never call them.
+$byKey  = $list->groupBy::<string>($keyOf);   // ❌ re-seeds List → Map → List → … without bound
+$bucket = $byKey->get('a');
+```
+
+```
+Generic specialization did not converge (exceeded depth 16): a self-reintroducing
+cycle grows without bound through App\ImmutableMap (…/ImmutableMap.xphp) and
+App\ImmutableList (…/ImmutableList.xphp) — e.g. "…". Break the cycle: return a
+non-self-reintroducing type from the re-exposing member (for example a
+non-generic iterable), or split the derivation …
+```
+
+### Why
+
+This is a **by-design boundary**, not a pending feature
+([ADR-0020](adr/0020-diagnose-and-restructure-self-reintroducing-specialization.md)).
+xphp monomorphizes — one class per instantiation
+([ADR-0001](adr/0001-monomorphization-over-type-erasure.md)) — so a member that
+keeps producing a strictly-deeper instantiation of its own family has no fixed
+point. Specialization discovers new instantiations **structurally**, from every
+member of a specialized class — return types *and* the `new` expressions in method
+bodies — including members you never call. So the result map's family-re-exposing
+views (`values()`/`entries()`) re-seed the cycle on their own, and retyping a
+signature without also changing the body that *constructs* the deeper value does not
+stop it. Termination is guaranteed by the depth cap
+([ADR-0006](adr/0006-bounded-specialization-depth-cap.md)), which aborts with a
+localized diagnostic naming every concrete class in the cycle and its source file.
+(It surfaces at `xphp compile`; `xphp check` does not specialize, so it passes
+green — compile to see the diagnostic.) Auto-erasing the cycle (a
+`dyn`-style seam) is deferred, not built: every monomorphizing language provides
+such an escape hatch (Rust's `dyn Trait`, JVM/HHVM erasure), but it must erase the
+*constructed value*, not merely the type.
+
+### ✅ Workaround
+
+Give the grouped result a **view-less type** — one with no `values()`/`entries()`/
+`keys()` member (and no body) that returns or constructs the receiver's family. A
+result exposing only `get(key)`/`count` cannot re-seed the cycle, so the derivation
+converges. In practice, host `groupBy`/`associateBy` as static generics on a plain,
+non-variant helper returning that view-less result, rather than as members of the
+collection — which also keeps the list template free of any map-returning member.
+
+If you do want bucket iteration, expose it past a **non-generic seam**: a view typed
+`iterable`/`array` whose body returns a plain array (no `new ImmutableList::<…>`), so
+neither the signature nor the body re-introduces the family:
+
+```php
+public function valuesList(): iterable { return array_values($this->entries); }
+// foreach ($byKey->valuesList() as $bucket) { /* a real list at runtime; element type is mixed */ }
+```
+
+The element type is `mixed` past that seam (re-narrow with `instanceof` where a typed
+bucket is needed) — the same trade a `dyn` boundary makes. Or **split the derivation**
+so the growing type is never reached through an unbounded chain.
+
+---
+
+## Generic turbofish grounded by an enclosing type parameter
+
+A turbofish whose type argument is supplied by an **enclosing** generic scope — a
+function type parameter or a class type parameter — cannot yet be specialized. Every
+such shape is rejected with a loud compile error rather than emitted as runtime-fatal
+code; the representative cases below are not exhaustive (a named free-function forward
+grounded by an enclosing parameter, `return identity::<T>($v)` inside `wrap<T>`, is the
+same class of shape and rejected the same way). Each may be lifted in a future version.
+
+### ❌ What doesn't work
+
+A generic **closure** grounded by an enclosing function type parameter:
+
+```php
+function relay<S>(S $v): S
+{
+    $inner = fn<I>(I $x): I => $x;
+    return $inner::<S>($v);          // ❌ `S` is not concrete here
+}
+```
+
+```
+Generic closure call `$inner::<S>(...)` cannot be specialized: its type argument(s)
+are grounded only by an enclosing generic scope and are not concrete here …
+```
+
+A **concrete** inner closure turbofish, but written **inside a generic function body**:
+
+```php
+function outer<T>(T $seed): int
+{
+    $f = fn<U>(U $x): U => $x;
+    return $f::<int>(41);            // ❌ the same call works at file scope, not here
+}
+```
+
+A **method/static turbofish grounded by an enclosing class type parameter**:
+
+```php
+class Box<T>
+{
+    public function make(T $v): T { return self::gen::<T>($v); }   // ❌ `T` from the class
+    public static function gen<U>(U $x): U { return $x; }
+}
+```
+
+```
+A generic turbofish/closure marker survived specialization into the emitted output …
+[xphp.unspecialized_generic_leak]
+```
+
+### Why
+
+Variable-turbofish and method-turbofish dispatch is **call-site-driven**: a site is
+specialized only when its type arguments are concrete *at that site*. When the argument
+comes from an enclosing type parameter it is still abstract when the inner site is
+visited, so no concrete dispatch can be built; and the concrete-inner case (`outer`)
+only fails because the closure sits inside a *generic function* body, which the current
+dispatch pass does not re-enter per specialization. Left un-grounded, each would emit
+PHP that names a non-existent type-parameter class (`App\I`, `App\U`, or a stripped
+`gen()` method) and fatal on first use. Rather than emit that, xphp fails the build: the
+closure form is caught at the source seam in both `xphp check` and `xphp compile`
+(`xphp.unspecialized_generic_closure`); the two shapes that reach code generation are
+caught by a compile-time backstop over the emitted output
+(`xphp.unspecialized_generic_leak`). Grounding these shapes so they *run* is tracked
+for a later release; today the guarantee is only that they never miscompile silently.
+
+**`xphp check` catches only the closure form.** The two shapes that surface at code
+generation (`outer`, `Box::make`, and the named free-function forward above) are caught
+by the emit-time backstop, which `xphp check` does not run — it validates without
+emitting. So `check` reports **zero** diagnostics for those, while `compile` rejects
+them loudly. A CI pipeline that gates on `xphp compile` (or runs it after `check`) is
+fully covered; one that gates on `xphp check` alone will see green on code that
+`compile` will reject. This is a completeness gap in `check`, never a runtime-safety
+hole: no fatal-able code is ever emitted.
+
+### ✅ Workaround
+
+Call the inner generic with an **explicit concrete** turbofish at a scope where the type
+is known, or lift it out of the enclosing generic scope:
+
+```php
+$inner = fn<I>(I $x): I => $x;
+echo $inner::<int>(41);              // works at file / plain-function scope
+
+function gen<U>(U $x): U { return $x; }
+Box::useGen(gen::<int>(5));          // ground the generic where the type is concrete
+```

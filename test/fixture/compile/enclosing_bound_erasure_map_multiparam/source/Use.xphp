@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+$map = new Map::<string, Fruit>();
+$found = $map->containsValue::<Banana>(new Banana());
+$label = $map->describe('k');

@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\TooMany;
+
+// Box declares one type parameter; both instantiations pass two.
+$a = new Box::<int, string>();
+$b = new Box::<float, bool>();

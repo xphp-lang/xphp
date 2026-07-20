@@ -501,14 +501,15 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingReassignmentInvalidatesPostBranchSpecialization(): void
+    public function testBranchingReassignmentMakesReceiverUndeterminedAndFailsToCompile(): void
     {
-        // Bug fix: `$x = new Foo(); if (…) { $x = new Bar(); } $x->m::<T>()`
-        // used to specialize against Bar (the last lexical write) regardless
-        // of whether the branch fired. The conservative fix invalidates `$x`
-        // on the branch's exit -- the post-branch call site no longer
-        // specializes, and PHP throws "undefined method" at runtime instead
-        // of silently calling the wrong specialization.
+        // `$x = new Foo(); if (…) { $x = new Bar(); } $x->m::<T>()` must never
+        // specialize against the last lexical write (Bar) — the branch may not
+        // fire. The flow analyzer invalidates `$x` on the branch's exit, so the
+        // receiver's type is undetermined. A turbofish call can't be specialized
+        // without a known receiver type, and the generic method is stripped from
+        // its class, so leaving the call would emit a runtime "undefined method".
+        // Ground or fail: this is a compile error.
         $dir = sys_get_temp_dir() . '/xphp-br-post-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -536,16 +537,71 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
+            $this->compileFrom($dir);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testReassignedParameterReceiverResolvesToTheNewType(): void
+    {
+        // A typed parameter reassigned to `new Other()` must resolve a later turbofish
+        // call against Other — the reassignment invalidates the declared parameter type,
+        // which otherwise masked the live local tracking and mis-resolved the call to the
+        // param's declared type (which lacks the generic method).
+        $dir = sys_get_temp_dir() . '/xphp-reassign-param-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ReassignParam;
+        class Plain { public function m(int $a): int { return $a; } }
+        class HasGen { public function pick<R>(R $a): R { return $a; } }
+        function run(Plain $x): int {
+            $x = new HasGen();
+            return $x->pick::<int>(5);
+        }
+        PHP);
+
+        try {
             $this->compileFrom($dir);
             $use = file_get_contents($dir . '/dist/Use.php');
             self::assertIsString($use);
-            // Negative invariant kept: ambiguous post-branch type must
-            // de-specialize, leaving the bare unmangled call.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingReassignmentInvalidatesPostBranchSpecialization/Use.expected.php',
-                $use,
-            );
+            self::assertStringContainsString('pick_', $use, 'the call specialized against HasGen');
+            self::assertStringNotContainsString('pick::<', $use, 'the turbofish was rewritten');
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testReceiverReassignedFromAnUntrackableCallIsUndetermined(): void
+    {
+        // A local reassigned from a plain function call (an untrackable RHS) must drop
+        // its prior tracked type rather than keep the stale one. Before this was fixed
+        // the receiver mis-resolved to the stale `Plain` type and silently specialized
+        // against the WRONG class; now it is correctly undetermined (ground or fail).
+        $dir = sys_get_temp_dir() . '/xphp-reassign-untrackable-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\ReassignUntrackable;
+        class Plain { public function pick<R>(R $a): R { return $a; } }
+        class HasGen { public function pick<R>(R $a): R { return $a; } }
+        function make(): HasGen { return new HasGen(); }
+        function run(): int {
+            $x = new Plain();
+            $x = make();
+            return $x->pick::<int>(5);
+        }
+        PHP);
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
+            $this->compileFrom($dir);
         } finally {
             self::rrmdir($dir);
         }
@@ -678,14 +734,14 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingIfWithoutElseStillDeSpecializes(): void
+    public function testBranchingIfWithoutElseUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: if-without-else has an implicit empty arm. Even when both
-        // reachable paths agree on Foo (the pre-branch assignment matches
-        // the if-body's), the merge MUST de-specialize because the
-        // expectedArmCount guard trips. This is deliberate -- the implicit
-        // arm doesn't appear in perBranchTypes, and special-casing it
-        // would be fragile against refactors.
+        // If-without-else has an implicit empty arm. Even when both reachable
+        // paths agree on Foo (the pre-branch assignment matches the if-body's),
+        // the merge MUST NOT ground the receiver because the expectedArmCount
+        // guard trips (the implicit arm doesn't appear in perBranchTypes, and
+        // special-casing it would be fragile). The receiver's type is therefore
+        // undetermined, so the turbofish call can't be specialized → compile error.
         $dir = sys_get_temp_dir() . '/xphp-br-noelse-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -707,15 +763,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: if-without-else must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingIfWithoutElseStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -802,9 +852,10 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingSwitchWithoutDefaultStillDeSpecializes(): void
+    public function testBranchingSwitchWithoutDefaultUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: no `default` case = implicit fall-through = no merge.
+        // No `default` case = implicit fall-through = no merge, so the receiver's
+        // type stays undetermined and the turbofish call can't be specialized.
         $dir = sys_get_temp_dir() . '/xphp-br-swnod-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -828,15 +879,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: switch without default must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingSwitchWithoutDefaultStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -886,11 +931,12 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingOneArmAssignsUntrackedRhsStillDeSpecializes(): void
+    public function testBranchingOneArmAssignsUntrackedRhsUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: one arm assigns the same class via `new Foo()`, the other
-        // via an untracked RHS (a function call). The untracked arm captures
-        // null, the merge fails, $x de-specializes.
+        // One arm assigns the same class via `new Foo()`, the other via an
+        // untracked RHS (a function call whose return type the flow analyzer
+        // doesn't read here). The untracked arm captures null, the merge fails,
+        // and the receiver's type is undetermined → the turbofish call fails.
         $dir = sys_get_temp_dir() . '/xphp-br-untracked-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -914,15 +960,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: untracked-RHS arm forces de-specialization.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingOneArmAssignsUntrackedRhsStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -967,11 +1007,10 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
-    public function testBranchingMatchWithoutDefaultStillDeSpecializes(): void
+    public function testBranchingMatchWithoutDefaultUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: match without default = canMergeOnLeave returns false.
-        // (Match would runtime-throw on unmatched value, but we're
-        // conservative.)
+        // Match without default = canMergeOnLeave returns false, so the receiver's
+        // type stays undetermined and the turbofish call can't be specialized.
         $dir = sys_get_temp_dir() . '/xphp-br-mtchnod-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -995,26 +1034,21 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: match without default must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingMatchWithoutDefaultStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
     }
 
-    public function testBranchingElseifMiddleArmDiffersStillDeSpecializes(): void
+    public function testBranchingElseifMiddleArmDiffersUndeterminedReceiverFailsToCompile(): void
     {
-        // P5.1: three-arm if/elseif/else where the middle arm assigns Bar
-        // instead of Foo. Locks the per-arm equality loop -- if the loop
-        // accidentally only checks the first vs last arm, this test would
-        // wrongly merge against Foo.
+        // Three-arm if/elseif/else where the middle arm assigns Bar instead of
+        // Foo. Locks the per-arm equality loop -- if it accidentally only checked
+        // the first vs last arm it would wrongly merge against Foo and ground the
+        // receiver. The arms disagree, so the receiver is undetermined → the
+        // turbofish call can't be specialized and fails to compile.
         $dir = sys_get_temp_dir() . '/xphp-br-elsmid-' . uniqid('', true);
         mkdir($dir, 0o755, true);
         file_put_contents($dir . '/Foo.xphp', <<<'PHP'
@@ -1041,15 +1075,9 @@ final class GenericMethodIntegrationTest extends TestCase
         PHP);
 
         try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Cannot determine the receiver');
             $this->compileFrom($dir);
-            $use = file_get_contents($dir . '/dist/Use.php');
-            self::assertIsString($use);
-            // Negative invariant kept: middle-arm disagreement must de-specialize.
-            self::assertStringNotContainsString('fooId_T_', $use);
-            SnapshotHash::assertMatches(
-                __DIR__ . '/GenericMethodIntegrationTest/testBranchingElseifMiddleArmDiffersStillDeSpecializes/Use.expected.php',
-                $use,
-            );
         } finally {
             self::rrmdir($dir);
         }
@@ -1235,23 +1263,429 @@ final class GenericMethodIntegrationTest extends TestCase
             $generated = self::globRecursive($dir . '/.xphp-cache/Generated', '*.php');
             self::assertGreaterThanOrEqual(2, count($generated));
 
-            $childSpec = null;
+            $childSpecialization = null;
             foreach ($generated as $f) {
                 if (str_contains($f, '/Child/T_')) {
-                    $childSpec = file_get_contents($f);
+                    $childSpecialization = file_get_contents($f);
                     break;
                 }
             }
-            self::assertIsString($childSpec, 'expected a Child<int> specialization at /Child/T_*.php');
+            self::assertIsString($childSpecialization, 'expected a Child<int> specialization at /Child/T_*.php');
 
             // Negative invariants kept: parent must not be misresolved
             // to a class FQN; no leftover turbofish marker.
-            self::assertStringNotContainsString('App\\PseudoParent\\parent', $childSpec);
-            self::assertStringNotContainsString('::<', $childSpec);
+            self::assertStringNotContainsString('App\\PseudoParent\\parent', $childSpecialization);
+            self::assertStringNotContainsString('::<', $childSpecialization);
             SnapshotHash::assertMatches(
                 __DIR__ . '/GenericMethodIntegrationTest/testNewParentTurbofishCompilesEndToEnd/Child.expected.php',
-                $childSpec,
+                $childSpecialization,
             );
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testGenericMethodResolvesThroughInheritance(): void
+    {
+        // A generic method declared on a base class resolves and
+        // runs when called via turbofish on a subclass receiver. The
+        // specialization is emitted onto the DECLARING base so every subclass
+        // inherits the single copy through the class-level `extends` edge --
+        // it is NOT duplicated onto the receiver's own specialization.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_method_through_inheritance/source',
+            'genmethod-inherit',
+        );
+        try {
+            $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
+
+            $baseSpecialization = '';
+            $derivedSpecialization = '';
+            foreach ($generated as $f) {
+                $content = file_get_contents($f);
+                self::assertIsString($content);
+                if (str_contains($f, '/Base/T_')) {
+                    $baseSpecialization .= $content;
+                }
+                if (str_contains($f, '/Derived/T_')) {
+                    $derivedSpecialization .= $content;
+                }
+            }
+
+            // Both `identity` specializations (<string> and <int>) land on Base.
+            self::assertSame(
+                2,
+                preg_match_all('/function identity_T_[0-9a-f]+\(/', $baseSpecialization),
+                'both identity specializations emitted onto the declaring Base',
+            );
+            // Derived inherits them; nothing is duplicated onto the subclass.
+            self::assertStringNotContainsString(
+                'identity_T_',
+                $derivedSpecialization,
+                'subclass inherits the base specialization; no duplicate on Derived',
+            );
+
+            $fixture->registerAutoload('App\\GenericMethodThroughInheritance');
+            require __DIR__ . '/../../fixture/compile/generic_method_through_inheritance/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testStaticGenericMethodResolvesThroughInheritance(): void
+    {
+        // Static path: a static generic method declared on Base
+        // resolves and runs when called as `Derived::make::<...>()`. The
+        // specialization is emitted onto the declaring Base and reached via
+        // PHP's static-method inheritance.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_static_method_through_inheritance/source',
+            'genmethod-static-inherit',
+        );
+        try {
+            $base = file_get_contents($fixture->targetDir . '/Base.php');
+            $derived = file_get_contents($fixture->targetDir . '/Derived.php');
+            self::assertIsString($base);
+            self::assertIsString($derived);
+            // Both make specializations land on Base; Derived inherits them.
+            self::assertSame(2, preg_match_all('/function make_T_[0-9a-f]+\(/', $base));
+            self::assertStringNotContainsString('make_T_', $derived);
+
+            require __DIR__ . '/../../fixture/compile/generic_static_method_through_inheritance/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testNullsafeInheritedGenericMethodResolves(): void
+    {
+        // Nullsafe instance turbofish resolves through inheritance too (it shares
+        // the instance path). The specialization lands on the declaring base and
+        // the call is rewritten while preserving the `?->` short-circuit operator.
+        $dir = sys_get_temp_dir() . '/xphp-inh-nullsafe-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhNullsafe;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Derived.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhNullsafe;
+        class Derived extends Base {}
+        PHP);
+        file_put_contents($dir . '/Caller.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhNullsafe;
+        class Caller {
+            public function go(?Derived $d): ?int {
+                return $d?->id::<int>(5);
+            }
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $caller = file_get_contents($dir . '/dist/Caller.php');
+            self::assertIsString($base);
+            self::assertIsString($caller);
+            // Specialization on the declaring base; nullsafe operator preserved.
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $base));
+            self::assertMatchesRegularExpression('/\$d\?->id_T_[0-9a-f]+\(/', $caller);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testParentTurbofishResolvesInheritedStaticGenericMethod(): void
+    {
+        // A static generic method inherited from the parent now resolves via the
+        // ancestor walk (before the static path walked ancestors this was an
+        // "unresolved generic method" compile error).
+        $dir = sys_get_temp_dir() . '/xphp-inh-parent-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhParent;
+        class Base { public static function make<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Child.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhParent;
+        class Child extends Base {
+            public function run(): int { return parent::make::<int>(1); }
+        }
+        PHP);
+
+        try {
+            $this->compileFrom($dir); // must NOT throw
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $child = file_get_contents($dir . '/dist/Child.php');
+            self::assertIsString($base);
+            self::assertIsString($child);
+            self::assertSame(1, preg_match_all('/function make_T_[0-9a-f]+\(/', $base));
+            // The inherited static call resolved to a mangled specialization (the
+            // `parent::` receiver resolves to the current class, which inherits the
+            // base method); no leftover turbofish marker survives.
+            self::assertMatchesRegularExpression('/::make_T_[0-9a-f]+\(/', $child);
+            self::assertStringNotContainsString('make::<', $child);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testSubclassGenericMethodOverrideBindsToSubclass(): void
+    {
+        // The direct hit on the receiver's own class wins over the ancestor
+        // walk: a subclass that redeclares the generic method binds its own
+        // body, so the specialization lands on the subclass, not the base.
+        $dir = sys_get_temp_dir() . '/xphp-inh-override-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhOverride;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Derived.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhOverride;
+        class Derived extends Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhOverride;
+        $d = new Derived();
+        $r = $d->id::<int>(5);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $derived = file_get_contents($dir . '/dist/Derived.php');
+            self::assertIsString($base);
+            self::assertIsString($derived);
+            // Override wins: the specialization is on Derived (the direct hit).
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $derived));
+            self::assertStringNotContainsString('id_T_', $base);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testGenericMethodResolvesThroughMultiLevelInheritance(): void
+    {
+        // Base <- Mid <- Leaf: the method on Base resolves on a Leaf receiver,
+        // and the specialization lands on the nearest *declaring* ancestor
+        // (Base), reached via the breadth-first ancestor walk.
+        $dir = sys_get_temp_dir() . '/xphp-inh-chain-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Mid.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        class Mid extends Base {}
+        PHP);
+        file_put_contents($dir . '/Leaf.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        class Leaf extends Mid {}
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhChain;
+        $leaf = new Leaf();
+        $r = $leaf->id::<int>(9);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $mid = file_get_contents($dir . '/dist/Mid.php');
+            $leaf = file_get_contents($dir . '/dist/Leaf.php');
+            self::assertIsString($base);
+            self::assertIsString($mid);
+            self::assertIsString($leaf);
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $base));
+            self::assertStringNotContainsString('id_T_', $mid);
+            self::assertStringNotContainsString('id_T_', $leaf);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testIntermediateOverrideBindsToNearestDeclaringAncestor(): void
+    {
+        // Base declares id<U>; Mid overrides it; Leaf inherits. A call on a Leaf
+        // receiver binds the NEAREST declaring ancestor (Mid) -- the breadth-first
+        // walk returns Mid's template first, so the specialization lands on Mid,
+        // not on Base.
+        $dir = sys_get_temp_dir() . '/xphp-inh-midoverride-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Mid.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        class Mid extends Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Leaf.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        class Leaf extends Mid {}
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhMidOverride;
+        $leaf = new Leaf();
+        $r = $leaf->id::<int>(3);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            $mid = file_get_contents($dir . '/dist/Mid.php');
+            $leaf = file_get_contents($dir . '/dist/Leaf.php');
+            self::assertIsString($base);
+            self::assertIsString($mid);
+            self::assertIsString($leaf);
+            // Nearest declaring ancestor wins: the specialization lands on Mid only.
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $mid));
+            self::assertStringNotContainsString('id_T_', $base);
+            self::assertStringNotContainsString('id_T_', $leaf);
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testInheritedGenericMethodDedupesOnSharedBase(): void
+    {
+        // Two subclasses calling the same inherited method with the same type
+        // argument emit exactly ONE specialization, on the shared base (dedup
+        // keyed by the declaring FQN, not the receiver).
+        $dir = sys_get_temp_dir() . '/xphp-inh-dedup-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Base.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        abstract class Base { public function id<U>(U $x): U { return $x; } }
+        PHP);
+        file_put_contents($dir . '/A.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        class A extends Base {}
+        PHP);
+        file_put_contents($dir . '/B.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        class B extends Base {}
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\InhDedup;
+        $a = new A();
+        $b = new B();
+        $ra = $a->id::<int>(1);
+        $rb = $b->id::<int>(2);
+        PHP);
+
+        try {
+            $this->compileFrom($dir);
+            $base = file_get_contents($dir . '/dist/Base.php');
+            self::assertIsString($base);
+            self::assertSame(1, preg_match_all('/function id_T_[0-9a-f]+\(/', $base));
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testPlainNonGenericCallIsNotFlaggedAsUnresolvedGeneric(): void
+    {
+        // The unresolved-generic error fires only for turbofish calls. A plain
+        // (non-turbofish) call to a non-template method passes through untouched
+        // -- it is ordinary PHP, not a generic-resolution failure -- while a
+        // turbofish call to a method that DOES exist still specializes.
+        $dir = sys_get_temp_dir() . '/xphp-plaincall-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Box.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PlainCall;
+        class Box { public function get<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\PlainCall;
+        $b = new Box();
+        $b->nope(1);
+        $r = $b->get::<int>(2);
+        PHP);
+
+        try {
+            $this->compileFrom($dir); // must NOT throw
+            $use = file_get_contents($dir . '/dist/Use.php');
+            self::assertIsString($use);
+            // Plain call survives untouched; the turbofish call specializes.
+            self::assertStringContainsString('$b->nope(1)', $use);
+            self::assertSame(1, preg_match_all('/get_T_[0-9a-f]+\(/', $use));
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
+    public function testUnresolvedStaticGenericMethodTurbofishFailsCompilation(): void
+    {
+        // The unresolved-generic error also covers the static turbofish path:
+        // `Box::nope::<int>()` where `nope` is not a generic method on Box.
+        $dir = sys_get_temp_dir() . '/xphp-unresolved-static-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Box.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\UnresolvedStatic;
+        class Box { public static function get<T>(T $x): T { return $x; } }
+        PHP);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace App\UnresolvedStatic;
+        $r = Box::nope::<int>(1);
+        PHP);
+
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('could not be resolved');
+            $this->compileFrom($dir);
         } finally {
             self::rrmdir($dir);
         }

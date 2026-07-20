@@ -27,12 +27,13 @@ than erasure can.
 | Generic classes / interfaces / traits    | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Generic functions / methods              | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Generic closures + arrow functions       | ✅                      | ✅               | ✅               | ✅            | ✅                    |
+| Typed closure signatures (`Closure(int): bool`) | ✅ (erases to `\Closure`; literal conformance checked at compile time) | ✅ (runtime-lenient) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
 | Upper bounds                             | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Multiple bounds (intersection)           | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Union bounds + DNF                       | ✅                      | ✅               | ✅               | ❌ (intersection only via `where`) | n/a |
 | F-bounded recursion (`T : Box<T>`)       | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Default type parameters                  | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Declaration-site variance (`+T` / `-T`)  | ✅                      | ✅               | ✅               | ✅            | ⚠️ inferred (lifetime-driven; PhantomData for unused type params) |
+| Declaration-site variance (`out T` / `in T`)  | ✅                      | ✅               | ✅               | ✅            | ⚠️ inferred (lifetime-driven; PhantomData for unused type params) |
 | Inner-template variance composition      | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ✅ (inline)   | ✅ (monomorphic)      |
 | `instanceof OriginalFqn` works           | ✅                      | ✅ (trivially: only one class exists at runtime) | n/a | n/a | n/a |
@@ -81,7 +82,7 @@ runtime — just the concrete class name substituted in.
 ### Real subtype edges between specializations
 
 ```php
-class Producer<+T> {
+class Producer<out T> {
     public function get(): T { /* ... */ }
 }
 ```

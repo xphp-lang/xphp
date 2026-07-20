@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericMethodThroughInheritance;
+
+class Base<T>
+{
+    public function identity<U>(U $x): U
+    {
+        return $x;
+    }
+}

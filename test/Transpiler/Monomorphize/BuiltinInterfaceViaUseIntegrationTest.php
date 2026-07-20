@@ -16,7 +16,7 @@ use XPHP\TestSupport\CompiledFixture;
 use XPHP\TestSupport\SnapshotHash;
 
 /**
- * Regression coverage for ticket 0001: a generic that `extends`/`implements` a
+ * Regression coverage: a generic that `extends`/`implements` a
  * built-in interface — or instantiates / catches an imported class — via a bare
  * `use` import used to keep those bare names when relocated into the
  * `XPHP\Generated\...` namespace, where they resolved to a non-existent

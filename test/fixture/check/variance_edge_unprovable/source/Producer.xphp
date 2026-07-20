@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\VarianceEdgeUnprovable;
+
+// Covariant `+T` (T in a return position) — a variant template whose specializations
+// get real `extends` edges between provable subtype pairs.
+class Producer<out T>
+{
+    public function get(): T
+    {
+        throw new \LogicException();
+    }
+}

@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+$box = new Box::<Fruit>();
+$viaForward = $box->probe::<Banana>(new Banana());
+$viaDirect = $box->contains::<Banana>(new Banana());

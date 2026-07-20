@@ -167,6 +167,22 @@ args are spelled. Hash-collision detection at recording time fails
 loudly with both colliding instantiations, the current hash length,
 and a re-run command using a longer hash.
 
+### Free functions and constants bind the template's namespace
+
+Because a specialized body moves into `XPHP\Generated\…`, an
+unqualified free-function call or constant read inside it (`helper($x)`,
+`FACTOR`) would, under PHP's normal rules, look in the *generated*
+namespace and then fall back to global — never the template's own
+namespace. The compiler prevents this: every unqualified free-function
+call and constant fetch that the template's compilation unit defines
+(directly, in another file of the same namespace, or via a
+`use function` / `use const` import, single or grouped) is
+fully-qualified to that symbol before the class is emitted. Built-in
+functions, magic constants, and any name the unit does not define are
+left untouched, so PHP's global resolution still applies to them. A
+specialization therefore calls exactly the free functions and constants
+its template did.
+
 ## What monomorphization costs
 
 One class file per unique instantiation. A codebase instantiating

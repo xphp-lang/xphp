@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\CovariantPrivateProperty;
+
+// Covariance: a Box<Banana> is accepted where a Box<Fruit> is expected, because
+// Banana extends Fruit and T is covariant — the element is read back through a
+// covariant `get(): T`.
+function nameOf(Box<Fruit> $box): string
+{
+    return $box->get()->name;
+}
+
+$bananaBox = new Box::<Banana>(new Banana());
+$name = nameOf($bananaBox);

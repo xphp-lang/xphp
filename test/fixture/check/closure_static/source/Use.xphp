@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\ClosureStatic;
+
+// A `static` generic closure can't yet be specialized at the call site.
+$f = static function <T>(T $x): T {
+    return $x;
+};
+
+$r = $f::<int>(1);

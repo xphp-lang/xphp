@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Must-keep guard for the keyword-turbofish support: keyword-named NON-generic methods and
+// `list()` destructuring must pass through untouched. The keyword recognition is a dedicated
+// branch that fires ONLY for `keyword::<…>` after `::`, so it must never route these ordinary
+// keyword uses into the scanner's bare-`<`, closure-signature, or array-sugar sub-branches.
+class R
+{
+    public function list(int $z): int
+    {
+        return $z + 1;
+    }
+
+    public static function print(int $z): int
+    {
+        return $z + 2;
+    }
+}
+
+function unpack(array $a): int
+{
+    list($x, $y) = $a;
+    return $x + $y;
+}
+
+$r = new R();
+$instance = $r->list(10);
+$static = R::print(20);
+$destructured = unpack([3, 4]);

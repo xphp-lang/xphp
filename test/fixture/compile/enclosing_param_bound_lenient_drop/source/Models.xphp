@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Fruit {}
+
+// Rock is NOT a Fruit — passing it where a subtype of the element type is required is a
+// genuine bound violation.
+class Rock {}

@@ -7,12 +7,15 @@ namespace XPHP\Transpiler\Monomorphize;
 use PhpParser\Node;
 use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Name;
-use PhpParser\Node\Name\FullyQualified;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\Const_;
+use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\GroupUse;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Walks an AST and feeds generic definitions and instantiations into a Registry.
@@ -96,10 +99,12 @@ final class RegistryCollector extends NodeVisitorAbstract
             // never appears in any fixture, so the null-safe call is observationally
             // identical to the non-null version on every test input.
             $this->ctx->enterNamespace($node->name?->toString());
-            // @infection-ignore-all — dual-handled by the standalone Use_ branch below; dead loop.
+            // @infection-ignore-all — dual-handled by the standalone Use_/GroupUse branches below; dead loop.
             foreach ($node->stmts as $inner) {
                 if ($inner instanceof Use_) {
                     $this->ctx->indexUse($inner);
+                } elseif ($inner instanceof GroupUse) {
+                    $this->ctx->indexGroupUse($inner);
                 }
             }
         }
@@ -107,15 +112,37 @@ final class RegistryCollector extends NodeVisitorAbstract
         if ($node instanceof Use_) {
             // @infection-ignore-all — dual-handled by the inner foreach above.
             $this->ctx->indexUse($node);
+        } elseif ($node instanceof GroupUse) {
+            // @infection-ignore-all — dual-handled by the inner foreach above.
+            $this->ctx->indexGroupUse($node);
+        }
+
+        if ($this->mode !== self::MODE_INSTANTIATIONS) {
+            // Free functions and constants defined in the unit. Recorded so the Specializer can
+            // re-qualify an unqualified `helper()` / `FOO` in a relocated template body to the
+            // ORIGINAL namespace only when the target is known here — leaving builtins and any
+            // undefined name to PHP's global fallback. (Class methods are ClassMethod and class
+            // constants are ClassConst — different node types — so this never sees a member.)
+            $ns = $this->ctx->currentNamespace();
+            if ($node instanceof Function_) {
+                $name = $node->name->toString();
+                $this->registry->recordFunction($ns !== '' ? $ns . '\\' . $name : $name);
+            } elseif ($node instanceof Const_) {
+                foreach ($node->consts as $const) {
+                    $name = $const->name->toString();
+                    $this->registry->recordConst($ns !== '' ? $ns . '\\' . $name : $name);
+                }
+            }
         }
 
         if ($this->mode !== self::MODE_INSTANTIATIONS
             && $node instanceof ClassLike && $node->name !== null) {
             $params = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
             $fqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
-            if (is_array($params)) {
+            $isGenericTemplate = is_array($params) && $params !== [] && is_string($fqn);
+            if ($isGenericTemplate) {
                 /** @var list<TypeParam> $params — set as a list by XphpSourceParser::resolveAndAttach. */
-                if ($params !== [] && is_string($fqn) && !$this->isAlreadyRecorded($fqn)) {
+                if (!$this->isAlreadyRecorded($fqn)) {
                     $this->registry->recordDefinition(
                         $fqn,
                         $node->name->toString(),
@@ -124,6 +151,14 @@ final class RegistryCollector extends NodeVisitorAbstract
                         $this->currentFile,
                     );
                 }
+            } else {
+                // A NON-generic class/interface/trait. Record its FQN so the bare-new guard does
+                // not reject a `new B` when a plain `class B` coexists with a generic `class B<T>`
+                // (conditional same-name declarations). ATTR_TEMPLATE_FQN is only attached to
+                // generic templates, so compute the declaration FQN from the namespace context.
+                $ns = $this->ctx->currentNamespace();
+                $plainFqn = $ns !== '' ? $ns . '\\' . $node->name->toString() : $node->name->toString();
+                $this->registry->recordNonGenericClass($plainFqn);
             }
         }
 
@@ -133,15 +168,22 @@ final class RegistryCollector extends NodeVisitorAbstract
             if (is_array($args)) {
                 /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach. */
                 if (is_string($fqn) && self::allConcrete($args)) {
-                    $this->registry->recordInstantiation($fqn, $args);
+                    $this->registry->recordInstantiation(
+                        $fqn,
+                        $args,
+                        new SourceLocation($this->currentFile, $node->getStartLine()),
+                    );
                 }
             }
         }
 
+        // Fully-qualified bare news are included: `new \App\Box("hi")` on an
+        // all-defaults generic used to be skipped here, so compile emitted the
+        // stripped `interface Box {}` and KEPT the call site — a guaranteed
+        // runtime fatal behind a clean gate.
         if ($this->mode !== self::MODE_DEFINITIONS
             && $node instanceof New_
             && $node->class instanceof Name
-            && !$node->class instanceof FullyQualified
             && $node->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) === null
         ) {
             $this->synthesizeBareNewIfAllDefaults($node->class);
@@ -159,13 +201,27 @@ final class RegistryCollector extends NodeVisitorAbstract
      */
     private function synthesizeBareNewIfAllDefaults(Name $name): void
     {
-        $resolved = $this->ctx->resolveAgainstContext($name->toString());
+        // resolveName (not a flattened toString()): the spelling decides the
+        // template — `\App\Box` must not double the namespace, and a relative
+        // `namespace\Box` must bind to the current namespace even when a
+        // colliding `use` alias is in scope (otherwise synthesis targets the
+        // WRONG template, or silently skips).
+        $resolved = $this->ctx->resolveName($name);
         $definition = $this->registry->definition($resolved);
         if ($definition === null || $definition->typeParams === []) {
             return;
         }
         foreach ($definition->typeParams as $param) {
             if ($param->default === null) {
+                // A generic template with a required (non-defaulted) parameter, used as a bare
+                // `new` with no turbofish. It cannot be padded from defaults, so it was silently
+                // skipped -- leaving the call site pointing at the stripped marker `interface`,
+                // a guaranteed runtime fatal behind a clean gate. Report it loudly instead,
+                // matching the function/method call path (`xphp.missing_type_argument`).
+                $this->registry->reportMissingTypeArgumentsForBareNew(
+                    $resolved,
+                    new SourceLocation($this->currentFile, $name->getStartLine()),
+                );
                 return;
             }
         }
@@ -178,6 +234,9 @@ final class RegistryCollector extends NodeVisitorAbstract
         // instantiation downstream -- only the path differs. The split exists to
         // record the synthesis at the same time as the attribute attach so that the
         // fixed-point loop's nested-instantiation walk picks it up in the same pass.
+        // Call-site location is threaded for the explicit-turbofish path (the bound-violation
+        // case); the all-defaults bare-`new` path can only fail bounds via a default, which is
+        // reported at the definition site, so it records without a call-site here.
         $this->registry->recordInstantiation($resolved, []);
     }
 

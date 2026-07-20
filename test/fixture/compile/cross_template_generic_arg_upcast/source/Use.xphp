@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// The cross-template covariant upcast: `useTuple` takes a `Tuple<Collection<Product>, Tag>`, but is
+// called with a `Couple<ImmutableList<Book>, Tag>`. For that to load and run, the covariant edge
+//   Tuple<ImmutableList<Book>, Tag>  ⊑  Tuple<Collection<Product>, Tag>
+// must be emitted — which requires recognizing the ARGUMENT subtype `ImmutableList<Book> ⊑
+// Collection<Product>` across DIFFERENT templates (`ImmutableList implements Collection`, both
+// covariant). It reads the left element list through the interface and pulls its first element.
+function useTuple(Tuple<Collection<Product>, Tag> $t): ?Product
+{
+    return $t->left()->first();
+}
+
+$books = new ImmutableList::<Book>(new Book());
+$couple = new Couple::<ImmutableList<Book>, Tag>($books, new Tag());
+$first = useTuple($couple);

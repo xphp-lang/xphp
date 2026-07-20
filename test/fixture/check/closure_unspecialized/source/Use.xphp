@@ -1,0 +1,34 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\Unspecialized;
+
+// Every generic closure below is declared but never turbofish-called —
+// its type-param hints would reach the output as references to
+// non-existent classes. Each draws one diagnostic; the called twin at
+// the bottom draws none.
+
+$f = static fn<T>(T $x): T => $x;
+
+function makes(): callable
+{
+    return fn<U>(U $y): U => $y;
+}
+
+$mapped = array_map(function<V>(V $z): V { return $z; }, [1]);
+
+$w = 5;
+$g = function<W>(W $q) use ($w) { return $q; };
+
+$h = function<X = int>(X $r): X { return $r; };
+
+// Unused type param — dead syntax, rejected uniformly.
+$i = fn<Y>(int $s): int => $s + 1;
+
+// Conditional twins: the if-arm is grounded, the else-arm is an orphan.
+if ($w > 0) { $c = fn<Q>(Q $a): Q => $a; $c::<int>(1); } else { $c = fn<R>(R $b): R => $b; }
+
+// Called — must NOT be flagged.
+$ok = fn<Z>(Z $v): Z => $v;
+$ok::<int>(1);

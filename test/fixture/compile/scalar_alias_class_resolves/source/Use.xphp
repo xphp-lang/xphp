@@ -1,0 +1,13 @@
+<?php
+declare(strict_types=1);
+namespace App;
+// `Double`, `Integer`, `Boolean` are real classes whose names alias the gettype-style scalar names. Used as
+// generic TYPE ARGUMENTS they must resolve to the classes, so each `Box<…>` specialization is typed on the
+// class (`\App\Double`, …). Before the fix they were mistaken for the scalars `double`/`integer`/`boolean`,
+// emitting `public readonly double $value` — which PHP reads as a non-existent class and fatals at runtime.
+$d = new Box::<Double>(new Double(2.5));
+$i = new Box::<Integer>(new Integer(7));
+$b = new Box::<Boolean>(new Boolean(true));
+$dv = $d->value();
+$iv = $i->value();
+$bv = $b->value();

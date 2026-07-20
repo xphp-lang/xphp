@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NestedMethod;
+
+class Box<Z>
+{
+    // A generic method nested in a generic template. Its stray `Stray` must be
+    // reported exactly once (by the template's member walk), not twice.
+    public function map<K>(Stray $x): K
+    {
+    }
+}

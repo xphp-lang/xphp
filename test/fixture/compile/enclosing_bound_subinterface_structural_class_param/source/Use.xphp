@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+function isBook(OrderedCollection<Product> $c): bool
+{
+    return $c->firstKind::<Product>(new Product());
+}
+
+$books = new ListColl::<Book>(new Book());
+$result = isBook($books);

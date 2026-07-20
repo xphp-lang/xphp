@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\MultiError;
+
+// Two independent bound violations in the same (instantiation) phase — both int and
+// float fail the `\Stringable` bound. `xphp check` must report BOTH in one run.
+$a = new Box::<int>(1);
+$b = new Box::<float>(2.0);

@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+$box = new Box::<Fruit>();
+$both = $box->bothAreFruit::<Banana, Cherry>(new Banana(), new Cherry());

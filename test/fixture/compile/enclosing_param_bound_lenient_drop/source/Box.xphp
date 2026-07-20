@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class Box<out E>
+{
+    // U must be a subtype of the element type E (the sound, element-typed shape on a
+    // covariant collection). The bound is checked only when E can be grounded.
+    public function contains<U : E>(U $value): bool
+    {
+        return true;
+    }
+}

@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface MMap<K, out V>
+{
+    public function containsValue<U : V>(U $value): bool;
+}

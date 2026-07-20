@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Escape;
+
+use App\Models\Real;
+
+interface Foo<Z>
+{
+    // The escape hatches: an imported name and a fully-qualified name are
+    // deliberate references to types elsewhere, so neither is flagged even though
+    // neither is declared in this source set.
+    public function a(Real $x): void;
+
+    public function b(\App\Models\Other $y): void;
+
+    // Scalar + declared parameter: also clean.
+    public function c(int $n): Z;
+}

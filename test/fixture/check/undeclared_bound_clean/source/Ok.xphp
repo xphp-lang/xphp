@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\OkBounds;
+
+use App\Other\Real;
+
+// Clean: built-in bound (Stringable), imported bound (Real), a parameter
+// referencing an earlier parameter as its default (B = A) and as its bound
+// (C: A), a multi-segment (namespaced) bound (Sub\Thing), and a scalar bound
+// (E: int) — none are single-segment class strays, so none are flagged here.
+class Ok<T: \Stringable, K: Real, A, C: A, D: Sub\Thing, E: int, B = A>
+{
+}

@@ -195,10 +195,12 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $this->rrmdir(dirname($dir));
     }
 
-    public function testEmptyArgSetsLeavesOriginalAssignUntouched(): void
+    public function testTemplateNeverCalledViaTurbofishIsRejected(): void
     {
-        // Template declared but never called via turbofish. The Assign
-        // RHS stays as the original closure body; no dispatcher emitted.
+        // Template declared but never called via turbofish. It used to keep
+        // its original Assign untouched — emitting raw `T` hints that name
+        // the non-existent class App\T and fatal on first invocation. It is
+        // now rejected loudly instead.
         $dir = $this->mkdir('disp-empty');
         file_put_contents($dir . '/Use.xphp', <<<'PHP'
         <?php
@@ -206,19 +208,37 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         $id = function<T>(T $x): T { return $x; };
         PHP);
 
-        $this->compile($dir);
-        $out = file_get_contents($dir . '/dist/Use.php');
-        self::assertIsString($out);
-        // Negative invariants kept: no dispatcher tag-parameter and no
-        // specialized function emitted when the template is never called.
-        self::assertStringNotContainsString('__xphp_tag', $out);
-        self::assertStringNotContainsString('closure_id_T_', $out);
-        SnapshotHash::assertMatches(
-            __DIR__ . '/ClosureDispatcherIntegrationTest/testEmptyArgSetsLeavesOriginalAssignUntouched/Use.expected.php',
-            $out,
-        );
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('never specialized');
+            $this->compile($dir);
+        } finally {
+            $this->rrmdir(dirname($dir));
+        }
+    }
 
-        $this->rrmdir(dirname($dir));
+    public function testGenericClosureGroundedByEnclosingParamIsRejected(): void
+    {
+        // A generic closure whose turbofish is grounded only by an enclosing FUNCTION type
+        // parameter (`$inner::<S>` inside `relay<S>`): the type argument `S` is not concrete
+        // at the call site, so the dispatcher cannot ground it. Emitted, it would keep
+        // `fn(I $x): I` naming the non-existent class `App\I` and fatal on invocation. It is
+        // rejected loudly at the source seam (both check and compile) instead.
+        $dir = $this->mkdir('disp-enclosing-param');
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        function relay<S>(S $v): S { $inner = fn<I>(I $x): I => $x; return $inner::<S>($v); }
+        relay::<int>(3);
+        PHP);
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('cannot be specialized');
+            $this->compile($dir);
+        } finally {
+            $this->rrmdir(dirname($dir));
+        }
     }
 
     public function testNestedScopeCallsShareDispatcher(): void
@@ -257,6 +277,51 @@ final class ClosureDispatcherIntegrationTest extends TestCase
         );
 
         $this->rrmdir(dirname($dir));
+    }
+
+    #[RunInSeparateProcess]
+    public function testFirstClassCallableTurbofishClosureEmitsValidForwardingClosureAndRuns(): void
+    {
+        // `$g = $f::<int>(...)` used to emit `$f('T_…', ...)` — a tag arg beside the FCC
+        // placeholder, which does not parse. It now emits a forwarding closure that routes
+        // through the dispatcher, preserving captures / variadics / named args. The require
+        // below both parses (else it fatals) and executes the emitted output.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/turbofish_fcc_closure/source',
+            'fcc-closure',
+        );
+        try {
+            require __DIR__ . '/../../fixture/compile/turbofish_fcc_closure/verify/runtime.php';
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    public function testFirstClassCallableOfThisCapturingClosureIsRejected(): void
+    {
+        // The eager `$this`-capture reject fires for an FCC too (it sits before the FCC
+        // handling): an FCC of a `$this`-capturing generic closure draws the loud
+        // capture error, not a broken forwarding closure.
+        $dir = $this->mkdir('fcc-this');
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App;
+        class Widget {
+            public int $n = 3;
+            public function make(): callable {
+                $f = fn<T>(T $x): T => $x + $this->n;
+                return $f::<int>(...);
+            }
+        }
+        PHP);
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('captures `$this`');
+            $this->compile($dir);
+        } finally {
+            $this->rrmdir(dirname($dir));
+        }
     }
 
     // ----- helpers ---------------------------------------------------------

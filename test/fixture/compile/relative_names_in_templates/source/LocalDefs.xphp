@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\RelativeTemplates;
+
+class Base
+{
+}
+
+class Thing
+{
+    public function __construct(public string $tag)
+    {
+    }
+}
+
+class Svc
+{
+    public function id<T>(T $x): T
+    {
+        return $x;
+    }
+}

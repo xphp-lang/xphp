@@ -1,0 +1,8 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\GenericStaticMethodThroughInheritance;
+
+$s = Derived::make::<string>('hi');
+$n = Derived::make::<int>(7);

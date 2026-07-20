@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Lib
+{
+    function apply<R>(Closure(R $x): R $fn, R $seed): R
+    {
+        return $fn($seed);
+    }
+}
+
+namespace App
+{
+    use function Lib\apply;
+
+    function run(): void
+    {
+        // Reached through a `use function` alias and grounded to Closure(int): int —
+        // the conforming literal is accepted, proving the callee resolves via the
+        // caller's function imports.
+        apply::<int>(fn(int $x): int => $x + 1, 5);
+        \Lib\apply::<int>(fn(int $x): int => $x + 2, 5);   // fully-qualified, also conforms
+    }
+}

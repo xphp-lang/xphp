@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+use function Vendor\make;
+use const Vendor\RATE;
+
+// The `use function` / `use const` imports resolve `make` / `RATE` to Vendor's symbols,
+// NOT App's. After Wrap specializes into XPHP\Generated\App\Wrap, the references must
+// still bind Vendor\make / Vendor\RATE — the file-level `use` imports do not travel with
+// the relocated body, so the reference is fully-qualified to the resolved target.
+class Wrap<T>
+{
+    public function compute(T $seed): int
+    {
+        return make(3) + RATE;
+    }
+}
+
+$wrap = new Wrap::<int>();
+$computed = $wrap->compute(0);

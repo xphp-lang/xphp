@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Bucket3;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Box<E>
+{
+    public function __construct(private E $v) {}
+
+    public function each(Closure(E $x): string $fn): string
+    {
+        return $fn($this->v);
+    }
+
+    public function describe(): string
+    {
+        // $this : Box<E>; E is abstract HERE, so this self-call is gradual at the
+        // template. Once the class specializes, `each`'s target grounds: under Box<Book>
+        // it is Closure(Book): string and `fn(int)` is a provable contravariance
+        // violation; under Box<int> it is Closure(int): string and `fn(int)` conforms.
+        return $this->each(fn(int $x): string => 'z');
+    }
+}
+
+function run(): void
+{
+    // The SAME describe() source is instantiated two ways. Only the Box<Book>
+    // specialization is a violation ⇒ exactly one diagnostic, at the specialized Book class.
+    $a = new Box::<Book>(new Book('x'));
+    $a->describe();
+    $b = new Box::<int>(3);
+    $b->describe();
+}

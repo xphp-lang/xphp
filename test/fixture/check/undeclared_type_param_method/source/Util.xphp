@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\MethodGen;
+
+class Util
+{
+    // Generic method on a plain (non-generic) class: `B` is not a declared
+    // parameter of the method (`A` is) and names no real type.
+    public static function pick<A>(B $x): A
+    {
+        return $x;
+    }
+}
+
+// Free generic function: `C` is a stray parameter.
+function wrap<A>(C $x): A
+{
+    return $x;
+}
+
+// Generic closure and arrow: `D` and `E` are stray parameters. Both are
+// turbofish-called so the only diagnostics here stay the undeclared-type
+// ones (an uncalled generic closure draws its own, different error).
+$closure = function<A>(D $x): A {
+    return $x;
+};
+$closure::<int>(1);
+
+$arrow = fn<A>(E $x): A => $x;
+$arrow::<int>(2);

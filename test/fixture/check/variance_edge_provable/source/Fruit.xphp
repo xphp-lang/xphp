@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\VarianceEdgeProvable;
+
+// Declared in the source set, so the hierarchy can prove relationships involving it —
+// no "unprovable edge" warning.
+class Fruit
+{
+}

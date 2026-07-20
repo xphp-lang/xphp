@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+function run(string $g): void
+{
+    $$g::<int>(4);
+}

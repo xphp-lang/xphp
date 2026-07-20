@@ -1,0 +1,18 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+class ListColl<out E> extends AbstractColl<E> implements OrderedCollection<E>
+{
+    public function indexOf<U : E>(U $value): int
+    {
+        foreach ($this->items as $i => $item) {
+            if ($item === $value) {
+                return $i;
+            }
+        }
+        return -1;
+    }
+}

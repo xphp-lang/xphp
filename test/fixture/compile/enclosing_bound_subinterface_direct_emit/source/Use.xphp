@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// indexOf lives on the SUB-interface OrderedCollection, body on ListColl (which extends AbstractColl —
+// it has a parent). The upcast can't inherit indexOf_<Product> through a covariant edge, so it's emitted
+// directly onto ListColl<Book>. contains_<Product> still comes via inheritance from AbstractColl<Product>.
+function firstProduct(OrderedCollection<Product> $c): int
+{
+    return $c->indexOf::<Product>(new Product());
+}
+
+function hasProduct(Collection<Product> $c): bool
+{
+    return $c->contains::<Product>(new Product());
+}
+
+$books = new ListColl::<Book>(new Book());
+$idx = firstProduct($books);   // indexOf via direct emission
+$has = hasProduct($books);     // contains via inheritance

@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+abstract class AbstractMap<K, out V> implements MMap<K, V>
+{
+    /** @var list<mixed> */
+    protected array $values;
+
+    public function __construct(V ...$values)
+    {
+        $this->values = $values;
+    }
+
+    public function containsValue<U : V>(U $value): bool
+    {
+        return \in_array($value, $this->values, true);
+    }
+}

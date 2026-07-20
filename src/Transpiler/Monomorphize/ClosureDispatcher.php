@@ -121,7 +121,7 @@ final class ClosureDispatcher
                 continue;
             }
             $seenTags[$tag] = true;
-            $spec = $this->buildSpecialization(
+            $specialization = $this->buildSpecialization(
                 $template,
                 $args,
                 $typeParams,
@@ -130,8 +130,8 @@ final class ClosureDispatcher
                 $hashLength,
                 $useClauses,
             );
-            $declarations[] = $spec['function'];
-            $arms[] = ['tag' => $tag, 'mangledFqn' => $spec['mangledFqn']];
+            $declarations[] = $specialization['function'];
+            $arms[] = ['tag' => $tag, 'mangledFqn' => $specialization['mangledFqn']];
         }
         $dispatcher = $this->buildDispatcherClosure(
             $template,
@@ -183,7 +183,7 @@ final class ClosureDispatcher
             $substitution[$param->name] = $args[$i];
         }
 
-        $specialized = $this->specializer->specializeFunction($synthetic, $substitution, $mangled);
+        $specialized = $this->specializer->specializeFunction($synthetic, Substitution::of($substitution), $mangled);
 
         return [
             'function'   => $specialized,
@@ -323,7 +323,7 @@ final class ClosureDispatcher
             variadic: true,
         );
 
-        return new Closure(
+        $dispatcher = new Closure(
             [
                 'params'     => [$tagParam, $argsParam],
                 'returnType' => new Identifier('mixed'),
@@ -332,6 +332,13 @@ final class ClosureDispatcher
             ],
             $template->getAttributes(),
         );
+        // The dispatcher is the final emitted artifact — it replaces the generic
+        // closure with its grounded, per-tag routing. Drop the template's
+        // ATTR_METHOD_GENERIC_PARAMS marker copied above so the emitted closure does
+        // not read as an un-specialized generic: it is already specialized. This keeps
+        // a surviving generic marker a sound leak signal for the emit-time backstop.
+        $dispatcher->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, null);
+        return $dispatcher;
     }
 
     /**

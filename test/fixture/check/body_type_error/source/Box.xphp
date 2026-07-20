@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\BodyTypeError;
+
+class Box<T>
+{
+    public function __construct(public T $item)
+    {
+    }
+
+    public function get(): T
+    {
+        return $this->item;
+    }
+
+    public function broken(): T
+    {
+        // The generics are valid, so `xphp check`'s own phase passes and `xphp
+        // compile` succeeds. But after specialization (T -> int) this method
+        // returns a string where an int is declared — a body-level type error
+        // only PHPStan, run over the concrete output, can see.
+        return 'not a valid value';
+    }
+}

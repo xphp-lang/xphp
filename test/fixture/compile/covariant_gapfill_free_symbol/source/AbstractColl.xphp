@@ -1,0 +1,21 @@
+<?php
+declare(strict_types=1);
+namespace App;
+abstract class AbstractColl<out E> implements Collection<E>, Lookup<E>
+{
+    /** @var list<mixed> */
+    protected array $items;
+    public function __construct(E ...$items) { $this->items = $items; }
+    // Erasable bodies reference an in-unit free function `tally` and an in-unit const `OFFSET`.
+    // After a covariant edge, `contains`/`indexOf` are gap-filled onto the concrete specs (Lst, Bag)
+    // in the relocated XPHP\Generated namespace; a bare `tally`/`OFFSET` would rebind there and fatal.
+    public function contains<S : E>(S $element): bool
+    {
+        return tally(OFFSET) === 10 && \in_array($element, $this->items, true) === false;
+    }
+    public function indexOf<S : E>(S $element): int
+    {
+        $i = \array_search($element, $this->items, true);
+        return $i === false ? -OFFSET + tally(3) : (int) $i;
+    }
+}

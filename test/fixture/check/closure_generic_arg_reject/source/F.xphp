@@ -1,0 +1,18 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Positions;
+
+class Box<T>
+{
+    public function __construct(public T $v)
+    {
+    }
+}
+
+// A closure signature as a generic type argument — unsupported; the misleading
+// nikic parse error is enriched into a clear closure-specific message.
+function f(Box<Closure(int): int> $b): void
+{
+}

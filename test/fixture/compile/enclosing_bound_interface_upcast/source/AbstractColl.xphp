@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+abstract class AbstractColl<out E> implements Collection<E>
+{
+    /** @var list<mixed> */
+    protected array $items;
+
+    public function __construct(E ...$items)
+    {
+        $this->items = $items;
+    }
+
+    public function contains<E2 : E>(E2 $value): bool
+    {
+        return \in_array($value, $this->items, true);
+    }
+}

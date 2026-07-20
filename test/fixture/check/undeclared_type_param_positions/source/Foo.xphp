@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Positions;
+
+class Foo<Z>
+{
+    public Prop $field;
+
+    public function __construct(public Promo $promoted)
+    {
+    }
+
+    public function ret(): Ret
+    {
+    }
+
+    public function nullable(?Nul $x, $untyped): void
+    {
+    }
+
+    public function union(): UnA|UnB
+    {
+    }
+
+    public function intersection(InA&InB $x): void
+    {
+    }
+
+    public function closure(): void
+    {
+        // Stray names in a nested closure signature (param + return) are caught too;
+        // the untyped param exercises the "param has no type" branch.
+        $f = function (Clo $x, $untyped): CloRet {};
+    }
+}

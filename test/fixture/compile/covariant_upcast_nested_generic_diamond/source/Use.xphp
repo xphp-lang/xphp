@@ -1,0 +1,16 @@
+<?php
+declare(strict_types=1);
+namespace App;
+// All four Tuple combos between Book<:Product form a covariant DIAMOND, so Lst<Tuple<Book,Book>> is a
+// covariant instance of Collection at several Tuple supertypes at once. Single inheritance carries the
+// erased contains for only one diamond path; the post-edge gap-fill must supply the siblings directly,
+// or this program fatals at class load ("contains 1 abstract method").
+function probe(Collection<Tuple<Product, Product>> $c): bool
+{
+    return $c->contains::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+}
+$bb = new Lst::<Tuple<Book, Book>>(new Couple::<Book, Book>(new Book(), new Book()));
+$bp = new Lst::<Tuple<Book, Product>>(new Couple::<Book, Product>(new Book(), new Product()));
+$pb = new Lst::<Tuple<Product, Book>>(new Couple::<Product, Book>(new Product(), new Book()));
+$pp = new Lst::<Tuple<Product, Product>>(new Couple::<Product, Product>(new Product(), new Product()));
+$found = probe($bb);

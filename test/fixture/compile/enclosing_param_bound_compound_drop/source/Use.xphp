@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Branch-merge agreement on a compound bound: both arms construct Box<Fruit>, so the merge keeps the
+// element type and $box is determined to be Box<Fruit>. The whole `\Stringable & E` bound grounds to
+// `\Stringable & Fruit`. `Banana` is a valid element (Banana <: Fruit) but is not `\Stringable`, so
+// it is rejected on the `\Stringable` operand.
+//
+// Expected behaviour: COMPILE ERROR (Banana does not extend/implement \Stringable). Grounding the
+// whole bound preserves every operand — the checkable `\Stringable` constraint is never lost.
+function store(bool $cond): void
+{
+    if ($cond) {
+        $box = new Box::<Fruit>();
+    } else {
+        $box = new Box::<Fruit>();
+    }
+
+    $box->register::<Banana>(new Banana());
+}

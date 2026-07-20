@@ -43,36 +43,36 @@ final class NestedGenericsIntegrationTest extends TestCase
 
         $result = $this->compile($sourceDir);
 
-        self::assertSame(2, $result->generatedCount, 'expected Lst<Plastic> + Box<Lst<Plastic>>');
+        self::assertSame(2, $result->generatedCount, 'expected Collection<Plastic> + Box<Collection<Plastic>>');
 
         $plastic = new TypeRef('App\\NestedInstantiation\\Models\\Plastic');
-        $lstOfPlastic = new TypeRef('App\\NestedInstantiation\\Containers\\Lst', [$plastic]);
+        $collectionOfPlastic = new TypeRef('App\\NestedInstantiation\\Containers\\Collection', [$plastic]);
 
-        $lstFqn = Registry::generatedFqn('App\\NestedInstantiation\\Containers\\Lst', [$plastic]);
-        $boxFqn = Registry::generatedFqn('App\\NestedInstantiation\\Containers\\Box', [$lstOfPlastic]);
+        $collectionFqn = Registry::generatedFqn('App\\NestedInstantiation\\Containers\\Collection', [$plastic]);
+        $boxFqn = Registry::generatedFqn('App\\NestedInstantiation\\Containers\\Box', [$collectionOfPlastic]);
 
-        $lstFile = $this->fqnToPath($lstFqn);
+        $collectionFile = $this->fqnToPath($collectionFqn);
         $boxFile = $this->fqnToPath($boxFqn);
-        self::assertFileExists($lstFile, "expected {$lstFile}");
+        self::assertFileExists($collectionFile, "expected {$collectionFile}");
         self::assertFileExists($boxFile, "expected {$boxFile}");
 
-        $lstContent = file_get_contents($lstFile);
+        $collectionContent = file_get_contents($collectionFile);
         $boxContent = file_get_contents($boxFile);
 
-        // Pin parent identities for the nested instantiation: Box<Lst<Plastic>>'s
-        // `$item` must point at the Lst<Plastic> specialization specifically.
-        self::assertStringContainsString('public \\' . $lstFqn . ' $item', $boxContent);
+        // Pin parent identities for the nested instantiation: Box<Collection<Plastic>>'s
+        // `$item` must point at the Collection<Plastic> specialization specifically.
+        self::assertStringContainsString('public \\' . $collectionFqn . ' $item', $boxContent);
 
         $useFile = $this->targetDir . '/Use.php';
         self::assertFileExists($useFile);
         $useContent = file_get_contents($useFile);
         // Pin which specialized FQN each `new` call refers to.
         self::assertStringContainsString('new \\' . $boxFqn . '()', $useContent);
-        self::assertStringContainsString('new \\' . $lstFqn . '()', $useContent);
+        self::assertStringContainsString('new \\' . $collectionFqn . '()', $useContent);
 
         $snapshotDir = __DIR__ . '/../../fixture/compile/nested_instantiation/verify/testNestedInstantiationGeneratesInnerAndOuterSpecializations';
-        SnapshotHash::assertMatches($snapshotDir . '/Lst_Plastic.expected.php', $lstContent);
-        SnapshotHash::assertMatches($snapshotDir . '/Box_Lst_Plastic.expected.php', $boxContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Collection_Plastic.expected.php', $collectionContent);
+        SnapshotHash::assertMatches($snapshotDir . '/Box_Collection_Plastic.expected.php', $boxContent);
         SnapshotHash::assertMatches($snapshotDir . '/Use.expected.php', $useContent);
 
         $this->assertAllSyntacticallyValid();

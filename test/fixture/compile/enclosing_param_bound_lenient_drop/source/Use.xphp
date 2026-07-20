@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// Branch-merge agreement: both arms construct Box<Fruit>, so the merge keeps the element type
+// (the arms agree on Box<Fruit>) and $box is determined to be Box<Fruit>. The bound `<U : E>`
+// grounds to `<U : Fruit>`, so `Rock` — plainly not a Fruit — is rejected.
+//
+// Expected behaviour: COMPILE ERROR (Rock does not extend/implement App\Fruit). A knowable element
+// type is never dropped, so a determinate violation is never silently accepted.
+function pick(bool $cond): bool
+{
+    if ($cond) {
+        $box = new Box::<Fruit>();
+    } else {
+        $box = new Box::<Fruit>();
+    }
+
+    return $box->contains::<Rock>(new Rock());
+}

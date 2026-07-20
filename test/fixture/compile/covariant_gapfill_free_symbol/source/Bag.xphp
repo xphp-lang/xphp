@@ -1,0 +1,4 @@
+<?php
+declare(strict_types=1);
+namespace App;
+class Bag<out E> extends AbstractColl<E> implements Collection<E>, Lookup<E> {}

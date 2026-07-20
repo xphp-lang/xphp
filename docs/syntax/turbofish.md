@@ -70,30 +70,70 @@ $id('T_<hash-of-int>', 42);
   scanner requires `::<` to be adjacent.
 - **Anchored to a name**: `Foo<T>(...)` (no `::`) is a PHP-side
   ambiguity (`Foo < T` could be comparison) and is rejected.
+- **The method name must be a literal.** A turbofish on a
+  *dynamically-named* method or static call — `$o->$m::<int>()`, the
+  nullsafe `$o?->$m::<int>()`, the static `Foo::$m::<int>()`, or a
+  variable-variable `$$g::<int>()` — is **rejected** with a diagnostic:
+  the specialized method name cannot be resolved from a value known only
+  at runtime. The name may be any literal identifier, **including a PHP
+  keyword** — `$o->list::<int>()`, `Foo::print::<int>()`, and the
+  matching declaration `public function list<T>(...)` all work, since PHP
+  permits keywords as method names.
 - All call-site shapes can carry empty turbofish `::<>` when the
   template is all-defaulted.
 - Bare `new Foo;` (no `(` or `::<>`) also works for all-defaulted
   class templates — see [defaults](defaults.md).
+- **The type argument is not inferred from the call arguments.** A
+  turbofish-less call (`$x->pick('a')` instead of
+  `$x->pick::<string>('a')`) is a compile error
+  (`xphp.missing_type_argument`), not a silent skip — `xphp check`
+  catches a forgotten turbofish at build time rather than letting it
+  fatal at runtime. A generic **method** whose type parameters are all
+  defaulted may still be called bare; a named generic **function** or
+  **closure** has no bare or empty-turbofish form, so it always needs
+  an explicit turbofish. (A first-class callable `pick(...)` creates a
+  closure rather than calling, and is left alone.)
 
 ## Receiver-type analysis (instance methods)
 
 For instance-method turbofish `$x->m::<T>(...)`, the compiler needs to
-know what class `$x` holds to pick the right method template. It uses:
+know what class `$x` holds to pick the right method template. The
+receiver's type is determined from:
 
-1. The receiver's declared type: typed parameter, typed property,
+1. A declared type: a typed parameter, a typed property (`$this->prop`),
    or `$this`.
-2. Local-scope tracking on `$x = new Foo()` assignments.
+2. A local assigned from `new Foo()`, a method return, a chained call,
+   or a `self`/`static` factory.
+3. A branch whose arms all agree on the same class.
 
-If the analysis can't prove a single class (e.g., `$x` reassigned
-inside a branch where the arms disagree), the call drops to a
-non-specialized path rather than picking a possibly-wrong class.
+If the analysis can't prove a single class — `$x` is an untyped
+`foreach` variable, or it's reassigned across a branch whose arms
+disagree — the turbofish call **can't be specialized**. The generic
+method is stripped from its class, so a non-specialized call would fatal
+at runtime ("undefined method"); rather than emit that, the compiler
+reports a **compile-time error**
+([`xphp.undetermined_receiver`](../errors.md#diagnostic-codes)). Give the
+receiver a statically-known type.
+
+Once the receiver class is known, the method is resolved through its
+**inheritance chain** (nearest ancestor first), so a generic method
+declared on a base class is callable on a subclass receiver. The same
+holds for the static (`Sub::m::<T>()`) and nullsafe (`$x?->m::<T>()`)
+shapes. See
+[methods and functions → inheritance](methods-and-functions.md#inheritance).
+
+A turbofish call whose generic method can't be resolved on the receiver
+or any of its ancestors is a **compile-time error**
+([`xphp.unresolved_generic_call`](../errors.md#diagnostic-codes)) rather
+than a silent pass-through that fatals at runtime.
 
 ## Caveats
 
 - > ⚠️ **Branching narrowing precision** — receiver-type analysis
-  conservatively de-specializes after `$x` is reassigned across
-  branches whose arms disagree. See
-  [caveats](../caveats.md#branching-narrowing-precision-loss).
+  conservatively refuses to ground `$x` after it's reassigned across
+  branches whose arms disagree; a turbofish call there is a compile
+  error (`xphp.undetermined_receiver`), not a silent de-specialization.
+  See [caveats](../caveats.md#branching-narrowing-precision-loss).
 
 ## See also
 

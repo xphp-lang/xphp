@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureDefault;
+
+// A default value inside a Closure(...) signature TYPE is meaningless — a
+// signature describes the callable's shape, not call-time values. `check` must
+// collect a clear parse-error diagnostic at the real line (the `=` on line 10),
+// not silently mis-model the signature into phantom parameters.
+function make(): Closure(int $x = 0): int
+{
+    return fn(int $x): int => $x + 1;
+}

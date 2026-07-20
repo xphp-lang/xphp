@@ -7,10 +7,15 @@ namespace XPHP\Console;
 use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as StandardPrinter;
 use Symfony\Component\Console\Application;
+use XPHP\Config\ManifestResolver;
+use XPHP\Config\SourceResolver;
+use XPHP\Console\Command\CheckCommand;
 use XPHP\Console\Command\CompileCommand;
 use XPHP\FileSystem\FileFinder;
 use XPHP\FileSystem\FileReader;
 use XPHP\FileSystem\FileWriter;
+use XPHP\StaticAnalysis\CheckGate;
+use XPHP\StaticAnalysis\StaticAnalysisGate;
 use XPHP\Transpiler\Monomorphize\Compiler;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\SpecializedClassGenerator;
@@ -35,17 +40,20 @@ final class ApplicationConsole extends Application
         $phpParser = (new ParserFactory())->createForHostVersion();
         $printer = new StandardPrinter();
 
-        $this->addCommand(new CompileCommand(
-            $fileFinder,
-            new Compiler(
-                $fileReader,
-                $fileWriter,
-                new XphpSourceParser($phpParser),
-                new Specializer(),
-                new SpecializedClassGenerator($printer, $fileWriter),
-                $printer,
-                $hashLength,
-            ),
-        ));
+        $compiler = new Compiler(
+            $fileReader,
+            $fileWriter,
+            new XphpSourceParser($phpParser),
+            new Specializer(),
+            new SpecializedClassGenerator($printer, $fileWriter),
+            $printer,
+            $hashLength,
+        );
+
+        $sourceResolver = new SourceResolver($fileFinder, new ManifestResolver($fileReader, $fileFinder));
+        $gate = new CheckGate($compiler, new StaticAnalysisGate($compiler));
+
+        $this->addCommand(new CompileCommand($sourceResolver, $compiler, $gate));
+        $this->addCommand(new CheckCommand($sourceResolver, $gate));
     }
 }

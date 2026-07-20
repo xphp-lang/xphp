@@ -1,0 +1,12 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\GenericMethodMissingArg;
+
+class Util
+{
+    public function pair<A, B>(A $a, B $b): void
+    {
+    }
+}

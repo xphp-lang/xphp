@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureBuiltinOk;
+
+// Regression: an exception factory. `MyException` is a user subclass of the
+// built-in `\Exception`, which is a `\Throwable`. The hierarchy models no edges
+// for PHP built-ins, so conformance must accept this gradually rather than
+// false-reject a valid, idiomatic factory.
+class MyException extends \Exception
+{
+}
+
+function makeThrower(): Closure(): \Throwable
+{
+    return fn(): MyException => new MyException('boom');
+}
+
+$factory = makeThrower();
+$thrown = $factory();

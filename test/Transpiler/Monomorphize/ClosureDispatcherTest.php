@@ -69,6 +69,40 @@ final class ClosureDispatcherTest extends TestCase
         $this->assertSame($expected, ClosureDispatcher::tagFor($args, 16));
     }
 
+    public function testDispatcherClosureDropsTheTemplateGenericParamsMarker(): void
+    {
+        // The emitted dispatcher is a grounded, already-specialized artifact: it replaces the
+        // generic closure with per-tag routing. It must NOT carry the template's
+        // ATTR_METHOD_GENERIC_PARAMS marker, so that a surviving marker stays a sound leak
+        // signal for the emit-time backstop ({@see GenericMarkerLeakGuard}). Pin both halves:
+        // the dispatcher's copy is cleared, and the template's own marker is left untouched
+        // (the copy is by value via getAttributes(), so the other passes still see it).
+        $template = $this->buildTemplate();
+        $params = $this->buildTypeParams();
+        $template->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS, $params);
+
+        $result = (new ClosureDispatcher())->dispatch(
+            $template,
+            [[new TypeRef('int')]],
+            $params,
+            'pair',
+            'App',
+            16,
+        );
+
+        $dispatcher = $result['assignment']->expr;
+        $this->assertInstanceOf(Closure::class, $dispatcher);
+        $this->assertNull(
+            $dispatcher->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS),
+            'the emitted dispatcher must not read as an un-specialized generic',
+        );
+        $this->assertSame(
+            $params,
+            $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS),
+            'clearing the dispatcher copy must not touch the template',
+        );
+    }
+
     public function testDispatcherClosureSignatureIsStringTagAndVariadicArgs(): void
     {
         $result = $this->dispatchSimple([[new TypeRef('int')]]);

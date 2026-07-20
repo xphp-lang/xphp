@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\ParseError;
+
+// xphp-specific parse-time rejection (not a PHP syntax error): variance markers
+// are not allowed on closures. Throws during parse, carrying this token's line.
+$f = function <out T>(T $x): T {
+    return $x;
+};

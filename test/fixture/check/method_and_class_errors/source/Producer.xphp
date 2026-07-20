@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\MethodAndClass;
+
+// Class-level: covariant +T in an input position.
+class Producer<out T>
+{
+    public function set(T $value): void
+    {
+    }
+}

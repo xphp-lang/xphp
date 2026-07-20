@@ -26,7 +26,7 @@ final class GenericInterfaceIntegrationTest extends TestCase
     {
         $this->sourceDir = realpath(__DIR__ . '/../../fixture/compile/generic_interface/source')
             ?: throw new RuntimeException('Fixture missing');
-        $this->workDir = sys_get_temp_dir() . '/xphp-generic-iface-' . uniqid('', true);
+        $this->workDir = sys_get_temp_dir() . '/xphp-generic-interface-' . uniqid('', true);
         $this->targetDir = $this->workDir . '/dist';
         $this->cacheDir = $this->workDir . '/.xphp-cache';
         mkdir($this->workDir, 0o755, true);
@@ -43,7 +43,7 @@ final class GenericInterfaceIntegrationTest extends TestCase
     {
         $this->compile();
 
-        $ifaceFqn = Registry::generatedFqn(
+        $interfaceFqn = Registry::generatedFqn(
             'App\\GenericInterface\\Containers\\Container',
             [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
         );
@@ -52,18 +52,18 @@ final class GenericInterfaceIntegrationTest extends TestCase
             [new TypeRef('App\\GenericInterface\\Models\\Plastic')],
         );
 
-        $ifaceFile = $this->fqnToPath($ifaceFqn);
+        $interfaceFile = $this->fqnToPath($interfaceFqn);
         $boxFile = $this->fqnToPath($boxFqn);
-        self::assertFileExists($ifaceFile, 'specialized interface must be emitted');
+        self::assertFileExists($interfaceFile, 'specialized interface must be emitted');
         self::assertFileExists($boxFile, 'specialized class must be emitted');
 
         $boxContent = file_get_contents($boxFile);
         // Pin the implements target identity (snapshot's first-seen-order
         // normalization can't distinguish which specialized FQN gets used).
-        self::assertStringContainsString('implements \\' . $ifaceFqn, $boxContent);
+        self::assertStringContainsString('implements \\' . $interfaceFqn, $boxContent);
 
         $snapshotDir = __DIR__ . '/../../fixture/compile/generic_interface/verify/testGenericInterfaceSpecializesAndIsImplementedBySpecializedClass';
-        SnapshotHash::assertMatches($snapshotDir . '/Container_Plastic.expected.php', file_get_contents($ifaceFile));
+        SnapshotHash::assertMatches($snapshotDir . '/Container_Plastic.expected.php', file_get_contents($interfaceFile));
         SnapshotHash::assertMatches($snapshotDir . '/Box_Plastic.expected.php', $boxContent);
     }
 
@@ -116,7 +116,7 @@ final class GenericInterfaceIntegrationTest extends TestCase
     #[RunInSeparateProcess]
     public function testSpecializedClassIsInstanceOfSpecializedInterfaceAtRuntime(): void
     {
-        $fixture = CompiledFixture::compile($this->sourceDir, 'generic-iface-runtime');
+        $fixture = CompiledFixture::compile($this->sourceDir, 'generic-interface-runtime');
         $fixture->registerAutoload('App\\GenericInterface\\');
         try {
             require __DIR__ . '/../../fixture/compile/generic_interface/verify/specialized_interface_runtime.php';

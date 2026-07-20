@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+trait A<T> { public function m(T $x): T { return $x; } }
+trait B<T> { public function m(T $x): T { return $x; } }
+
+class C
+{
+    use A<int>, A<string>, B<int> {
+        A::m insteadof B;
+    }
+}

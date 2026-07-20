@@ -73,7 +73,14 @@ implementation detail.
 - **Traits don't get markers** — `instanceof SomeTrait` doesn't work
   in PHP, so generic traits are dropped from the emit after
   specialization.
-- **Variance edges** — when `+T` or `-T` is declared, specializations
+- **Generic traits work with `insteadof` / `as`** — a conflict
+  resolution block (`use A<int>, B<int> { A::m insteadof B; B::m as
+  bm; }`) rewrites its operand names to the same specializations as
+  the `use` list, so the adapted class loads and runs. A bare operand
+  that matches two different specializations of one trait (`use
+  A<int>, A<string>`) can't be disambiguated in an adaptation clause
+  and is rejected.
+- **Variance edges** — when `out T` or `in T` is declared, specializations
   get real `extends` chains. See [variance](variance.md).
 
 ## See also
@@ -81,5 +88,6 @@ implementation detail.
 - Test fixture: `test/fixture/compile/box_generic/`
 - Test fixture: `test/fixture/compile/generic_interface/`
 - Test fixture: `test/fixture/compile/nested_instantiation/`
+- Test fixture: `test/fixture/compile/generic_trait_adaptation/`
 - Related: [methods and functions](methods-and-functions.md),
   [turbofish](turbofish.md)

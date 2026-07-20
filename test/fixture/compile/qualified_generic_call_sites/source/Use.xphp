@@ -1,0 +1,59 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\QualifiedCalls;
+
+// Fully-qualified and `namespace\`-relative spellings of generic call
+// sites: every one must route to the same specialization as the bare
+// form. Historically the FQ forms either failed loudly with a doubled
+// namespace or silently kept the raw `new` against the stripped marker
+// interface, and the relative forms silently lost their markers.
+
+class Box<T>
+{
+    public function __construct(public T $v)
+    {
+    }
+}
+
+class Cache<T = string>
+{
+    public function __construct(public T $key)
+    {
+    }
+}
+
+class Holder<T>
+{
+    public function __construct(public T $inner)
+    {
+    }
+
+    // FQ generic return hint + FQ turbofish with a type-param arg inside
+    // a template body: both must ground when Holder specializes.
+    public function wrap(): \App\QualifiedCalls\Box<T>
+    {
+        return new \App\QualifiedCalls\Box::<T>($this->inner);
+    }
+}
+
+function make<T>(T $x): T
+{
+    return $x;
+}
+
+// Relative generic return type and a bare turbofish on ONE line: both
+// markers must bind (the relative one used to be silently dropped).
+// The wrong-site STEAL variant — distinct type args per site — is pinned
+// at the parser level, where a mismatched program can still be observed.
+function build(): namespace\Box<int> { return new Box::<int>(9); }
+
+$a = new \App\QualifiedCalls\Box::<int>(1);
+$b = new namespace\Box::<string>('r');
+$c = new \App\QualifiedCalls\Cache::<>('k');
+$h = new Holder::<int>(5);
+$d = $h->wrap();
+$e = build();
+$f = \App\QualifiedCalls\make::<int>(3);
+$g = namespace\make::<string>('g');

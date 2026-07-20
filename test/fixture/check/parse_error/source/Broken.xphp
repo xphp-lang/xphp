@@ -1,0 +1,11 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\ParseError;
+
+// Deliberate syntax error: unterminated method signature.
+class Broken
+{
+    public function oops(
+}

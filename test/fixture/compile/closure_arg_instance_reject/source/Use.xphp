@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureArgReject;
+
+final class Book
+{
+    public function __construct(public string $name) {}
+}
+
+class Box<E>
+{
+    public function __construct(private E $value) {}
+
+    public function map<R>(Closure(E $x): R $fn): R
+    {
+        return $fn($this->value);
+    }
+}
+
+$box = new Box::<Book>(new Book('PHP'));
+// int is not wider than Book — compile fails fast before any output is written.
+$box->map::<string>(fn(int $x): string => (string) $x);

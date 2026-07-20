@@ -1,0 +1,28 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// `list` and `print` are PHP keywords but valid (semi-reserved) method names. Their generic
+// forms must scan (the declaration gate used to require T_STRING and reject a keyword name,
+// so the raw `<T>` reached php-parser) AND both call sites must strip + specialize:
+//  - instance `$r->list::<int>()` — `list` re-tokenizes as T_STRING after `->` (already worked);
+//  - static `Reg::print::<int>()` — `print` stays T_PRINT after `::`, the case the call-site gate
+//    rejected, leaving a raw parse error until this WI.
+class Reg
+{
+    public function list<T>(T $x): T
+    {
+        return $x;
+    }
+
+    public static function print<T>(T $x): T
+    {
+        return $x;
+    }
+}
+
+$r = new Reg();
+$instanceResult = $r->list::<int>(41);
+$staticResult = Reg::print::<int>(7);

@@ -1,0 +1,10 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// `contains<U:E>` is declared on the generic BASE; the erased member is emitted on Base<Fruit> and
+// inherited by ArrayList<Fruit>. The call must resolve to that inherited member.
+$list = new ArrayList::<Fruit>();
+$inherited = $list->contains::<Banana>(new Banana());

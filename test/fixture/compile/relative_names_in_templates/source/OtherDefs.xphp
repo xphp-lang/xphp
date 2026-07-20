@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Other;
+
+// Deliberate name collisions: if any relative reference is alias-captured,
+// the emitted code lands on these classes instead and the runtime verify
+// fails loudly.
+
+class Base
+{
+}
+
+class Thing
+{
+    public function __construct(public int $wrong)
+    {
+    }
+}
+
+class Svc
+{
+}

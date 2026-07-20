@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ClosureArgFn;
+
+function apply<R>(Closure(R $x): R $fn, R $seed): R
+{
+    return $fn($seed);
+}
+
+function run(): void
+{
+    // Target grounds to Closure(int $x): int; the literal takes `string` — a provable
+    // contravariance violation.
+    apply::<int>(fn(string $x): int => 0, 5);
+}

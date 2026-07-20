@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ArraySugarMarkerOffset;
+
+// The `VeryLongRecordName[]` sugar rewrites to the shorter `array`,
+// shifting every byte after it; the generic closure below must still
+// specialize and route both turbofish calls.
+final class VeryLongRecordName
+{
+}
+
+function countRecords(VeryLongRecordName[] $records): int
+{
+    return \count($records);
+}
+
+$id = function<T>(T $x): T {
+    return $x;
+};
+
+$n = countRecords([new VeryLongRecordName()]);
+$a = $id::<int>(42);
+$b = $id::<string>('hello');

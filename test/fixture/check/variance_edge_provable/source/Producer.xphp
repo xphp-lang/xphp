@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Check\VarianceEdgeProvable;
+
+class Producer<out T>
+{
+    public function get(): T
+    {
+        throw new \LogicException();
+    }
+}
