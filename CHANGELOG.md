@@ -5,9 +5,7 @@ All notable changes to `xphp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - Unreleased
-
-_In progress on this branch — content still accumulating; date set at tag time._
+## [0.3.0]
 
 ### Added
 
@@ -489,7 +487,7 @@ _In progress on this branch — content still accumulating; date set at tag time
   turbofish) is not double-reported, and a turbofish with still-abstract type
   arguments counts as a real call.
 
-## [0.2.1] - 2026-06-17
+## [0.2.1]
 
 ### Fixed
 
@@ -595,7 +593,7 @@ These are documented in full in the [caveats](docs/caveats.md):
 - Build-time hash-collision detection and a configurable
   `XPHP_HASH_LENGTH` (16–64).
 
-[0.3.0]: https://github.com/xphp-lang/xphp/compare/v0.2.1...HEAD
+[0.3.0]: https://github.com/xphp-lang/xphp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/xphp-lang/xphp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/xphp-lang/xphp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xphp-lang/xphp/releases/tag/v0.1.0

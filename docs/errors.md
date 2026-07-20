@@ -169,7 +169,7 @@ specialization has no stable class identity to anchor a subtype
 ### Variance composition violation
 
 ```
-Variance violation in template <Template>: type-parameter <+|->T
+Variance violation in template <Template>: type-parameter <out|in> T
 appears in <invariant|covariant|contravariant>-only position
 (via slot N of <InnerTemplate>).
 ```
@@ -177,7 +177,7 @@ appears in <invariant|covariant|contravariant>-only position
 ### Variance position violation
 
 ```
-Generic parameter `<+|->T` appears in <position> position, which is not
+Generic parameter `<out|in> T` appears in <position> position, which is not
 allowed for <covariant|contravariant> variance.
 ```
 

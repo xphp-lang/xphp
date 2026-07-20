@@ -114,7 +114,7 @@ Both `dist/` and `.xphp-cache/` can be gitignored — they're
 generated artifacts your CI/CD pipeline rebuilds on every deploy.
 
 **Safe by default:** `compile` runs the same validation gate as
-[`check`](#) — the generic validators plus PHPStan over the compiled
+[`check`](errors.md#xphp-check--validate-without-emitting) — the generic validators plus PHPStan over the compiled
 output — *before* emitting, and fails the build (writing nothing) if it
 finds an error, so a typo'd or undeclared type never reaches runtime. For a
 fast iteration build — when you've already run `check` and just want to
