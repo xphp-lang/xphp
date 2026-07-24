@@ -8,13 +8,16 @@ declare(strict_types=1);
  * the enclosing class (no flow analysis needed), so the int and
  * string call sites each land on their own mangled method.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Util.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Util.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(42, $i);
-Assert::assertSame('hi', $s);
+    Assert::assertSame(42, $i);
+    Assert::assertSame('hi', $s);
+};

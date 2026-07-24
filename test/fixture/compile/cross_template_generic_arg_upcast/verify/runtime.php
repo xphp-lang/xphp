@@ -16,12 +16,14 @@ declare(strict_types=1);
  * That the program loads, the call resolves, and `first()` returns the Book proves the cross-template
  * edge was emitted and the covariance holds at runtime — not just at `check`.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertInstanceOf(\App\Book::class, $first, 'the upcast tuple resolved and yielded its Book element');
-echo "OK\n";
+    Assert::assertInstanceOf(\App\Book::class, $first, 'the upcast tuple resolved and yielded its Book element');
+};

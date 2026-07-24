@@ -84,7 +84,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             self::assertStringNotContainsString('final class', $combined);
 
             $fixture->registerAutoload('App\\CovariantConstructor');
-            require __DIR__ . '/../../fixture/compile/generic_covariant_immutable_constructor/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_covariant_immutable_constructor/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -135,7 +136,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             self::assertStringNotContainsString('final class', $combined);
 
             $fixture->registerAutoload('App\\CovariantPrivateProperty');
-            require __DIR__ . '/../../fixture/compile/generic_covariant_private_property/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_covariant_private_property/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -181,7 +183,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
             );
 
             $fixture->registerAutoload('App\\');
-            require __DIR__ . '/../../fixture/compile/cross_template_generic_arg_upcast/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/cross_template_generic_arg_upcast/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -202,7 +205,8 @@ final class VarianceEdgeIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App\\');
-            require __DIR__ . '/../../fixture/compile/comparator_param_covariant_upcast/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/comparator_param_covariant_upcast/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

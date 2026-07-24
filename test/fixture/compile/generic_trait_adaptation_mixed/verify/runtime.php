@@ -9,14 +9,17 @@ declare(strict_types=1);
  * generic operands rewrite to their specializations. Plain's `val` wins; the excluded
  * generic `val`s are re-exposed under aliases; Plain's distinct method runs.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoloader registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoloader registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame('P:1', $val);        // insteadof: Plain's val wins over G, H
-Assert::assertSame('G:2', $gval);       // as: excluded generic G::val under alias
-Assert::assertSame('H:3', $hval);       // as: excluded generic H::val under alias
-Assert::assertSame('plain', $plainOnly); // Plain's distinct method
+    Assert::assertSame('P:1', $val);        // insteadof: Plain's val wins over G, H
+    Assert::assertSame('G:2', $gval);       // as: excluded generic G::val under alias
+    Assert::assertSame('H:3', $hval);       // as: excluded generic H::val under alias
+    Assert::assertSame('plain', $plainOnly); // Plain's distinct method
+};

@@ -11,13 +11,16 @@ declare(strict_types=1);
  * Box<Banana> used where a Box<Fruit> is expected dispatches the inherited `contains_<Fruit>`.
  * That this loads and runs proves erasure is variance-safe through the real pipeline.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($viaCovariance, 'a Box<Banana> via the Box<Fruit> view runs the inherited contains_<Fruit>');
-Assert::assertTrue($direct);
-Assert::assertTrue($isCovariant, 'Box<Banana> must be an instanceof the Box marker');
+    Assert::assertTrue($viaCovariance, 'a Box<Banana> via the Box<Fruit> view runs the inherited contains_<Fruit>');
+    Assert::assertTrue($direct);
+    Assert::assertTrue($isCovariant, 'Box<Banana> must be an instanceof the Box marker');
+};

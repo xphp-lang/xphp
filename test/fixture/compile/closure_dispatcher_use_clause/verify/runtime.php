@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Runtime verify for `closure_dispatcher_use_clause`.
  *
- * Driver contract: `$fixture` (CompiledFixture) must be in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  * The compiled `Use.php` defines `$base`, `$counter`, and three call
  * results `$callA`, `$callB`, `$callC` at top level. After require,
  * each is available here. The by-ref `&$counter` capture mutates
@@ -13,10 +13,13 @@ declare(strict_types=1);
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame([1, 10, 1], $callA);
-Assert::assertSame([2, 10, 2], $callB);
-Assert::assertSame(['hi', 10, 3], $callC);
-Assert::assertSame(3, $counter);
+    Assert::assertSame([1, 10, 1], $callA);
+    Assert::assertSame([2, 10, 2], $callB);
+    Assert::assertSame(['hi', 10, 3], $callC);
+    Assert::assertSame(3, $counter);
+};

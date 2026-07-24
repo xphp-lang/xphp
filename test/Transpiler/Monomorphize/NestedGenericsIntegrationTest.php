@@ -148,7 +148,8 @@ final class NestedGenericsIntegrationTest extends TestCase
         $fixture = CompiledFixture::compile($sourceDir, 'nested-runtime');
         $fixture->registerAutoload('App\\NestedTypehint\\');
         try {
-            require __DIR__ . '/../../fixture/compile/nested_typehint/verify/nested_specialization_runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/nested_typehint/verify/nested_specialization_runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

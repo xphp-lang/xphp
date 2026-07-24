@@ -8,14 +8,17 @@ declare(strict_types=1);
  * called as `Derived::make::<...>()` on a subclass. The specialization is emitted
  * onto Base and reached through PHP's static-method inheritance.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Base.php';
-require $fixture->targetDir . '/Derived.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Base.php';
+    require $fixture->targetDir . '/Derived.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame('hi', $s);
-Assert::assertSame(7, $n);
+    Assert::assertSame('hi', $s);
+    Assert::assertSame(7, $n);
+};

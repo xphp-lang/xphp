@@ -9,14 +9,17 @@ declare(strict_types=1);
  * construction. That all three construct, run, and return their class-typed values proves the alias names
  * resolve to the classes in argument position.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 use PHPUnit\Framework\Assert;
-require $fixture->targetDir . '/Use.php';
-Assert::assertInstanceOf(\App\Double::class, $dv, 'Box::<Double> must carry an App\\Double, not a scalar');
-Assert::assertSame(2.5, $dv->f);
-Assert::assertInstanceOf(\App\Integer::class, $iv, 'Box::<Integer> must carry an App\\Integer');
-Assert::assertSame(7, $iv->i);
-Assert::assertInstanceOf(\App\Boolean::class, $bv, 'Box::<Boolean> must carry an App\\Boolean');
-Assert::assertTrue($bv->b);
-echo "OK\n";
+use XPHP\TestSupport\CompiledFixture;
+
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
+    Assert::assertInstanceOf(\App\Double::class, $dv, 'Box::<Double> must carry an App\\Double, not a scalar');
+    Assert::assertSame(2.5, $dv->f);
+    Assert::assertInstanceOf(\App\Integer::class, $iv, 'Box::<Integer> must carry an App\\Integer');
+    Assert::assertSame(7, $iv->i);
+    Assert::assertInstanceOf(\App\Boolean::class, $bv, 'Box::<Boolean> must carry an App\\Boolean');
+    Assert::assertTrue($bv->b);
+};

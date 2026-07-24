@@ -8,15 +8,18 @@ declare(strict_types=1);
  * relocated Box<int> body. Tool::ping()='pong' . Widget::spin()='spin' -> 'pongspin'. A group form
  * that fell back to the current namespace would fatal with "Class App\Tool not found".
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-// Vendor's two classes share one emitted lib.php (not one-class-per-file), so PSR-4 can't autoload
-// them — require it before Use.php runs its top-level instantiation. The specialized Box autoloads
-// via XPHP\Generated.
-require $fixture->targetDir . '/lib.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    // Vendor's two classes share one emitted lib.php (not one-class-per-file), so PSR-4 can't autoload
+    // them — require it before Use.php runs its top-level instantiation. The specialized Box autoloads
+    // via XPHP\Generated.
+    require $fixture->targetDir . '/lib.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame('pongspin', $result);
+    Assert::assertSame('pongspin', $result);
+};

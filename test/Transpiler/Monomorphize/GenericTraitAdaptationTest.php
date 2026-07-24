@@ -28,7 +28,8 @@ final class GenericTraitAdaptationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/generic_trait_adaptation/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_trait_adaptation/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -46,7 +47,8 @@ final class GenericTraitAdaptationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/generic_trait_adaptation_mixed/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_trait_adaptation_mixed/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

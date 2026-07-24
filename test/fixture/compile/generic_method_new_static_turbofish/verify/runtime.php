@@ -8,21 +8,24 @@ declare(strict_types=1);
  * binding resolves `static` against the specialized class. With no
  * subclassing in this fixture, `$a` and `$b` end up in the same class.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\TypeRef;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Builder.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Builder.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(2, $b->value);
-Assert::assertSame(get_class($a), get_class($b));
+    Assert::assertSame(2, $b->value);
+    Assert::assertSame(get_class($a), get_class($b));
 
-$specializedFqn = Registry::generatedFqn(
-    'App\\GenericMethodNewStaticTurbofish\\Builder',
-    [new TypeRef('int', isScalar: true)],
-);
-Assert::assertSame($specializedFqn, get_class($a));
+    $specializedFqn = Registry::generatedFqn(
+        'App\\GenericMethodNewStaticTurbofish\\Builder',
+        [new TypeRef('int', isScalar: true)],
+    );
+    Assert::assertSame($specializedFqn, get_class($a));
+};

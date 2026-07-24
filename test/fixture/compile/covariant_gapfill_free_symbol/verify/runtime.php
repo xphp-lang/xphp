@@ -10,14 +10,16 @@ declare(strict_types=1);
  * upcast `indexOf` (via Bag) returns -OFFSET + tally(3) = 1 for the absent tuple. A bare reference that
  * rebinds to the generated namespace would fatal ("undefined function XPHP\Generated\App\Lst\tally").
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-// Free functions/consts aren't autoloadable, so define them before Use.php runs.
-require $fixture->targetDir . '/helpers.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    // Free functions/consts aren't autoloadable, so define them before Use.php runs.
+    require $fixture->targetDir . '/helpers.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($found, 'the upcast contains-call (via Lst) must bind the App free symbols and report the tuple absent');
-Assert::assertSame(1, $index, 'the upcast indexOf-call (via Bag) must compute -OFFSET + tally(3) = 1 for the absent tuple');
-echo "OK\n";
+    Assert::assertTrue($found, 'the upcast contains-call (via Lst) must bind the App free symbols and report the tuple absent');
+    Assert::assertSame(1, $index, 'the upcast indexOf-call (via Bag) must compute -OFFSET + tally(3) = 1 for the absent tuple');
+};

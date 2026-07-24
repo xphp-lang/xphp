@@ -9,12 +9,15 @@ declare(strict_types=1);
  * receiver. The specialization is emitted onto the declaring base and
  * inherited through the class-level `extends` edge.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame('hi', $s);
-Assert::assertSame(7, $n);
+    Assert::assertSame('hi', $s);
+    Assert::assertSame(7, $n);
+};

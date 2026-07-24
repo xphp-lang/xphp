@@ -5,12 +5,15 @@ declare(strict_types=1);
 /**
  * Runtime verify for `closure_use_multiple_arg_tuples`.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame('pre:1', $a);
-Assert::assertSame('pre:two', $b);
+    Assert::assertSame('pre:1', $a);
+    Assert::assertSame('pre:two', $b);
+};

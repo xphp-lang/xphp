@@ -11,12 +11,14 @@ declare(strict_types=1);
  * split substitution were wrong and `E` resolved to `Product`, it would be `$value instanceof Product` →
  * true. The false answer proves the class `E` was substituted with `Book`, not `Product`.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertFalse($result, 'the body class parameter E must substitute to the upcast-source concrete (Book), not the supertype (Product)');
-echo "OK\n";
+    Assert::assertFalse($result, 'the body class parameter E must substitute to the upcast-source concrete (Book), not the supertype (Product)');
+};

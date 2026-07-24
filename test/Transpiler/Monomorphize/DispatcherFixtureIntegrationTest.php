@@ -68,7 +68,8 @@ final class DispatcherFixtureIntegrationTest extends TestCase
                 $out,
             );
 
-            require __DIR__ . '/../../fixture/compile/closure_dispatcher_arrow/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_dispatcher_arrow/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -100,7 +101,8 @@ final class DispatcherFixtureIntegrationTest extends TestCase
             preg_match_all('/function closure_f_T_[0-9a-f]+\(/', $out, $matches);
             self::assertCount(2, $matches[0]);
 
-            require __DIR__ . '/../../fixture/compile/closure_dispatcher_use_clause/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_dispatcher_use_clause/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -131,7 +133,8 @@ final class DispatcherFixtureIntegrationTest extends TestCase
             preg_match_all('/function closure_f_T_[0-9a-f]+\(/', $out, $fMatches);
             self::assertCount(2, $fMatches[0]);
 
-            require __DIR__ . '/../../fixture/compile/closure_dispatcher_defaults/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_dispatcher_defaults/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
