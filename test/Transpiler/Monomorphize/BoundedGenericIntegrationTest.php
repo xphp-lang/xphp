@@ -428,7 +428,8 @@ final class BoundedGenericIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/scalar_alias_class_resolves/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/scalar_alias_class_resolves/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

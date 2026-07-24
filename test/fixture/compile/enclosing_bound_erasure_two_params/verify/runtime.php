@@ -9,11 +9,14 @@ declare(strict_types=1);
  * `[E, E]`. Both parameters widen to the bound (Fruit), so `bothAreFruit::<Banana, Cherry>` resolves
  * to the one emitted member and runs.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($both, 'a two-bounded-param erasable method must resolve and run');
+    Assert::assertTrue($both, 'a two-bounded-param erasable method must resolve and run');
+};

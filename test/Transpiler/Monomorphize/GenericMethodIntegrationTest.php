@@ -92,7 +92,8 @@ final class GenericMethodIntegrationTest extends TestCase
             'genmethod-runtime',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/generic_method/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -240,7 +241,8 @@ final class GenericMethodIntegrationTest extends TestCase
             );
 
             $fixture->registerAutoload('App\\GenericMethodSelfReturnTypeArgs');
-            require __DIR__ . '/../../fixture/compile/generic_method_self_with_type_args/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method_self_with_type_args/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -271,7 +273,8 @@ final class GenericMethodIntegrationTest extends TestCase
                 $util,
             );
 
-            require __DIR__ . '/../../fixture/compile/generic_method_this_receiver/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method_this_receiver/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -342,7 +345,8 @@ final class GenericMethodIntegrationTest extends TestCase
                 $use,
             );
 
-            require __DIR__ . '/../../fixture/compile/generic_method_local_variable_receiver/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method_local_variable_receiver/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1185,7 +1189,8 @@ final class GenericMethodIntegrationTest extends TestCase
             );
 
             $fixture->registerAutoload('App\\GenericMethodNewSelfTurbofish');
-            require __DIR__ . '/../../fixture/compile/generic_method_new_self_turbofish/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method_new_self_turbofish/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1217,7 +1222,8 @@ final class GenericMethodIntegrationTest extends TestCase
             );
 
             $fixture->registerAutoload('App\\GenericMethodNewStaticTurbofish');
-            require __DIR__ . '/../../fixture/compile/generic_method_new_static_turbofish/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method_new_static_turbofish/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1327,7 +1333,8 @@ final class GenericMethodIntegrationTest extends TestCase
             );
 
             $fixture->registerAutoload('App\\GenericMethodThroughInheritance');
-            require __DIR__ . '/../../fixture/compile/generic_method_through_inheritance/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_method_through_inheritance/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1353,7 +1360,8 @@ final class GenericMethodIntegrationTest extends TestCase
             self::assertSame(2, preg_match_all('/function make_T_[0-9a-f]+\(/', $base));
             self::assertStringNotContainsString('make_T_', $derived);
 
-            require __DIR__ . '/../../fixture/compile/generic_static_method_through_inheritance/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_static_method_through_inheritance/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

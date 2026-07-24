@@ -9,18 +9,21 @@ declare(strict_types=1);
  * closure) at top level; the verify file then invokes it with a
  * tag that no real call site emits.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-$caught = null;
-try {
-    $id('T_bogus', 99);
-} catch (\RuntimeException $e) {
-    $caught = $e;
-}
-Assert::assertInstanceOf(\RuntimeException::class, $caught);
-Assert::assertSame('Unknown generic specialization tag: T_bogus', $caught->getMessage());
+    $caught = null;
+    try {
+        $id('T_bogus', 99);
+    } catch (\RuntimeException $e) {
+        $caught = $e;
+    }
+    Assert::assertInstanceOf(\RuntimeException::class, $caught);
+    Assert::assertSame('Unknown generic specialization tag: T_bogus', $caught->getMessage());
+};

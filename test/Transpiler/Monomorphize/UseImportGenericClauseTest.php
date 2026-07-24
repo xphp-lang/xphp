@@ -138,7 +138,8 @@ final class UseImportGenericClauseTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App\\UseTraitGeneric');
-            require __DIR__ . '/../../fixture/compile/use_trait_generic/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/use_trait_generic/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

@@ -3,8 +3,11 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(10, $a);
-Assert::assertSame('hi', $b);
+    Assert::assertSame(10, $a);
+    Assert::assertSame('hi', $b);
+};

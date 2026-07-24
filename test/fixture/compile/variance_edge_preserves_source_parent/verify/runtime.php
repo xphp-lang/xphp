@@ -14,12 +14,15 @@ declare(strict_types=1);
  * That both calls resolve and run proves each specialization kept its source parent and its inherited
  * erased member.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($fruitHit, 'ListColl<Fruit> must inherit contains_<Fruit> from its source parent Base<Fruit>');
-Assert::assertTrue($bananaHit, 'ListColl<Banana> must keep its source parent (not be overwritten) so contains_<Banana> resolves');
+    Assert::assertTrue($fruitHit, 'ListColl<Fruit> must inherit contains_<Fruit> from its source parent Base<Fruit>');
+    Assert::assertTrue($bananaHit, 'ListColl<Banana> must keep its source parent (not be overwritten) so contains_<Banana> resolves');
+};

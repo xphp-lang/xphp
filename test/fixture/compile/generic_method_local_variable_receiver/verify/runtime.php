@@ -8,13 +8,16 @@ declare(strict_types=1);
  * `$u->identity::<T>(…)` specialize against Util via the visitor's
  * lexical-last-write record.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Util.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Util.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(99, $i);
-Assert::assertSame('world', $s);
+    Assert::assertSame(99, $i);
+    Assert::assertSame('world', $s);
+};

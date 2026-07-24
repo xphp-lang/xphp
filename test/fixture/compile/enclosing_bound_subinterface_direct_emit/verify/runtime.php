@@ -11,13 +11,15 @@ declare(strict_types=1);
  * `Product` and the body reading the inherited `Book`-typed `$items` (Book <: Product). `contains` still
  * resolves via the inheritance path. That both calls run proves direct emission and inheritance coexist.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(-1, $idx, 'indexOf via direct emission must resolve, run, and report the fresh Product absent');
-Assert::assertFalse($has, 'contains via inheritance must still resolve');
-echo "OK\n";
+    Assert::assertSame(-1, $idx, 'indexOf via direct emission must resolve, run, and report the fresh Product absent');
+    Assert::assertFalse($has, 'contains via inheritance must still resolve');
+};

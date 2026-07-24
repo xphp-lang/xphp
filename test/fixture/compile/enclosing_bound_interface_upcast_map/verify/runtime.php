@@ -10,12 +10,14 @@ declare(strict_types=1);
  * — varying only the covariant V to the supertype arg while keeping the invariant K = Id — with NO
  * explicit `HashMap<Id, Product>` anywhere. Executing the output proves the threading is correct.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertFalse($found, 'the multi-param upcast containsValue-call must resolve and run');
-echo "OK\n";
+    Assert::assertFalse($found, 'the multi-param upcast containsValue-call must resolve and run');
+};

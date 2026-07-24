@@ -8,9 +8,12 @@ declare(strict_types=1);
  * emission; the post-edge gap-fill must recognise it as already provided and leave it alone. That this
  * compiles, loads, and `probe` returns the stored Book proves A3 does not over-emit a return-E member.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 use PHPUnit\Framework\Assert;
-require $fixture->targetDir . '/Use.php';
-Assert::assertInstanceOf(\App\Book::class, $first, 'firstOr returns the stored Book through the covariant upcast');
-echo "OK\n";
+use XPHP\TestSupport\CompiledFixture;
+
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
+    Assert::assertInstanceOf(\App\Book::class, $first, 'firstOr returns the stored Book through the covariant upcast');
+};

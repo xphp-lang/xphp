@@ -26,7 +26,8 @@ final class MarkerAlignmentIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\MultilineMarkers');
         try {
-            require __DIR__ . '/../../fixture/compile/multiline_generic_markers/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/multiline_generic_markers/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -41,7 +42,8 @@ final class MarkerAlignmentIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\AttributedClosures');
         try {
-            require __DIR__ . '/../../fixture/compile/attributed_generic_closures/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/attributed_generic_closures/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -56,7 +58,8 @@ final class MarkerAlignmentIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\SameLinePairs');
         try {
-            require __DIR__ . '/../../fixture/compile/same_line_marker_pairs/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/same_line_marker_pairs/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -71,7 +74,8 @@ final class MarkerAlignmentIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\SplitHeaders');
         try {
-            require __DIR__ . '/../../fixture/compile/split_declaration_headers/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/split_declaration_headers/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

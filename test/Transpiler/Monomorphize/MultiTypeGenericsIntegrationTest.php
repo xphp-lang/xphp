@@ -197,7 +197,8 @@ final class MultiTypeGenericsIntegrationTest extends TestCase
         $fixture = CompiledFixture::compile($this->sourceDir, 'multi-type-runtime');
         $fixture->registerAutoload('App\\MultiType\\');
         try {
-            require __DIR__ . '/../../fixture/compile/multi_type/verify/type_error_on_wrong_slot.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/multi_type/verify/type_error_on_wrong_slot.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

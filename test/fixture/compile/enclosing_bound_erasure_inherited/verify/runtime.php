@@ -11,11 +11,14 @@ declare(strict_types=1);
  * this is the cross-cutting mangling invariant where call-site and Specializer name computation could
  * silently drift. That the call resolves and runs proves they agree.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($inherited, 'inherited erasable member must resolve via the same E-mangled name');
+    Assert::assertTrue($inherited, 'inherited erasable member must resolve via the same E-mangled name');
+};

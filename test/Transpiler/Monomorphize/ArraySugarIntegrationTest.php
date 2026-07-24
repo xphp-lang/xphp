@@ -84,7 +84,8 @@ final class ArraySugarIntegrationTest extends TestCase
         $fixture = CompiledFixture::compile($this->sourceDir, 'array-sugar-verify');
         $fixture->registerAutoload('App\\ArraySugar\\');
         try {
-            require __DIR__ . '/../../fixture/compile/array_sugar/verify/nullable_return.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/array_sugar/verify/nullable_return.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -104,7 +105,8 @@ final class ArraySugarIntegrationTest extends TestCase
             ?: throw new RuntimeException('Fixture missing');
         $fixture = CompiledFixture::compile($source, 'array-sugar-marker-offset');
         try {
-            require __DIR__ . '/../../fixture/compile/array_sugar_before_generic_closure/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/array_sugar_before_generic_closure/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

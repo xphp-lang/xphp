@@ -126,7 +126,8 @@ final class ClosureDispatcherIntegrationTest extends TestCase
             'disp-routing',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_dispatcher_runtime_routing/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_dispatcher_runtime_routing/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -142,7 +143,8 @@ final class ClosureDispatcherIntegrationTest extends TestCase
             'disp-unknown',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_dispatcher_unknown_tag/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_dispatcher_unknown_tag/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -291,7 +293,8 @@ final class ClosureDispatcherIntegrationTest extends TestCase
             'fcc-closure',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/turbofish_fcc_closure/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/turbofish_fcc_closure/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

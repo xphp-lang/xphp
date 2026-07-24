@@ -15,29 +15,32 @@ declare(strict_types=1);
 use PHPUnit\Framework\Assert;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\TypeRef;
+use XPHP\TestSupport\CompiledFixture;
 
-$collectionFqn = Registry::generatedFqn(
-    'App\\ArraySugar\\Containers\\Collection',
-    [new TypeRef('App\\ArraySugar\\Models\\User')],
-);
+return function (CompiledFixture $fixture): void {
+    $collectionFqn = Registry::generatedFqn(
+        'App\\ArraySugar\\Containers\\Collection',
+        [new TypeRef('App\\ArraySugar\\Models\\User')],
+    );
 
-// Non-empty: first() returns the concrete typed instance, all() is an array.
-$collection = new $collectionFqn(
-    new \App\ArraySugar\Models\User('alice'),
-    new \App\ArraySugar\Models\User('bob'),
-);
-Assert::assertInstanceOf(\App\ArraySugar\Models\User::class, $collection->first());
-$all = $collection->all();
-Assert::assertIsArray($all);
-Assert::assertCount(2, $all);
+    // Non-empty: first() returns the concrete typed instance, all() is an array.
+    $collection = new $collectionFqn(
+        new \App\ArraySugar\Models\User('alice'),
+        new \App\ArraySugar\Models\User('bob'),
+    );
+    Assert::assertInstanceOf(\App\ArraySugar\Models\User::class, $collection->first());
+    $all = $collection->all();
+    Assert::assertIsArray($all);
+    Assert::assertCount(2, $all);
 
-// Empty: first() returns null (the nullable arm of `?T`).
-$empty = new $collectionFqn();
-Assert::assertNull($empty->first());
+    // Empty: first() returns null (the nullable arm of `?T`).
+    $empty = new $collectionFqn();
+    Assert::assertNull($empty->first());
 
-// Reflection: the `?T` return type must lower to the concrete class,
-// not survive as a literal `T` or be widened to `mixed`.
-$returnType = (new \ReflectionMethod($collectionFqn, 'first'))->getReturnType();
-Assert::assertInstanceOf(\ReflectionNamedType::class, $returnType);
-Assert::assertSame('App\\ArraySugar\\Models\\User', $returnType->getName());
-Assert::assertTrue($returnType->allowsNull());
+    // Reflection: the `?T` return type must lower to the concrete class,
+    // not survive as a literal `T` or be widened to `mixed`.
+    $returnType = (new \ReflectionMethod($collectionFqn, 'first'))->getReturnType();
+    Assert::assertInstanceOf(\ReflectionNamedType::class, $returnType);
+    Assert::assertSame('App\\ArraySugar\\Models\\User', $returnType->getName());
+    Assert::assertTrue($returnType->allowsNull());
+};

@@ -8,15 +8,18 @@ declare(strict_types=1);
  * builtin and magic constant left to global resolution.
  *   scale(1)=10, BONUS=5, Sub\tweak(2)=3, strlen('ab')=2, true?0 -> 10+5+3+2+0 = 20
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoloader registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoloader registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-// Free functions/consts aren't autoloadable, so define them before Use.php runs its
-// top-level instantiation (the specialized class itself autoloads via PSR-4).
-require $fixture->targetDir . '/helpers.php';
-require $fixture->targetDir . '/sub.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    // Free functions/consts aren't autoloadable, so define them before Use.php runs its
+    // top-level instantiation (the specialized class itself autoloads via PSR-4).
+    require $fixture->targetDir . '/helpers.php';
+    require $fixture->targetDir . '/sub.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(20, $result);
+    Assert::assertSame(20, $result);
+};
