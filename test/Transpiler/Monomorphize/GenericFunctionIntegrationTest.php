@@ -84,7 +84,8 @@ final class GenericFunctionIntegrationTest extends TestCase
     {
         $fixture = CompiledFixture::compile($this->sourceDir, 'genfn-runtime');
         try {
-            require __DIR__ . '/../../fixture/compile/generic_function/verify/runtime_execution.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_function/verify/runtime_execution.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -269,7 +270,8 @@ final class GenericFunctionIntegrationTest extends TestCase
                 $funcsOut,
             );
 
-            require __DIR__ . '/../../fixture/compile/generic_function_bare_top_level/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_function_bare_top_level/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

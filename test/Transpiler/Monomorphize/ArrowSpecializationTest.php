@@ -94,7 +94,8 @@ final class ArrowSpecializationTest extends TestCase
             'arrow-capture',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/arrow_capture_at_declaration/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_capture_at_declaration/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -108,7 +109,8 @@ final class ArrowSpecializationTest extends TestCase
             'arrow-multi',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/arrow_multiple_captures/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_multiple_captures/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -122,7 +124,8 @@ final class ArrowSpecializationTest extends TestCase
             'arrow-empty',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/arrow_no_captures/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_no_captures/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -138,7 +141,8 @@ final class ArrowSpecializationTest extends TestCase
             'arrow-shadow',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/arrow_capture_shadowing/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_capture_shadowing/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -164,7 +168,8 @@ final class ArrowSpecializationTest extends TestCase
                 $out,
             );
 
-            require __DIR__ . '/../../fixture/compile/arrow_multiple_arg_tuples/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_multiple_arg_tuples/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -218,7 +223,8 @@ final class ArrowSpecializationTest extends TestCase
                 $out,
             );
 
-            require __DIR__ . '/../../fixture/compile/arrow_reserved_args_capture/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_reserved_args_capture/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -250,7 +256,8 @@ final class ArrowSpecializationTest extends TestCase
                 $out,
             );
 
-            require __DIR__ . '/../../fixture/compile/arrow_reserved_tag_capture/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_reserved_tag_capture/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

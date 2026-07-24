@@ -11,12 +11,15 @@ declare(strict_types=1);
  * `$this->contains(...)` (the old silent break), this would fatal with "undefined method" the
  * moment `probe` ran. That it runs and returns the contained-element verdict proves the lowering.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($viaForward, 'forwarded self-call must resolve to the emitted contains_<E> method');
-Assert::assertTrue($viaDirect, 'a direct erasable call must run too');
+    Assert::assertTrue($viaForward, 'forwarded self-call must resolve to the emitted contains_<E> method');
+    Assert::assertTrue($viaDirect, 'a direct erasable call must run too');
+};

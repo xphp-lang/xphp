@@ -57,7 +57,8 @@ final class GenericExceptionCatchIntegrationTest extends TestCase
         $fixture = CompiledFixture::compile($this->sourceDir, 'generic-catch-runtime');
         $fixture->registerAutoload('App\\GenericExceptionCatch\\');
         try {
-            require __DIR__ . '/../../fixture/compile/generic_exception_catch/verify/catch_runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_exception_catch/verify/catch_runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

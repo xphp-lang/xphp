@@ -15,13 +15,15 @@ declare(strict_types=1);
  * sound; the fix routes the nested `Comparator<E>` verdict through the composing variance pass, which
  * accepts it. That the program runs and `pick` returns the max Book proves the acceptance is sound.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertInstanceOf(\App\Book::class, $best, 'pick returned a Book element through the upcast');
-Assert::assertSame(3, $best->id, 'pick selected the max-id Book via the Product comparator');
-echo "OK\n";
+    Assert::assertInstanceOf(\App\Book::class, $best, 'pick returned a Book element through the upcast');
+    Assert::assertSame(3, $best->id, 'pick selected the max-id Book via the Product comparator');
+};

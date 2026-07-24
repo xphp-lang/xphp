@@ -139,7 +139,8 @@ final class BuiltinInterfaceViaUseIntegrationTest extends TestCase
         $fixture = CompiledFixture::compile($this->sourceDir, 'builtin-via-use-runtime');
         $fixture->registerAutoload('App\\BuiltinViaUse\\');
         try {
-            require __DIR__ . '/../../fixture/compile/builtin_interface_via_use/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/builtin_interface_via_use/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

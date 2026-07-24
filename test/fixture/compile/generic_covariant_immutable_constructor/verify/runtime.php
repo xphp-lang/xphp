@@ -10,7 +10,7 @@ declare(strict_types=1);
  * type on each specialization (no erasure), and that real type is enforced by
  * PHP at construction — passing a non-Banana to `ImmutableList<Banana>` throws.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use App\CovariantConstructor\Banana;
@@ -18,26 +18,29 @@ use App\CovariantConstructor\Fruit;
 use PHPUnit\Framework\Assert;
 use XPHP\Transpiler\Monomorphize\Registry;
 use XPHP\Transpiler\Monomorphize\TypeRef;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(2, $cnt);
-Assert::assertSame('banana', $name);
+    Assert::assertSame(2, $cnt);
+    Assert::assertSame('banana', $name);
 
-// The constructor element type is REAL (not erased to `mixed`) and runtime-checked:
-// an `ImmutableList<Banana>` rejects a plain `Fruit` at construction.
-$bananaListFqn = Registry::generatedFqn(
-    'App\\CovariantConstructor\\ImmutableList',
-    [new TypeRef('App\\CovariantConstructor\\Banana')],
-);
-$threw = false;
-try {
-    new $bananaListFqn(new Fruit('apple'));
-} catch (\TypeError) {
-    $threw = true;
-}
-Assert::assertTrue($threw, 'ImmutableList<Banana> must reject a non-Banana element at construction');
+    // The constructor element type is REAL (not erased to `mixed`) and runtime-checked:
+    // an `ImmutableList<Banana>` rejects a plain `Fruit` at construction.
+    $bananaListFqn = Registry::generatedFqn(
+        'App\\CovariantConstructor\\ImmutableList',
+        [new TypeRef('App\\CovariantConstructor\\Banana')],
+    );
+    $threw = false;
+    try {
+        new $bananaListFqn(new Fruit('apple'));
+    } catch (\TypeError) {
+        $threw = true;
+    }
+    Assert::assertTrue($threw, 'ImmutableList<Banana> must reject a non-Banana element at construction');
 
-// And it accepts a real Banana.
-$ok = new $bananaListFqn(new Banana());
-Assert::assertSame('banana', $ok->get(0)->name);
+    // And it accepts a real Banana.
+    $ok = new $bananaListFqn(new Banana());
+    Assert::assertSame('banana', $ok->get(0)->name);
+};

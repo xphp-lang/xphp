@@ -732,7 +732,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_forwarding/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_forwarding/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -749,7 +750,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_two_params/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_two_params/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -766,7 +768,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -783,7 +786,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_param_widening/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_param_widening/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -801,7 +805,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_inherited/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_inherited/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -819,7 +824,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_covariant_chain/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_covariant_chain/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -839,7 +845,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -859,7 +866,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_direct_emit/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_direct_emit/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -878,7 +886,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_structural_class_param/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_structural_class_param/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -896,7 +905,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast_map/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast_map/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -916,7 +926,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/variance_edge_preserves_source_parent/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/variance_edge_preserves_source_parent/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1264,7 +1275,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_upcast_nested_generic_diamond/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_upcast_nested_generic_diamond/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1287,7 +1299,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_upcast_multipath_diamond/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_upcast_multipath_diamond/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1307,7 +1320,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_upcast_return_enclosing_inherited/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_upcast_return_enclosing_inherited/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

@@ -7,13 +7,16 @@ declare(strict_types=1);
  * `list()` destructuring survive the keyword-turbofish support unchanged. list(10)+1=11,
  * print(20)+2=22, unpack([3,4])=7.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(11, $instance);
-Assert::assertSame(22, $static);
-Assert::assertSame(7, $destructured);
+    Assert::assertSame(11, $instance);
+    Assert::assertSame(22, $static);
+    Assert::assertSame(7, $destructured);
+};

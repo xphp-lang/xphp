@@ -7,17 +7,20 @@ declare(strict_types=1);
  * specialization emits a valid forwarding closure (the file parses, or this require would
  * fatal) that routes through the dispatcher and preserves callable semantics.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(50, $viaCall);
-Assert::assertSame([10, 20, 30], $viaMap);
-Assert::assertSame(42, $named);
-Assert::assertSame(7, $defaulted);
-Assert::assertSame(4, $direct);
-Assert::assertSame(8, $viaFcc);
-Assert::assertSame(9, $collided);
+    Assert::assertSame(50, $viaCall);
+    Assert::assertSame([10, 20, 30], $viaMap);
+    Assert::assertSame(42, $named);
+    Assert::assertSame(7, $defaulted);
+    Assert::assertSame(4, $direct);
+    Assert::assertSame(8, $viaFcc);
+    Assert::assertSame(9, $collided);
+};

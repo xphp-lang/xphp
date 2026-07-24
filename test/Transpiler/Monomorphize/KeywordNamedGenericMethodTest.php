@@ -30,7 +30,8 @@ final class KeywordNamedGenericMethodTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/keyword_named_generic_method/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/keyword_named_generic_method/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -49,7 +50,8 @@ final class KeywordNamedGenericMethodTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/keyword_nongeneric_passthrough/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/keyword_nongeneric_passthrough/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

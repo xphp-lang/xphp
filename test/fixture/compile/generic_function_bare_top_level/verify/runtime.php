@@ -7,16 +7,19 @@ declare(strict_types=1);
  * top-level generic function specializes; the non-generic sibling
  * function survives the strip pass intact; both call sites resolve.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope. Bare-
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`. Bare-
  * top-level functions aren't autoloadable, so requiring funcs.php
  * is the only way to bring `identity_T_<hash>` and
  * `nonGenericDouble` into scope.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/funcs.php';
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/funcs.php';
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(42, $asInt);
-Assert::assertSame(42, $doubled);
+    Assert::assertSame(42, $asInt);
+    Assert::assertSame(42, $doubled);
+};

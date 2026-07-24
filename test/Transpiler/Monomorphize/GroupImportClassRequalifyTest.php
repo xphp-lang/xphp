@@ -29,7 +29,8 @@ final class GroupImportClassRequalifyTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App', 'Vendor');
-            require __DIR__ . '/../../fixture/compile/group_import_class_requalify/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/group_import_class_requalify/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

@@ -102,7 +102,8 @@ final class DefaultedGenericIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App\\BareNewSelfInGenericBody');
-            require __DIR__ . '/../../fixture/compile/bare_new_self_in_generic_body/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/bare_new_self_in_generic_body/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

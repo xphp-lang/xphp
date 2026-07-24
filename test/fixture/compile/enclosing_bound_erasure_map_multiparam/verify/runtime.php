@@ -10,12 +10,15 @@ declare(strict_types=1);
  * V) and the Specializer must agree on that key. That the call resolves and runs proves the
  * multi-class-param mangle keys on the bound's referent.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($found, 'containsValue mangled on V (Fruit) must resolve and run');
-Assert::assertSame('k', $label);
+    Assert::assertTrue($found, 'containsValue mangled on V (Fruit) must resolve and run');
+    Assert::assertSame('k', $label);
+};

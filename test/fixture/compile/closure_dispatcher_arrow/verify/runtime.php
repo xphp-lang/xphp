@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Runtime verify for `closure_dispatcher_arrow`.
  *
- * Driver contract: `$fixture` (CompiledFixture) must be in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  * Requiring the compiled `Use.php` brings the top-level variables
  * `$y` and `$resultArrow` into this file's scope, so the assertions
  * read them directly. The capture moment is the assign site, so the
@@ -13,8 +13,11 @@ declare(strict_types=1);
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(43, $resultArrow);
-Assert::assertSame(2, $y);
+    Assert::assertSame(43, $resultArrow);
+    Assert::assertSame(2, $y);
+};

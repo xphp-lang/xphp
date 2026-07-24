@@ -26,7 +26,8 @@ final class QualifiedCallSiteIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\QualifiedCalls');
         try {
-            require __DIR__ . '/../../fixture/compile/qualified_generic_call_sites/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/qualified_generic_call_sites/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -41,7 +42,8 @@ final class QualifiedCallSiteIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\RelativeTemplates', 'Other');
         try {
-            require __DIR__ . '/../../fixture/compile/relative_names_in_templates/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/relative_names_in_templates/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -56,7 +58,8 @@ final class QualifiedCallSiteIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\QualifiedDefaults', 'Other');
         try {
-            require __DIR__ . '/../../fixture/compile/qualified_bare_new_defaults/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/qualified_bare_new_defaults/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

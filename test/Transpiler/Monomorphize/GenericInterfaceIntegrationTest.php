@@ -119,7 +119,8 @@ final class GenericInterfaceIntegrationTest extends TestCase
         $fixture = CompiledFixture::compile($this->sourceDir, 'generic-interface-runtime');
         $fixture->registerAutoload('App\\GenericInterface\\');
         try {
-            require __DIR__ . '/../../fixture/compile/generic_interface/verify/specialized_interface_runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_interface/verify/specialized_interface_runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
