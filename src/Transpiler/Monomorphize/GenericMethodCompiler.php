@@ -388,14 +388,17 @@ final class GenericMethodCompiler
         // diagnostic here (call-marker arm only; sites the Phase-1a walk already
         // reported — e.g. an unspecializable `$this` self-call — dedupe by position).
         if (!$emit && $this->diagnostics !== null) {
-            // Variable-turbofish markers are excluded: check never materializes closure
-            // dispatchers, so a class-spec clone legitimately carries the `$f::<int>`
-            // marker compile's dispatcher pass grounds — flagging it would reject code
-            // compile accepts.
+            // Variable-turbofish markers and the interiors of retained generic-method
+            // templates are excluded: check never materializes closure dispatchers nor
+            // strips templates, so a class-spec clone legitimately carries a `$f::<int>`
+            // marker (compile's dispatcher pass grounds it) and template bodies with
+            // method-param markers (compile clones stripped classes) — flagging either
+            // would reject code compile accepts.
             $leak = GenericMarkerLeakGuard::findLeak(
                 $specialized,
                 includeClosureTemplates: false,
                 includeVariableTurbofish: false,
+                skipUnspecializedTemplates: true,
             );
             if ($leak !== null && !$this->alreadyReportedAt($currentFile, $leak->getStartLine())) {
                 $this->diagnostics->add(new Diagnostic(
@@ -1577,9 +1580,14 @@ final class GenericMethodCompiler
                             $groundingClassSubst->withOverrides(Substitution::of($overlay)),
                             $mangled,
                         );
+                        // Drain context = the SPEC's template, not the declaring class:
+                        // the member now lives on the spec, so `$this`/`self` inside its
+                        // drained body are the spec — an ancestor-declared member whose
+                        // body forwards again (`self::genB::<U>` on Base) must pass the
+                        // in-spec site guard, or a groundable chain leaks spuriously.
                         $this->pendingAppends[] = [$this->grounding->spec, $specialized, [
-                            'classFqn'  => $declaringFqn,
-                            'namespace' => self::namespaceOf($declaringFqn),
+                            'classFqn'  => $this->grounding->templateFqn,
+                            'namespace' => self::namespaceOf($this->grounding->templateFqn),
                         ]];
                         $this->alreadyGenerated[$specKey] = true;
                     }
@@ -1830,9 +1838,12 @@ final class GenericMethodCompiler
                             $classSubst->withOverrides(Substitution::of($overlay)),
                             $mangled,
                         );
+                        // Drain context = the SPEC's template (see the static arm): the
+                        // member lives on the spec, so its drained body's `$this`/`self`
+                        // are the spec and further own-chain forwards keep grounding.
                         $this->pendingAppends[] = [$this->grounding->spec, $specialized, [
-                            'classFqn'  => $declaringFqn,
-                            'namespace' => self::namespaceOf($declaringFqn),
+                            'classFqn'  => $this->grounding->templateFqn,
+                            'namespace' => self::namespaceOf($this->grounding->templateFqn),
                         ]];
                         $this->alreadyGenerated[$specKey] = true;
                     }
@@ -3176,7 +3187,11 @@ final class GenericMethodCompiler
                     return false;
                 }
                 foreach ($this->diagnostics->all() as $diagnostic) {
-                    if ($diagnostic->location !== null
+                    // Errors only: a same-line WARNING must not suppress grounding —
+                    // that would mask a real error the grounded walk would surface
+                    // (check-green on code compile rejects, the dangerous direction).
+                    if ($diagnostic->severity === Severity::Error
+                        && $diagnostic->location !== null
                         && $diagnostic->location->file === $this->currentFile
                         && $diagnostic->location->line === $line
                     ) {
@@ -3475,7 +3490,9 @@ final class GenericMethodCompiler
             return false;
         }
         foreach ($this->diagnostics->all() as $diagnostic) {
-            if ($diagnostic->location !== null
+            // Errors only — a same-line warning must not swallow the leak backstop.
+            if ($diagnostic->severity === Severity::Error
+                && $diagnostic->location !== null
                 && $diagnostic->location->file === $file
                 && $diagnostic->location->line === $line
             ) {

@@ -13,6 +13,15 @@ class Base<T>
     /** @return array<int, mixed> */
     public static function gen<U>(U $x): array
     {
+        // A further hop DECLARED ON THE ANCESTOR: the grounded member lives on the
+        // Holder spec, so its drained body re-grounds `self::genB::<U>` there too —
+        // the ancestor chain grounds hop by hop, not just one level.
+        return self::genB::<U>($x);
+    }
+
+    /** @return array<int, mixed> */
+    public static function genB<V>(V $x): array
+    {
         return [$x, $x];
     }
 

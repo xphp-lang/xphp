@@ -10,6 +10,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
@@ -114,6 +115,34 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertCount(1, $diagnostics->all());
         self::assertSame(Registry::CODE_TOO_MANY_TYPE_ARGUMENTS, $diagnostics->all()[0]->code);
+    }
+
+    public function testTwoHopOwnTemplateForwardChainIsCleanInCheck(): void
+    {
+        // Compile grounds `go` → `self::a::<T>` → `self::b::<U>` and the program
+        // runs; check must stay silent — its un-stripped spec clone retains the
+        // `a<U>`/`b<V>` templates, whose interior method-param markers are dispatch
+        // machinery, not leaks.
+        $diagnostics = $this->check('method_turbofish_two_hop_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testSameLineWarningDoesNotMaskAGroundedError(): void
+    {
+        // A warning-producing construct shares the source line with the deferred
+        // turbofish: the position dedupe is severity-aware, so grounding still runs
+        // and the bound violation nested in the grounded member surfaces — check
+        // must not go green on code compile rejects.
+        $diagnostics = $this->check('method_turbofish_warning_same_line');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $errorCodes = array_map(
+            static fn ($d) => $d->code,
+            array_filter($diagnostics->all(), static fn ($d) => $d->severity === Severity::Error),
+        );
+        self::assertContains(Registry::CODE_BOUND_VIOLATION, $errorCodes);
     }
 
     public function testTemplateTargetOutsideItsOwnSpecLeakIsCollectedByCheck(): void

@@ -12,7 +12,12 @@ use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Name;
+use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\NodeFinder;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor;
+use PhpParser\NodeVisitorAbstract;
 use RuntimeException;
 
 /**
@@ -67,16 +72,25 @@ final class GenericMarkerLeakGuard
      * elsewhere (the source seam in both modes, or the append-drain backstop, whose
      * check side keeps this arm on because compile's drain rejects the same body).
      *
+     * `$skipUnspecializedTemplates` skips the SUBTREES of function/method/closure
+     * declarations still carrying their generic-template marker. Same check-mode
+     * class-spec backstop rationale: check never strips templates, so a spec clone
+     * retains e.g. `a<U>` whose body legitimately holds a `self::b::<U>` marker — the
+     * template as a whole is dispatch machinery, not emitted output, and flagging its
+     * interior would reject code compile accepts. Compile-mode specs never contain
+     * such declarations, so the assert path is unaffected.
+     *
      * @param Node|list<Node> $specialized  the emitted specialized node(s)
      */
     public static function findLeak(
         Node|array $specialized,
         bool $includeClosureTemplates = true,
         bool $includeVariableTurbofish = true,
+        bool $skipUnspecializedTemplates = false,
     ): ?Node {
         $nodes = is_array($specialized) ? $specialized : [$specialized];
 
-        return (new NodeFinder())->findFirst($nodes, static function (Node $n) use ($includeClosureTemplates, $includeVariableTurbofish): bool {
+        $matcher = static function (Node $n) use ($includeClosureTemplates, $includeVariableTurbofish): bool {
             if ($n instanceof FuncCall
                 || $n instanceof MethodCall
                 || $n instanceof StaticCall
@@ -92,7 +106,51 @@ final class GenericMarkerLeakGuard
             }
 
             return false;
-        });
+        };
+
+        if (!$skipUnspecializedTemplates) {
+            return (new NodeFinder())->findFirst($nodes, $matcher);
+        }
+
+        // Subtree-skipping scan: NodeFinder can't prune, so walk with a traverser that
+        // refuses to descend into declarations still carrying the template marker.
+        // Preorder like findFirst, so both paths report the same first leak.
+        $visitor = new class($matcher) extends NodeVisitorAbstract {
+            public ?Node $leak = null;
+
+            /** @param \Closure(Node): bool $matcher */
+            public function __construct(private readonly \Closure $matcher)
+            {
+            }
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($this->leak !== null) {
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+                if (($node instanceof ClassMethod || $node instanceof Function_
+                        || $node instanceof Closure || $node instanceof ArrowFunction)
+                    && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
+                ) {
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+                if (($this->matcher)($node)) {
+                    $this->leak = $node;
+                    // @infection-ignore-all ReturnRemoval — descending into the found
+                    // leak's children is a no-op: the leak-set early-exit above prunes
+                    // every subsequent node before the matcher can overwrite. The
+                    // prune is an optimization; first-leak-wins is pinned by
+                    // GenericMarkerLeakGuardTest's document-order test.
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($nodes);
+
+        return $visitor->leak;
     }
 
     /**
