@@ -1,0 +1,40 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ForwardChain;
+
+// Multi-hop forwarding: each drained specialization surfaces the next hop's turbofish
+// (`wrap<T>` → `mid::<T>` → `identity::<T>`), so the append-drain must keep grounding
+// until the chain bottoms out.
+function identity<U>(U $x): U
+{
+    return $x;
+}
+
+function mid<V>(V $x): V
+{
+    return identity::<V>($x);
+}
+
+function wrap<T>(T $v): T
+{
+    return mid::<T>($v);
+}
+
+// Same-args mutual recursion: ping<P> forwards to pong::<P>, whose body forwards back
+// to ping::<P>. Compile-time termination rides the specialization dedup (the second
+// visit finds the mangled key already generated and only rewrites the call); runtime
+// termination rides the counter.
+function ping<P>(P $v, int $n): P
+{
+    return $n <= 0 ? $v : pong::<P>($v, $n - 1);
+}
+
+function pong<Q>(Q $v, int $n): Q
+{
+    return $n <= 0 ? $v : ping::<Q>($v, $n - 1);
+}
+
+$a = wrap::<int>(7);
+$b = ping::<string>('x', 3);

@@ -140,4 +140,45 @@ final class GenericMarkerLeakGuardTest extends TestCase
         $this->expectException(RuntimeException::class);
         GenericMarkerLeakGuard::assertNoLeak([$clean, new Expression($leaking)], 'list');
     }
+
+    public function testFindLeakReturnsTheLeakingNodeAndNullOnCleanInput(): void
+    {
+        // The check-mode drain consumes the scan directly (degrading to a diagnostic
+        // instead of a throw), so the found node — not just the boolean outcome — is API.
+        $leaking = new StaticCall(new Name('self'), new Identifier('gen'));
+        $leaking->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+
+        self::assertSame($leaking, GenericMarkerLeakGuard::findLeak(new Expression($leaking)));
+        self::assertNull(GenericMarkerLeakGuard::findLeak(new Expression(new FuncCall(new Variable('a')))));
+    }
+
+    public function testFindLeakCanExcludeTheClosureTemplateArm(): void
+    {
+        // With $includeClosureTemplates=false only call-node markers count: an
+        // un-specialized closure template is reported elsewhere (source seam / orphan
+        // check), so the check-mode drain must not re-flag the template node itself.
+        $closure = new Closure(['stmts' => []]);
+        $closure->setAttribute(self::PARAMS_MARKER, [new Identifier('I')]);
+        $body = new Expression($closure);
+
+        self::assertSame($closure, GenericMarkerLeakGuard::findLeak($body));
+        self::assertNull(GenericMarkerLeakGuard::findLeak($body, includeClosureTemplates: false));
+
+        // A call-node marker still counts with the closure arm off.
+        $call = new FuncCall(new Variable('f'));
+        $call->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        self::assertSame($call, GenericMarkerLeakGuard::findLeak(new Expression($call), includeClosureTemplates: false));
+    }
+
+    public function testLeakMessageNamesTheLabelTheLineAndTheCode(): void
+    {
+        $call = new FuncCall(new Variable('inner'), [], ['startLine' => 7]);
+        $call->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+
+        $message = GenericMarkerLeakGuard::leakMessage($call, 'wrap_T_cafe');
+
+        self::assertStringContainsString('wrap_T_cafe', $message);
+        self::assertStringContainsString('7', $message);
+        self::assertStringContainsString(GenericMarkerLeakGuard::CODE, $message);
+    }
 }

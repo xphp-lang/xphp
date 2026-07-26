@@ -45,17 +45,26 @@ final class GenericMarkerLeakGuard
     public const CODE = 'xphp.unspecialized_generic_leak';
 
     /**
-     * Throw if any generic marker survives into a specialized AST subtree.
+     * Find the first surviving generic marker in a specialized AST subtree, or null when
+     * the subtree is clean. The scan is the guard's single source of truth — `assertNoLeak`
+     * throws on it, and `check`-mode callers degrade it to a collected diagnostic so the
+     * validate-only pass reports the same shapes the compile-time backstop rejects.
+     *
+     * `$includeClosureTemplates` toggles the defense-in-depth arm. The compile-time
+     * assert keeps it on. The check-mode drain turns it off: an un-specialized closure
+     * template inside a drained body always accompanies either a source-seam diagnostic
+     * on its call site (a different line — the template node's own line would dodge the
+     * caller's already-reported dedupe) or an orphan diagnostic from the
+     * declared-but-never-specialized check, so re-flagging the template node itself only
+     * double-reports; the call-site marker arm is what carries new information there.
      *
      * @param Node|list<Node> $specialized  the emitted specialized node(s)
-     * @param string          $label        the specialization's identity, for the error message
      */
-    public static function assertNoLeak(Node|array $specialized, string $label): void
+    public static function findLeak(Node|array $specialized, bool $includeClosureTemplates = true): ?Node
     {
         $nodes = is_array($specialized) ? $specialized : [$specialized];
-        $finder = new NodeFinder();
 
-        $leak = $finder->findFirst($nodes, static function (Node $n): bool {
+        return (new NodeFinder())->findFirst($nodes, static function (Node $n) use ($includeClosureTemplates): bool {
             if ($n instanceof FuncCall
                 || $n instanceof MethodCall
                 || $n instanceof StaticCall
@@ -63,21 +72,25 @@ final class GenericMarkerLeakGuard
             ) {
                 return $n->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) !== null;
             }
-            if ($n instanceof Closure || $n instanceof ArrowFunction) {
+            if ($includeClosureTemplates && ($n instanceof Closure || $n instanceof ArrowFunction)) {
                 return is_array($n->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS));
             }
 
             return false;
         });
+    }
 
-        if ($leak === null) {
-            return;
-        }
-
+    /**
+     * Build the guard's diagnostic message for a found leak. Shared verbatim between the
+     * compile-time throw and the check-mode collected diagnostic so both modes name the
+     * same site the same way.
+     */
+    public static function leakMessage(Node $leak, string $label): string
+    {
         // @infection-ignore-all Concat ConcatOperandRemoval — the diagnostic wording is not
         // behavior: the tests pin that a leak throws and that the message names the label, the
         // line, and the code; reordering or dropping a prose clause changes none of those.
-        throw new RuntimeException(sprintf(
+        return sprintf(
             'A generic turbofish/closure marker survived specialization into the emitted output for %s '
             . '(near line %d). This site could not be grounded to a concrete type, so its type-parameter '
             . 'hints would reach the emitted PHP as references to non-existent classes — a runtime TypeError. '
@@ -87,6 +100,23 @@ final class GenericMarkerLeakGuard
             $label,
             $leak->getStartLine(),
             self::CODE,
-        ));
+        );
+    }
+
+    /**
+     * Throw if any generic marker survives into a specialized AST subtree.
+     *
+     * @param Node|list<Node> $specialized  the emitted specialized node(s)
+     * @param string          $label        the specialization's identity, for the error message
+     */
+    public static function assertNoLeak(Node|array $specialized, string $label): void
+    {
+        $leak = self::findLeak($specialized);
+
+        if ($leak === null) {
+            return;
+        }
+
+        throw new RuntimeException(self::leakMessage($leak, $label));
     }
 }

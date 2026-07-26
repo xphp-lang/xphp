@@ -19,9 +19,12 @@ use XPHP\TestSupport\CompiledFixture;
  * `TypeError`/`Error`) behind an otherwise clean compile. The backstop turns each into a loud
  * compile failure carrying `xphp.unspecialized_generic_leak` before any output is written.
  *
- * (The third shape — a generic closure grounded by an enclosing *function* parameter, `relay` —
- * is a non-concrete variable turbofish caught earlier at the source seam in both modes; see
- * {@see ClosureDispatcherIntegrationTest} and {@see CheckPassIntegrationTest}.)
+ * (Two adjacent shapes are handled elsewhere: a generic closure grounded by an enclosing
+ * *function* parameter, `relay`, is a non-concrete variable turbofish caught earlier at the
+ * source seam in both modes — see {@see ClosureDispatcherIntegrationTest} and
+ * {@see CheckPassIntegrationTest}; and a NAMED free-function forward (`identity::<T>` inside
+ * `wrap<T>`) is grounded and dispatched by the append-drain rather than rejected — see the
+ * `generic_function_named_forward` runtime fixture in {@see GenericFunctionIntegrationTest}.)
  *
  * The must-keep side — a working top-level `$g::<int>` dispatcher and the `contains<U : E>`
  * enclosing-bound forward — is proven zero-false-reject by the existing `closure_dispatcher_arrow`
@@ -54,20 +57,4 @@ final class GenericMarkerLeakIntegrationTest extends TestCase
         );
     }
 
-    #[RunInSeparateProcess]
-    public function testNamedFreeFunctionForwardGroundedByEnclosingParamIsRejected(): void
-    {
-        // A named generic free function forwarded a non-concrete type argument from an
-        // enclosing function parameter (`identity::<T>($v)` inside `wrap<T>`). The named-call
-        // turbofish is not a variable turbofish, so it slips past the source seam and reaches
-        // emit as an appended `wrap_T_<hash>` with the marker still present — caught by the
-        // backstop. Same class of shape as the concrete-inner-turbofish case.
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
-
-        CompiledFixture::compile(
-            __DIR__ . '/../../fixture/compile/generic_function_named_forward_leak_reject/source',
-            'generic-function-named-forward-leak',
-        );
-    }
 }

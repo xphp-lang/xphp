@@ -1,0 +1,28 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ForwardGrowthPair;
+
+final class Box<G>
+{
+    public function __construct(public readonly G $value)
+    {
+    }
+}
+
+// TWO independent strictly-growing forwards. Check must collect one unconverged
+// diagnostic PER chain: hitting the hop cap on the first chain stops that chain only,
+// not the whole drain — the second chain still gets its own report.
+function growA<T>(T $v): int
+{
+    return growA::<Box<T>>(new Box::<T>($v));
+}
+
+function growB<S>(S $v): int
+{
+    return growB::<Box<S>>(new Box::<S>($v));
+}
+
+growA::<int>(1);
+growB::<string>('x');
