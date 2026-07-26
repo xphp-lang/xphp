@@ -43,6 +43,64 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame([], $diagnostics->all());
     }
 
+    public function testNamedForwardGroundedByEnclosingParamIsCleanInCheck(): void
+    {
+        // `wrap<T>` forwarding `identity::<T>` is grounded per specialization by the
+        // append-drain; the validate-only walk must agree with compile and report
+        // nothing — no duplicate diagnostics from the drain's re-traversal either.
+        $diagnostics = $this->check('forward_named_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testGroundedForwardBoundViolationIsCollectedByCheck(): void
+    {
+        // `need<U : Labeled>` forwarded `T = int`: provable only after `wrap::<int>`
+        // substitutes, so it surfaces from the drain's validate-only traversal —
+        // matching the compile-side throw (check/compile parity).
+        $diagnostics = $this->check('forward_named_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(Registry::CODE_BOUND_VIOLATION, $diagnostics->all()[0]->code);
+    }
+
+    public function testUnconvergedForwardChainIsCollectedByCheck(): void
+    {
+        // `grow<T>` forwarding `grow::<Box<T>>` never converges; check collects the
+        // drain's hop-cap diagnostic instead of hanging or throwing.
+        $diagnostics = $this->check('forward_growth');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(GenericMethodCompiler::CODE_UNCONVERGED_METHOD_SPECIALIZATION, $codes);
+    }
+
+    public function testEachUnconvergedChainGetsItsOwnDiagnosticInCheck(): void
+    {
+        // Two independent growing chains: hitting the cap on the first stops that
+        // chain only — the drain keeps going and the second chain reports too.
+        $diagnostics = $this->check('forward_growth_pair');
+
+        $unconverged = array_values(array_filter(
+            $diagnostics->all(),
+            static fn ($d) => $d->code === GenericMethodCompiler::CODE_UNCONVERGED_METHOD_SPECIALIZATION,
+        ));
+        self::assertCount(2, $unconverged);
+    }
+
+    public function testInnerClosureTurbofishLeakIsCollectedByCheck(): void
+    {
+        // A concrete inner closure turbofish (`$f::<int>` inside `outer<T>`) survives
+        // the drain (variable turbofish stays out of the markers-only pass) and is
+        // degraded from the compile-time leak throw to a collected diagnostic here.
+        $diagnostics = $this->check('forward_inner_closure_leak');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(GenericMarkerLeakGuard::CODE, $codes);
+    }
+
     public function testDefaultBoundViolationIsCollectedByCheck(): void
     {
         // Exercises the validateDefaultsAgainstBounds() step of check().

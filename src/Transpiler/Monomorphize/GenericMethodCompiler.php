@@ -94,6 +94,18 @@ final class GenericMethodCompiler
     public const CODE_UNDETERMINED_RECEIVER = 'xphp.undetermined_receiver';
     public const CODE_UNSPECIALIZABLE_SELF_CALL = 'xphp.unspecializable_self_call';
     public const CODE_UNSPECIALIZED_GENERIC_CLOSURE = 'xphp.unspecialized_generic_closure';
+    public const CODE_UNCONVERGED_METHOD_SPECIALIZATION = 'xphp.unconverged_method_specialization';
+
+    /**
+     * Cap on the append-drain's specialization chain depth. A freshly specialized
+     * function/method body may itself carry a now-concrete turbofish that mints a further
+     * specialization (`wrap<T>` forwarding to `mid::<T>` forwarding to `identity::<T>`);
+     * same-args cycles terminate via the alreadyGenerated dedup, but a strictly-growing
+     * chain (`grow<T>` calling `grow::<Box<T>>`) mints a new mangled name every hop and
+     * would never converge. Sixteen mirrors Compiler::MAX_SPECIALIZATION_DEPTH (kept as a
+     * separate constant — this pass must stay independent of the class-level pipeline).
+     */
+    private const MAX_METHOD_SPECIALIZATION_HOPS = 16;
 
     /**
      * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
@@ -410,8 +422,29 @@ final class GenericMethodCompiler
              */
             private NamespaceContext $nsContext;
 
-            /** @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_}> */
+            /**
+             * Buffered specialized-member appends, flushed (and drained for freshly
+             * grounded markers) after the traversal. Slot 2 is the drain context: the
+             * declaring class FQN (methods; null for functions) and the namespace the
+             * specialized body resolves against — a drained stmt is traversed DETACHED,
+             * so the visitor's namespace/class state must be primed per item rather
+             * than inherited from whatever file the main walk last visited.
+             *
+             * @var list<array{0: ClassLike|Namespace_, 1: ClassMethod|Function_, 2: array{classFqn: ?string, namespace: string}}>
+             */
             public array $pendingAppends = [];
+
+            /**
+             * Markers-only mode for drain re-traversals of freshly specialized bodies.
+             * When true the rewrite pass touches ONLY named-call turbofish markers that
+             * substitution has made concrete; everything else — plain-call closure-arg
+             * sweeps, closure-dispatcher tracking (finalize has already run), orphan
+             * re-checks, static/instance marker rewrites (their name resolution is not
+             * drain-safe yet; a kept marker falls to the leak guard exactly as before) —
+             * is skipped so a drained body can neither duplicate diagnostics already
+             * reported against the template nor mis-ground through stale file state.
+             */
+            public bool $markersOnly = false;
 
             /** Receiver-type analysis state. Pushed on entering ClassLike, popped on leave. */
             private ?string $currentClassFqn = null;
@@ -580,6 +613,34 @@ final class GenericMethodCompiler
                 private readonly ?ClosureConformanceValidator $closureValidator,
             ) {
                 $this->nsContext = new NamespaceContext();
+            }
+
+            /**
+             * Reset the visitor's lexical state for one drained (detached) specialized
+             * stmt. The stmt is traversed outside any Namespace_/Use_/ClassLike parent,
+             * so enterNode never primes this state — left stale it would resolve names
+             * against whatever file the main traversal last walked. The use-alias map is
+             * cleared rather than reconstructed: names the drain needs are attribute-
+             * resolved (ATTR_TEMPLATE_FQN / ATTR_RESOLVED_FQN at parse time), so aliases
+             * are never consulted on the markers-only path.
+             */
+            public function primeDrainScope(?string $classFqn, string $namespace): void
+            {
+                $this->currentClassFqn = $classFqn;
+                $this->currentNamespace = $namespace;
+                $this->currentNamespaceNode = null;
+                $this->useMap = [];
+                $this->nsContext = new NamespaceContext();
+                $this->nsContext->enterNamespace($namespace !== '' ? $namespace : null);
+                $this->currentScopeParamTypes = [];
+                $this->currentScopeLocalTypes = [];
+                $this->currentScopeParamTypeArgs = [];
+                $this->currentScopeLocalTypeArgs = [];
+                $this->branchSnapshots = [];
+                $this->scopeSnapshots = [];
+                $this->currentScopeClosureTemplates = [];
+                $this->currentScopeClosureContexts = [];
+                $this->callReturnCache = [];
             }
 
             public function enterNode(Node $node): null
@@ -856,12 +917,34 @@ final class GenericMethodCompiler
             public function leaveNode(Node $node): ?Node
             {
                 if ($node instanceof StaticCall) {
+                    // Drain traversals leave static markers untouched: their class-name
+                    // resolution is not drain-safe yet, and a kept marker falls to the
+                    // leak guard exactly as it did before the drain existed.
+                    if ($this->markersOnly) {
+                        return null;
+                    }
                     return $this->rewriteStaticCall($node);
                 }
                 if ($node instanceof FuncCall) {
+                    // Drain traversals rewrite ONLY named-call turbofish markers: dispatch
+                    // is ATTR_TEMPLATE_FQN-driven (no lexical resolution), so a detached
+                    // body grounds safely. Bare calls and variable turbofish (`$f::<...>`)
+                    // are skipped — dispatcher finalize has already run, and a surviving
+                    // variable marker stays for the leak guard's closure arm.
+                    if ($this->markersOnly
+                        && (!$node->name instanceof Name
+                            || $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) === null)
+                    ) {
+                        return null;
+                    }
                     return $this->rewriteFuncCall($node);
                 }
                 if ($node instanceof MethodCall || $node instanceof NullsafeMethodCall) {
+                    // Same as StaticCall: instance-marker grounding inside drained bodies
+                    // is not supported here; the marker survives for the leak guard.
+                    if ($this->markersOnly) {
+                        return null;
+                    }
                     return $this->rewriteInstanceMethodCall($node);
                 }
                 if ($node instanceof ClassLike) {
@@ -1285,7 +1368,10 @@ final class GenericMethodCompiler
                     $owner = $this->index->classLike($declaringFqn);
                     if ($owner !== null) {
                         // Buffer the append (see rewriteFuncCall for the rationale).
-                        $this->pendingAppends[] = [$owner, $specialized];
+                        $this->pendingAppends[] = [$owner, $specialized, [
+                            'classFqn'  => $declaringFqn,
+                            'namespace' => self::namespaceOf($declaringFqn),
+                        ]];
                         $this->alreadyGenerated[$generatedKey] = true;
                     }
                 }
@@ -1480,7 +1566,10 @@ final class GenericMethodCompiler
                     $specialized = (new Specializer())->specializeMethod($template, Substitution::of($overlay), $mangled);
                     $owner = $this->index->classLike($declaringFqn);
                     if ($owner !== null) {
-                        $this->pendingAppends[] = [$owner, $specialized];
+                        $this->pendingAppends[] = [$owner, $specialized, [
+                            'classFqn'  => $declaringFqn,
+                            'namespace' => self::namespaceOf($declaringFqn),
+                        ]];
                         $this->alreadyGenerated[$generatedKey] = true;
                     }
                 }
@@ -2368,7 +2457,10 @@ final class GenericMethodCompiler
                         // Buffer the append — modifying $namespaceNode->stmts mid-traversal
                         // doesn't reliably propagate through nikic's NodeTraverser. The
                         // outer process() loop flushes pendingAppends after the walk.
-                        $this->pendingAppends[] = [$namespaceNode, $specialized];
+                        $this->pendingAppends[] = [$namespaceNode, $specialized, [
+                            'classFqn'  => null,
+                            'namespace' => $namespace,
+                        ]];
                     } else {
                         // Bare top-level template (no enclosing `namespace { }` block):
                         // there's no container to append to, so route the specialized
@@ -2737,6 +2829,13 @@ final class GenericMethodCompiler
                 $pos = strrpos($name, '\\');
                 return $pos === false ? $name : substr($name, $pos + 1);
             }
+
+            /** The namespace part of an FQN ('' for a global-namespace symbol). */
+            private static function namespaceOf(string $fqn): string
+            {
+                $pos = strrpos($fqn, '\\');
+                return $pos === false ? '' : substr($fqn, 0, $pos);
+            }
         };
 
         $traverser = new NodeTraverser();
@@ -2747,31 +2846,178 @@ final class GenericMethodCompiler
         // diagnostics too (this is a validation, not an emission side-effect).
         $this->rejectUnspecializedClosureTemplates($ast, $visitor->attemptedClosureTemplates, $currentFile);
 
-        // Validate-only (check) skips all emission: no dispatcher materialization, no buffered
-        // appends. The traversal above already produced the diagnostics via the call-site checks.
-        if (!$emit) {
-            return;
-        }
-
         // Pass 2 of the closure-dispatcher pipeline: materialize a dispatcher
         // closure per recorded template, replace the original Assign's RHS,
         // append specialized declarations, and rewrite each collected call
-        // site to inject the tag arg.
-        $this->finalizeClosureDispatchers($visitor, $hashLength);
+        // site to inject the tag arg. Compile-only: it mutates shared Assign
+        // nodes and call sites, which check's discarded walk must not do.
+        if ($emit) {
+            $this->finalizeClosureDispatchers($visitor, $hashLength);
+        }
 
-        // Apply buffered appends now that the traversal has finished, so we don't fight
-        // nikic's NodeTraverser's child-array iteration semantics mid-walk. Each appended
-        // node is a fully specialized function/method: guard it against a surviving generic
-        // marker (a site that could not be grounded) before it reaches emitted output — the
-        // function-shaped counterpart to the specialized-class backstop in Compiler's emit
-        // loop. Compile-only: the `!$emit` gate above already returned for `check`.
-        foreach ($visitor->pendingAppends as [$container, $stmt]) {
-            $container->stmts[] = $stmt;
-            GenericMarkerLeakGuard::assertNoLeak($stmt, $currentFile . ' (' . $stmt->name->toString() . ')');
+        // Drain the buffered appends now that the traversal has finished, so we don't
+        // fight nikic's NodeTraverser's child-array iteration semantics mid-walk. Runs
+        // in BOTH modes: compile attaches, grounds, and backstops each appended body;
+        // check re-traverses the (discarded) bodies validate-only so diagnostics that
+        // only become provable after substitution are collected — keeping check and
+        // compile verdicts aligned.
+        $this->drainSpecializedAppends($visitor, $currentFile, $emit);
+    }
+
+    /**
+     * Flush the buffered specialized appends as a grounding worklist.
+     *
+     * Each buffered stmt is a freshly specialized function/method whose body may itself
+     * carry method-generic turbofish markers that substitution has made concrete
+     * (`identity::<T>` inside `wrap<T>` becomes `identity::<int>` inside the buffered
+     * `wrap_T_<hash>`). A flat flush would emit those bodies ungrounded — the leak-guard
+     * backstop tripped on exactly that shape. Instead each stmt is attached (compile
+     * mode), then re-traversed with the same rewrite visitor in markers-only mode so a
+     * named-forward marker dispatches and may buffer further appends; the loop repeats
+     * until both queues drain. Same-args cycles (`a<T>` forwarding to `b<T>` forwarding
+     * back) terminate through the shared alreadyGenerated dedup — the second visit finds
+     * the key set and only rewrites the call. A strictly-growing chain mints a fresh
+     * mangled name every hop and is cut off at MAX_METHOD_SPECIALIZATION_HOPS with a
+     * loud non-convergence error instead of an endless compile.
+     *
+     * Check mode traverses without attaching (the walked ASTs are discarded) and
+     * degrades both the non-convergence error and the leak backstop to collected
+     * diagnostics, so `xphp check` reports the shapes `compile` rejects.
+     */
+    private function drainSpecializedAppends(object $visitor, string $currentFile, bool $emit): void
+    {
+        // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+        $visitor->markersOnly = true;
+        // @infection-ignore-all UnwrapFinally — the reset is defensive hygiene: this drain is
+        // the visitor's last use (one visitor per rewriteCallSites call), so a leftover
+        // markersOnly=true is dead state today; the finally guards future reuse, not behavior.
+        try {
+            $pendingIdx = 0;
+            $topLevelIdx = 0;
+            /** @var array<int, int> $hopDepth spl_object_id(stmt) => chain depth; absent = 1 (buffered by the user-code walk) */
+            $hopDepth = [];
+            while (true) {
+                // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                if ($pendingIdx < count($visitor->pendingAppends)) {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                    [$container, $stmt, $context] = $visitor->pendingAppends[$pendingIdx++];
+                    if ($emit) {
+                        $container->stmts[] = $stmt;
+                    }
+                // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                } elseif ($topLevelIdx < count($visitor->topLevelAppends)) {
+                    // Top-level (null-namespace) functions have no container node here;
+                    // process() flushes them into the top-level AST array after this
+                    // method returns. They are still grounded + leak-checked like any
+                    // other append.
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                    $stmt = $visitor->topLevelAppends[$topLevelIdx++];
+                    $context = ['classFqn' => null, 'namespace' => ''];
+                } else {
+                    break;
+                }
+
+                // @infection-ignore-all IncrementInteger DecrementInteger — shifting the
+                // initial depth by one only offsets where the cap lands (16±1 hops); the
+                // behavior — a growing chain halts loudly with the unconverged code — is
+                // pinned by the growth fixtures, and the exact allowance is not contract.
+                $depth = $hopDepth[spl_object_id($stmt)] ?? 1;
+                if ($depth > self::MAX_METHOD_SPECIALIZATION_HOPS) {
+                    $message = sprintf(
+                        'Generic method/function specialization did not converge: grounding "%s" '
+                        . '(in %s) is %d specialization hops deep — each hop mints a new type argument '
+                        . '(e.g. a generic forwarding to itself with a nested `Box<T>`), so the chain '
+                        . 'would never terminate. Break the growth by forwarding a concrete turbofish. [%s]',
+                        $stmt->name->toString(),
+                        $currentFile,
+                        $depth,
+                        self::CODE_UNCONVERGED_METHOD_SPECIALIZATION,
+                    );
+                    if (!$emit && $this->diagnostics !== null) {
+                        $this->diagnostics->add(new Diagnostic(
+                            Severity::Error,
+                            self::CODE_UNCONVERGED_METHOD_SPECIALIZATION,
+                            $message,
+                            new SourceLocation($currentFile, $stmt->getStartLine()),
+                        ));
+                        continue;
+                    }
+                    throw new RuntimeException($message);
+                }
+
+                // @phpstan-ignore-next-line method.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                $visitor->primeDrainScope($context['classFqn'], $context['namespace']);
+                // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                $beforePending = count($visitor->pendingAppends);
+                // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                $beforeTopLevel = count($visitor->topLevelAppends);
+
+                $traverser = new NodeTraverser();
+                assert($visitor instanceof NodeVisitorAbstract);
+                $traverser->addVisitor($visitor);
+                $traverser->traverse([$stmt]);
+
+                // @infection-ignore-all IncrementInteger Plus — a coarser per-hop increment
+                // only halves/offsets the cap allowance; growth still halts loudly with the
+                // unconverged code (pinned by the growth fixtures) at the same reported depth.
+                // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                for ($i = $beforePending; $i < count($visitor->pendingAppends); $i++) {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                    $hopDepth[spl_object_id($visitor->pendingAppends[$i][1])] = $depth + 1;
+                }
+                // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                for ($i = $beforeTopLevel; $i < count($visitor->topLevelAppends); $i++) {
+                    // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+                    $hopDepth[spl_object_id($visitor->topLevelAppends[$i])] = $depth + 1;
+                }
+
+                $label = $currentFile . ' (' . $stmt->name->toString() . ')';
+                if ($emit) {
+                    GenericMarkerLeakGuard::assertNoLeak($stmt, $label);
+                } elseif ($this->diagnostics !== null) {
+                    // Call-marker arm only: an un-specialized closure template in a
+                    // drained body is always reported elsewhere (seam or orphan check).
+                    $leak = GenericMarkerLeakGuard::findLeak($stmt, includeClosureTemplates: false);
+                    // Suppress the backstop when the site already carries a diagnostic:
+                    // the cloned body preserves the template's line numbers, so a shape
+                    // the source seam rejected with a precise error (e.g. a non-concrete
+                    // variable turbofish, CODE_UNSPECIALIZED_GENERIC_CLOSURE) would
+                    // otherwise double-report here under the vaguer leak code.
+                    if ($leak !== null && !$this->alreadyReportedAt($currentFile, $leak->getStartLine())) {
+                        $this->diagnostics->add(new Diagnostic(
+                            Severity::Error,
+                            GenericMarkerLeakGuard::CODE,
+                            GenericMarkerLeakGuard::leakMessage($leak, $label),
+                            new SourceLocation($currentFile, $leak->getStartLine()),
+                        ));
+                    }
+                }
+            }
+        } finally {
+            // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
+            $visitor->markersOnly = false;
         }
-        foreach ($topLevelAppends as $stmt) {
-            GenericMarkerLeakGuard::assertNoLeak($stmt, $currentFile . ' (' . $stmt->name->toString() . ')');
+    }
+
+    /**
+     * Whether the collector already holds a diagnostic at this exact source position.
+     * Used by the drain's check-mode backstop to avoid re-reporting a site the source
+     * seam rejected with a more precise code.
+     */
+    private function alreadyReportedAt(string $file, int $line): bool
+    {
+        if ($this->diagnostics === null) {
+            return false;
         }
+        foreach ($this->diagnostics->all() as $diagnostic) {
+            if ($diagnostic->location !== null
+                && $diagnostic->location->file === $file
+                && $diagnostic->location->line === $line
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -2857,7 +3103,10 @@ final class GenericMethodCompiler
             foreach ($result['declarations'] as $specialized) {
                 if ($entry['namespaceNode'] !== null) {
                     // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
-                    $visitor->pendingAppends[] = [$entry['namespaceNode'], $specialized];
+                    $visitor->pendingAppends[] = [$entry['namespaceNode'], $specialized, [
+                        'classFqn'  => null,
+                        'namespace' => $entry['namespace'],
+                    ]];
                 } else {
                     // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
                     $visitor->topLevelAppends[] = $specialized;

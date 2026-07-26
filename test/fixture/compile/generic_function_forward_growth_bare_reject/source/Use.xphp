@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+// Top-level (no namespace) variant of the strictly-growing forward: the specialized
+// functions route through the top-level append bag rather than a Namespace_ container,
+// and the drain's hop cap must bound that queue exactly like the namespaced one —
+// otherwise a growing bare-file chain would specialize forever.
+final class Box<G>
+{
+    public function __construct(public readonly G $value)
+    {
+    }
+}
+
+function grow<T>(T $v): int
+{
+    return grow::<Box<T>>(new Box::<T>($v));
+}
+
+grow::<int>(1);
