@@ -1,0 +1,31 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ErasablePlainCaller;
+
+// A PLAIN (non-generic) method forwarding the class parameter to an erasable
+// `<U : E>` target: the grounded call must reuse the E-mangled member the erasure
+// lowering already emitted per instantiation — appending a second same-named member
+// would be a class-load fatal.
+class Box<E>
+{
+    /** @param array<int, E> $items */
+    public function __construct(private array $items)
+    {
+    }
+
+    public function contains<U : E>(U $needle): bool
+    {
+        return in_array($needle, $this->items, true);
+    }
+
+    public function has(E $x): bool
+    {
+        return $this->contains::<E>($x);
+    }
+}
+
+$b = new Box::<int>([1, 2, 3]);
+$hit = $b->has(2);
+$miss = $b->has(9);

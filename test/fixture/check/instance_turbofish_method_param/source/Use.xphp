@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// The abstract leaf is a METHOD-level parameter (`W`), not the enclosing class param:
+// no downstream pass ever grounds it, so the precise Phase-1a rejection must stay —
+// deferral is reserved for class-param leaves.
+class Holder<T>
+{
+    public function probe<W>(W $w): mixed
+    {
+        return $this->dup::<W>($w);
+    }
+
+    /** @return array<int, mixed> */
+    public function dup<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+}
+
+$h = new Holder::<int>();
+$h->probe::<string>('x');

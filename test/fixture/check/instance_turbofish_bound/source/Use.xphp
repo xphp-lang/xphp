@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// The instance-grounded bound is VIOLATED: `need<V : \Stringable>` receives `T = int`
+// once Holder<int> specializes — collected by the grounding pass, matching compile.
+class Holder<T>
+{
+    public function m(T $v): T
+    {
+        return $this->need::<T>($v);
+    }
+
+    public function need<V : \Stringable>(V $x): V
+    {
+        return $x;
+    }
+}
+
+$h = new Holder::<int>();
+$h->m(1);

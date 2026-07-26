@@ -111,6 +111,55 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertContains(GenericMethodCompiler::CODE_BOUND_UNPROVABLE, $codes);
     }
 
+    public function testInstanceTurbofishGroundedByEnclosingClassParamIsCleanInCheck(): void
+    {
+        // `$this->dup::<T>` / `$m->dup::<T>` inside `Holder<T>` ground per
+        // specialization; the validate-only pass must agree with compile and
+        // report nothing.
+        $diagnostics = $this->check('instance_turbofish_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testInstanceGroundedBoundViolationIsCollectedByCheck(): void
+    {
+        // `need<V : \Stringable>` grounded with `T = int` through `$this`:
+        // collected by the grounding pass, located at the template's real file.
+        $diagnostics = $this->check('instance_turbofish_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_BOUND_VIOLATION, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+    }
+
+    public function testMethodParamLeafSelfCallIsCollectedByCheck(): void
+    {
+        // `$this->dup::<W>` inside `probe<W>`: deferral is reserved for
+        // class-param leaves, so check keeps the precise Phase-1a diagnostic
+        // (exactly one — the grounding pass must not add a leak duplicate).
+        $diagnostics = $this->check('instance_turbofish_method_param');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL,
+            $diagnostics->all()[0]->code,
+        );
+    }
+
+    public function testNeverInstantiatedDeferredMarkerIsCleanInCheck(): void
+    {
+        // A deferred enclosing-param turbofish in a never-instantiated generic
+        // class: unreachable code, no diagnostic (deliberate surface choice,
+        // matching compile).
+        $diagnostics = $this->check('instance_never_instantiated');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
     public function testGroundedForwardBoundViolationIsCollectedByCheck(): void
     {
         // `need<U : Labeled>` forwarded `T = int`: provable only after `wrap::<int>`
