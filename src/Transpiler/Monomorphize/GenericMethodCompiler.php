@@ -117,12 +117,6 @@ final class GenericMethodCompiler
     private const MAX_METHOD_SPECIALIZATION_HOPS = 16;
 
     /**
-     * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
-     *   method/function/closure-level generic error throws as before, byte-identical. When provided
-     *   (by `xphp check` with `process(..., emit: false)`), each is appended as a Diagnostic and the
-     *   pass continues, so all are reported in one run.
-     */
-    /**
      * Phase-1a state retained for the post-specialization grounding pass
      * ({@see groundSpecializedClass}). `process()` strips generic templates from the
      * user ASTs at the end of its run, but the index keeps referencing the detached
@@ -137,6 +131,12 @@ final class GenericMethodCompiler
     /** @var array<string, string> class template FQN => source ast key (filepath), for grounding-time diagnostics */
     private array $classSourceByFqn = [];
 
+    /**
+     * @param ?DiagnosticCollector $diagnostics When null (the default — `xphp compile`), every
+     *   method/function/closure-level generic error throws as before, byte-identical. When provided
+     *   (by `xphp check` with `process(..., emit: false)`), each is appended as a Diagnostic and the
+     *   pass continues, so all are reported in one run.
+     */
     public function __construct(
         private readonly int $hashLength = Registry::DEFAULT_HASH_HEX_LENGTH,
         private readonly ?TypeHierarchy $hierarchy = null,
@@ -365,7 +365,16 @@ final class GenericMethodCompiler
             return [];
         }
         // Cheap pre-scan: most specs carry no marker; skip the visitor entirely then.
-        if (GenericMarkerLeakGuard::findLeak($specialized, includeClosureTemplates: false) === null) {
+        // skipUnspecializedTemplates matches the check-mode backstop below: in check
+        // mode a spec clone retains its (unstripped) generic-method templates, whose
+        // bodies carry call markers that the grounding walk deliberately skips — without
+        // this flag the pre-scan would see those and never take the cheap exit for any
+        // spec that declares a generic method.
+        if (GenericMarkerLeakGuard::findLeak(
+            $specialized,
+            includeClosureTemplates: false,
+            skipUnspecializedTemplates: true,
+        ) === null) {
             return [];
         }
 
