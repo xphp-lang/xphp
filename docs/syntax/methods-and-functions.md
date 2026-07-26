@@ -126,6 +126,16 @@ build time instead of fataling at runtime with "Call to undefined method".
   isn't tracked — give such a local a typed parameter/property hop, or
   the turbofish call fails as an undetermined receiver.
 
+- > ⚠️ Forwarding an **enclosing class type parameter**
+  (`$this->dup::<T>` / `self::gen::<T>` / `Maker::wrap::<T>` inside
+  `Box<T>`, or `identity::<T>` inside a generic function `wrap<T>`)
+  grounds per specialization and runs. Forwarding a **method-level**
+  parameter to a non-erasable target (`$this->dup::<W>` inside
+  `probe<W>`) stays a compile error (`xphp.unspecializable_self_call`),
+  as do targets on a *different* generic template and the
+  `static::`/`parent::` spellings. See
+  [caveats](../caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter).
+
 ## See also
 
 - Test fixture: `test/fixture/compile/generic_method/`

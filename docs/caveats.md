@@ -762,32 +762,52 @@ so the growing type is never reached through an unbounded chain.
 ## Generic turbofish grounded by an enclosing type parameter
 
 A turbofish whose type argument is supplied by an **enclosing** generic scope — a
-function type parameter or a class type parameter — cannot yet be specialized. Every
-such shape is rejected with a loud compile error rather than emitted as runtime-fatal
-code; the representative cases below are not exhaustive (a named free-function forward
-grounded by an enclosing parameter, `return identity::<T>($v)` inside `wrap<T>`, is the
-same class of shape and rejected the same way). Each may be lifted in a future version.
+function type parameter or a class type parameter — is grounded **per specialization**:
+the call is abstract inside the template, and once the enclosing generic specializes
+(`wrap::<int>`, `new Box::<int>`) the now-concrete call is dispatched to a real
+specialized member or function. The shapes below compile and run:
 
-### ❌ What doesn't work
+```php
+function identity<U>(U $x): U { return $x; }
+function wrap<T>(T $v): T { return identity::<T>($v); }   // ✅ named forward
+wrap::<int>(3);
 
-A generic **closure** grounded by an enclosing function type parameter:
+final class Maker
+{
+    public static function wrap<X>(X $v): array { return [$v]; }
+}
+
+class Box<T>
+{
+    public function make(T $v): T { return self::gen::<T>($v); }        // ✅ own static
+    public function viaMaker(T $v): array { return Maker::wrap::<T>($v); } // ✅ external static
+    public function twice(T $v): array { return $this->dup::<T>($v); }  // ✅ own instance
+    public static function gen<U>(U $x): U { return $x; }
+    public function dup<V>(V $x): array { return [$x, $x]; }
+}
+```
+
+Instance calls also ground on a receiver with a **non-generic** declared type
+(`$maker->wrap::<T>($v)` for a `Maker $maker` parameter), and on a target declared on a
+generic **base** class (`$this->dup::<T>` where `dup` lives on `Base<T>` — the member
+lands on the calling class's specialization). Both `xphp check` and `xphp compile`
+agree on every accept and reject below: a bound that only becomes provable after
+specialization (`gen<U : Stringable>` called with the class's `T`) is checked per
+instantiation in both modes.
+
+### ❌ What still doesn't work
+
+A generic **closure** grounded by an enclosing function type parameter — and a
+**concrete** inner closure turbofish written inside a generic function body. Closure
+dispatch is not re-entered per specialization:
 
 ```php
 function relay<S>(S $v): S
 {
     $inner = fn<I>(I $x): I => $x;
-    return $inner::<S>($v);          // ❌ `S` is not concrete here
+    return $inner::<S>($v);          // ❌ xphp.unspecialized_generic_closure
 }
-```
 
-```
-Generic closure call `$inner::<S>(...)` cannot be specialized: its type argument(s)
-are grounded only by an enclosing generic scope and are not concrete here …
-```
-
-A **concrete** inner closure turbofish, but written **inside a generic function body**:
-
-```php
 function outer<T>(T $seed): int
 {
     $f = fn<U>(U $x): U => $x;
@@ -795,55 +815,44 @@ function outer<T>(T $seed): int
 }
 ```
 
-A **method/static turbofish grounded by an enclosing class type parameter**:
+A target declared on a **different generic template** — its specialized member belongs
+on that template's own specializations, which the grounding pass must not touch:
 
 ```php
-class Box<T>
+class Other<S> { public static function gen<U>(U $x): U { return $x; } }
+class Holder<T>
 {
-    public function make(T $v): T { return self::gen::<T>($v); }   // ❌ `T` from the class
-    public static function gen<U>(U $x): U { return $x; }
+    public function m(T $v): T { return Other::gen::<T>($v); }   // ❌ cross-template
 }
 ```
 
+The late-bound `static::` / `parent::` spellings (resolving them statically could
+silently re-route a subclass or parent dispatch — rejecting loudly is the contract),
+a forward to a **bare top-level** (namespace-less) generic function from inside a
+generic class, and a **method-level** parameter forwarded to a non-erasable target
+(`$this->dup::<W>` inside `probe<W>` — reported precisely as
+`xphp.unspecializable_self_call`, since no specialization ever grounds `W`).
+
+A **strictly-growing** forward chain is rejected as non-convergent rather than
+compiled forever:
+
+```php
+function grow<T>(T $v): int
+{
+    return grow::<Box<T>>(new Box::<T>($v));   // ❌ xphp.unconverged_method_specialization
+}
 ```
-A generic turbofish/closure marker survived specialization into the emitted output …
-[xphp.unspecialized_generic_leak]
-```
 
-### Why
+Every rejected shape fails **loudly** — with the diagnostic named above or the
+`xphp.unspecialized_generic_leak` backstop — in both `check` and `compile`; none is
+ever emitted as runtime-fatal PHP.
 
-Variable-turbofish and method-turbofish dispatch is **call-site-driven**: a site is
-specialized only when its type arguments are concrete *at that site*. When the argument
-comes from an enclosing type parameter it is still abstract when the inner site is
-visited, so no concrete dispatch can be built; and the concrete-inner case (`outer`)
-only fails because the closure sits inside a *generic function* body, which the current
-dispatch pass does not re-enter per specialization. Left un-grounded, each would emit
-PHP that names a non-existent type-parameter class (`App\I`, `App\U`, or a stripped
-`gen()` method) and fatal on first use. Rather than emit that, xphp fails the build: the
-closure form is caught at the source seam in both `xphp check` and `xphp compile`
-(`xphp.unspecialized_generic_closure`); the two shapes that reach code generation are
-caught by a compile-time backstop over the emitted output
-(`xphp.unspecialized_generic_leak`). Grounding these shapes so they *run* is tracked
-for a later release; today the guarantee is only that they never miscompile silently.
+### ✅ Workaround (for the still-rejected shapes)
 
-**`xphp check` catches only the closure form.** The two shapes that surface at code
-generation (`outer`, `Box::make`, and the named free-function forward above) are caught
-by the emit-time backstop, which `xphp check` does not run — it validates without
-emitting. So `check` reports **zero** diagnostics for those, while `compile` rejects
-them loudly. A CI pipeline that gates on `xphp compile` (or runs it after `check`) is
-fully covered; one that gates on `xphp check` alone will see green on code that
-`compile` will reject. This is a completeness gap in `check`, never a runtime-safety
-hole: no fatal-able code is ever emitted.
-
-### ✅ Workaround
-
-Call the inner generic with an **explicit concrete** turbofish at a scope where the type
-is known, or lift it out of the enclosing generic scope:
+Call the inner generic with an **explicit concrete** turbofish at a scope where the
+type is known, or lift it out of the enclosing generic scope:
 
 ```php
 $inner = fn<I>(I $x): I => $x;
 echo $inner::<int>(41);              // works at file / plain-function scope
-
-function gen<U>(U $x): U { return $x; }
-Box::useGen(gen::<int>(5));          // ground the generic where the type is concrete
 ```

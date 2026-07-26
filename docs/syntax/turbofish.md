@@ -135,6 +135,14 @@ than a silent pass-through that fatals at runtime.
   error (`xphp.undetermined_receiver`), not a silent de-specialization.
   See [caveats](../caveats.md#branching-narrowing-precision-loss).
 
+- > ⚠️ **Enclosing type parameters as turbofish arguments** — a turbofish
+  grounded by an enclosing generic scope (`identity::<T>` inside `wrap<T>`,
+  `self::gen::<T>` / `$this->dup::<T>` / `Maker::wrap::<T>` inside `Box<T>`)
+  is grounded per specialization and runs. Still rejected loudly: closure
+  turbofish inside generic function bodies, targets on a *different*
+  generic template, and `static::`/`parent::` spellings. See
+  [caveats](../caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter).
+
 ## See also
 
 - Test fixture: `test/fixture/compile/generic_method/`
