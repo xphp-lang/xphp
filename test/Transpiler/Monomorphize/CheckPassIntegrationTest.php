@@ -54,6 +54,63 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertSame([], $diagnostics->all());
     }
 
+    public function testMethodTurbofishGroundedByEnclosingClassParamIsCleanInCheck(): void
+    {
+        // `self::gen::<T>` / `Maker::wrap::<T>` inside `Box<T>` ground per
+        // specialization; the validate-only pass must agree with compile and report
+        // nothing — across two instantiations and two forwarding classes.
+        $diagnostics = $this->check('method_turbofish_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testGroundedStaticBoundViolationIsCollectedByCheck(): void
+    {
+        // `gen<U : \Stringable>` grounded with `T = int`: provable only after
+        // Box<int> specializes, collected by the per-specialization grounding pass.
+        // The location must point at the template's real source file (the grounding
+        // pass resolves it through the retained class-source map), not a synthetic
+        // `<specialized:…>` label.
+        $diagnostics = $this->check('method_turbofish_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_BOUND_VIOLATION, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+    }
+
+    public function testCrossTemplateStaticTurbofishLeakIsCollectedByCheck(): void
+    {
+        // `Other::gen::<T>` (a static method-generic on a DIFFERENT generic template)
+        // stays un-grounded by design; compile rejects at the emit backstop, and check
+        // must collect the same leak diagnostic from the grounding pass — located at
+        // the template's real source file.
+        $diagnostics = $this->check('method_turbofish_cross_template');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $leaks = array_values(array_filter(
+            $diagnostics->all(),
+            static fn ($d) => $d->code === GenericMarkerLeakGuard::CODE,
+        ));
+        self::assertCount(1, $leaks);
+        self::assertNotNull($leaks[0]->location);
+        self::assertStringEndsWith('Use.xphp', $leaks[0]->location->file);
+    }
+
+    public function testClassParamBoundOnStaticIsStillUnprovableInCheck(): void
+    {
+        // `gen<U : T>` on a static method-generic: genuinely unprovable in a static
+        // context — the pre-existing rejection survives the grounding pass in check
+        // exactly as in compile.
+        $diagnostics = $this->check('method_turbofish_unprovable');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(GenericMethodCompiler::CODE_BOUND_UNPROVABLE, $codes);
+    }
+
     public function testGroundedForwardBoundViolationIsCollectedByCheck(): void
     {
         // `need<U : Labeled>` forwarded `T = int`: provable only after `wrap::<int>`
