@@ -1895,6 +1895,25 @@ final class GenericMethodIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testTwoHopOwnTemplateForwardChainCompilesAndRuns(): void
+    {
+        // `go` → `self::a::<T>` whose grounded body forwards `self::b::<U>`: the
+        // drain re-grounds the appended member with the spec's own identity, so the
+        // chain bottoms out on the spec.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_method_forward_chain/source',
+            'genmethod-forward-chain',
+        );
+        try {
+            $fixture->registerAutoload('App\\MethodForwardChain');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_method_forward_chain/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testStaticInheritedTurbofishLandsOnTheCallingSpec(): void
     {
         // `self::gen::<T>` where gen lives on generic `Base<T>`: mirrors the

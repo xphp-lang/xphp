@@ -17,18 +17,22 @@ return function (CompiledFixture $fixture): void {
     Assert::assertSame([3, 3], $r1);
     Assert::assertSame('s', $r2);
 
+    // Both hops of the ancestor-declared chain (`gen` → `genB`) ground onto the
+    // Holder spec itself.
     $genMembers = array_values(array_filter(
         get_class_methods($h),
-        static fn (string $m): bool => str_starts_with($m, 'gen_T_'),
+        static fn (string $m): bool => str_starts_with($m, 'gen_T_') || str_starts_with($m, 'genB_T_'),
     ));
-    Assert::assertCount(1, $genMembers);
-    Assert::assertSame(
-        get_class($h),
-        (new ReflectionMethod($h, $genMembers[0]))->getDeclaringClass()->getName(),
-        'member declared on the Holder spec itself',
-    );
+    Assert::assertCount(2, $genMembers);
+    foreach ($genMembers as $member) {
+        Assert::assertSame(
+            get_class($h),
+            (new ReflectionMethod($h, $member))->getDeclaringClass()->getName(),
+            'member declared on the Holder spec itself',
+        );
+    }
     Assert::assertSame([], array_values(array_filter(
         get_class_methods($b),
-        static fn (string $m): bool => str_starts_with($m, 'gen_T_'),
+        static fn (string $m): bool => str_starts_with($m, 'gen_T_') || str_starts_with($m, 'genB_T_'),
     )), 'the Base<string> spec grew no grounded member');
 };
