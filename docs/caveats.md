@@ -788,9 +788,10 @@ class Box<T>
 ```
 
 Instance calls also ground on a receiver with a **non-generic** declared type
-(`$maker->wrap::<T>($v)` for a `Maker $maker` parameter), and on a target declared on a
-generic **base** class (`$this->dup::<T>` where `dup` lives on `Base<T>` — the member
-lands on the calling class's specialization). Both `xphp check` and `xphp compile`
+(`$maker->wrap::<T>($v)` for a `Maker $maker` parameter), and both call shapes ground
+a target declared on a generic **base** class (`$this->dup::<T>` / `self::gen::<T>`
+where the target lives on `Base<T>` — the member lands on the calling class's
+specialization). Both `xphp check` and `xphp compile`
 agree on every accept and reject below: a bound that only becomes provable after
 specialization (`gen<U : Stringable>` called with the class's `T`) is checked per
 instantiation in both modes.

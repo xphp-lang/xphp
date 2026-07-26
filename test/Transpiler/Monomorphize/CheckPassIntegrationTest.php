@@ -81,6 +81,57 @@ final class CheckPassIntegrationTest extends TestCase
         self::assertStringEndsWith('Use.xphp', $d->location->file);
     }
 
+    public function testClassClosureDispatcherIsCleanInCheck(): void
+    {
+        // A concrete `$f::<int>` inside a generic CLASS method: compile materializes
+        // the dispatcher and the program runs, so check must stay silent — the spec
+        // clone's leftover variable marker (check never finalizes dispatchers) is not
+        // a leak.
+        $diagnostics = $this->check('class_closure_dispatcher_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testNestedBoundViolationInsideGroundedMemberIsCollectedByCheck(): void
+    {
+        // The violation lives inside the grounded member's body (`new Pair::<U>` with
+        // `Pair<P : Labeled>`, grounded to Pair<int>): own-spec members are collected
+        // even though check attaches nothing, so check agrees with compile's reject.
+        $diagnostics = $this->check('method_turbofish_nested_bound');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(Registry::CODE_BOUND_VIOLATION, $codes);
+    }
+
+    public function testDeferredTurbofishArityErrorIsReportedOncePerSite(): void
+    {
+        // An arity error on a deferred enclosing-param turbofish under TWO
+        // instantiations: one diagnostic at the source site — the per-spec grounding
+        // walks must not re-fire the same collector message per specialization.
+        $diagnostics = $this->check('method_turbofish_arity_once');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(Registry::CODE_TOO_MANY_TYPE_ARGUMENTS, $diagnostics->all()[0]->code);
+    }
+
+    public function testTemplateTargetOutsideItsOwnSpecLeakIsCollectedByCheck(): void
+    {
+        // The compile-side keep-marker contract for a template-owned target named
+        // outside the template's own body (see the compile reject fixture) holds in
+        // check too: exactly one leak diagnostic, at the real source site.
+        $diagnostics = $this->check('template_target_outside_spec');
+
+        $leaks = array_values(array_filter(
+            $diagnostics->all(),
+            static fn ($d) => $d->code === GenericMarkerLeakGuard::CODE,
+        ));
+        self::assertCount(1, $leaks);
+        self::assertNotNull($leaks[0]->location);
+        self::assertStringEndsWith('Use.xphp', $leaks[0]->location->file);
+    }
+
     public function testCrossTemplateStaticTurbofishLeakIsCollectedByCheck(): void
     {
         // `Other::gen::<T>` (a static method-generic on a DIFFERENT generic template)

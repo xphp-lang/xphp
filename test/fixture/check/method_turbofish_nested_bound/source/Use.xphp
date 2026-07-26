@@ -1,0 +1,38 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface Labeled
+{
+    public function label(): string;
+}
+
+// The bound violation lives INSIDE the grounded member's body: `gen<U>` instantiates
+// `Pair<U>` (bounded by Labeled), which only becomes `Pair<int>` when Holder<int>'s
+// grounding specializes gen. Check must collect it from the grounded member exactly
+// as compile rejects it — own-spec members are collected even though check attaches
+// nothing.
+final class Pair<P : Labeled>
+{
+    public function __construct(public readonly P $v)
+    {
+    }
+}
+
+final class Holder<T>
+{
+    public function go(T $v): mixed
+    {
+        return self::gen::<T>($v);
+    }
+
+    public static function gen<U>(U $x): mixed
+    {
+        return new Pair::<U>($x);
+    }
+}
+
+$h = new Holder::<int>();
+$h->go(1);

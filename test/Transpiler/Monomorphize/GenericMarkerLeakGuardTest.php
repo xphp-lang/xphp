@@ -170,6 +170,34 @@ final class GenericMarkerLeakGuardTest extends TestCase
         self::assertSame($call, GenericMarkerLeakGuard::findLeak(new Expression($call), includeClosureTemplates: false));
     }
 
+    public function testFindLeakCanExcludeVariableTurbofishCalls(): void
+    {
+        // With $includeVariableTurbofish=false a FuncCall on a VARIABLE (`$f::<int>`)
+        // is not a leak — check's class-spec backstop uses this because dispatchers
+        // are only materialized in compile mode. Named calls still count.
+        $varCall = new FuncCall(new Variable('f'));
+        $varCall->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        $body = new Expression($varCall);
+
+        self::assertSame($varCall, GenericMarkerLeakGuard::findLeak($body));
+        self::assertNull(GenericMarkerLeakGuard::findLeak($body, includeVariableTurbofish: false));
+
+        $namedCall = new FuncCall(new Name('identity'));
+        $namedCall->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        self::assertSame(
+            $namedCall,
+            GenericMarkerLeakGuard::findLeak(new Expression($namedCall), includeVariableTurbofish: false),
+        );
+
+        // Static/instance markers are unaffected by the toggle.
+        $static = new StaticCall(new Name('self'), new Identifier('gen'));
+        $static->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        self::assertSame(
+            $static,
+            GenericMarkerLeakGuard::findLeak(new Expression($static), includeVariableTurbofish: false),
+        );
+    }
+
     public function testLeakMessageNamesTheLabelTheLineAndTheCode(): void
     {
         $call = new FuncCall(new Variable('inner'), [], ['startLine' => 7]);
