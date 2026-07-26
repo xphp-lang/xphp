@@ -1837,6 +1837,125 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testInstanceTurbofishGroundedByEnclosingClassParamCompiles(): void
+    {
+        // `$this->dup::<T>` (deferred at the template, grounded per spec) and
+        // `$m->dup::<T>` (non-generic receiver, grounded onto Maker) both run.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_instance_turbofish/source',
+            'genmethod-instance-turbofish',
+        );
+        try {
+            $fixture->registerAutoload('App\\InstanceTurbofish');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_instance_turbofish/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testInheritedInstanceTurbofishLandsOnTheCallingSpec(): void
+    {
+        // Target declared on a generic BASE: the member is grounded onto the calling
+        // Holder spec (substitution threaded through the extends chain), never onto
+        // the shared Base template — the earlier-instantiated Base<string> spec must
+        // not grow an int member.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_instance_inherited_turbofish/source',
+            'genmethod-inherited-turbofish',
+        );
+        try {
+            $fixture->registerAutoload('App\\InheritedTurbofish');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_instance_inherited_turbofish/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testErasablePlainCallerForwardReusesLoweredMember(): void
+    {
+        // A plain method forwarding the class param to an erasable `<U : E>` target:
+        // the grounded call reuses the erasure-lowered member — a duplicate append
+        // would be a "cannot redeclare method" load fatal.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_erasable_plain_caller/source',
+            'genmethod-erasable-plain-caller',
+        );
+        try {
+            $fixture->registerAutoload('App\\ErasablePlainCaller');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_erasable_plain_caller/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testInstanceCrossTemplateTurbofishIsRejected(): void
+    {
+        // `$b->dup::<T>` where $b is another generic template: the grounded member
+        // belongs on that template's own specs — kept-marker, backstop reject.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_instance_cross_template_reject/source',
+            'genmethod-instance-cross-template',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testDeferredMarkerInNeverInstantiatedClassCompiles(): void
+    {
+        // A deferred enclosing-param turbofish in a class no one instantiates: the
+        // template lowers to a marker interface and the program compiles and runs —
+        // unreachable code draws no diagnostic (deliberate surface choice).
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_deferred_never_instantiated/source',
+            'genmethod-never-instantiated',
+        );
+        try {
+            $fixture->registerAutoload('App\\NeverInstantiated');
+            require $fixture->targetDir . '/Use.php';
+            self::assertSame('alive', $out);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testMethodParamLeafSelfCallStillFailsCompilation(): void
+    {
+        // `$this->dup::<W>` inside `probe<W>`: the abstract leaf is a METHOD param —
+        // deferral is reserved for class-param leaves, so the precise Phase-1a
+        // rejection stays.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Cannot specialize the self-call `$this->dup::<...>()`');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/check/instance_turbofish_method_param/source',
+            'genmethod-method-param-leaf',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testInstanceGroundedBoundViolationFailsCompilation(): void
+    {
+        // `need<V : \Stringable>` grounded with `T = int` through `$this`: provable
+        // only per specialization, must fail at the grounding pass.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated while instantiating App\Holder::need');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/check/instance_turbofish_bound/source',
+            'genmethod-instance-bound',
+        );
+    }
+
     private function compileFrom(string $dir): void
     {
         $compiler = $this->buildCompiler();

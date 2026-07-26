@@ -1085,9 +1085,15 @@ final class GenericMethodCompiler
                     return $this->rewriteFuncCall($node);
                 }
                 if ($node instanceof MethodCall || $node instanceof NullsafeMethodCall) {
-                    // Same as StaticCall: instance-marker grounding inside drained bodies
-                    // is not supported here; the marker survives for the leak guard.
-                    if ($this->markersOnly) {
+                    // Same rule as StaticCall: the Phase-1a drain leaves instance
+                    // markers for the leak guard, but grounding a specialized class
+                    // processes them — receiver identity/args come from the threaded
+                    // context (`$this` = the spec) or the spec's already-substituted
+                    // declared types.
+                    if ($this->markersOnly
+                        && ($this->grounding === null
+                            || $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) === null)
+                    ) {
                         return null;
                     }
                     return $this->rewriteInstanceMethodCall($node);
@@ -1413,15 +1419,7 @@ final class GenericMethodCompiler
                     return null;
                 }
 
-                // A drained/grounding walk runs over a DETACHED body: lexical use-alias
-                // state is unavailable, so prefer the parse-time resolution attribute
-                // (`self` carries none and still routes through resolveClassName, whose
-                // currentClassFqn was primed per item). The normal Phase-1a walk keeps
-                // its lexical resolution byte-identical.
-                $resolvedAttr = $node->class->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN);
-                $classFqn = $this->markersOnly && is_string($resolvedAttr)
-                    ? $resolvedAttr
-                    : $this->resolveClassName($node->class);
+                $classFqn = $this->resolveClassName($node->class);
                 $methodName = $node->name->toString();
                 $key = $classFqn . '::' . $methodName;
                 // Resolve through the inheritance chain (same as the instance path):
@@ -1665,15 +1663,21 @@ final class GenericMethodCompiler
                     return null;
                 }
                 if (!self::allConcrete($padded)) {
-                    // A non-concrete turbofish arg is an abstract type parameter forwarded from the
-                    // enclosing generic method (`probe<U:E>{ $this->contains::<U>(...) }`). On a
-                    // `$this`-rooted receiver this can't be specialized at the template — the arg is
-                    // concrete only per instantiation. When the target is ERASABLE the Specializer
-                    // rewrites this self-call to the target's E-mangled name per instantiation, so it
-                    // resolves; leave it for that pass. Otherwise it would emit a bare `$this->m(...)`
-                    // to a method that was never specialized (a runtime fatal) — so report it.
+                    // A non-concrete turbofish arg on a `$this`-rooted receiver can't be
+                    // specialized at the template — the arg is concrete only per
+                    // instantiation. Three shapes:
+                    //  - ERASABLE target: the Specializer rewrites the self-call to the
+                    //    E-mangled member per instantiation; leave it for that pass.
+                    //  - Every abstract leaf is an ENCLOSING CLASS parameter
+                    //    (`$this->dup::<T>(...)` inside `Box<T>`): defer — the
+                    //    per-specialization grounding pass dispatches it once the class
+                    //    substitution makes it concrete.
+                    //  - A METHOD-level parameter leaf (`probe<W>{ $this->dup::<W>(...) }`
+                    //    on a non-erasable target): nothing downstream ever grounds it —
+                    //    report here, at the precise site, instead of a vaguer late leak.
                     if ($this->receiverRootedAtThis($node->var)
                         && !$this->isErasableTarget($template, $params, $declaringFqn)
+                        && !$this->abstractLeavesAreEnclosingClassParams($padded)
                     ) {
                         return $this->reportUnspecializableSelfCall($methodName, $location);
                     }
@@ -1758,6 +1762,47 @@ final class GenericMethodCompiler
                 }
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
+
+                // Grounding mode, generic declaring class: only a `$this`-rooted call is
+                // groundable — the receiver IS this spec, so the declaring template's
+                // substitution threads through the inheritance chain from the spec's own
+                // concrete args, and the member lands on the spec itself (the template
+                // lowers to a marker interface; mutating it mid-loop would be
+                // order-dependent). An OBJECT receiver of another generic template keeps
+                // its marker for the emit backstop: its member belongs on that other
+                // template's specs, which this pass must not touch.
+                if ($this->grounding !== null && $this->isGenericTemplateClass($declaringFqn)) {
+                    if (!$this->receiverRootedAtThis($node->var)) {
+                        return null;
+                    }
+                    $templateKey = $declaringFqn . '::' . $mangled;
+                    $specKey = $this->grounding->generatedFqn . '::' . $mangled;
+                    if (!isset($this->alreadyGenerated[$templateKey]) && !isset($this->alreadyGenerated[$specKey])) {
+                        $classSubst = $this->classSubstitutionFor(
+                            $classFqn,
+                            $this->resolveReceiverTypeArgs($node->var),
+                            $declaringFqn,
+                        );
+                        $overlay = [];
+                        foreach ($params as $i => $param) {
+                            $overlay[$param->name] = $args[$i];
+                        }
+                        $specialized = (new Specializer())->specializeMethod(
+                            $template,
+                            $classSubst->withOverrides(Substitution::of($overlay)),
+                            $mangled,
+                        );
+                        $this->pendingAppends[] = [$this->grounding->spec, $specialized, [
+                            'classFqn'  => $declaringFqn,
+                            'namespace' => self::namespaceOf($declaringFqn),
+                        ]];
+                        $this->alreadyGenerated[$specKey] = true;
+                    }
+                    $node->name = new Identifier($mangled, $node->name->getAttributes());
+                    $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, null);
+                    return $node;
+                }
+
                 // Key emission + dedup by the DECLARING class, not the receiver: the
                 // specialization lands on the base and every subclass inherits the one
                 // copy. Keying by receiver would append a duplicate per subclass.
@@ -1955,6 +2000,12 @@ final class GenericMethodCompiler
                     // Plain (non-turbofish) call -- not a generic-resolution failure.
                     return null;
                 }
+                // Markers-only walks: the Phase-1a walk already diagnosed this site (the
+                // clone keeps its source position) — skip; a survivor falls to the emit
+                // backstop / check-mode leak diagnostic, which dedupe by position.
+                if ($this->markersOnly) {
+                    return null;
+                }
                 $message = self::unresolvedGenericCallMessage($receiverFqn, $methodName);
                 if ($this->diagnostics !== null) {
                     $this->diagnostics->add(new Diagnostic(
@@ -1993,6 +2044,13 @@ final class GenericMethodCompiler
             private function reportUndeterminedReceiverOrSkip(string $methodName, Node $node): null
             {
                 if (!is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS))) {
+                    return null;
+                }
+                // Markers-only walks re-visit call sites the Phase-1a walk already
+                // diagnosed (the clone keeps the same source position): skip instead of
+                // double-reporting; a genuinely un-grounded survivor still falls to the
+                // emit backstop / check-mode leak diagnostic, which dedupe by position.
+                if ($this->markersOnly) {
                     return null;
                 }
                 $message = sprintf(
@@ -2184,6 +2242,13 @@ final class GenericMethodCompiler
             {
                 if ($receiver instanceof Variable && is_string($receiver->name)) {
                     if ($receiver->name === 'this') {
+                        // Grounding a spec: `$this` IS the specialization, so its type
+                        // arguments are the instantiation's concrete args — not the
+                        // template's identity params, which would leave a `<U : E>`
+                        // bound ungroundable exactly as at the Phase-1a walk.
+                        if ($this->grounding !== null) {
+                            return $this->grounding->classArgs;
+                        }
                         $owner = $this->currentClassFqn !== null
                             ? ($this->index->classLike($this->currentClassFqn))
                             : null;
@@ -2893,6 +2958,15 @@ final class GenericMethodCompiler
 
             private function resolveClassName(Name $name): string
             {
+                // Markers-only walks run over DETACHED bodies with no use-alias state
+                // (primeDrainScope clears the map): the parse-time resolution attribute
+                // is authoritative there. Pseudo-names (`self`/`static`/`parent`) never
+                // carry it and keep the enclosing-class mapping below; the normal
+                // Phase-1a walk keeps its lexical resolution byte-identical.
+                $resolvedAttr = $name->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN);
+                if ($this->markersOnly && is_string($resolvedAttr)) {
+                    return $resolvedAttr;
+                }
                 $raw = $name->toString();
                 // Pseudo-types short-circuit to the enclosing class FQN. Without this,
                 // a parameter typed `self` would resolve to `App\…\self` (a phantom
@@ -3076,6 +3150,49 @@ final class GenericMethodCompiler
                 }
                 $first = strtolower($class->getParts()[0]);
                 return $first === 'static' || $first === 'parent';
+            }
+
+            /**
+             * Whether every abstract (type-param) leaf across the given TypeRef trees
+             * names a type parameter DECLARED BY THE ENCLOSING CLASS — the shape the
+             * per-specialization grounding pass can dispatch. A method-level parameter
+             * leaf (or any leaf when the enclosing class isn't generic) fails the test:
+             * no downstream pass ever grounds those.
+             *
+             * @param list<TypeRef> $args
+             */
+            private function abstractLeavesAreEnclosingClassParams(array $args): bool
+            {
+                if ($this->currentClassFqn === null) {
+                    return false;
+                }
+                $classParams = $this->index->classLike($this->currentClassFqn)
+                    ?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                if (!is_array($classParams)) {
+                    return false;
+                }
+                /** @var list<TypeParam> $classParams — set as a list by XphpSourceParser::resolveAndAttach. */
+                $names = [];
+                foreach ($classParams as $classParam) {
+                    $names[$classParam->name] = true;
+                }
+                $walk = static function (TypeRef $ref) use (&$walk, $names): bool {
+                    if ($ref->isTypeParam && !isset($names[$ref->name])) {
+                        return false;
+                    }
+                    foreach ($ref->args as $inner) {
+                        if (!$walk($inner)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                foreach ($args as $arg) {
+                    if (!$walk($arg)) {
+                        return false;
+                    }
+                }
+                return true;
             }
 
             /** Whether the FQN names a generic class template (declares type parameters). */
