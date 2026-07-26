@@ -1895,6 +1895,25 @@ final class GenericMethodIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testStaticInheritedTurbofishLandsOnTheCallingSpec(): void
+    {
+        // `self::gen::<T>` where gen lives on generic `Base<T>`: mirrors the
+        // instance-call rule — the member grounds through the extends chain onto the
+        // Holder spec, never the shared Base template.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_static_inherited_turbofish/source',
+            'genmethod-static-inherited',
+        );
+        try {
+            $fixture->registerAutoload('App\\StaticInherited');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_static_inherited_turbofish/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
     public function testInstanceCrossTemplateTurbofishIsRejected(): void
     {
         // `$b->dup::<T>` where $b is another generic template: the grounded member

@@ -67,6 +67,23 @@ final class GenericMarkerLeakIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testTemplateTargetOutsideItsOwnSpecIsRejected(): void
+    {
+        // `Holder::gen::<X>` written inside Maker's body (a NON-member of Holder):
+        // grounding Holder<int> drains Maker's freshly appended member, but the
+        // own-template arm must not fire there — a `self::` rewrite inside Maker
+        // would call a member Maker doesn't have (a runtime fatal). Keep-marker +
+        // backstop is the contract.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_template_target_outside_spec_reject/source',
+            'generic-class-target-outside-spec',
+        );
+    }
+
+    #[RunInSeparateProcess]
     public function testStaticPseudoNameTurbofishIsRejected(): void
     {
         // `static::gen::<T>`: honoring late static binding is impossible for the

@@ -11,6 +11,7 @@ use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Name;
 use PhpParser\NodeFinder;
 use RuntimeException;
 
@@ -58,18 +59,32 @@ final class GenericMarkerLeakGuard
      * declared-but-never-specialized check, so re-flagging the template node itself only
      * double-reports; the call-site marker arm is what carries new information there.
      *
+     * `$includeVariableTurbofish` toggles variable-turbofish FuncCalls (`$f::<int>`).
+     * The check-mode CLASS-spec backstop turns it off: check's validate-only walk never
+     * materializes closure dispatchers, so a class-spec clone legitimately carries the
+     * variable marker that compile's dispatcher pass grounds — flagging it would reject
+     * code compile accepts. Every genuinely-broken variable-turbofish shape is caught
+     * elsewhere (the source seam in both modes, or the append-drain backstop, whose
+     * check side keeps this arm on because compile's drain rejects the same body).
+     *
      * @param Node|list<Node> $specialized  the emitted specialized node(s)
      */
-    public static function findLeak(Node|array $specialized, bool $includeClosureTemplates = true): ?Node
-    {
+    public static function findLeak(
+        Node|array $specialized,
+        bool $includeClosureTemplates = true,
+        bool $includeVariableTurbofish = true,
+    ): ?Node {
         $nodes = is_array($specialized) ? $specialized : [$specialized];
 
-        return (new NodeFinder())->findFirst($nodes, static function (Node $n) use ($includeClosureTemplates): bool {
+        return (new NodeFinder())->findFirst($nodes, static function (Node $n) use ($includeClosureTemplates, $includeVariableTurbofish): bool {
             if ($n instanceof FuncCall
                 || $n instanceof MethodCall
                 || $n instanceof StaticCall
                 || $n instanceof NullsafeMethodCall
             ) {
+                if (!$includeVariableTurbofish && $n instanceof FuncCall && !$n->name instanceof Name) {
+                    return false;
+                }
                 return $n->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) !== null;
             }
             if ($includeClosureTemplates && ($n instanceof Closure || $n instanceof ArrowFunction)) {

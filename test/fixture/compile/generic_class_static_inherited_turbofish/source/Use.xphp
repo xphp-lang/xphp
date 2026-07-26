@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\StaticInherited;
+
+// The static generic target lives on a generic BASE: `self::gen::<T>` inside the
+// Holder spec threads Holder's concrete arguments through the extends chain to Base's
+// parameters and lands the member on the HOLDER specialization — mirroring the
+// instance-call rule, never mutating the shared Base template.
+class Base<T>
+{
+    /** @return array<int, mixed> */
+    public static function gen<U>(U $x): array
+    {
+        return [$x, $x];
+    }
+
+    public function idT(T $v): T
+    {
+        return $v;
+    }
+}
+
+class Holder<T> extends Base<T>
+{
+    /** @return array<int, mixed> */
+    public function go(T $v): array
+    {
+        return self::gen::<T>($v);
+    }
+}
+
+$b = new Base::<string>();
+$h = new Holder::<int>();
+$r1 = $h->go(3);
+$r2 = $b->idT('s');

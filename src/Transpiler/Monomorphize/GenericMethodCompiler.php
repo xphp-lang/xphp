@@ -388,11 +388,15 @@ final class GenericMethodCompiler
         // diagnostic here (call-marker arm only; sites the Phase-1a walk already
         // reported — e.g. an unspecializable `$this` self-call — dedupe by position).
         if (!$emit && $this->diagnostics !== null) {
-            // phpstan memoizes the identical pre-scan call above, but the grounding walk
-            // mutates the AST in between: a marker the pre-scan found is usually
-            // dispatched (nulled) by now, so this CAN be null.
-            $leak = GenericMarkerLeakGuard::findLeak($specialized, includeClosureTemplates: false);
-            // @phpstan-ignore-next-line notIdentical.alwaysTrue
+            // Variable-turbofish markers are excluded: check never materializes closure
+            // dispatchers, so a class-spec clone legitimately carries the `$f::<int>`
+            // marker compile's dispatcher pass grounds — flagging it would reject code
+            // compile accepts.
+            $leak = GenericMarkerLeakGuard::findLeak(
+                $specialized,
+                includeClosureTemplates: false,
+                includeVariableTurbofish: false,
+            );
             if ($leak !== null && !$this->alreadyReportedAt($currentFile, $leak->getStartLine())) {
                 $this->diagnostics->add(new Diagnostic(
                     Severity::Error,
@@ -1051,6 +1055,18 @@ final class GenericMethodCompiler
 
             public function leaveNode(Node $node): ?Node
             {
+                // Markers-only re-walks must not re-diagnose a site the Phase-1a walk
+                // already reported (one collector message per source position): skip
+                // the rewrite wholesale — the kept marker falls to the backstops, which
+                // dedupe by the same position and stay silent.
+                if ($this->markersOnly
+                    && ($node instanceof StaticCall || $node instanceof FuncCall
+                        || $node instanceof MethodCall || $node instanceof NullsafeMethodCall)
+                    && $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) !== null
+                    && $this->siteAlreadyReported($node->getStartLine())
+                ) {
+                    return null;
+                }
                 if ($node instanceof StaticCall) {
                     if ($this->markersOnly) {
                         // Phase-1a drain (no grounding context): static resolution is
@@ -1436,16 +1452,28 @@ final class GenericMethodCompiler
                     return $this->reportUnresolvedTurbofishOrSkip($classFqn, $methodName, $node);
                 }
                 [$template, $declaringFqn] = $resolved;
-                // Grounding mode: only the spec's OWN template's members may land on the
-                // spec. A static target declared on a *different* generic template would
-                // need that other template's substitution mapping (and mutating a shared
-                // template mid-loop is order-dependent wrong code) — keep the marker and
-                // let the emit backstop reject it as a documented limitation.
-                if ($this->grounding !== null
-                    && $declaringFqn !== $this->grounding->templateFqn
-                    && $this->isGenericTemplateClass($declaringFqn)
-                ) {
-                    return null;
+                // Grounding mode, generic declaring template: groundable ONLY when the
+                // call site lexically lives inside the spec being grounded (a drained
+                // body appended onto ANOTHER class must not dispatch through this
+                // spec's `self::` — that emits a call to a member the other class
+                // doesn't have), AND the declaring template's parameters are threadable
+                // from the spec's own concrete arguments — its own template, or a
+                // generic ancestor through the extends chain. Anything else (a
+                // different generic template, an unthreadable chain, a foreign drained
+                // body) keeps its marker for the emit backstop.
+                $groundingClassSubst = null;
+                if ($this->grounding !== null && $this->isGenericTemplateClass($declaringFqn)) {
+                    if ($this->currentClassFqn !== $this->grounding->templateFqn) {
+                        return null;
+                    }
+                    $groundingClassSubst = $this->classSubstitutionFor(
+                        $this->grounding->templateFqn,
+                        $this->grounding->classArgs,
+                        $declaringFqn,
+                    );
+                    if ($groundingClassSubst->isEmpty()) {
+                        return null;
+                    }
                 }
                 $params = $template->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
                 if (!is_array($params)) {
@@ -1524,25 +1552,31 @@ final class GenericMethodCompiler
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
 
-                // Grounding a spec whose OWN template declares the target: the member
-                // lands on the spec itself — the template class lowers to a marker
-                // interface in output, so an append there would vanish (and mutating a
-                // shared template mid-loop would be order-dependent). Dedup per
-                // specialization, but consult the global key first: a member a concrete
-                // Phase-1a call already appended onto the template was cloned INTO this
-                // spec, and appending again would redeclare the method (load-time fatal).
-                if ($this->grounding !== null && $declaringFqn === $this->grounding->templateFqn) {
+                // Grounding a target declared on the spec's own template (or a generic
+                // ancestor — $groundingClassSubst threads the spec's arguments through
+                // the extends chain): the member lands on the spec itself — the
+                // template class lowers to a marker interface in output, so an append
+                // there would vanish (and mutating a shared template mid-loop would be
+                // order-dependent). Dedup per specialization, but consult the global
+                // key first: a member a concrete Phase-1a call already appended onto
+                // the template was cloned INTO this spec, and appending again would
+                // redeclare the method (load-time fatal).
+                if ($this->grounding !== null && $groundingClassSubst !== null) {
                     $templateKey = $declaringFqn . '::' . $mangled;
                     $specKey = $this->grounding->generatedFqn . '::' . $mangled;
                     if (!isset($this->alreadyGenerated[$templateKey]) && !isset($this->alreadyGenerated[$specKey])) {
-                        // Compose the enclosing class substitution under the method's
+                        // Compose the declaring class's substitution under the method's
                         // own overlay: the detached template's body may reference class
                         // type parameters, which are concrete for THIS spec only.
-                        $overlay = $this->groundingClassOverlay();
+                        $overlay = [];
                         foreach ($params as $i => $param) {
                             $overlay[$param->name] = $args[$i];
                         }
-                        $specialized = (new Specializer())->specializeMethod($template, Substitution::of($overlay), $mangled);
+                        $specialized = (new Specializer())->specializeMethod(
+                            $template,
+                            $groundingClassSubst->withOverrides(Substitution::of($overlay)),
+                            $mangled,
+                        );
                         $this->pendingAppends[] = [$this->grounding->spec, $specialized, [
                             'classFqn'  => $declaringFqn,
                             'namespace' => self::namespaceOf($declaringFqn),
@@ -1763,16 +1797,20 @@ final class GenericMethodCompiler
 
                 $mangled = self::mangleName($methodName, $args, $this->hashLength);
 
-                // Grounding mode, generic declaring class: only a `$this`-rooted call is
-                // groundable — the receiver IS this spec, so the declaring template's
-                // substitution threads through the inheritance chain from the spec's own
-                // concrete args, and the member lands on the spec itself (the template
-                // lowers to a marker interface; mutating it mid-loop would be
-                // order-dependent). An OBJECT receiver of another generic template keeps
-                // its marker for the emit backstop: its member belongs on that other
-                // template's specs, which this pass must not touch.
+                // Grounding mode, generic declaring class: only a `$this`-rooted call
+                // FROM INSIDE THE SPEC BEING GROUNDED is groundable — there the
+                // receiver IS this spec, so the declaring template's substitution
+                // threads through the inheritance chain from the spec's own concrete
+                // args, and the member lands on the spec itself (the template lowers
+                // to a marker interface; mutating it mid-loop would be
+                // order-dependent). An OBJECT receiver of another generic template, or
+                // a `$this` inside a DRAINED body appended onto some other class
+                // (where `$this` is that class, not this spec), keeps its marker for
+                // the emit backstop.
                 if ($this->grounding !== null && $this->isGenericTemplateClass($declaringFqn)) {
-                    if (!$this->receiverRootedAtThis($node->var)) {
+                    if (!$this->receiverRootedAtThis($node->var)
+                        || $this->currentClassFqn !== $this->grounding->templateFqn
+                    ) {
                         return null;
                     }
                     $templateKey = $declaringFqn . '::' . $mangled;
@@ -2242,11 +2280,13 @@ final class GenericMethodCompiler
             {
                 if ($receiver instanceof Variable && is_string($receiver->name)) {
                     if ($receiver->name === 'this') {
-                        // Grounding a spec: `$this` IS the specialization, so its type
-                        // arguments are the instantiation's concrete args — not the
-                        // template's identity params, which would leave a `<U : E>`
-                        // bound ungroundable exactly as at the Phase-1a walk.
-                        if ($this->grounding !== null) {
+                        // Grounding a spec: `$this` IS the specialization — but ONLY
+                        // for sites inside the spec's own body. In a drained body
+                        // appended onto another class, `$this` is that class; fall
+                        // through to the ordinary (lenient) resolution there.
+                        if ($this->grounding !== null
+                            && $this->currentClassFqn === $this->grounding->templateFqn
+                        ) {
                             return $this->grounding->classArgs;
                         }
                         $owner = $this->currentClassFqn !== null
@@ -3124,6 +3164,29 @@ final class GenericMethodCompiler
             }
 
             /**
+             * Whether the collector already holds a diagnostic at this source position
+             * (clones keep the template's line numbers). Markers-only walks re-visit
+             * call sites the Phase-1a walk already validated: re-running the rewrite on
+             * a site that already drew a diagnostic (an arity error, a bound failure)
+             * would re-fire the same collector message once per specialization.
+             */
+            private function siteAlreadyReported(int $line): bool
+            {
+                if ($this->diagnostics === null) {
+                    return false;
+                }
+                foreach ($this->diagnostics->all() as $diagnostic) {
+                    if ($diagnostic->location !== null
+                        && $diagnostic->location->file === $this->currentFile
+                        && $diagnostic->location->line === $line
+                    ) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            /**
              * A function/method/closure declaration still carrying its generic-template
              * marker — never present in a compile-mode spec (templates are stripped or
              * lowered before cloning), but present in check-mode clones; markers-only
@@ -3202,32 +3265,6 @@ final class GenericMethodCompiler
                 return is_array($params) && $params !== [];
             }
 
-            /**
-             * The enclosing template's type-parameter → concrete-argument map for the
-             * spec being grounded, read off the RETAINED template node (the spec clone's
-             * generic attributes were nulled by the Specializer).
-             *
-             * @return array<string, TypeRef>
-             */
-            private function groundingClassOverlay(): array
-            {
-                if ($this->grounding === null) {
-                    return [];
-                }
-                $classParams = $this->index->classLike($this->grounding->templateFqn)
-                    ?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
-                if (!is_array($classParams)) {
-                    return [];
-                }
-                /** @var list<TypeParam> $classParams — set as a list by XphpSourceParser::resolveAndAttach. */
-                $overlay = [];
-                foreach ($classParams as $i => $classParam) {
-                    if (isset($this->grounding->classArgs[$i])) {
-                        $overlay[$classParam->name] = $this->grounding->classArgs[$i];
-                    }
-                }
-                return $overlay;
-            }
         };
 
         if ($grounding !== null) {
@@ -3316,9 +3353,13 @@ final class GenericMethodCompiler
                     // Grounding mode: a member appended onto anything but the spec
                     // itself (a non-generic user class, a function namespace) is
                     // invisible to the fixed-point loop's spec collection — record it
-                    // so the caller can collect its nested instantiation needs.
+                    // so the caller can collect its nested instantiation needs. In
+                    // check mode NOTHING is attached, so own-spec members are equally
+                    // invisible to the spec collect and must be recorded too — or a
+                    // bound violation nested in a grounded member's body (`new
+                    // Pair::<U>` inside `gen<U>`) passes check while compile rejects.
                     // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
-                    if ($visitor->grounding !== null && $container !== $visitor->grounding->spec) {
+                    if ($visitor->grounding !== null && (!$emit || $container !== $visitor->grounding->spec)) {
                         $visitor->grounding->externalAppends[] = $stmt;
                     }
                 // @phpstan-ignore-next-line property.notFound — $visitor is an anonymous class declared above; phpstan can't name its shape.
