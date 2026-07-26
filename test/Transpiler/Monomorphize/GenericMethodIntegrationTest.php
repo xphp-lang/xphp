@@ -1699,6 +1699,144 @@ final class GenericMethodIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testMethodTurbofishGroundedByEnclosingClassParamCompiles(): void
+    {
+        // `self::gen::<T>` / `Maker::wrap::<T>` inside `Box<T>`: abstract in the
+        // template, grounded and dispatched per specialization. The spec carries its
+        // own `gen_T_<hash>` member (dispatched via `self::`, appended once despite
+        // two call sites) and the non-generic Maker gets one shared `wrap_T_<hash>`
+        // per unique argument tuple.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_method_turbofish/source',
+            'genmethod-enclosing-turbofish',
+        );
+        try {
+            $generated = self::globRecursive($fixture->cacheDir . '/Generated', '*.php');
+            self::assertCount(3, $generated, 'Box<int>, Box<string>, CoBox<int>');
+
+            $specs = array_combine($generated, array_map('file_get_contents', $generated));
+            $boxIntSpec = null;
+            foreach ($specs as $path => $content) {
+                self::assertIsString($content);
+                if (str_contains($path, '/Box/') && str_contains($content, 'make(int $v): int')) {
+                    $boxIntSpec = $content;
+                }
+            }
+            self::assertIsString($boxIntSpec, 'Box<int> spec found');
+            // One appended member, dispatched via self:: (never the marker interface).
+            self::assertSame(1, preg_match_all('/function gen_T_[0-9a-f]+\(/', $boxIntSpec));
+            self::assertSame(2, preg_match_all('/self::gen_T_[0-9a-f]+\(/', $boxIntSpec));
+            self::assertStringNotContainsString('Box::gen', $boxIntSpec);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_class_method_turbofish/verify/testMethodTurbofishGroundedByEnclosingClassParamCompiles/BoxInt.expected.php',
+                $boxIntSpec,
+            );
+
+            // Maker (a plain user file) carries exactly two wrap specializations —
+            // int (shared by Box<int> and CoBox<int>) and string.
+            $maker = file_get_contents($fixture->targetDir . '/Maker.php');
+            self::assertIsString($maker);
+            self::assertSame(2, preg_match_all('/function wrap_T_[0-9a-f]+\(/', $maker));
+
+            $fixture->registerAutoload('App\\MethodTurbofish');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_method_turbofish/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testGroundingAppendedMemberInstantiationsAreCollected(): void
+    {
+        // `Pair<int>` first exists inside the `twin_T_<hash>` member the grounding
+        // pass appends onto Maker — its instantiation must be collected into the
+        // fixed point or the emitted call references a missing generated class.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_method_turbofish_discovery/source',
+            'genmethod-turbofish-discovery',
+        );
+        try {
+            $pairSpecs = array_filter(
+                self::globRecursive($fixture->cacheDir . '/Generated', '*.php'),
+                static fn (string $p): bool => str_contains($p, '/Pair/'),
+            );
+            self::assertCount(1, $pairSpecs, 'Pair<int> was discovered and specialized');
+
+            $fixture->registerAutoload('App\\TurbofishDiscovery');
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_class_method_turbofish_discovery/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testGroundedStaticBoundViolationFailsCompilation(): void
+    {
+        // `gen<U : \Stringable>` grounded with `T = int` once Box<int> specializes:
+        // provable only after substitution, must fail at the grounding pass.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated while instantiating App\Box::gen');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/check/method_turbofish_bound/source',
+            'genmethod-turbofish-bound',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testClassParamBoundOnStaticStaysUnprovable(): void
+    {
+        // `gen<U : T>` on a STATIC method: a class-param bound has no receiver to
+        // ground it in a static context — the pre-existing rejection must survive
+        // the grounding pass unchanged.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Cannot verify generic bound `U : T` for App\Box::gen');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/check/method_turbofish_unprovable/source',
+            'genmethod-turbofish-unprovable',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testGroundedStaticBoundSatisfiedCompilesAndRuns(): void
+    {
+        // The bound twin that must keep compiling: `gen<U : \Stringable>` grounded
+        // with a T that satisfies the bound.
+        $dir = sys_get_temp_dir() . '/xphp-genmethod-bound-ok-' . uniqid('', true);
+        mkdir($dir, 0o755, true);
+        file_put_contents($dir . '/Use.xphp', <<<'PHP'
+        <?php
+        namespace App\BoundOk;
+        final class Label implements \Stringable {
+            public function __construct(private string $s) {}
+            public function __toString(): string { return $this->s; }
+        }
+        class Box<T> {
+            public function m(T $v): T { return self::gen::<T>($v); }
+            public static function gen<U : \Stringable>(U $x): U { return $x; }
+        }
+        $b = new Box::<Label>();
+        $out = $b->m(new Label('ok'));
+        PHP);
+
+        try {
+            $fixture = CompiledFixture::compile($dir, 'genmethod-bound-ok');
+            try {
+                $fixture->registerAutoload('App\\BoundOk');
+                require $fixture->targetDir . '/Use.php';
+                self::assertSame('ok', (string) $out);
+            } finally {
+                $fixture->cleanup();
+            }
+        } finally {
+            self::rrmdir($dir);
+        }
+    }
+
     private function compileFrom(string $dir): void
     {
         $compiler = $this->buildCompiler();

@@ -1,0 +1,28 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A static method-generic declared on a DIFFERENT generic template: grounding it would
+// need Other's own substitution mapping, and appending onto a shared template mid-loop
+// is order-dependent. The marker is kept and the emitted-marker backstop rejects the
+// compile — a documented limitation, not silent wrong code.
+class Other<S>
+{
+    public static function gen<U>(U $x): U
+    {
+        return $x;
+    }
+}
+
+class Holder<T>
+{
+    public function m(T $v): T
+    {
+        return Other::gen::<T>($v);
+    }
+}
+
+$h = new Holder::<int>();
+$h->m(1);
