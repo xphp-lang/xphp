@@ -22,5 +22,16 @@ services:
       service: php
     entrypoint: [ "/opt/app/bin/xphp" ]
 
+  # Node runtime for commit-message linting: the .githooks/commit-msg hook runs
+  # commitlint through this service, so contributors need docker but no host
+  # Node toolchain — and local linting uses the exact tool CI runs. One-shot:
+  #   docker compose run --rm node npx commitlint --help
+  node:
+    image: node:24-alpine
+    working_dir: /opt/app
+    volumes:
+      - ./:/opt/app
+    command: [ "tail", "-f", "/dev/null" ]
+
 volumes:
   composer_cache: ~

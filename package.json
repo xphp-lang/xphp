@@ -1,0 +1,9 @@
+{
+    "name": "xphp-dev-tools",
+    "private": true,
+    "description": "Dev-only Node toolchain: commit-message linting (commitlint). The PHP package proper is defined in composer.json.",
+    "devDependencies": {
+        "@commitlint/cli": "^19.8.1",
+        "@commitlint/config-conventional": "^19.8.1"
+    }
+}
