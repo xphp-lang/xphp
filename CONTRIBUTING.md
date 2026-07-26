@@ -1,5 +1,30 @@
 # Contributing
 
+## Commit messages
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org):
+
+```
+type(scope): lowercase subject
+```
+
+Types: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert`
+`style` `test`. The scope is the component the change lives in
+(`monomorphize`, `specializer`, `parser`, `cli`, ...); bare `type:` is fine
+for cross-cutting changes. Examples from the history:
+
+```
+feat(monomorphize): ground enclosing-param method turbofish per class specialization
+fix(cli): locate Composer autoloader when installed as a dependency
+docs: refresh docs/ tree with syntax tour, caveats, errors
+```
+
+CI rejects a PR whose commits don't conform: `commitlint` (pinned by
+`package-lock.json`) over `commitlint.config.mjs`. Locally, `composer
+install` wires up a `commit-msg` hook (`.githooks/`) that runs the **same
+tool** through the docker compose `node` service at commit time — docker is
+required, a host Node toolchain is not.
+
 ## Test
 
 ```bash

@@ -13,3 +13,4 @@
 /core/.xphp-cache/
 docker-compose.override.yml
 .phpunit.result.cache
+node_modules/

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Commit-message lint: the SAME tool CI runs — commitlint over
+# commitlint.config.mjs — executed through the docker compose `node` service,
+# so contributors need docker but no host Node toolchain.
+#
+# Installed by `composer install` via `git config core.hooksPath .githooks`.
+# The message is piped on stdin (comment lines stripped, as git would on
+# commit), so no path mapping into the container is needed and the hook works
+# from worktrees too. node_modules is npm-ci'd on first use from the lockfile.
+
+msg_file="$1"
+
+if ! command -v docker > /dev/null 2>&1; then
+    echo "commit-msg: docker is required to lint the commit message (compose service 'node')." >&2
+    echo "  rules: commitlint.config.mjs (Conventional Commits) — CI enforces the same check." >&2
+    exit 1
+fi
+
+top=$(git rev-parse --show-toplevel)
+
+sed -e 's/\r$//' -e '/^#/d' "$msg_file" \
+    | docker compose --project-directory "$top" run --rm -T --no-deps node sh -c '
+        test -x node_modules/.bin/commitlint \
+            || npm ci --no-audit --no-fund --loglevel=error
+        exec node_modules/.bin/commitlint
+    '
