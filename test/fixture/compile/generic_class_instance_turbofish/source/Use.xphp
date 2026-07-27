@@ -1,0 +1,53 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\InstanceTurbofish;
+
+final class Maker
+{
+    /** @return array<int, mixed> */
+    public function dup<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+}
+
+// Instance method turbofish grounded by the enclosing class type parameter, both
+// receiver shapes: `$this->dup::<T>` dispatches to a member grounded onto the
+// specialization itself (once per spec, despite two call sites), and `$m->dup::<T>`
+// on a non-generic receiver grounds onto Maker like any external target.
+final class Holder<T>
+{
+    /** @return array<int, mixed> */
+    public function viaThis(T $v): array
+    {
+        return $this->dup::<T>($v);
+    }
+
+    /** @return array<int, mixed> */
+    public function viaThisAgain(T $v): array
+    {
+        return $this->dup::<T>($v);
+    }
+
+    /** @return array<int, mixed> */
+    public function viaObj(Maker $m, T $v): array
+    {
+        return $m->dup::<T>($v);
+    }
+
+    /** @return array<int, mixed> */
+    public function dup<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+}
+
+$h = new Holder::<int>();
+$r1 = $h->viaThis(1);
+$r2 = $h->viaThisAgain(2);
+$r3 = $h->viaObj(new Maker(), 3);
+
+$s = new Holder::<string>();
+$r4 = $s->viaThis('a');

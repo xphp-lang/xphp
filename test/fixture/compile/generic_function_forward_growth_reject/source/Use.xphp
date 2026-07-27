@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ForwardGrowth;
+
+final class Box<G>
+{
+    public function __construct(public readonly G $value)
+    {
+    }
+}
+
+// A strictly-growing forward: every specialization of `grow` mints a deeper type
+// argument (`grow<int>` calls `grow::<Box<int>>`, which calls `grow::<Box<Box<int>>>`,
+// ...), so the specialization chain can never converge. Rejected loudly by the drain's
+// hop cap instead of compiling forever.
+function grow<T>(T $v): int
+{
+    return grow::<Box<T>>(new Box::<T>($v));
+}
+
+grow::<int>(1);

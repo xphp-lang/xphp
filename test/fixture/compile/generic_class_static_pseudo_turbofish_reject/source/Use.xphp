@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A `static::` turbofish grounded by the enclosing class parameter: late static
+// binding cannot be honored by the grounding pass (resolving `static` to the current
+// class would silently break a subclass dispatch), so the marker is kept and the
+// emitted-marker backstop rejects loudly instead.
+class Box<T>
+{
+    public function m(T $v): T
+    {
+        return static::gen::<T>($v);
+    }
+
+    public static function gen<U>(U $x): U
+    {
+        return $x;
+    }
+}
+
+$b = new Box::<int>();
+$b->m(1);

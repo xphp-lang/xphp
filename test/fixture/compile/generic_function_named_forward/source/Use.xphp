@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NamedForward;
+
+// A named generic free function forwarding a type argument grounded by the enclosing
+// function's type parameter: `identity::<T>($v)` is abstract inside the `wrap<T>`
+// template, becomes concrete when `wrap` specializes (`wrap::<int>` substitutes
+// `identity::<int>`), and the append-drain then grounds and dispatches it into a real
+// `identity_T_<hash>` specialization.
+function identity<U>(U $x): U
+{
+    return $x;
+}
+
+function wrap<T>(T $v): T
+{
+    return identity::<T>($v);
+}
+
+$i = wrap::<int>(3);
+$s = wrap::<string>('hi');

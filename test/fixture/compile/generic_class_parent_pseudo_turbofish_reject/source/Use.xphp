@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A `parent::` turbofish grounded by the enclosing class parameter: resolving `parent`
+// through the current-class mapping would silently dispatch to the wrong side of the
+// hierarchy, so the marker is kept and the emitted-marker backstop rejects loudly.
+class Base<T>
+{
+    public static function gen<U>(U $x): U
+    {
+        return $x;
+    }
+}
+
+class Kid<T> extends Base<T>
+{
+    public function m(T $v): T
+    {
+        return parent::gen::<T>($v);
+    }
+}
+
+$k = new Kid::<int>();
+$k->m(1);

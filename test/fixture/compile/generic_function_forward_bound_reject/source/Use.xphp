@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\ForwardBound;
+
+interface Labeled
+{
+    public function label(): string;
+}
+
+// The forwarded turbofish grounds to a type argument that VIOLATES the target's bound:
+// `need<U : Labeled>` receives `T = int` once `wrap::<int>` specializes. The violation
+// is only provable after substitution, so it must fail at the grounding drain — not
+// slip through as an unchecked emitted call.
+function need<U : Labeled>(U $x): U
+{
+    return $x;
+}
+
+function wrap<T>(T $v): T
+{
+    return need::<T>($v);
+}
+
+wrap::<int>(1);

@@ -5,6 +5,40 @@ All notable changes to `xphp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Method-generic turbofish grounded by an enclosing type parameter.** A turbofish
+  whose type argument is supplied by the enclosing generic scope now grounds **per
+  specialization** and runs, instead of being rejected by the emitted-marker backstop:
+  a named free-function forward (`identity::<T>($v)` inside `wrap<T>`), a static call
+  (`self::gen::<T>()`, `Maker::wrap::<T>()` inside `Box<T>` — the idiomatic "delegate
+  to a shared static generic helper" shape), and an instance call (`$this->dup::<T>()`,
+  `$m->dup::<T>()` on a non-generic receiver, including a target declared on a generic
+  base class). Freshly specialized bodies are re-grounded transitively, so multi-hop
+  forwards and mutually recursive generics converge; a member grounded onto the
+  program's classes is deduplicated per unique argument tuple, and an instantiation
+  that first appears inside a grounded body is discovered like any other. A bound that
+  only becomes provable after specialization (`gen<U : Stringable>` receiving the
+  class's `T`) is checked per instantiation, and a strictly-growing forward chain
+  (`grow<T>` calling `grow::<Box<T>>`) is rejected as non-convergent
+  (`xphp.unconverged_method_specialization`) instead of specializing forever. See
+  [turbofish](docs/syntax/turbofish.md) and the
+  [remaining caveats](docs/caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter)
+  (closure turbofish in generic function bodies, cross-template targets, and the
+  late-bound `static::`/`parent::` spellings still fail loudly).
+
+### Fixed
+
+- **`xphp check` / `xphp compile` parity on enclosing-parameter turbofish.** `check`
+  previously reported nothing for the shapes only the compile-time emitted-marker
+  backstop rejected — a pipeline gating on `check` alone saw green on code `compile`
+  refused. The validate-only pass now grounds each specialization the same way
+  `compile` does and collects the same diagnostics (a violated grounded bound, a
+  non-convergent chain, a surviving marker), located at the template's real source
+  line.
+
 ## [0.3.0]
 
 ### Added

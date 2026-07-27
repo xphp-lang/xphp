@@ -12,16 +12,22 @@ use XPHP\TestSupport\CompiledFixture;
 /**
  * End-to-end coverage for the emitted-generic-marker backstop ({@see GenericMarkerLeakGuard}).
  *
- * Two enclosing-parameter / generic-function-scope turbofish shapes slip past the source-level
- * gates and reach the emit phase un-grounded: a *concrete* inner closure turbofish inside a
- * generic function body, and a method turbofish grounded by an enclosing class type parameter.
- * Left to emit, each produces PHP that references a non-existent type-parameter class (a runtime
- * `TypeError`/`Error`) behind an otherwise clean compile. The backstop turns each into a loud
- * compile failure carrying `xphp.unspecialized_generic_leak` before any output is written.
+ * The turbofish shapes that deliberately stay un-groundable reach the emit phase with their
+ * marker intact: a *concrete* inner closure turbofish inside a generic function body, a static
+ * method-generic declared on a *different* generic template, and the late-bound
+ * `static::`/`parent::` spellings. Left to emit, each produces PHP that references a
+ * non-existent type-parameter class or the wrong dispatch target behind an otherwise clean
+ * compile. The backstop turns each into a loud compile failure carrying
+ * `xphp.unspecialized_generic_leak` before any output is written.
  *
- * (The third shape — a generic closure grounded by an enclosing *function* parameter, `relay` —
- * is a non-concrete variable turbofish caught earlier at the source seam in both modes; see
- * {@see ClosureDispatcherIntegrationTest} and {@see CheckPassIntegrationTest}.)
+ * (Adjacent shapes are handled elsewhere: a generic closure grounded by an enclosing *function*
+ * parameter, `relay`, is a non-concrete variable turbofish caught earlier at the source seam in
+ * both modes — see {@see ClosureDispatcherIntegrationTest} and {@see CheckPassIntegrationTest};
+ * a NAMED free-function forward (`identity::<T>` inside `wrap<T>`) is grounded by the
+ * append-drain — see `generic_function_named_forward` in {@see GenericFunctionIntegrationTest};
+ * and an own-template / non-generic-target method turbofish grounded by the enclosing class
+ * parameter (`self::gen::<T>`, `Maker::wrap::<T>`) is grounded per specialization — see
+ * `generic_class_method_turbofish` in {@see GenericMethodIntegrationTest}.)
  *
  * The must-keep side — a working top-level `$g::<int>` dispatcher and the `contains<U : E>`
  * enclosing-bound forward — is proven zero-false-reject by the existing `closure_dispatcher_arrow`
@@ -43,31 +49,66 @@ final class GenericMarkerLeakIntegrationTest extends TestCase
     }
 
     #[RunInSeparateProcess]
-    public function testMethodTurbofishGroundedByEnclosingClassParamIsRejected(): void
+    public function testCrossTemplateStaticTurbofishIsRejected(): void
     {
+        // A static method-generic declared on a DIFFERENT generic template
+        // (`Other::gen::<T>` from inside `Holder<T>`): the grounding pass deliberately
+        // leaves the marker (it would need Other's own substitution mapping, and
+        // appending onto a shared template mid-loop is order-dependent), so the
+        // backstop rejects. The own-template and non-generic-target forms of the same
+        // call shape ground and run — see the generic_class_method_turbofish fixture.
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
 
         CompiledFixture::compile(
-            __DIR__ . '/../../fixture/compile/generic_class_method_turbofish_leak_reject/source',
-            'generic-class-method-turbofish-leak',
+            __DIR__ . '/../../fixture/compile/generic_class_cross_template_turbofish_reject/source',
+            'generic-class-cross-template-turbofish',
         );
     }
 
     #[RunInSeparateProcess]
-    public function testNamedFreeFunctionForwardGroundedByEnclosingParamIsRejected(): void
+    public function testTemplateTargetOutsideItsOwnSpecIsRejected(): void
     {
-        // A named generic free function forwarded a non-concrete type argument from an
-        // enclosing function parameter (`identity::<T>($v)` inside `wrap<T>`). The named-call
-        // turbofish is not a variable turbofish, so it slips past the source seam and reaches
-        // emit as an appended `wrap_T_<hash>` with the marker still present — caught by the
-        // backstop. Same class of shape as the concrete-inner-turbofish case.
+        // `Holder::gen::<X>` written inside Maker's body (a NON-member of Holder):
+        // grounding Holder<int> drains Maker's freshly appended member, but the
+        // own-template arm must not fire there — a `self::` rewrite inside Maker
+        // would call a member Maker doesn't have (a runtime fatal). Keep-marker +
+        // backstop is the contract.
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
 
         CompiledFixture::compile(
-            __DIR__ . '/../../fixture/compile/generic_function_named_forward_leak_reject/source',
-            'generic-function-named-forward-leak',
+            __DIR__ . '/../../fixture/compile/generic_class_template_target_outside_spec_reject/source',
+            'generic-class-target-outside-spec',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testStaticPseudoNameTurbofishIsRejected(): void
+    {
+        // `static::gen::<T>`: honoring late static binding is impossible for the
+        // grounding pass, and resolving `static` to the current class would silently
+        // re-route a subclass dispatch — keep-marker + loud reject is the contract.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_static_pseudo_turbofish_reject/source',
+            'generic-class-static-pseudo-turbofish',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testParentPseudoNameTurbofishIsRejected(): void
+    {
+        // `parent::gen::<T>`: same contract as `static::` — the current-class mapping
+        // would dispatch to the wrong side of the hierarchy, so the marker is kept.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(GenericMarkerLeakGuard::CODE);
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_class_parent_pseudo_turbofish_reject/source',
+            'generic-class-parent-pseudo-turbofish',
         );
     }
 }

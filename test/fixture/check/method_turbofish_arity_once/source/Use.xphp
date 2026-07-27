@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// An arity error on a deferred enclosing-param turbofish, under TWO instantiations:
+// the Phase-1a walk reports it once at the source site; the per-specialization
+// grounding walks must not re-fire the same collector message per spec.
+class Box<T>
+{
+    public function m(T $v): mixed
+    {
+        return self::gen::<T, string>($v);
+    }
+
+    public static function gen<U>(U $x): U
+    {
+        return $x;
+    }
+}
+
+$a = new Box::<int>();
+$b = new Box::<float>();

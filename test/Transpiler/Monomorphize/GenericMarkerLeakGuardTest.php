@@ -140,4 +140,133 @@ final class GenericMarkerLeakGuardTest extends TestCase
         $this->expectException(RuntimeException::class);
         GenericMarkerLeakGuard::assertNoLeak([$clean, new Expression($leaking)], 'list');
     }
+
+    public function testFindLeakReturnsTheLeakingNodeAndNullOnCleanInput(): void
+    {
+        // The check-mode drain consumes the scan directly (degrading to a diagnostic
+        // instead of a throw), so the found node — not just the boolean outcome — is API.
+        $leaking = new StaticCall(new Name('self'), new Identifier('gen'));
+        $leaking->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+
+        self::assertSame($leaking, GenericMarkerLeakGuard::findLeak(new Expression($leaking)));
+        self::assertNull(GenericMarkerLeakGuard::findLeak(new Expression(new FuncCall(new Variable('a')))));
+    }
+
+    public function testFindLeakCanExcludeTheClosureTemplateArm(): void
+    {
+        // With $includeClosureTemplates=false only call-node markers count: an
+        // un-specialized closure template is reported elsewhere (source seam / orphan
+        // check), so the check-mode drain must not re-flag the template node itself.
+        $closure = new Closure(['stmts' => []]);
+        $closure->setAttribute(self::PARAMS_MARKER, [new Identifier('I')]);
+        $body = new Expression($closure);
+
+        self::assertSame($closure, GenericMarkerLeakGuard::findLeak($body));
+        self::assertNull(GenericMarkerLeakGuard::findLeak($body, includeClosureTemplates: false));
+
+        // A call-node marker still counts with the closure arm off.
+        $call = new FuncCall(new Variable('f'));
+        $call->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        self::assertSame($call, GenericMarkerLeakGuard::findLeak(new Expression($call), includeClosureTemplates: false));
+    }
+
+    public function testFindLeakCanExcludeVariableTurbofishCalls(): void
+    {
+        // With $includeVariableTurbofish=false a FuncCall on a VARIABLE (`$f::<int>`)
+        // is not a leak — check's class-spec backstop uses this because dispatchers
+        // are only materialized in compile mode. Named calls still count.
+        $varCall = new FuncCall(new Variable('f'));
+        $varCall->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        $body = new Expression($varCall);
+
+        self::assertSame($varCall, GenericMarkerLeakGuard::findLeak($body));
+        self::assertNull(GenericMarkerLeakGuard::findLeak($body, includeVariableTurbofish: false));
+
+        $namedCall = new FuncCall(new Name('identity'));
+        $namedCall->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        self::assertSame(
+            $namedCall,
+            GenericMarkerLeakGuard::findLeak(new Expression($namedCall), includeVariableTurbofish: false),
+        );
+
+        // Static/instance markers are unaffected by the toggle.
+        $static = new StaticCall(new Name('self'), new Identifier('gen'));
+        $static->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        self::assertSame(
+            $static,
+            GenericMarkerLeakGuard::findLeak(new Expression($static), includeVariableTurbofish: false),
+        );
+    }
+
+    public function testFindLeakCanSkipUnspecializedTemplateInteriors(): void
+    {
+        // With $skipUnspecializedTemplates=true, the SUBTREE of a declaration still
+        // carrying its generic-template marker is not scanned: check-mode spec clones
+        // retain method templates whose interior markers are dispatch machinery, not
+        // leaks. Each declaration kind prunes independently.
+        $makeMarkedCall = static function (): StaticCall {
+            $call = new StaticCall(new Name('self'), new Identifier('gen'));
+            $call->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+            return $call;
+        };
+
+        $method = new \PhpParser\Node\Stmt\ClassMethod('a', ['stmts' => [new Return_($makeMarkedCall())]]);
+        $method->setAttribute(self::PARAMS_MARKER, [new Identifier('U')]);
+        $function = new \PhpParser\Node\Stmt\Function_('f', ['stmts' => [new Return_($makeMarkedCall())]]);
+        $function->setAttribute(self::PARAMS_MARKER, [new Identifier('U')]);
+        $closure = new Closure(['stmts' => [new Return_($makeMarkedCall())]]);
+        $closure->setAttribute(self::PARAMS_MARKER, [new Identifier('U')]);
+        $arrow = new ArrowFunction(['expr' => $makeMarkedCall()]);
+        $arrow->setAttribute(self::PARAMS_MARKER, [new Identifier('U')]);
+
+        foreach ([$method, $function, new Expression($closure), new Expression($arrow)] as $decl) {
+            self::assertNotNull(
+                GenericMarkerLeakGuard::findLeak($decl, includeClosureTemplates: false),
+                'without the skip, the interior marker is a leak',
+            );
+            self::assertNull(
+                GenericMarkerLeakGuard::findLeak($decl, includeClosureTemplates: false, skipUnspecializedTemplates: true),
+                'with the skip, the template interior is pruned',
+            );
+        }
+
+        // A declaration WITHOUT the template marker is scanned normally...
+        $plainMethod = new \PhpParser\Node\Stmt\ClassMethod('b', ['stmts' => [new Return_($makeMarkedCall())]]);
+        self::assertNotNull(
+            GenericMarkerLeakGuard::findLeak($plainMethod, includeClosureTemplates: false, skipUnspecializedTemplates: true),
+        );
+        // ...and the params attribute on a NON-declaration node never prunes (the skip
+        // is scoped to the four declaration kinds precisely).
+        $decoy = new Expression($makeMarkedCall());
+        $decoy->setAttribute(self::PARAMS_MARKER, [new Identifier('U')]);
+        self::assertNotNull(
+            GenericMarkerLeakGuard::findLeak($decoy, includeClosureTemplates: false, skipUnspecializedTemplates: true),
+        );
+    }
+
+    public function testFindLeakSkippingScanReturnsTheFirstLeakInDocumentOrder(): void
+    {
+        // The pruning scan must report the same FIRST leak the plain scan does — a
+        // later sibling must never overwrite it.
+        $first = new StaticCall(new Name('self'), new Identifier('one'));
+        $first->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        $second = new StaticCall(new Name('self'), new Identifier('two'));
+        $second->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+        $body = [new Expression($first), new Expression($second)];
+
+        self::assertSame($first, GenericMarkerLeakGuard::findLeak($body, skipUnspecializedTemplates: true));
+        self::assertSame($first, GenericMarkerLeakGuard::findLeak($body));
+    }
+
+    public function testLeakMessageNamesTheLabelTheLineAndTheCode(): void
+    {
+        $call = new FuncCall(new Variable('inner'), [], ['startLine' => 7]);
+        $call->setAttribute(self::ARGS_MARKER, [new Identifier('int')]);
+
+        $message = GenericMarkerLeakGuard::leakMessage($call, 'wrap_T_cafe');
+
+        self::assertStringContainsString('wrap_T_cafe', $message);
+        self::assertStringContainsString('7', $message);
+        self::assertStringContainsString(GenericMarkerLeakGuard::CODE, $message);
+    }
 }

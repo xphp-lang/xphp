@@ -135,8 +135,10 @@ final readonly class Compiler
 
         // Phase 2: fixed-point specialization loop. Fail-fast (an undefined template
         // or an exceeded depth throws) — the emit path must not proceed on a set it
-        // couldn't fully build.
-        $specializedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: false);
+        // couldn't fully build. The method compiler rides along: each fresh
+        // specialization is grounded (enclosing-param method-generic turbofish
+        // dispatched against the retained Phase-1a template index) before collection.
+        $specializedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: false, methodCompiler: $methodCompiler);
 
         // Phase 2.3: re-qualify free-function calls and const fetches in every specialization
         // produced by the fixed-point loop. Each body was relocated out of its origin namespace
@@ -202,12 +204,12 @@ final readonly class Compiler
             $specializedAsts[$generatedFqn] = $first;
         }
 
-        // Note for future-proofing (review F9): method-level specialization runs in Phase 1a
-        // against the raw user-file ASTs, NOT against the specialized cache classes. That's
-        // safe under the current MVP limit ("generic methods on non-generic classes only" —
-        // see GenericMethodCompiler's docblock). If that limit ever relaxes, the specialized
-        // class ASTs would need to be fed back through the method compiler with their
-        // enclosing namespace preserved so FQN keying still works.
+        // Method-level specialization runs twice-shaped: Phase 1a against the raw
+        // user-file ASTs, then per-specialization inside the Phase-2 loop
+        // (GenericMethodCompiler::groundSpecializedClass, fed the retained template
+        // index with the spec's identity threaded — the F9 wiring note this replaces).
+        // Anything neither pass could ground still carries its marker and is rejected
+        // by the backstop below.
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             // Last-resort safety net: no generic marker may survive into emitted output. A
             // surviving turbofish/closure marker is a site the pipeline could not ground —
@@ -305,6 +307,7 @@ final readonly class Compiler
         RegistryCollector $collector,
         TypeHierarchy $hierarchy,
         bool $resilient,
+        ?GenericMethodCompiler $methodCompiler = null,
     ): array {
         /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
         $specializedAsts = [];
@@ -365,6 +368,44 @@ final readonly class Compiler
                 }
 
                 $specializedAsts[$generatedFqn] = $specialized;
+
+                // Ground method-generic turbofish markers the class substitution just
+                // made concrete (`self::gen::<T>` → `::<int>`) BEFORE collecting: an
+                // own-template member appended onto the spec is then swept by the
+                // collect below, and externally-appended members (onto a non-generic
+                // user class or a function namespace — invisible to spec collection)
+                // are collected explicitly, so nested instantiation needs discovered by
+                // grounding converge through this same fixed point.
+                if ($methodCompiler !== null) {
+                    if ($resilient) {
+                        try {
+                            $externalAppends = $methodCompiler->groundSpecializedClass(
+                                $specialized,
+                                $generatedFqn,
+                                $instantiation->templateFqn,
+                                $instantiation->concreteTypes,
+                                emit: false,
+                            );
+                        } catch (RuntimeException) {
+                            // Grounding failures surface as collected diagnostics in
+                            // check mode; a residual throw must not abort the resilient
+                            // pass over the remaining instantiations.
+                            $externalAppends = [];
+                        }
+                    } else {
+                        $externalAppends = $methodCompiler->groundSpecializedClass(
+                            $specialized,
+                            $generatedFqn,
+                            $instantiation->templateFqn,
+                            $instantiation->concreteTypes,
+                            emit: true,
+                        );
+                    }
+                    if ($externalAppends !== []) {
+                        $collector->collect($externalAppends, "<grounded:{$generatedFqn}>");
+                    }
+                }
+
                 $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
             }
 
@@ -381,6 +422,10 @@ final readonly class Compiler
             }
 
             if ($countAfter === $countBefore) {
+                // @infection-ignore-all Continue_ -- break vs continue reconverges: an
+                // unchanged count means this pass recorded no new instantiations, so the
+                // next iteration processes nothing new and exits via the !newlyProcessed
+                // break; the mutant merely skips that no-op pass.
                 continue;
             }
 
@@ -481,8 +526,12 @@ final readonly class Compiler
         // validation calls (which produce the diagnostics) run in BOTH modes; `emit` only governs
         // append/strip/finalize side-effects on `$astPerFile`, which is local and discarded. So
         // flipping it changes only wasted work, not the collected diagnostics. `emit: false` is the
-        // correct (no-wasted-work, no-mutation) choice.
-        (new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics))->process($astPerFile, emit: false);
+        // correct (no-wasted-work, no-mutation) choice. The instance is held: the resilient
+        // specialization pass below feeds each spec back through it (groundSpecializedClass) so
+        // enclosing-param turbofish diagnostics only provable after substitution are collected —
+        // keeping check's verdicts aligned with compile's.
+        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics);
+        $methodCompiler->process($astPerFile, emit: false);
 
         // Grounded closure-signature conformance. A `Closure(T $x)` target whose
         // type parameter is still abstract above is gradually accepted; grounding it
@@ -497,7 +546,7 @@ final readonly class Compiler
         // by-ref) mismatches were already collected by the abstract pre-loop above, so
         // the grounded pass skips them to avoid a duplicate report at the specialized
         // location.
-        $groundedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: true);
+        $groundedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: true, methodCompiler: $methodCompiler);
         foreach ($groundedAsts as $generatedFqn => $classAst) {
             $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", $diagnostics, groundedTypesOnly: true);
         }

@@ -10,6 +10,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use XPHP\Diagnostics\DiagnosticCollector;
+use XPHP\Diagnostics\Severity;
 use XPHP\FileSystem\FileFinder\NativeFileFinder;
 use XPHP\FileSystem\FilepathArray;
 use XPHP\FileSystem\FileReader\NativeFileReader;
@@ -41,6 +42,249 @@ final class CheckPassIntegrationTest extends TestCase
 
         self::assertFalse($diagnostics->hasErrors());
         self::assertSame([], $diagnostics->all());
+    }
+
+    public function testNamedForwardGroundedByEnclosingParamIsCleanInCheck(): void
+    {
+        // `wrap<T>` forwarding `identity::<T>` is grounded per specialization by the
+        // append-drain; the validate-only walk must agree with compile and report
+        // nothing — no duplicate diagnostics from the drain's re-traversal either.
+        $diagnostics = $this->check('forward_named_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testMethodTurbofishGroundedByEnclosingClassParamIsCleanInCheck(): void
+    {
+        // `self::gen::<T>` / `Maker::wrap::<T>` inside `Box<T>` ground per
+        // specialization; the validate-only pass must agree with compile and report
+        // nothing — across two instantiations and two forwarding classes.
+        $diagnostics = $this->check('method_turbofish_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testGroundedStaticBoundViolationIsCollectedByCheck(): void
+    {
+        // `gen<U : \Stringable>` grounded with `T = int`: provable only after
+        // Box<int> specializes, collected by the per-specialization grounding pass.
+        // The location must point at the template's real source file (the grounding
+        // pass resolves it through the retained class-source map), not a synthetic
+        // `<specialized:…>` label.
+        $diagnostics = $this->check('method_turbofish_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_BOUND_VIOLATION, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+    }
+
+    public function testClassClosureDispatcherIsCleanInCheck(): void
+    {
+        // A concrete `$f::<int>` inside a generic CLASS method: compile materializes
+        // the dispatcher and the program runs, so check must stay silent — the spec
+        // clone's leftover variable marker (check never finalizes dispatchers) is not
+        // a leak.
+        $diagnostics = $this->check('class_closure_dispatcher_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testNestedBoundViolationInsideGroundedMemberIsCollectedByCheck(): void
+    {
+        // The violation lives inside the grounded member's body (`new Pair::<U>` with
+        // `Pair<P : Labeled>`, grounded to Pair<int>): own-spec members are collected
+        // even though check attaches nothing, so check agrees with compile's reject.
+        $diagnostics = $this->check('method_turbofish_nested_bound');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(Registry::CODE_BOUND_VIOLATION, $codes);
+    }
+
+    public function testDeferredTurbofishArityErrorIsReportedOncePerSite(): void
+    {
+        // An arity error on a deferred enclosing-param turbofish under TWO
+        // instantiations: one diagnostic at the source site — the per-spec grounding
+        // walks must not re-fire the same collector message per specialization.
+        $diagnostics = $this->check('method_turbofish_arity_once');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(Registry::CODE_TOO_MANY_TYPE_ARGUMENTS, $diagnostics->all()[0]->code);
+    }
+
+    public function testTwoHopOwnTemplateForwardChainIsCleanInCheck(): void
+    {
+        // Compile grounds `go` → `self::a::<T>` → `self::b::<U>` and the program
+        // runs; check must stay silent — its un-stripped spec clone retains the
+        // `a<U>`/`b<V>` templates, whose interior method-param markers are dispatch
+        // machinery, not leaks.
+        $diagnostics = $this->check('method_turbofish_two_hop_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testSameLineWarningDoesNotMaskAGroundedError(): void
+    {
+        // A warning-producing construct shares the source line with the deferred
+        // turbofish: the position dedupe is severity-aware, so grounding still runs
+        // and the bound violation nested in the grounded member surfaces — check
+        // must not go green on code compile rejects.
+        $diagnostics = $this->check('method_turbofish_warning_same_line');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $errorCodes = array_map(
+            static fn ($d) => $d->code,
+            array_filter($diagnostics->all(), static fn ($d) => $d->severity === Severity::Error),
+        );
+        self::assertContains(Registry::CODE_BOUND_VIOLATION, $errorCodes);
+    }
+
+    public function testTemplateTargetOutsideItsOwnSpecLeakIsCollectedByCheck(): void
+    {
+        // The compile-side keep-marker contract for a template-owned target named
+        // outside the template's own body (see the compile reject fixture) holds in
+        // check too: exactly one leak diagnostic, at the real source site.
+        $diagnostics = $this->check('template_target_outside_spec');
+
+        $leaks = array_values(array_filter(
+            $diagnostics->all(),
+            static fn ($d) => $d->code === GenericMarkerLeakGuard::CODE,
+        ));
+        self::assertCount(1, $leaks);
+        self::assertNotNull($leaks[0]->location);
+        self::assertStringEndsWith('Use.xphp', $leaks[0]->location->file);
+    }
+
+    public function testCrossTemplateStaticTurbofishLeakIsCollectedByCheck(): void
+    {
+        // `Other::gen::<T>` (a static method-generic on a DIFFERENT generic template)
+        // stays un-grounded by design; compile rejects at the emit backstop, and check
+        // must collect the same leak diagnostic from the grounding pass — located at
+        // the template's real source file.
+        $diagnostics = $this->check('method_turbofish_cross_template');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $leaks = array_values(array_filter(
+            $diagnostics->all(),
+            static fn ($d) => $d->code === GenericMarkerLeakGuard::CODE,
+        ));
+        self::assertCount(1, $leaks);
+        self::assertNotNull($leaks[0]->location);
+        self::assertStringEndsWith('Use.xphp', $leaks[0]->location->file);
+    }
+
+    public function testClassParamBoundOnStaticIsStillUnprovableInCheck(): void
+    {
+        // `gen<U : T>` on a static method-generic: genuinely unprovable in a static
+        // context — the pre-existing rejection survives the grounding pass in check
+        // exactly as in compile.
+        $diagnostics = $this->check('method_turbofish_unprovable');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(GenericMethodCompiler::CODE_BOUND_UNPROVABLE, $codes);
+    }
+
+    public function testInstanceTurbofishGroundedByEnclosingClassParamIsCleanInCheck(): void
+    {
+        // `$this->dup::<T>` / `$m->dup::<T>` inside `Holder<T>` ground per
+        // specialization; the validate-only pass must agree with compile and
+        // report nothing.
+        $diagnostics = $this->check('instance_turbofish_clean');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testInstanceGroundedBoundViolationIsCollectedByCheck(): void
+    {
+        // `need<V : \Stringable>` grounded with `T = int` through `$this`:
+        // collected by the grounding pass, located at the template's real file.
+        $diagnostics = $this->check('instance_turbofish_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        $d = $diagnostics->all()[0];
+        self::assertSame(Registry::CODE_BOUND_VIOLATION, $d->code);
+        self::assertNotNull($d->location);
+        self::assertStringEndsWith('Use.xphp', $d->location->file);
+    }
+
+    public function testMethodParamLeafSelfCallIsCollectedByCheck(): void
+    {
+        // `$this->dup::<W>` inside `probe<W>`: deferral is reserved for
+        // class-param leaves, so check keeps the precise Phase-1a diagnostic
+        // (exactly one — the grounding pass must not add a leak duplicate).
+        $diagnostics = $this->check('instance_turbofish_method_param');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(
+            GenericMethodCompiler::CODE_UNSPECIALIZABLE_SELF_CALL,
+            $diagnostics->all()[0]->code,
+        );
+    }
+
+    public function testNeverInstantiatedDeferredMarkerIsCleanInCheck(): void
+    {
+        // A deferred enclosing-param turbofish in a never-instantiated generic
+        // class: unreachable code, no diagnostic (deliberate surface choice,
+        // matching compile).
+        $diagnostics = $this->check('instance_never_instantiated');
+
+        self::assertFalse($diagnostics->hasErrors());
+        self::assertSame([], $diagnostics->all());
+    }
+
+    public function testGroundedForwardBoundViolationIsCollectedByCheck(): void
+    {
+        // `need<U : Labeled>` forwarded `T = int`: provable only after `wrap::<int>`
+        // substitutes, so it surfaces from the drain's validate-only traversal —
+        // matching the compile-side throw (check/compile parity).
+        $diagnostics = $this->check('forward_named_bound');
+
+        self::assertCount(1, $diagnostics->all());
+        self::assertSame(Registry::CODE_BOUND_VIOLATION, $diagnostics->all()[0]->code);
+    }
+
+    public function testUnconvergedForwardChainIsCollectedByCheck(): void
+    {
+        // `grow<T>` forwarding `grow::<Box<T>>` never converges; check collects the
+        // drain's hop-cap diagnostic instead of hanging or throwing.
+        $diagnostics = $this->check('forward_growth');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(GenericMethodCompiler::CODE_UNCONVERGED_METHOD_SPECIALIZATION, $codes);
+    }
+
+    public function testEachUnconvergedChainGetsItsOwnDiagnosticInCheck(): void
+    {
+        // Two independent growing chains: hitting the cap on the first stops that
+        // chain only — the drain keeps going and the second chain reports too.
+        $diagnostics = $this->check('forward_growth_pair');
+
+        $unconverged = array_values(array_filter(
+            $diagnostics->all(),
+            static fn ($d) => $d->code === GenericMethodCompiler::CODE_UNCONVERGED_METHOD_SPECIALIZATION,
+        ));
+        self::assertCount(2, $unconverged);
+    }
+
+    public function testInnerClosureTurbofishLeakIsCollectedByCheck(): void
+    {
+        // A concrete inner closure turbofish (`$f::<int>` inside `outer<T>`) survives
+        // the drain (variable turbofish stays out of the markers-only pass) and is
+        // degraded from the compile-time leak throw to a collected diagnostic here.
+        $diagnostics = $this->check('forward_inner_closure_leak');
+
+        self::assertTrue($diagnostics->hasErrors());
+        $codes = array_map(static fn ($d) => $d->code, $diagnostics->all());
+        self::assertContains(GenericMarkerLeakGuard::CODE, $codes);
     }
 
     public function testDefaultBoundViolationIsCollectedByCheck(): void

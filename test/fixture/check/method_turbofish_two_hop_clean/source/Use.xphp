@@ -1,0 +1,34 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\MethodForwardChain;
+
+// A 2-hop own-template forward: grounding `self::a::<T>` appends a member whose body
+// holds a now-concrete `self::b::<U>` — the drain must re-ground the appended member
+// (with the spec's own identity, so the in-spec site guard passes) until the chain
+// bottoms out. Check must stay silent: the retained `a<U>`/`b<V>` templates inside its
+// un-stripped spec clone are dispatch machinery, not leaks.
+class Holder<T>
+{
+    /** @return array<int, mixed> */
+    public function go(T $v): array
+    {
+        return self::a::<T>($v);
+    }
+
+    /** @return array<int, mixed> */
+    public static function a<U>(U $x): array
+    {
+        return self::b::<U>($x);
+    }
+
+    /** @return array<int, mixed> */
+    public static function b<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+}
+
+$h = new Holder::<int>();
+$r = $h->go(9);

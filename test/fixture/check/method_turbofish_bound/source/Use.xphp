@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// The grounded bound is VIOLATED: `gen<U : \Stringable>` receives `T = int` once
+// Box<int> specializes. Provable only after substitution — check must collect it from
+// the per-specialization grounding pass, matching compile's throw.
+class Box<T>
+{
+    public function m(T $v): T
+    {
+        return self::gen::<T>($v);
+    }
+
+    public static function gen<U : \Stringable>(U $x): U
+    {
+        return $x;
+    }
+}
+
+$b = new Box::<int>();
+$b->m(1);

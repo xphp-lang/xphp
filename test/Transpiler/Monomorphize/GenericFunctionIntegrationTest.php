@@ -356,6 +356,120 @@ final class GenericFunctionIntegrationTest extends TestCase
         }
     }
 
+    public function testNamedForwardGroundedByEnclosingParamSpecializes(): void
+    {
+        // `wrap<T>` forwards `identity::<T>($v)` — abstract in the template, concrete
+        // after `wrap::<int>` / `wrap::<string>` specialize. The append-drain grounds
+        // each specialized body and dispatches the forward into a real
+        // `identity_T_<hash>` declaration; no marker (and no raw `identity(`) survives.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_named_forward/source',
+            'genfn-named-forward',
+        );
+        try {
+            $content = file_get_contents($fixture->targetDir . '/Use.php');
+            self::assertIsString($content);
+
+            // Two instantiations → two wrap + two forwarded identity specializations.
+            self::assertSame(2, preg_match_all('/function wrap_T_[0-9a-f]+\(/', $content));
+            self::assertSame(2, preg_match_all('/function identity_T_[0-9a-f]+\(/', $content));
+            // Each specialized wrap body calls the matching identity specialization.
+            self::assertSame(2, preg_match_all('/return \\\\App\\\\NamedForward\\\\identity_T_[0-9a-f]+\(/', $content));
+            // Negative invariants: templates stripped, no un-rewritten forward survives
+            // (`identity::<` only appears in the carried-over source comment's prose).
+            self::assertStringNotContainsString('function wrap(', $content);
+            self::assertStringNotContainsString('function identity(', $content);
+            self::assertStringNotContainsString('return identity::<', $content);
+            SnapshotHash::assertMatches(
+                __DIR__ . '/../../fixture/compile/generic_function_named_forward/verify/testNamedForwardGroundedByEnclosingParamSpecializes/Use.expected.php',
+                $content,
+            );
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testNamedForwardRuntimeExecution(): void
+    {
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_named_forward/source',
+            'genfn-named-forward-runtime',
+        );
+        try {
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_function_named_forward/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testForwardChainAndSameArgsCycleRuntimeExecution(): void
+    {
+        // 2-hop chain (`wrap` → `mid` → `identity`) and same-args mutual recursion
+        // (`ping` ↔ `pong`): the drain keeps grounding freshly appended bodies until
+        // the queue empties, and the specialization dedup terminates the cycle.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_forward_chain/source',
+            'genfn-forward-chain',
+        );
+        try {
+            $runtime = require __DIR__ . '/../../fixture/compile/generic_function_forward_chain/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testGrowingForwardChainIsRejectedAsUnconverged(): void
+    {
+        // `grow<T>` forwards `grow::<Box<T>>` — every hop mints a deeper type argument,
+        // so the chain can never converge. The drain's hop cap rejects it loudly. The
+        // reported depth pins the cap boundary exactly: sixteen allowed hops, failing
+        // on the seventeenth.
+        try {
+            CompiledFixture::compile(
+                __DIR__ . '/../../fixture/compile/generic_function_forward_growth_reject/source',
+                'genfn-forward-growth',
+            );
+            self::fail('expected the growing chain to be rejected');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString(GenericMethodCompiler::CODE_UNCONVERGED_METHOD_SPECIALIZATION, $e->getMessage());
+            self::assertStringContainsString('is 17 specialization hops deep', $e->getMessage());
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testGrowingBareTopLevelForwardChainIsRejectedAsUnconverged(): void
+    {
+        // Top-level variant: specializations route through the top-level append bag
+        // (no Namespace_ container), whose queue the hop cap must bound identically —
+        // an unbounded bare-file chain would otherwise specialize forever.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(GenericMethodCompiler::CODE_UNCONVERGED_METHOD_SPECIALIZATION);
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_forward_growth_bare_reject/source',
+            'genfn-forward-growth-bare',
+        );
+    }
+
+    #[RunInSeparateProcess]
+    public function testGroundedForwardBoundViolationFailsCompilation(): void
+    {
+        // `need<U : Labeled>` forwarded `T = int` — the violation is only provable
+        // after `wrap::<int>` substitutes, so it must fail at the grounding drain.
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Generic bound violated while instantiating App\ForwardBound\need');
+
+        CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/generic_function_forward_bound_reject/source',
+            'genfn-forward-bound',
+        );
+    }
+
     private function compile(): void
     {
         $compiler = $this->buildCompiler();
