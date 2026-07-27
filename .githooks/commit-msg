@@ -1,0 +1,42 @@
+#!/bin/sh
+# Commit-message lint: the SAME tool CI runs — commitlint over
+# commitlint.config.mjs — executed through the docker compose `node` service,
+# so contributors need docker but no host Node toolchain.
+#
+# Installed by `composer install` via `git config core.hooksPath .githooks`.
+# The message is piped on stdin (comment lines stripped, as git would on
+# commit), so no path mapping into the container is needed and the hook works
+# from worktrees too. node_modules is (re)installed from the lockfile whenever
+# it's missing or stale, so the local commitlint always matches the pinned one.
+
+msg_file="$1"
+
+if ! command -v docker > /dev/null 2>&1; then
+    echo "commit-msg: docker is required to lint the commit message (compose service 'node')." >&2
+    echo "  rules: commitlint.config.mjs (Conventional Commits) — CI enforces the same check." >&2
+    exit 1
+fi
+
+# `command -v docker` isn't enough: this hook runs `docker compose run`, which
+# needs the Compose v2 plugin. Without it, Docker prints its own cryptic
+# "'compose' is not a docker command" — surface a useful message instead.
+if ! docker compose version > /dev/null 2>&1; then
+    echo "commit-msg: the Docker Compose v2 plugin is required ('docker compose' is unavailable)." >&2
+    echo "  rules: commitlint.config.mjs (Conventional Commits) — CI enforces the same check." >&2
+    exit 1
+fi
+
+top=$(git rev-parse --show-toplevel)
+
+# Reinstall when node_modules is absent OR the lockfile is newer than the
+# installed binary — a version bump a collaborator pulls in updates
+# package-lock.json but leaves node_modules untouched, and a stale local
+# commitlint would silently disagree with CI. `npm ci` is otherwise skipped so
+# the common case (already installed) stays fast.
+sed -e 's/\r$//' -e '/^#/d' "$msg_file" \
+    | docker compose --project-directory "$top" run --rm -T --no-deps node sh -c '
+        if [ ! -x node_modules/.bin/commitlint ] || [ package-lock.json -nt node_modules/.bin/commitlint ]; then
+            npm ci --no-audit --no-fund --loglevel=error
+        fi
+        exec node_modules/.bin/commitlint
+    '

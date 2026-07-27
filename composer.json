@@ -51,5 +51,13 @@
         "allow-plugins": {
             "infection/extension-installer": true
         }
+    },
+    "scripts": {
+        "post-install-cmd": "@git:hooks",
+        "post-update-cmd": "@git:hooks",
+        "git:hooks": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true"
+    },
+    "scripts-descriptions": {
+        "git:hooks": "Point git at the tracked .githooks/ directory (commit-msg lint); no-op outside a git checkout."
     }
 }
