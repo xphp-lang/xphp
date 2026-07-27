@@ -28,6 +28,7 @@ than erasure can.
 | Generic functions / methods              | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Generic closures + arrow functions       | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Typed closure signatures (`Closure(int): bool`) | ✅ (erases to `\Closure`; literal conformance checked at compile time) | ✅ (runtime-lenient) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
+| Type-argument inference (call without `::<>`) | ❌ (explicit turbofish required) | ❌ (turbofish optional; omitting runs unvalidated) | ✅ | ✅ | ✅ (turbofish is the fallback) |
 | Upper bounds                             | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Multiple bounds (intersection)           | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Union bounds + DNF                       | ✅                      | ✅               | ✅               | ❌ (intersection only via `where`) | n/a |
@@ -52,6 +53,19 @@ no comparable concept to align to. For the RFC, the `(erased)` notes
 mark features that simply can't exist under bound erasure: there are
 no specialized classes at runtime, so subtype edges, reified-T
 operations, and a wildcard sigil all lose their meaning.
+
+**Type-argument inference.** No xphp generic call infers its type
+arguments from the values passed — you always write the turbofish:
+`identity::<int>($x)`, `new Box::<int>()`. Omitting it is a compile
+error (`xphp.missing_type_argument`), because monomorphization needs
+the concrete type to pick a specialization. TypeScript, Kotlin, and
+Rust all infer instead. Rust is the closest comparison: xphp borrows
+its `::<>` turbofish spelling exactly, but where Rust infers by
+default and reaches for the turbofish only to disambiguate, xphp
+makes it the only spelling. The bound-erasure RFC has no inference
+either, yet diverges from xphp in the other direction — there the
+turbofish is *optional*: omit it and the call runs unvalidated with
+erased-to-`mixed` semantics rather than failing to compile.
 
 ## Where the monomorphic and erasure paths diverge
 
