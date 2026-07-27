@@ -129,11 +129,15 @@ build time instead of fataling at runtime with "Call to undefined method".
 - > ⚠️ Forwarding an **enclosing class type parameter**
   (`$this->dup::<T>` / `self::gen::<T>` / `Maker::wrap::<T>` inside
   `Box<T>`, or `identity::<T>` inside a generic function `wrap<T>`)
-  grounds per specialization and runs. Forwarding a **method-level**
-  parameter to a non-erasable target (`$this->dup::<W>` inside
-  `probe<W>`) stays a compile error (`xphp.unspecializable_self_call`),
-  as do targets on a *different* generic template and the
-  `static::`/`parent::` spellings. See
+  grounds per specialization and runs — the class parameter becomes
+  concrete when the class specializes. Forwarding a **method-level**
+  parameter (`$this->dup::<W>` inside `probe<W>`) does **not**: a generic
+  method is specialized before its class, so `W` has no concrete value
+  where the forward would be grounded. It is a compile error regardless
+  of the target — `xphp.unspecializable_self_call` for a non-erasable
+  target, `xphp.unspecialized_generic_leak` for an erasable one.
+  Targets on a *different* generic template and the `static::`/`parent::`
+  spellings are rejected too. See
   [caveats](../caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter).
 
 ## See also
