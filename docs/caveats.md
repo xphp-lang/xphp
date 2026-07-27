@@ -830,9 +830,12 @@ class Holder<T>
 The late-bound `static::` / `parent::` spellings (resolving them statically could
 silently re-route a subclass or parent dispatch — rejecting loudly is the contract),
 a forward to a **bare top-level** (namespace-less) generic function from inside a
-generic class, and a **method-level** parameter forwarded to a non-erasable target
-(`$this->dup::<W>` inside `probe<W>` — reported precisely as
-`xphp.unspecializable_self_call`, since no specialization ever grounds `W`).
+generic class, and a **method-level** parameter forwarded to any generic method
+(`$this->dup::<W>` inside `probe<W>`). A method-level parameter can't be forwarded
+because a generic method is specialized before its class, so `W` has no concrete
+value where the forward would be grounded — a non-erasable target reports
+`xphp.unspecializable_self_call`, an erasable one `xphp.unspecialized_generic_leak`,
+but neither is supported.
 
 A **strictly-growing** forward chain is rejected as non-convergent rather than
 compiled forever:
