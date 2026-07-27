@@ -162,7 +162,8 @@ reproduction and workaround) in [caveats](../caveats.md).
   strength — see above), but not universal: some covariant upcasts to an
   interface with an erased element-consuming method are **unschedulable**
   and fail loudly (`xphp.unschedulable_covariant_upcast`), a
-  self-reintroducing list-↔-map derivation can fail to converge, and a
+  self-reintroducing list-↔-map derivation can fail to converge
+  ([caveat](../caveats.md#self-reintroducing-specialization-list--map-derivations)), and a
   covariant `array`-backed collection trips the optional PHPStan pass at
   level 6+
   ([caveat](../caveats.md#covariant-array-backed-collections-trip-the-xphp-check-phpstan-pass)).
