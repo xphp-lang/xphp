@@ -27,7 +27,7 @@ than erasure can.
 | Generic classes / interfaces / traits    | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Generic functions / methods              | ⚠️ (no inference; can't forward a method-level param, target another generic template, or use `static::`/`parent::`) | ✅ | ✅ | ✅ | ✅ |
 | Generic closures + arrow functions       | ⚠️ (no `$this` capture or `static function` closures; reflection/serializers see the dispatcher rewrite) | ✅ | ✅ | ✅ | ✅ |
-| Typed closure signatures (`Closure(int): bool`) | ⚠️ (param/return/property only — not a generic arg or bound; erases to `\Closure`, literal conformance checked) | ✅ (runtime-lenient) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
+| Typed closure signatures (`Closure(int): bool`) | ⚠️ (param/return/property only — not a generic arg or bound; erases to `\Closure`, literal conformance checked) | ❌ (only untyped `callable` / `\Closure`; noted as future work) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
 | Type-argument inference (call without `::<>`) | ❌ (explicit turbofish required) | ❌ (turbofish optional; omitting runs unvalidated) | ✅ | ✅ | ✅ (turbofish is the fallback) |
 | Upper bounds                             | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Multiple bounds (intersection)           | ✅                      | ✅               | ✅               | ✅            | ✅                    |
@@ -36,14 +36,14 @@ than erasure can.
 | Default type parameters                  | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Declaration-site variance (`out T` / `in T`)  | ⚠️ (class-level only; violations inside trait-`use`d methods go unchecked) | ✅ | ✅ | ✅ | ⚠️ inferred (lifetime-driven; PhantomData for unused type params) |
 | Inner-template variance composition      | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ✅ (inline)   | ✅ (monomorphic)      |
+| Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ⚠️ (`inline fun` only — can't reify a class type parameter) | ✅ (monomorphic)      |
 | `instanceof OriginalFqn` works           | ✅                      | ✅ (trivially: only one class exists at runtime) | n/a | n/a | n/a |
 | Real subtype edges between specializations | ⚠️ (common case works; some covariant upcasts are unschedulable or may not converge) | ❌ (erased) | n/a | n/a | n/a |
 | Generic type aliases                     | ❌                      | ❌               | ✅               | ✅            | ✅                    |
 | Wildcard / `*` (use-site existential)    | ⚠️ partial (via marker) | n/a (erased)     | ⚠️ via `any` (bivariant escape hatch — loses type discipline) | ✅ (`Box<*>`) | n/a |
 | Use-site variance                        | ❌                      | ❌               | ❌               | ✅            | n/a                   |
 | Variadic generics                        | ❌                      | ❌               | ✅               | ❌            | ⚠️ tuples              |
-| Generic enums / sum types                | ❌                      | ❌               | ✅               | ✅            | ✅                    |
+| Generic enums / sum types                | ❌                      | ❌               | ✅ (via discriminated unions; `enum` can't be generic) | ✅ (via `sealed` classes; `enum class` can't be generic) | ✅                    |
 | Per-arg specialization                   | ❌                      | ❌ (erasure)     | ❌               | ❌            | ⚠️ nightly             |
 | Associated types                         | ❌                      | n/a              | ❌               | ❌            | ✅                    |
 | `T[]` array sugar                        | ✅                      | ❌               | ✅               | ❌            | ❌                    |
