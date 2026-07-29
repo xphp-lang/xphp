@@ -58,8 +58,8 @@ final class TypeInference
      *  - a "hole": an inferred parameter follows an un-inferred one (not a clean prefix).
      *
      * @param list<TypeParam>  $typeParams the callee's generic parameters, in declaration order
-     * @param list<Param>      $params     the callee's value parameters, from the template AST
-     * @param list<Node\Arg|Node\VariadicPlaceholder> $args the call-site arguments
+     * @param array<Param>     $params     the callee's value parameters, from the template AST
+     * @param array<Node\Arg|Node\VariadicPlaceholder> $args the call-site arguments
      * @return list<TypeRef>|null
      */
     public function infer(array $typeParams, array $params, array $args, ExpressionTyper $typer): ?array
@@ -233,8 +233,8 @@ final class TypeInference
      * rebinds every following slot at runtime; and a first-class-callable placeholder carries no
      * value and is skipped. Arguments with no matching parameter are dropped.
      *
-     * @param list<Param> $params
-     * @param list<Node\Arg|Node\VariadicPlaceholder> $args
+     * @param array<Param> $params
+     * @param array<Node\Arg|Node\VariadicPlaceholder> $args
      * @return list<array{0: Param, 1: Node\Expr}>
      */
     private static function pairArgsToParams(array $params, array $args): array
@@ -272,7 +272,7 @@ final class TypeInference
     /**
      * The parameter a named argument binds, or null when no parameter has that name.
      *
-     * @param list<Param> $params
+     * @param array<Param> $params
      */
     private static function paramByName(array $params, string $name): ?Param
     {
@@ -289,7 +289,7 @@ final class TypeInference
      * trailing variadic that absorbs everything past the fixed arity, or null when the call
      * over-supplies a non-variadic list.
      *
-     * @param list<Param> $params
+     * @param array<Param> $params
      */
     private static function paramForPosition(array $params, int $index): ?Param
     {
