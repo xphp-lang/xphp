@@ -37,7 +37,7 @@ The `json` and `github` formats tag each diagnostic with a stable code:
 |------|---------|
 | `xphp.bound_violation` | a concrete type argument doesn't satisfy its parameter's bound |
 | `xphp.default_bound_violation` | a parameter's default doesn't satisfy its own bound |
-| `xphp.missing_type_argument` | a required type argument was omitted and has no default — including a **turbofish-less call** to a generic method, function, or closure (`$x->pick('a')` instead of `$x->pick::<string>('a')`), and a **bare `new` of a generic without all-defaults** (`new Box(...)` where `Box<T>` has a required parameter, instead of `new Box::<int>(...)`): the type argument takes no inference, so it must be supplied explicitly |
+| `xphp.missing_type_argument` | a required type argument was omitted, has no default, and **could not be inferred from the call/constructor arguments** — e.g. a type parameter used only in the return type, an argument whose static type isn't known, or arguments that disagree. A turbofish-less call (`$x->pick('a')`) or bare `new` (`new Box(...)`) is fine when the arguments determine the type; when they don't, supply an explicit turbofish (`$x->pick::<string>('a')`, `new Box::<int>(...)`). See [turbofish → inference](syntax/turbofish.md#type-argument-inference) |
 | `xphp.too_many_type_arguments` | more type arguments were supplied than the template declares (e.g. `Box::<int, string>` for a one-parameter `Box`) |
 | `xphp.variance_position` | an `out T` / `in T` parameter appears in a position its variance forbids |
 | `xphp.inner_variance` | variance is violated through another generic's slot (composition) |

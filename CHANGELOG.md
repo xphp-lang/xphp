@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Type-argument inference (optional turbofish).** A generic call or `new` whose
+  type parameters are determined by the argument values no longer needs the `::<>`
+  turbofish: `identity(5)` infers `identity::<int>`, `new Box($product)` infers
+  `new Box::<Product>`, `$factory->make($p)` and `$box->put($this->item)` infer
+  from the argument's type. Works for free functions, static and instance methods,
+  and class instantiation. An inferred call compiles to exactly the specialization
+  the turbofish would have selected — the type arguments are unified from the
+  arguments' static types and dispatched through the identical path, so bounds,
+  variance, mangling, and check/compile parity are unchanged. Argument types are
+  read conservatively (literals, `new`, `$this` properties, and non-reassigned
+  typed parameters); where they don't determine the type — a type parameter only in
+  the return type, an unknown argument type, or conflicting arguments — the explicit
+  turbofish is still required and omitting it remains the same `xphp.missing_type_argument`
+  error. Generic closure calls (`$f($x)`) and `T[]`-typed parameters are not yet
+  inference sources. See [turbofish → inference](docs/syntax/turbofish.md#type-argument-inference).
 - **Method-generic turbofish grounded by an enclosing type parameter.** A turbofish
   whose type argument is supplied by the enclosing generic scope now grounds **per
   specialization** and runs, instead of being rejected by the emitted-marker backstop:

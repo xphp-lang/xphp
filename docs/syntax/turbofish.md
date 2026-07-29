@@ -83,16 +83,49 @@ $id('T_<hash-of-int>', 42);
   template is all-defaulted.
 - Bare `new Foo;` (no `(` or `::<>`) also works for all-defaulted
   class templates — see [defaults](defaults.md).
-- **The type argument is not inferred from the call arguments.** A
-  turbofish-less call (`$x->pick('a')` instead of
-  `$x->pick::<string>('a')`) is a compile error
-  (`xphp.missing_type_argument`), not a silent skip — `xphp check`
-  catches a forgotten turbofish at build time rather than letting it
-  fatal at runtime. A generic **method** whose type parameters are all
-  defaulted may still be called bare; a named generic **function** or
-  **closure** has no bare or empty-turbofish form, so it always needs
-  an explicit turbofish. (A first-class callable `pick(...)` creates a
-  closure rather than calling, and is left alone.)
+- **The turbofish is optional where the arguments determine the type.**
+  A bare call or `new` whose type parameters are fixed by the argument
+  values is inferred — `$x->pick('a')` infers `$x->pick::<string>('a')`,
+  `new Box(5)` infers `new Box::<int>(5)` — and compiles to exactly the
+  specialization the turbofish would have selected (see
+  [inference](#type-argument-inference), below). When the arguments *don't*
+  determine the type — a type parameter only in the return type, an argument
+  whose static type isn't known, or arguments that disagree — a turbofish-less
+  call is a compile error (`xphp.missing_type_argument`), not a silent skip:
+  `xphp check` catches it at build time rather than letting it fatal at
+  runtime. A generic **method** whose type parameters are all defaulted may
+  still be called bare; a generic **closure** call (`$f($x)`) is not inferred
+  and always needs an explicit turbofish. (A first-class callable `pick(...)`
+  creates a closure rather than calling, and is left alone.)
+
+## Type-argument inference
+
+Where the arguments determine the type parameters, you can omit the turbofish
+and xphp infers it:
+
+```php
+$r = identity(5);                 // identity::<int>
+$b = new Box(new Plastic());      // new Box::<Plastic>
+$m = Factory::make($product);     // from $product's declared type
+$d = $bag->put($this->item);      // from the declared property type
+```
+
+Inference derives the type arguments by matching each parameter's declared
+type against the argument's static type, then dispatches through the identical
+path an explicit turbofish uses — so an inferred call is byte-for-byte the same
+specialization, with the same bound and variance checks. It never *weakens*
+anything: adding a turbofish to an inferred call can only make the type
+explicit, never change behavior.
+
+Argument types are read conservatively: literals, `new X(...)`, `$this->prop`
+(from the declared property type), and a plain parameter reference — but only a
+parameter with a concrete declared type that is never reassigned in its
+function. A local variable, a value returned from a call, a reassigned
+parameter, a union-typed value, or a value typed by a still-abstract type
+parameter is not an inference source, and such a call keeps the explicit
+turbofish. Generic **closure** calls (`$f($x)`) and `T[]`-typed parameters are
+not yet inferred either. See
+[caveats](../caveats.md#type-argument-inference-is-partial).
 
 ## Receiver-type analysis (instance methods)
 
