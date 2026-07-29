@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Check\BareNewMissingArgQualified;
 
 // Fully-qualified and relative spellings must reject with the SAME verdict as the
-// bare spelling -- both resolve to the same non-defaults template. Two diagnostics
-// in one run (check collects, does not throw-on-first).
-$a = new \App\Check\BareNewMissingArgQualified\Box(5);
-$b = new namespace\Box(6);
+// bare spelling -- both resolve to the same non-defaults, non-inferable template.
+// Two diagnostics in one run (check collects, does not throw-on-first).
+$a = new \App\Check\BareNewMissingArgQualified\Box();
+$b = new namespace\Box();

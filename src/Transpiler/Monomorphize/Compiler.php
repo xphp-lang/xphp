@@ -86,16 +86,27 @@ final readonly class Compiler
         // AST in compile-mode, so this must precede it).
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy);
 
-        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
-        $methodCompiler->process($astPerFile);
-
         // Phase 1b.i: collect class definitions across every source file. Splitting
         // definitions ahead of instantiations gives bare-`new Foo;` synthesis (added
         // in 1b.ii) a complete template registry so it can recognize Foo as an
-        // all-defaulted template regardless of the file-walk order.
+        // all-defaulted template regardless of the file-walk order. Collected BEFORE the
+        // method compiler runs so the type-argument inference pass below has the full
+        // template registry AND sees the original (un-stripped, un-appended) user ASTs —
+        // the same shape `check()` runs it against, keeping the two modes in parity.
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectDefinitions($ast, $filepath);
         }
+
+        // Optional turbofish on `new`: infer a bare `new Box($x)`'s type arguments from its
+        // constructor arguments and annotate it, so the instantiation collector + call-site
+        // rewriter treat it as an explicit turbofish. A `new` it can't resolve is left bare
+        // (all-defaults synthesis / missing-type-argument error). Runs before `process` so it
+        // never sees appended specializations (which `check` can't), and before
+        // collectInstantiations so the annotation is picked up.
+        (new NewInferencePass($registry, $hierarchy))->run($astPerFile);
+
+        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
+        $methodCompiler->process($astPerFile);
 
         // Phase 1b.ii: validate defaults-against-bounds at the source level (so a
         // bad declaration like `class Box<T : Stringable = int>` fails BEFORE any
@@ -501,6 +512,10 @@ final readonly class Compiler
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectDefinitions($ast, $filepath);
         }
+        // Optional turbofish on `new` (see compile()): infer bare `new` type arguments before
+        // instantiations are collected. Same pipeline position as compile — after definitions,
+        // before collectInstantiations — so check and compile infer identically.
+        (new NewInferencePass($registry, $hierarchy))->run($astPerFile);
         $registry->validateVariancePositions();
         $registry->validateUndeclaredTypeParameters();
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);

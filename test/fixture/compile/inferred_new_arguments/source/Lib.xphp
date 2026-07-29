@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NewInference;
+
+final class Box<T>
+{
+    public function __construct(private T $value)
+    {
+    }
+
+    public function get(): T
+    {
+        return $this->value;
+    }
+}
+
+final class Holder
+{
+    private Plastic $p;
+
+    public function __construct()
+    {
+        $this->p = new Plastic();
+    }
+
+    // `new Box($this->p)` — inferred from the declared property type.
+    public function boxProp(): Plastic
+    {
+        return (new Box($this->p))->get();
+    }
+
+    // `new Box($q)` — inferred from the declared parameter type.
+    public function boxParam(Plastic $q): Plastic
+    {
+        return (new Box($q))->get();
+    }
+}

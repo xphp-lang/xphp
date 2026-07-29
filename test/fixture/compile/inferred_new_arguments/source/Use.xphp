@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NewInference;
+
+// Bare `new` inference from a scalar literal and from a `new` argument.
+$boxInt = new Box(5);
+$intVal = $boxInt->get();
+$boxObj = new Box(new Plastic());
+$objVal = $boxObj->get();
+
+// Bare `new` inference from a class-typed property and a class-typed parameter.
+$holder = new Holder();
+$fromProp = $holder->boxProp();
+$fromParam = $holder->boxParam(new Plastic());
