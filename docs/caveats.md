@@ -43,15 +43,26 @@ identity(5);                    // ✓ T = int, from the literal
 wrap(new Plastic());            // ✓ T = Plastic, from the `new`
 Factory::make($p);              // ✓ from $p's declared (class) type
 $box->put($this->item);         // ✓ from the declared property type
+wrap($factory->make());         // ✓ from make()'s class return type (call path)
 new Box(5);                     // ✓ T = int
 new Pair($a, new Plastic());    // ✓ from a typed parameter + a `new`
 ```
 
-Inference sources are: literals, `new X(...)`, `$this->prop` (from the declared
-property type), and a plain parameter reference — but only a parameter with a
-*concrete* declared type that is *never reassigned* in its function. A local
-variable, a value from a call, a reassigned parameter, a union-typed value, or
-a value typed by a still-abstract type parameter yields no inference.
+Inference sources differ slightly between the two paths, because a **call**
+reuses the monomorphizer's receiver/flow tracking while **`new`** runs a
+lighter standalone pass:
+
+- **Calls** infer from: literals, `new X(...)`, `$this->prop` (declared type),
+  a plain parameter, a local whose type is statically tracked (assigned from a
+  `new` or a class-returning call), and a call whose declared return type is a
+  determinable class.
+- **`new`** infers from the conservative set only: literals, `new X(...)`,
+  `$this->prop`, and a non-reassigned typed parameter — not locals or call
+  returns.
+
+In both, a reassigned parameter, a *scalar*-returning-call value held in a
+local, a union-typed value, or a value typed by a still-abstract type parameter
+yields no inference.
 
 One conservative edge: inference is skipped when an argument's *simple* type
 name coincides with an in-scope type parameter — e.g. a class imported as
