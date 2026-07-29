@@ -540,7 +540,7 @@ final class GenericMethodCompiler
         // @infection-ignore-all — see rationale above the indexTemplates visitor: defensive
         // guards and call-shape mutations are masked by the surrounding pipeline's
         // type-strict invariants. End-to-end coverage from GenericMethodIntegrationTest.
-        $visitor = new class($index, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract {
+        $visitor = new class($index, $alreadyGenerated, $hashLength, $hierarchy, $topLevelAppends, $diagnostics, $currentFile, $closureValidator) extends NodeVisitorAbstract implements ExpressionTyper {
             private string $currentNamespace = '';
             private ?Namespace_ $currentNamespaceNode = null;
             /** @var array<string, string> alias => fqn */
@@ -754,7 +754,15 @@ final class GenericMethodCompiler
                 private readonly ?ClosureConformanceValidator $closureValidator,
             ) {
                 $this->nsContext = new NamespaceContext();
+                $this->literalTyper = new LiteralTyper();
             }
+
+            /**
+             * Types literals and `new` for {@see typeOf} — the context-free half of argument typing;
+             * the flow-dependent half (variables, `$this->prop`, call returns) is answered by this
+             * visitor's own receiver/scope resolvers.
+             */
+            private readonly LiteralTyper $literalTyper;
 
             /**
              * Reset the visitor's lexical state for one drained (detached) specialized
@@ -1502,14 +1510,13 @@ final class GenericMethodCompiler
                     if ($node->isFirstClassCallable()) {
                         return null;
                     }
-                    // Bare call (no turbofish): fall through to padArgsWithDefaults, which pads an
-                    // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise. A
-                    // method generic can't infer its type argument from the call args, so a bare call to a
-                    // non-all-default generic is an error — not a silent skip that emits a call to the
-                    // stripped method and fatals at runtime.
-                    $args = [];
+                    // Optional turbofish: infer the method's type arguments from the call arguments.
+                    // A miss yields [] and falls through to padArgsWithDefaults, which pads an
+                    // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise —
+                    // never a silent skip that emits a call to the stripped method and fatals at runtime.
+                    $args = $this->inferCallTypeArgs($params, $template->params, $node->args) ?? [];
                 }
-                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or inferred/empty above). */
                 $location = new SourceLocation($this->currentFile, $node->getStartLine());
                 $padded = Registry::padArgsWithDefaults($params, $args, $key, $this->diagnostics, $location);
                 if (!self::allConcrete($padded) || count($params) !== count($padded)) {
@@ -1696,14 +1703,13 @@ final class GenericMethodCompiler
                     if ($node->isFirstClassCallable()) {
                         return null;
                     }
-                    // Bare call (no turbofish): fall through to padArgsWithDefaults, which pads an
-                    // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise. A
-                    // method generic can't infer its type argument from the call args, so a bare call to a
-                    // non-all-default generic is an error — not a silent skip that emits a call to the
-                    // stripped method and fatals at runtime.
-                    $args = [];
+                    // Optional turbofish: infer the method's type arguments from the call arguments.
+                    // A miss yields [] and falls through to padArgsWithDefaults, which pads an
+                    // all-defaults generic and reports/throws `xphp.missing_type_argument` otherwise —
+                    // never a silent skip that emits a call to the stripped method and fatals at runtime.
+                    $args = $this->inferCallTypeArgs($params, $template->params, $node->args) ?? [];
                 }
-                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or empty after the all-defaults branch above). */
+                /** @var list<TypeRef> $args — set as a list by XphpSourceParser::resolveAndAttach (or inferred/empty above). */
                 $location = new SourceLocation($this->currentFile, $node->getStartLine());
                 $padded = Registry::padArgsWithDefaults($params, $args, $key, $this->diagnostics, $location);
                 // Arity first: in `check` mode padArgsWithDefaults collects an arity diagnostic and
@@ -2639,6 +2645,155 @@ final class GenericMethodCompiler
                 return false;
             }
 
+            /**
+             * Infer a bare generic call's type arguments from its ordinary arguments' static types,
+             * so the turbofish is optional wherever the arguments determine it. Returns the inferred
+             * concrete arguments (ready to dispatch exactly as an explicit turbofish would), or null
+             * to fall back to today's missing-turbofish handling. Inference is skipped without a type
+             * hierarchy (nothing to ground subtypes or run the identical bound checks against),
+             * matching how the seams below guard their bound checks.
+             *
+             * @param list<TypeParam> $typeParams  the callee's generic parameters
+             * @param array<Param>    $valueParams the callee's value parameters (template AST)
+             * @param array<Node\Arg|Node\VariadicPlaceholder> $args the call-site arguments
+             * @return list<TypeRef>|null
+             */
+            private function inferCallTypeArgs(array $typeParams, array $valueParams, array $args): ?array
+            {
+                if ($this->hierarchy === null) {
+                    return null;
+                }
+                return (new TypeInference($this->hierarchy))->infer($typeParams, $valueParams, $args, $this);
+            }
+
+            /**
+             * The concrete static type of an argument expression, for {@see TypeInference}. Literals
+             * and `new` are delegated to the context-free {@see LiteralTyper}; a variable, `$this`
+             * property, or call return is answered from this visitor's own receiver/scope tracking.
+             * Anything not statically determinable — an untyped local, a scalar flow value, an
+             * abstract (still-templated) type — is null, so its parameter is left unconstrained.
+             */
+            public function typeOf(Node\Expr $expr): ?TypeRef
+            {
+                $literal = $this->literalTyper->typeOf($expr);
+                if ($literal !== null) {
+                    return $literal;
+                }
+                if ($expr instanceof Variable && is_string($expr->name)) {
+                    $fqn = $this->currentScopeParamTypes[$expr->name]
+                        ?? $this->currentScopeLocalTypes[$expr->name]
+                        ?? null;
+                    if ($fqn === null) {
+                        return null;
+                    }
+                    $args = $this->currentScopeParamTypeArgs[$expr->name]
+                        ?? $this->currentScopeLocalTypeArgs[$expr->name]
+                        ?? [];
+                    return self::concreteOrNull(new TypeRef($fqn, $args));
+                }
+                if ($expr instanceof PropertyFetch
+                    && $expr->var instanceof Variable
+                    && $expr->var->name === 'this'
+                    && $expr->name instanceof Identifier
+                ) {
+                    return $this->typeOfThisProperty($expr->name->toString());
+                }
+                if ($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall || $expr instanceof StaticCall) {
+                    $return = $this->resolveCallReturn($expr);
+                    return $return === null ? null : self::concreteOrNull(new TypeRef($return[0], $return[1]));
+                }
+                return null;
+            }
+
+            /**
+             * The declared type of `$this->$propName` as a concrete TypeRef, or null when the class,
+             * property, or its type cannot be determined (an unknown class, a promoted-constructor or
+             * union-typed property, or a type that is not yet concrete in this template).
+             */
+            private function typeOfThisProperty(string $propName): ?TypeRef
+            {
+                if ($this->currentClassFqn === null) {
+                    return null;
+                }
+                $owner = $this->index->classLike($this->currentClassFqn);
+                if ($owner === null) {
+                    return null;
+                }
+                foreach ($owner->stmts as $stmt) {
+                    if (!$stmt instanceof Property) {
+                        continue;
+                    }
+                    foreach ($stmt->props as $prop) {
+                        if ($prop->name->toString() !== $propName) {
+                            continue;
+                        }
+                        $type = $stmt->type;
+                        if ($type instanceof NullableType) {
+                            $type = $type->type;
+                        }
+                        if (!$type instanceof Name) {
+                            return null;
+                        }
+                        $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                        /** @var list<TypeRef> $argRefs */
+                        $argRefs = is_array($args) ? $args : [];
+                        return self::concreteOrNull(new TypeRef($this->resolveClassName($type), $argRefs));
+                    }
+                }
+                return null;
+            }
+
+            /** A type is a basis for inference only when fully concrete; an abstract one is null. */
+            private static function concreteOrNull(TypeRef $ref): ?TypeRef
+            {
+                return $ref->isConcrete() ? $ref : null;
+            }
+
+            /**
+             * Try to infer a bare free-function call's type arguments; on success, annotate the node
+             * as if the turbofish had been written — so {@see rewriteFuncCall} re-dispatches it down
+             * the identical explicit-turbofish path — and return true. Only free-function calls (a
+             * Name callee) are inferred; a bare generic *closure* call ($var) keeps the explicit-
+             * turbofish requirement (deferred). The inferred prefix is padded to full arity with the
+             * template's defaults so the annotation carries the exact tuple a turbofish would.
+             *
+             * @param list<TypeParam> $typeParams
+             */
+            private function tryInferFuncCall(FuncCall $node, array $typeParams): bool
+            {
+                if (!$node->name instanceof Name) {
+                    return false;
+                }
+                $fqn = $this->resolveGenericFunctionFqn($node->name);
+                if ($fqn === null) {
+                    return false;
+                }
+                $template = $this->index->functionTemplate($fqn);
+                if ($template === null) {
+                    return false;
+                }
+                $inferred = $this->inferCallTypeArgs($typeParams, $template->params, $node->args);
+                if ($inferred === null) {
+                    return false;
+                }
+                // Free-function dispatch requires an exact-arity tuple (it does not pad), so fill any
+                // defaulted tail here. Inference only ever leaves a defaultable tail unbound, so this
+                // never reports — it yields the same complete tuple an explicit turbofish would.
+                $padded = Registry::padArgsWithDefaults(
+                    $typeParams,
+                    $inferred,
+                    $fqn,
+                    $this->diagnostics,
+                    new SourceLocation($this->currentFile, $node->getStartLine()),
+                );
+                if (count($padded) !== count($typeParams) || !self::allConcrete($padded)) {
+                    return false;
+                }
+                $node->setAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS, $padded);
+                $node->setAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN, $fqn);
+                return true;
+            }
+
             private function rewriteFuncCall(FuncCall $node): ?Node
             {
                 $args = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
@@ -2653,6 +2808,12 @@ final class GenericMethodCompiler
                     if (!$node->isFirstClassCallable()) {
                         $bare = $this->resolveBareGenericCall($node);
                         if ($bare !== null) {
+                            // Optional turbofish: infer the type arguments from the call arguments
+                            // and re-dispatch as if they had been written. Only when that fails is a
+                            // bare generic call the missing-type-arguments error it is today.
+                            if ($this->tryInferFuncCall($node, $bare[0])) {
+                                return $this->rewriteFuncCall($node);
+                            }
                             $this->reportMissingTurbofishArguments(
                                 $bare[1],
                                 new SourceLocation($this->currentFile, $node->getStartLine()),
