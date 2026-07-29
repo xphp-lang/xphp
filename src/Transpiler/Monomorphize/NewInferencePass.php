@@ -97,17 +97,23 @@ final class NewInferencePass extends NodeVisitorAbstract implements ExpressionTy
         if ($node instanceof FunctionLike) {
             $this->scopes[] = $this->scopeForFunction($node);
         }
+        return null;
+    }
+
+    public function leaveNode(Node $node): null
+    {
+        // Infer on leave (bottom-up): a nested `new` argument must be annotated with its own
+        // inferred type arguments BEFORE its enclosing `new` reads it, or `new Box(new Box(5))`
+        // would type the inner as the raw `Box` template and infer `Box<Box>` instead of
+        // `Box<Box<int>>` — a specialization the explicit turbofish would never produce. The
+        // namespace context, class stack, and scope are still in place here: those are popped
+        // only when the enclosing ClassLike/FunctionLike leaves, which is strictly later.
         if ($node instanceof New_
             && $node->class instanceof Name
             && $node->class->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS) === null
         ) {
             $this->tryInferNew($node->class, $node);
         }
-        return null;
-    }
-
-    public function leaveNode(Node $node): null
-    {
         if ($node instanceof FunctionLike) {
             array_pop($this->scopes);
         }
@@ -267,6 +273,8 @@ final class NewInferencePass extends NodeVisitorAbstract implements ExpressionTy
         if (is_array($params)) {
             /** @var list<TypeParam> $params */
             foreach ($params as $param) {
+                // @infection-ignore-all TrueValue -- $names is a set; membership is tested with
+                // isset() in TypeInference::paramTypeRef, so the stored value is immaterial.
                 $names[$param->name] = true;
             }
         }

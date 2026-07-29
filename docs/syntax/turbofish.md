@@ -117,14 +117,16 @@ specialization, with the same bound and variance checks. It never *weakens*
 anything: adding a turbofish to an inferred call can only make the type
 explicit, never change behavior.
 
-Argument types are read conservatively: literals, `new X(...)`, `$this->prop`
-(from the declared property type), and a plain parameter reference — but only a
-parameter with a concrete declared type that is never reassigned in its
-function. A local variable, a value returned from a call, a reassigned
-parameter, a union-typed value, or a value typed by a still-abstract type
-parameter is not an inference source, and such a call keeps the explicit
-turbofish. Generic **closure** calls (`$f($x)`) and `T[]`-typed parameters are
-not yet inferred either. See
+Argument types are read from: literals, `new X(...)`, `$this->prop` (declared
+type), and a plain parameter with a concrete declared type that isn't reassigned.
+A **call** additionally infers from a statically-tracked local (assigned from a
+`new` or a class-returning call) and from a call whose declared return type is a
+determinable class, because the call path reuses the monomorphizer's receiver/flow
+tracking; **`new`** inference is limited to the conservative set (no locals or call
+returns). A reassigned parameter, a scalar-returning-call value, a union-typed
+value, or a value typed by a still-abstract type parameter is never an inference
+source, and such a site keeps the explicit turbofish. Generic **closure** calls
+(`$f($x)`) and `T[]`-typed parameters are not yet inferred either. See
 [caveats](../caveats.md#type-argument-inference-is-partial).
 
 ## Receiver-type analysis (instance methods)

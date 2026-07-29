@@ -274,6 +274,39 @@ final class GenericInferenceIntegrationTest extends TestCase
         self::assertStringContainsString('Generated\\App\\Box\\T_', self::read($dist, 'Use.php'));
     }
 
+    public function testNestedGenericNewInfersSameSpecializationAsTurbofish(): void
+    {
+        // `new Box(new Box(5))` must infer `Box<Box<int>>` — the SAME specialization the explicit
+        // turbofish selects — not `Box<Box>` read off an un-annotated inner node. Regression for the
+        // bottom-up (leaveNode) annotation order.
+        $box = "<?php\ndeclare(strict_types=1);\nnamespace App;\nfinal class Box<T> { public function __construct(private T \$v) {} public function get(): T { return \$this->v; } }\n";
+        $inferred = self::read($this->compile([
+            'Box.xphp' => $box,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box(new Box(5));\n",
+        ]), 'Use.php');
+        $explicit = self::read($this->compile([
+            'Box.xphp' => $box,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box::<Box<int>>(new Box::<int>(5));\n",
+        ]), 'Use.php');
+        self::assertSame(2, preg_match_all('/Box\\\\T_\w+/', $explicit, $e));
+        self::assertSame(2, preg_match_all('/Box\\\\T_\w+/', $inferred, $i));
+        // The inferred outer + inner specializations are exactly the two the turbofish produces.
+        self::assertSame($e[0], $i[0], 'inferred nested new selects the same specializations as the turbofish');
+        self::assertCount(2, array_unique($i[0]), 'outer and inner are distinct specializations');
+    }
+
+    public function testCallInfersFromAClassReturningCallArgument(): void
+    {
+        // A call argument that is itself a call returning a determinable class is an inference source
+        // for the call path (it reuses the receiver flow engine): `identity($f->make())` infers
+        // T=Plastic. (The `new` pass is more conservative and would not.)
+        $dist = $this->compile([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plastic {}\nfunction identity<T>(T \$x): T { return \$x; }\nfinal class Factory { public function make(): Plastic { return new Plastic(); } }\nfinal class R { public function go(Factory \$f): Plastic { return identity(\$f->make()); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$noop = 1;\n",
+        ]);
+        self::assertStringContainsString('identity_T_', self::read($dist, 'Lib.php'));
+    }
+
     public function testBareNewInfersFromNewArgument(): void
     {
         $collector = $this->check([
@@ -302,6 +335,30 @@ final class GenericInferenceIntegrationTest extends TestCase
             'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfinal class Box<T> { public function get(): ?T { return null; } }\n",
             'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n",
         ]);
+    }
+
+    public function testParameterInferenceUsesTheRightScopeAfterANestedClosure(): void
+    {
+        // After a nested closure closes, `$op` must resolve against the OUTER function's scope —
+        // i.e. the scope stack is popped on leave. `new Box($op)` infers Box<Plastic>; without the
+        // pop it would read the closure's scope (which has $wp, not $op) and fail to infer.
+        $dist = $this->compile([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plastic {}\nclass Widget {}\nfinal class Box<T> { public function __construct(private T \$v) {} public function get(): T { return \$this->v; } }\nfunction outer(Plastic \$op): Plastic { \$f = function (Widget \$wp): Widget { return \$wp; }; \$unused = \$f; \$b = new Box(\$op); return \$b->get(); }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$noop = 1;\n",
+        ]);
+        self::assertStringContainsString('Generated\\App\\Box\\T_', self::read($dist, 'Lib.php'));
+    }
+
+    public function testPropertyInferenceUsesTheRightClassAfterANestedClass(): void
+    {
+        // After a nested (anonymous) class closes, `$this->ap` must resolve against the OUTER class
+        // A — i.e. the class stack is popped on leave. `new Box($this->ap)` infers Box<Plastic>;
+        // without the pop it would scan the anon class (which has no `$ap`) and fail to infer.
+        $dist = $this->compile([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plastic {}\nclass Widget {}\nfinal class Box<T> { public function __construct(private T \$v) {} public function get(): T { return \$this->v; } }\nfinal class A { private Plastic \$ap; public function __construct() { \$this->ap = new Plastic(); } public function m(): Plastic { \$inner = new class { private ?Widget \$wp = null; public function n(): ?Widget { return \$this->wp; } }; \$b = new Box(\$this->ap); return \$b->get(); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$noop = 1;\n",
+        ]);
+        self::assertStringContainsString('Generated\\App\\Box\\T_', self::read($dist, 'Lib.php'));
     }
 
     public function testReassignedParameterIsNotTrustedForNewInference(): void
