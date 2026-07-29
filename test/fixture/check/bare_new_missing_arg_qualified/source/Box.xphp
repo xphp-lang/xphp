@@ -6,7 +6,9 @@ namespace App\Check\BareNewMissingArgQualified;
 
 class Box<T>
 {
-    public function __construct(public T $v)
+    // T appears only in a method return, so a bare `new Box()` cannot infer it.
+    public function get(): ?T
     {
+        return null;
     }
 }

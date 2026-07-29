@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Check\BareNewMissingArg;
 
-// Bare `new` of a non-defaults generic, no turbofish: cannot pad from defaults.
-// Silently emitting would leave the site pointing at the stripped marker
-// `interface Box {}` -> a runtime "cannot instantiate interface" fatal. Rejected.
-$b = new Box(5);
+// Bare `new` whose type argument can't be inferred (T is not in a constructor
+// parameter) and can't be defaulted: silently emitting would leave the site
+// pointing at the stripped marker `interface Box {}` -> a runtime fatal. Rejected.
+$b = new Box();
