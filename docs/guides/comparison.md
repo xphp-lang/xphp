@@ -25,10 +25,10 @@ than erasure can.
 | Feature                                  | xphp                    | RFC              | TS               | Kotlin        | Rust                  |
 |------------------------------------------|-------------------------|------------------|------------------|---------------|-----------------------|
 | Generic classes / interfaces / traits    | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Generic functions / methods              | ⚠️ (no inference; can't forward a method-level param, target another generic template, or use `static::`/`parent::`) | ✅ | ✅ | ✅ | ✅ |
+| Generic functions / methods              | ⚠️ (can't forward a method-level param, target another generic template, or use `static::`/`parent::`) | ✅ | ✅ | ✅ | ✅ |
 | Generic closures + arrow functions       | ⚠️ (no `$this` capture or `static function` closures; reflection/serializers see the dispatcher rewrite) | ✅ | ✅ | ✅ | ✅ |
 | Typed closure signatures (`Closure(int): bool`) | ⚠️ (param/return/property only — not a generic arg or bound; erases to `\Closure`, literal conformance checked) | ❌ (only untyped `callable` / `\Closure`; noted as future work) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
-| Type-argument inference (call without `::<>`) | ❌ (explicit turbofish required) | ❌ (turbofish optional; omitting runs unvalidated) | ✅ | ✅ | ✅ (turbofish is the fallback) |
+| Type-argument inference (call without `::<>`) | ⚠️ (inferred from the arguments for calls and `new` where they determine the type; otherwise the explicit turbofish is still required) | ❌ (turbofish optional; omitting runs unvalidated) | ✅ | ✅ | ✅ (turbofish is the fallback) |
 | Upper bounds                             | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Multiple bounds (intersection)           | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Union bounds + DNF                       | ✅                      | ✅               | ✅               | ❌ (intersection only via `where`) | n/a |
@@ -54,18 +54,29 @@ mark features that simply can't exist under bound erasure: there are
 no specialized classes at runtime, so subtype edges, reified-T
 operations, and a wildcard sigil all lose their meaning.
 
-**Type-argument inference.** No xphp generic call infers its type
-arguments from the values passed — you always write the turbofish:
-`identity::<int>($x)`, `new Box::<int>()`. Omitting it is a compile
-error (`xphp.missing_type_argument`), because monomorphization needs
-the concrete type to pick a specialization. TypeScript, Kotlin, and
-Rust all infer instead. Rust is the closest comparison: xphp borrows
-its `::<>` turbofish spelling exactly, but where Rust infers by
-default and reaches for the turbofish only to disambiguate, xphp
-makes it the only spelling. The bound-erasure RFC has no inference
-either, yet diverges from xphp in the other direction — there the
-turbofish is *optional*: omit it and the call runs unvalidated with
-erased-to-`mixed` semantics rather than failing to compile.
+**Type-argument inference.** xphp infers the type arguments from the
+values passed when they determine the type, so the turbofish is
+optional there: `identity(5)` infers `identity::<int>`, `new Box($product)`
+infers `new Box::<Product>`, `$factory->make($p)` infers from `$p`'s
+type. An inferred call compiles to exactly the specialization the
+turbofish would have selected — inference only writes the turbofish for
+you, so bounds, variance, and mangling are unchanged. When the arguments
+*don't* determine the type — a type parameter used only in the return
+type, an argument whose static type isn't known, or two arguments that
+disagree — you still write the turbofish, and omitting it is the same
+compile error as before (`xphp.missing_type_argument`). Argument types are
+read conservatively (literals, `new`, `$this` properties, and non-reassigned
+typed parameters); generic *closure* calls (`$f($x)`) and `T[]`-typed
+parameters are not yet inference sources and keep the explicit turbofish.
+See [caveats](../caveats.md#type-argument-inference-is-partial).
+
+This is the same `::<>` turbofish Rust uses, and xphp now works like Rust
+in spirit: infer by default, reach for the turbofish to disambiguate or
+where inference can't see the type. TypeScript and Kotlin infer too. The
+bound-erasure RFC has no inference, and diverges in the other direction —
+there the turbofish is *optional* in a different sense: omit it and the
+call runs unvalidated with erased-to-`mixed` semantics rather than
+inferring or failing to compile.
 
 ## Where the monomorphic and erasure paths diverge
 
@@ -144,10 +155,11 @@ reproduction and workaround) in [caveats](../caveats.md).
   parameter can't be defaulted or untyped
   ([caveat](../caveats.md#closure-signature-types-only-in-parameter-return-and-property-slots)).
 - **Generic functions / methods.** The base feature is solid; *composition*
-  is where the gaps are. There's no type-argument inference — the turbofish
-  is mandatory (see the grid row). And a turbofish grounded by an enclosing
-  type parameter can't forward a *method-level* parameter, target a
-  *different* generic template, or use the `static::`/`parent::` spellings
+  is where the gaps are. Type arguments are inferred where the call arguments
+  determine them, and otherwise the turbofish is required (see the grid row).
+  And a turbofish grounded by an enclosing type parameter can't forward a
+  *method-level* parameter, target a *different* generic template, or use the
+  `static::`/`parent::` spellings
   ([caveat](../caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter)).
   Receiver-type tracking also gives up across branches that disagree on the
   type, and on a local assigned from a free function

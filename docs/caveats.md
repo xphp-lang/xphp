@@ -7,6 +7,71 @@ each with the underlying reason and the workaround.
 Pages in the [syntax tour](syntax/) link back to specific sections
 here using anchor links — search this page for the same heading text.
 
+## Type-argument inference is partial
+
+xphp infers a generic call's or `new`'s type arguments from the values you
+pass, so the `::<>` turbofish is optional where the arguments determine the
+type. But inference reads argument types conservatively — deliberately, so it
+never emits a specialization the runtime value can't match — and where it
+can't see a concrete type, you still write the turbofish.
+
+### ❌ What isn't inferred
+
+```php
+function first<T>(): T { /* ... */ }      // T is only in the return type
+$x = first();                              // ✗ nothing to infer from — needs first::<Foo>()
+
+function pair<T>(T $a, T $b): array { /* ... */ }
+$p = pair(1, 'x');                         // ✗ int vs string disagree — needs pair::<...>()
+
+$val = $repo->find();                      // a scalar-returning call assigned to a local
+$b = new Box($val);                        // ✗ local-from-call isn't tracked — needs new Box::<int>()
+
+function f(Fruit $x): void {
+    $x = pickAnother();                    // $x reassigned...
+    $b = new Box($x);                      // ✗ reassigned param isn't trusted — needs the turbofish
+}
+
+$g = function<T>(T $x): T { return $x; };
+$g(5);                                     // ✗ generic *closure* calls aren't inferred (deferred)
+```
+
+### ✅ What is inferred
+
+```php
+identity(5);                    // ✓ T = int, from the literal
+wrap(new Plastic());            // ✓ T = Plastic, from the `new`
+Factory::make($p);              // ✓ from $p's declared (class) type
+$box->put($this->item);         // ✓ from the declared property type
+new Box(5);                     // ✓ T = int
+new Pair($a, new Plastic());    // ✓ from a typed parameter + a `new`
+```
+
+Inference sources are: literals, `new X(...)`, `$this->prop` (from the declared
+property type), and a plain parameter reference — but only a parameter with a
+*concrete* declared type that is *never reassigned* in its function. A local
+variable, a value from a call, a reassigned parameter, a union-typed value, or
+a value typed by a still-abstract type parameter yields no inference.
+
+### Why
+
+Monomorphization needs the *concrete* type to pick a specialization, and an
+inferred call must compile to exactly what the turbofish would have. So
+inference only fires when it can prove the concrete type from the argument
+itself: it derives the type arguments by unifying each parameter's declared
+type against the argument's static type, then dispatches through the identical
+path an explicit turbofish uses (same bounds, variance, and mangling). A value
+whose type it can't prove statically — or can't prove *soundly*, like a
+reassigned parameter — is left alone rather than guessed, because a wrong guess
+would emit a specialization the runtime value fails to satisfy.
+
+### ✅ Workaround
+
+Write the explicit turbofish (`identity::<int>(5)`, `new Box::<int>($val)`)
+wherever inference can't see the type. It's always accepted, and an inferred
+call is identical to the turbofished one — so adding a turbofish never changes
+behavior, only makes the type explicit.
+
 ## `$this`-capturing arrows and closures rejected
 
 ### ❌ What doesn't work
