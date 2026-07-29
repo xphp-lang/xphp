@@ -53,6 +53,12 @@ property type), and a plain parameter reference — but only a parameter with a
 variable, a value from a call, a reassigned parameter, a union-typed value, or
 a value typed by a still-abstract type parameter yields no inference.
 
+One conservative edge: inference is skipped when an argument's *simple* type
+name coincides with an in-scope type parameter — e.g. a class imported as
+`use Other\U as U` (or a same-named `U` in the current namespace) passed inside
+`f<U>(...)`. The name is treated as the type parameter (which shadows it), so
+the call falls back. It never mis-infers — write the explicit turbofish there.
+
 ### Why
 
 Monomorphization needs the *concrete* type to pick a specialization, and an
