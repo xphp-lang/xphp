@@ -2172,8 +2172,8 @@ final class GenericMethodCompiler
             private function reportMissingTurbofishArguments(string $label, SourceLocation $location): void
             {
                 $message = sprintf(
-                    'Generic call `%s(...)` is missing its type arguments: a generic function or closure '
-                    . 'takes no inference, so it must be called with an explicit turbofish `%s::<...>(...)`.',
+                    'Generic call `%s(...)` is missing its type arguments: they could not be inferred '
+                    . 'from the call arguments, so call it with an explicit turbofish `%s::<...>(...)`.',
                     $label,
                     $label,
                 );
