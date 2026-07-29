@@ -647,6 +647,18 @@ final class GenericMethodCompiler
              */
             private array $currentScopeClosureTemplates = [];
             /**
+             * In-scope generic type-parameter names of the enclosing function/method/closure scopes,
+             * accumulated through nesting. A call/`new` argument whose declared type IS one of these
+             * is abstract here (it's a type parameter, not a concrete class), so it must NOT seed
+             * inference — otherwise a bare `identity($x)` inside `outer<U>(U $x)` would infer
+             * `identity::<U>` and emit a specialization referencing the non-existent class `U`.
+             * Class-level type parameters are read dynamically from {@see $currentClassFqn} in
+             * {@see typeOf}. Mirrors {@see NewInferencePass::enclosingTypeParamNames}.
+             *
+             * @var array<string, true>
+             */
+            private array $currentScopeTypeParamNames = [];
+            /**
              * Parallel to `currentScopeClosureTemplates`: the Assign node and
              * lexical-scope info that introduced each generic anonymous template.
              * Populated alongside the template; consumed by the dispatcher
@@ -696,7 +708,7 @@ final class GenericMethodCompiler
              * are snapshotted too so a generic closure assigned in one scope doesn't leak
              * into a sibling scope where the same variable names an unrelated callable.
              *
-             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, perBranchArgs: list<array<string, ?list<TypeRef>>>, armIndex: int}>, closureTemplates: array<string, Closure|ArrowFunction>, closureContexts: array<string, array{assign: Assign, namespace: string, namespaceNode: ?Namespace_}>}>
+             * @var list<array{params: array<string,string>, locals: array<string,string>, paramArgs: array<string, list<TypeRef>>, localArgs: array<string, list<TypeRef>>, typeParamNames: array<string, true>, branches: list<array{snapshot: array<string,string>, localArgsSnapshot: array<string, list<TypeRef>>, assigned: array<string,bool>, perBranchTypes: list<array<string, ?string>>, perBranchArgs: list<array<string, ?list<TypeRef>>>, armIndex: int}>, closureTemplates: array<string, Closure|ArrowFunction>, closureContexts: array<string, array{assign: Assign, namespace: string, namespaceNode: ?Namespace_}>}>
              */
             private array $scopeSnapshots = [];
             /**
@@ -785,6 +797,7 @@ final class GenericMethodCompiler
                 $this->currentScopeLocalTypes = [];
                 $this->currentScopeParamTypeArgs = [];
                 $this->currentScopeLocalTypeArgs = [];
+                $this->currentScopeTypeParamNames = [];
                 $this->branchSnapshots = [];
                 $this->scopeSnapshots = [];
                 $this->currentScopeClosureTemplates = [];
@@ -845,11 +858,13 @@ final class GenericMethodCompiler
                     $parentLocals = $this->currentScopeLocalTypes;
                     $parentParamArgs = $this->currentScopeParamTypeArgs;
                     $parentLocalArgs = $this->currentScopeLocalTypeArgs;
+                    $parentTypeParamNames = $this->currentScopeTypeParamNames;
                     $this->scopeSnapshots[] = [
                         'params' => $parentParams,
                         'locals' => $parentLocals,
                         'paramArgs' => $parentParamArgs,
                         'localArgs' => $parentLocalArgs,
+                        'typeParamNames' => $parentTypeParamNames,
                         'branches' => $this->branchSnapshots,
                         // Closure-template tracking is per-scope too: a generic closure assigned to `$f`
                         // in one function must NOT leak into a sibling scope where `$f` is an unrelated
@@ -864,6 +879,18 @@ final class GenericMethodCompiler
                     $this->branchSnapshots = [];
                     $this->currentScopeClosureTemplates = [];
                     $this->currentScopeClosureContexts = [];
+
+                    // Type parameters accumulate through nesting: this scope sees the enclosing
+                    // scopes' type params plus its own. Used to keep a type-param-typed argument
+                    // from seeding inference (it's abstract here, not a concrete class).
+                    $this->currentScopeTypeParamNames = $parentTypeParamNames;
+                    $ownTypeParams = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS);
+                    if (is_array($ownTypeParams)) {
+                        /** @var list<TypeParam> $ownTypeParams */
+                        foreach ($ownTypeParams as $ownTypeParam) {
+                            $this->currentScopeTypeParamNames[$ownTypeParam->name] = true;
+                        }
+                    }
 
                     // For closures: `use ($x)` explicitly imports outer variables.
                     // Copy each imported name's type from the parent scope so the
@@ -1153,6 +1180,7 @@ final class GenericMethodCompiler
                         $this->currentScopeLocalTypes = $snapshot['locals'];
                         $this->currentScopeParamTypeArgs = $snapshot['paramArgs'];
                         $this->currentScopeLocalTypeArgs = $snapshot['localArgs'];
+                        $this->currentScopeTypeParamNames = $snapshot['typeParamNames'];
                         $this->branchSnapshots = $snapshot['branches'];
                         $this->currentScopeClosureTemplates = $snapshot['closureTemplates'];
                         $this->currentScopeClosureContexts = $snapshot['closureContexts'];
@@ -1165,6 +1193,7 @@ final class GenericMethodCompiler
                         $this->currentScopeLocalTypes = [];
                         $this->currentScopeParamTypeArgs = [];
                         $this->currentScopeLocalTypeArgs = [];
+                        $this->currentScopeTypeParamNames = [];
                         $this->branchSnapshots = [];
                         $this->currentScopeClosureTemplates = [];
                         $this->currentScopeClosureContexts = [];
@@ -2683,7 +2712,9 @@ final class GenericMethodCompiler
                     $fqn = $this->currentScopeParamTypes[$expr->name]
                         ?? $this->currentScopeLocalTypes[$expr->name]
                         ?? null;
-                    if ($fqn === null) {
+                    if ($fqn === null || $this->isInScopeTypeParam($fqn)) {
+                        // Unknown, or the variable's declared type is an enclosing type parameter —
+                        // abstract here, so not a concrete inference source.
                         return null;
                     }
                     $args = $this->currentScopeParamTypeArgs[$expr->name]
@@ -2700,9 +2731,43 @@ final class GenericMethodCompiler
                 }
                 if ($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall || $expr instanceof StaticCall) {
                     $return = $this->resolveCallReturn($expr);
-                    return $return === null ? null : self::concreteOrNull(new TypeRef($return[0], $return[1]));
+                    if ($return === null || $this->isInScopeTypeParam($return[0])) {
+                        return null;
+                    }
+                    return self::concreteOrNull(new TypeRef($return[0], $return[1]));
                 }
                 return null;
+            }
+
+            /**
+             * Whether a resolved type name refers to a generic type parameter in scope — an enclosing
+             * function/method/closure parameter ({@see $currentScopeTypeParamNames}) or an enclosing
+             * class parameter. Such a name is abstract at this site (a type parameter shadows a
+             * same-named class), so a value of that type must not seed inference — otherwise a bare
+             * `identity($x)` inside `outer<U>(U $x)` would infer `identity::<U>` and emit a call to a
+             * non-existent class. Mirrors {@see NewInferencePass}'s use of paramTypeRef's type-param set.
+             */
+            private function isInScopeTypeParam(string $fqn): bool
+            {
+                $short = self::lastSegment(ltrim($fqn, '\\'));
+                if (isset($this->currentScopeTypeParamNames[$short])) {
+                    return true;
+                }
+                if ($this->currentClassFqn === null) {
+                    return false;
+                }
+                $classParams = $this->index->classLike($this->currentClassFqn)
+                    ?->getAttribute(XphpSourceParser::ATTR_GENERIC_PARAMS);
+                if (!is_array($classParams)) {
+                    return false;
+                }
+                /** @var list<TypeParam> $classParams */
+                foreach ($classParams as $classParam) {
+                    if ($classParam->name === $short) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             /**
@@ -2737,7 +2802,13 @@ final class GenericMethodCompiler
                         $args = $type->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
                         /** @var list<TypeRef> $argRefs */
                         $argRefs = is_array($args) ? $args : [];
-                        return self::concreteOrNull(new TypeRef($this->resolveClassName($type), $argRefs));
+                        $fqn = $this->resolveClassName($type);
+                        if ($this->isInScopeTypeParam($fqn)) {
+                            // A property typed by the class's own type parameter (`private T $value`
+                            // in `Box<T>`) is abstract here — not a concrete inference source.
+                            return null;
+                        }
+                        return self::concreteOrNull(new TypeRef($fqn, $argRefs));
                     }
                 }
                 return null;

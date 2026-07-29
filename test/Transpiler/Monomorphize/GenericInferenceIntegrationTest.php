@@ -165,6 +165,79 @@ final class GenericInferenceIntegrationTest extends TestCase
         ]);
     }
 
+    // --- soundness: a call argument typed by an in-scope type parameter must not infer -----------
+
+    public function testCallArgTypedByEnclosingFunctionTypeParamFallsBackInCheck(): void
+    {
+        // A bare call whose argument is typed by the ENCLOSING function's type parameter must not
+        // infer — that type is abstract here. Inferring would emit `identity::<U>`, a call to the
+        // non-existent class `U`. It falls back to the missing-type-argument error instead.
+        $collector = $this->check([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction identity<T>(T \$x): T { return \$x; }\nfunction outer<U>(U \$x): U { \$r = identity(\$x); return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$r = outer::<int>(5);\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testCallArgTypedByEnclosingFunctionTypeParamFailsCompile(): void
+    {
+        // Parity: compile throws the same error rather than emitting the broken specialization.
+        $this->expectException(RuntimeException::class);
+        $this->compile([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction identity<T>(T \$x): T { return \$x; }\nfunction outer<U>(U \$x): U { \$r = identity(\$x); return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$r = outer::<int>(5);\n",
+        ]);
+    }
+
+    public function testCallArgTypedByMethodTypeParamFallsBack(): void
+    {
+        // Same, but the argument is typed by the enclosing METHOD's type parameter.
+        $collector = $this->check([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction identity<T>(T \$x): T { return \$x; }\nfinal class Foo { public function m<W>(W \$x): W { \$r = identity(\$x); return \$x; } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$noop = 1;\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testCallArgTypedByEnclosingClassTypeParamFallsBack(): void
+    {
+        // Same, but the argument is typed by the enclosing CLASS's type parameter.
+        $collector = $this->check([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction identity<T>(T \$x): T { return \$x; }\nfinal class C<E> { public function f(E \$e): void { \$r = identity(\$e); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$noop = 1;\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testInstanceCallArgTypedByClassTypeParamFallsBack(): void
+    {
+        // The instance-method seam: `$this->prop`-less bare instance-generic call whose argument is
+        // typed by the class type parameter must not infer either.
+        $collector = $this->check([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfinal class Sink { public function take<T>(T \$x): T { return \$x; } }\nfinal class C<E> { public function f(E \$e): void { \$s = new Sink(); \$r = \$s->take(\$e); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$noop = 1;\n",
+        ]);
+        $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
+        self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
+    }
+
+    public function testExplicitTurbofishGroundedByEnclosingParamStillWorks(): void
+    {
+        // The correct alternative — an explicit turbofish grounded by the enclosing type parameter —
+        // still grounds per specialization (unchanged by inference): `outer::<int>` emits a call to
+        // a concrete `identity_T_<int>`, never a reference to the abstract `U`.
+        $dist = $this->compile([
+            'Lib.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction identity<T>(T \$x): T { return \$x; }\nfunction outer<U>(U \$x): U { \$r = identity::<U>(\$x); return \$x; }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$r = outer::<int>(5);\n",
+        ]);
+        $lib = self::read($dist, 'Lib.php');
+        self::assertStringContainsString('identity_T_', $lib);
+        self::assertStringNotContainsString('\\App\\U', $lib, 'no reference to the abstract type parameter U');
+    }
+
     // --- `new` inference -----------------------------------------------------------------------
 
     private const BOX = <<<'PHP'
