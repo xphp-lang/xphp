@@ -328,6 +328,25 @@ final class XphpSourceParser
         while ($i < $n) {
             $tok = $tokens[$i];
 
+            // Type-alias declaration: `type Name[<A, B>] = SingleHeadBody;` (WI-01, file-local).
+            // `type` is a contextual keyword (an ordinary T_STRING), so this arm MUST run first —
+            // before the bare `Name<…>` arm below, which would otherwise strip the `<A, B>` off
+            // `type Pair<A, B> = …` and leave the statement half-parsed. `tryParseAliasDeclaration`
+            // gates on statement position (so a `type` used as a constant / function / member name
+            // is never mistaken for a declaration) and consumes the WHOLE `type … ;` statement,
+            // blanking it to equal-length whitespace (the alias has no runtime existence).
+            if ($tok->id === T_STRING && $tok->text === 'type') {
+                $semicolonIdx = self::tryParseAliasDeclaration($tokens, $i);
+                if ($semicolonIdx !== null) {
+                    $startByte = $tok->pos;
+                    $endByte = $tokens[$semicolonIdx]->pos + strlen($tokens[$semicolonIdx]->text);
+                    $length = $endByte - $startByte;
+                    $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
+                    $i = $semicolonIdx + 1;
+                    continue;
+                }
+            }
+
             // Anonymous closure: `function<T>(...){}` / `fn<T>(...)`.
             // Recognized by T_FUNCTION/T_FN followed immediately by `<` (no
             // T_STRING name). `static`-prefixed shapes are consumed by the
@@ -2383,6 +2402,94 @@ final class XphpSourceParser
         }
 
         return null;
+    }
+
+    /**
+     * Recognize a type-alias declaration `type Name [<A, B>] = SingleHeadBody;` beginning at the
+     * `type` token index `$typeIdx`, and return the index of its terminating `;` — or null when the
+     * tokens are not a well-formed single-head alias declaration, so the `type` token falls through
+     * to ordinary handling (a genuinely malformed shape then reaches nikic / the validators; nothing
+     * is silently eaten).
+     *
+     * v1 (WI-01): file-local; the body must be a single (possibly-generic) head that `parseTypeArg`
+     * accepts. A union / intersection / nullable / closure body leaves a non-`;` token after the head
+     * and is declined here — a dedicated `xphp.alias_unsupported_body` diagnostic lands in a later
+     * change rather than a silent pass-through.
+     *
+     * Gated to STATEMENT position: the previous significant token must be a statement boundary
+     * (`;`, `{`, `}`, or the opening `<?php` tag), so a `type` used as a constant / function name or
+     * a member (`Foo::type`, `$x->type`, `new type()`) is never mistaken for a declaration.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function tryParseAliasDeclaration(array $tokens, int $typeIdx): ?int
+    {
+        // Statement-position guard. `type` always sits at index >= 1 (index 0 is the open tag), so
+        // skipWsBack lands on a real token; the `?? null` is a defensive floor only. A `type` used as
+        // a constant / function / member name (preceded by `->`, `::`, `=`, `(`, …) is declined here.
+        $prevTok = $tokens[self::skipWsBack($tokens, $typeIdx - 1)] ?? null;
+        if ($prevTok === null
+            || !($prevTok->id === T_OPEN_TAG
+                || $prevTok->text === ';'
+                || $prevTok->text === '{'
+                || $prevTok->text === '}')
+        ) {
+            return null;
+        }
+
+        // Alias name.
+        // @infection-ignore-all IncrementInteger -- `type` is always followed by whitespace (else
+        // `typeName` would tokenize as one T_STRING), so skipWs(+1) and skipWs(+2) reach the same
+        // name token: the offset increment is an equivalent mutant.
+        $nameIdx = self::skipWs($tokens, $typeIdx + 1);
+        $nameTok = $tokens[$nameIdx] ?? null;
+        if ($nameTok === null || $nameTok->id !== T_STRING) {
+            return null;
+        }
+
+        // Optional `<A, B>` parameter list. Parsed permissively (defaults + variance allowed, as on
+        // a class header) so recognition never throws; whether an alias param may carry a default or
+        // variance marker is a semantic question for the expansion step, not for scan-time stripping.
+        $afterName = self::skipWs($tokens, $nameIdx + 1);
+        $afterNameTok = $tokens[$afterName] ?? null;
+        if ($afterNameTok === null) {
+            return null;
+        }
+        if ($afterNameTok->text === '<') {
+            $parsed = self::parseTypeParamList($tokens, $afterName, allowDefaults: true, allowVariance: true);
+            if ($parsed === null) {
+                return null;
+            }
+            [, $paramsEndIdx] = $parsed;
+            // @infection-ignore-all IncrementInteger -- the `>` closing the param list is followed
+            // by whitespace-then-`=` in every reachable shape (a no-space `>=` is the comparison
+            // operator, not this position), so skipWs(+1) and skipWs(+2) reach the same token.
+            $eqIdx = self::skipWs($tokens, $paramsEndIdx + 1);
+        } else {
+            $eqIdx = $afterName;
+        }
+
+        // `=`.
+        if (($tokens[$eqIdx] ?? null)?->text !== '=') {
+            return null;
+        }
+
+        // Single (possibly-generic) head body. A union / intersection / nullable / closure body
+        // leaves a non-`;` token after the head and is declined for v1 (a later change turns that
+        // into an explicit `xphp.alias_unsupported_body` diagnostic rather than a silent decline).
+        $bodyParsed = self::parseTypeArg($tokens, self::skipWs($tokens, $eqIdx + 1));
+        if ($bodyParsed === null) {
+            return null;
+        }
+        [, $afterBody] = $bodyParsed;
+
+        // Terminating `;` (a single-head body leaves it immediately after the head).
+        $semiIdx = self::skipWs($tokens, $afterBody);
+        if (($tokens[$semiIdx] ?? null)?->text !== ';') {
+            return null;
+        }
+
+        return $semiIdx;
     }
 
     /**
