@@ -61,9 +61,10 @@ and needs no runtime identity.
 - Trade-off: for the *generic* case xphp defines surface ahead of PHP (which deferred it),
   a bet on the declaration-form consensus. The non-generic import form (`use type … as`)
   could be added later as a parity synonym without disturbing this decision.
-- Trade-off: v1 is scoped to file-local, single-head bodies (see the
-  [caveat](../caveats.md#type-aliases-are-file-local-and-single-head)) — a safe subset,
-  with cross-file and richer bodies as later work.
+- Trade-off: the delivered scope is single-head / union / nullable bodies, cross-file;
+  intersection / DNF / closure bodies and compound-in-non-slot positions are still
+  rejected (see the [caveat](../caveats.md#type-alias-body-and-position-limits)) — a safe
+  subset, with the richer bodies as later work.
 
 ### Confirmation
 
@@ -103,7 +104,7 @@ verified in both `compile` and `check`.
 ## More Information
 
 - [Type aliases](../syntax/type-aliases.md) and the
-  [file-local / single-head caveat](../caveats.md#type-aliases-are-file-local-and-single-head).
+  [file-local / single-head caveat](../caveats.md#type-alias-body-and-position-limits).
 - [ADR-0001](0001-monomorphization-over-type-erasure.md) — monomorphization;
   [ADR-0002](0002-build-time-transpiler.md) — build-time transpiler (why a runtime alias
   symbol is unnecessary).

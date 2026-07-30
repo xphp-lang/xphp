@@ -52,7 +52,8 @@ timeline
                 : marker interface per template
         Type aliases
                 : compile-time substitution
-                : file-local single-head bodies
+                : single-head union and nullable bodies
+                : whole-program cross-file use
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
@@ -226,14 +227,17 @@ upcoming one.
 - `type Name<A, B> = Body;` and `type Name = Body;` — a compile-time
   substitution expanded into its body before specialization, with no
   runtime existence (the emitted PHP never mentions the alias).
-- Expands in every type position, including as a generic argument
-  (`Bag<UserId>`); composes with nested and concrete-instantiation
-  aliases (`type UserMap = Pair<int, User>`).
-- File-local, single-head bodies (v1). Cyclic, arity-mismatched,
-  class-colliding, duplicate, and unsupported-body aliases are loud
+- Single-head, **union** (`int|string`), and **nullable** (`?Box`) bodies.
+  A single head expands in every type position (incl. as a generic
+  argument, `Bag<UserId>`); a union/nullable expands as the whole type of a
+  slot. Composes with nested and concrete-instantiation aliases.
+- **Cross-file**: an alias declared in one file is usable in another
+  (whole-program alias table).
+- Cyclic, arity-mismatched, class-colliding, duplicate, unsupported-body
+  (intersection / DNF / closure), and compound-in-non-slot uses are loud
   compile errors in both `compile` and `check`, each with a stable code.
 - See the [type aliases](syntax/type-aliases.md) tour and the
-  [file-local / single-head caveat](caveats.md#type-aliases-are-file-local-and-single-head).
+  [body / position limits caveat](caveats.md#type-alias-body-and-position-limits).
 
 ### Naming and collisions
 

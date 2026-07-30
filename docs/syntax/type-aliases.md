@@ -9,6 +9,8 @@ existence, so the emitted PHP never mentions the alias name.
 type Pair<A, B> = Dict<A, Bag<B>>;   // generic alias
 type UserId     = Ident;             // non-generic alias (a plain class)
 type UserMap    = Pair<int, User>;   // a concrete instantiation of another alias
+type Num        = int|string;        // union body
+type MaybeUser  = ?User;             // nullable body
 ```
 
 ## Example
@@ -59,12 +61,17 @@ no separate code path and no runtime cost.
 
 ## Rules
 
-- **Two forms**: `type Name<A, B> = Body;` (generic) and
+- **Declaration forms**: `type Name<A, B> = Body;` (generic) and
   `type Name = Body;` (non-generic). The parameter list is optional; the
   separator is `=`.
-- The alias expands in **every type position** — parameter, return,
-  property, `new`, turbofish argument, `extends`/`implements`, and as a
-  **generic argument** of another type (`Bag<UserId>`).
+- **Bodies**: a single (possibly-generic) head (`Ident`, `Dict<A, B>`), a
+  **union** (`int|string`), or a **nullable** (`?Box`). A single-head or
+  generic body expands in **every** type position, including as a generic
+  argument (`Bag<UserId>`), `new`, `extends`, and a bound. A **union /
+  nullable** body expands only as the *whole* type of a parameter,
+  property, return, or class-constant slot (see caveats).
+- **Cross-file**: an alias declared in one file is usable in another file
+  of the same build (the whole program shares one alias table).
 - Aliases compose: an alias body may reference another alias
   (`type UserMap = Pair<int, User>`), and an alias may take type
   parameters used inside its body (`type Pair<A, B> = Dict<A, Bag<B>>`).
@@ -79,24 +86,27 @@ no separate code path and no runtime cost.
   - `xphp.alias_class_collision` — an alias whose name collides with a
     class, interface, or trait of the same name (no silent shadowing).
   - `xphp.alias_duplicate` — the same alias name declared twice.
-  - `xphp.alias_unsupported_body` — see caveats below.
+  - `xphp.alias_unsupported_body` — an intersection / DNF / closure-signature
+    body (see caveats below).
+  - `xphp.alias_compound_in_non_slot` — a union / nullable alias used
+    outside a whole slot (see caveats below).
 
 ## Caveats
 
-Aliases are intentionally a small, safe first step. See
-[caveats → type aliases](../caveats.md#type-aliases-are-file-local-and-single-head)
+Union and nullable bodies and cross-file use all work; the remaining
+limits are the body shape and the positions a compound alias can take. See
+[caveats → type-alias body and position limits](../caveats.md#type-alias-body-and-position-limits)
 for the details and the reasons:
 
-- **File-local.** An alias is usable only within the file that declares
-  it (and only within its declaring namespace). Cross-file / importable
-  aliases are not supported yet.
-- **Single-head bodies.** The body must be a single class or generic type
-  (`Dict<A, B>`, `Ident`, `Bag<int>`). A union, intersection, nullable, or
-  closure-signature body (`int|string`, `?Box`, `Closure(int): int`) is
-  rejected with `xphp.alias_unsupported_body` — use a bare type or a named
-  class.
-- **Same-file collision detection.** An alias colliding with a class
-  declared in *another* file is not detected.
+- **Intersection / DNF / closure bodies** (`A&B`, `(A&B)|C`,
+  `Closure(int): int`) are rejected with `xphp.alias_unsupported_body` —
+  write the type directly or wrap it in a named class/interface.
+- **A union / nullable alias is a whole-slot type only.** As a generic
+  argument, in `new` / `extends` / a bound, or nested inside another
+  union/intersection, it is `xphp.alias_compound_in_non_slot`.
+- **Cross-file collision / duplicate not detected.** An alias colliding
+  with a class, or the same alias declared, in a *different* file is not
+  flagged (both are within one file).
 
 ## See also
 

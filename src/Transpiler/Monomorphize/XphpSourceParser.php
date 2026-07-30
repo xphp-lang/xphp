@@ -155,7 +155,7 @@ final class XphpSourceParser
     }
 
     /**
-     * The file-local type-alias table for a single source — its `type` / `use type` declarations
+     * The file-local type-alias table for a single source — its `type` declarations
      * keyed by FQN, bodies unresolved — WITHOUT expanding any uses. The Compiler merges these across
      * every source into a whole-program table so an alias declared in one file is usable in another.
      * Same-file duplicate / class-collision / unsupported-body rejections still fire (per file) via

@@ -89,51 +89,50 @@ wherever inference can't see the type. It's always accepted, and an inferred
 call is identical to the turbofished one — so adding a turbofish never changes
 behavior, only makes the type explicit.
 
-## Type aliases are file-local and single-head
+## Type-alias body and position limits
 
-[Type aliases](syntax/type-aliases.md) (`type Name<…> = Body;`) are a compile-time
-substitution — a deliberately small first step, with three boundaries.
+[Type aliases](syntax/type-aliases.md) are a compile-time substitution. A single
+head (`Ident`, `Box<int>`), a union (`int|string`), and a nullable (`?Box`) body
+are all supported, and an alias declared in one file is usable in another. Three
+limits remain.
 
 ### ❌ What doesn't work
 
 ```php
-// File Types.xphp
-type UserId = Ident;
+type Both = A & B;               // ✗ xphp.alias_unsupported_body — intersection
+type Dnf  = (A & B) | C;         // ✗ xphp.alias_unsupported_body — DNF
+type Fn   = Closure(int): int;   // ✗ xphp.alias_unsupported_body — closure signature
 
-// File Other.xphp — a DIFFERENT file
-function f(): UserId { /* ... */ }   // ✗ UserId is not visible here (file-local)
-
-type Num   = int|string;             // ✗ xphp.alias_unsupported_body — union body
-type Maybe = ?Box;                   // ✗ xphp.alias_unsupported_body — nullable body
-type Fn    = Closure(int): int;      // ✗ xphp.alias_unsupported_body — closure signature
+// A union / nullable alias is only usable as the WHOLE type of a slot:
+type Num = int|string;
+function f(Num $n): void {}       // ✓ whole param slot
+function g(Bag<Num> $x): void {}  // ✗ xphp.alias_compound_in_non_slot — generic argument
+function h(Num&Extra $x): void {} // ✗ nested in another intersection/union
+$b = new Num();                   // ✗ compound alias in `new` / extends / a bound
 ```
 
-An alias colliding with a class in **another** file is also not detected (a
-same-file collision is — `xphp.alias_class_collision`).
+Cross-file, an alias colliding with a **class in another file**, or the same alias
+declared in **two files**, is not detected (both are within one file —
+`xphp.alias_class_collision` / `xphp.alias_duplicate`).
 
 ### Why
 
-An alias is expanded before specialization, during the per-file parse: it has no
-runtime existence, and the parse has no cross-file symbol table, so an alias is
-scoped to the file (and namespace) that declares it. The body is restricted to a
-single class or generic *head* because that is the shape the monomorphizer can
-substitute directly into a type position; a union / intersection / nullable /
-closure body has no single identity to carry through specialization, so it is
-rejected loudly rather than mis-compiled. Both boundaries are the same "make the
-safe subset solid first" trade the rest of xphp makes — they are candidates to
-lift later, not permanent design limits.
+The body is limited to a single head, a flat union, or a nullable because those
+lower cleanly into a PHP type node. An intersection or DNF pulls in *distribution*
+(`(A|B)&C → (A&C)|(B&C)`), and a union/nullable has no single identity to hash or
+anchor, so it is representable only as the whole type of a param / property /
+return / class-constant slot — anywhere else it is rejected loudly rather than
+mis-compiled. Cross-file expansion is a whole-program pre-pass that merges each
+file's alias table; global duplicate/collision checking across that merge is a
+later refinement. These are "make the safe subset solid first" trades, not
+permanent design limits.
 
 ### ✅ Workaround
 
-- Keep an alias and its uses in the **same file**. For a shared vocabulary,
-  declare the alias in each file that needs it (it's a zero-cost substitution).
-- For a non-single-head type, write the type directly, or wrap it in a named
-  class or interface and alias *that*:
-
-```php
-type UserId = int|string;                       // ✗ rejected
-interface UserId { /* marker */ }               // ✓ a named type you can alias/reference
-```
+- For an intersection / DNF / closure body, write the type directly, or wrap it in
+  a named class or interface and alias *that*.
+- Use a union/nullable alias as the whole type of a slot; write the union directly
+  where you need it as a generic argument or nested in another compound type.
 
 ---
 
