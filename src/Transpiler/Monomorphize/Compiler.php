@@ -455,13 +455,18 @@ final readonly class Compiler
     public function check(FilepathArray $sources): DiagnosticCollector
     {
         $diagnostics = new DiagnosticCollector();
-        $astPerFile = [];
+        // Read every source up front — OUTSIDE the try so an I/O failure surfaces as itself, not a
+        // mislabeled "parse error" — then merge a whole-program alias table so a cross-file alias use
+        // resolves. Only parsing is treated as a per-file, recoverable diagnostic.
+        $contents = [];
         foreach ($sources->filepaths as $filepath) {
-            // Read OUTSIDE the try so an I/O failure surfaces as itself, not a mislabeled
-            // "parse error" — only parsing is treated as a per-file, recoverable diagnostic.
-            $content = $this->fileReader->read($filepath);
+            $contents[$filepath] = $this->fileReader->read($filepath);
+        }
+        $globalAliases = $this->collectGlobalAliases($contents);
+        $astPerFile = [];
+        foreach ($contents as $filepath => $content) {
             try {
-                $astPerFile[$filepath] = $this->sourceParser->parse($content);
+                $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases);
             } catch (PhpParserError $e) {
                 $line = $e->getStartLine();
                 $diagnostics->add(new Diagnostic(
@@ -577,12 +582,46 @@ final readonly class Compiler
      */
     private function parseAll(FilepathArray $sources): array
     {
-        $astPerFile = [];
+        $contents = [];
         foreach ($sources->filepaths as $filepath) {
-            $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath));
+            $contents[$filepath] = $this->fileReader->read($filepath);
+        }
+        $globalAliases = $this->collectGlobalAliases($contents);
+
+        $astPerFile = [];
+        foreach ($contents as $filepath => $content) {
+            $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases);
         }
 
         return $astPerFile;
+    }
+
+    /**
+     * Merge every source's file-local type-alias table into one whole-program table, so an alias
+     * declared in one file can be used in another. A file whose own aliases are malformed (same-file
+     * duplicate / collision / unsupported body) raises here and is skipped — the same error
+     * re-surfaces (and, in check mode, is collected) when that file is parsed for real.
+     *
+     * @param array<string, string> $contents filepath => source
+     * @return array<string, array{paramNames:list<string>, body:list<\XPHP\Transpiler\Monomorphize\TypeRef>}>
+     */
+    private function collectGlobalAliases(array $contents): array
+    {
+        $global = [];
+        foreach ($contents as $content) {
+            try {
+                foreach ($this->sourceParser->aliasTableOf($content) as $fqn => $entry) {
+                    $global[$fqn] = $entry;
+                }
+            } catch (RuntimeException) {
+                // Any parse-time rejection — skip this file's aliases; the same error re-surfaces (and
+                // is collected in check mode) when the file is parsed for real. Both a nikic syntax
+                // error (PhpParser\Error) and an xphp scanner/alias error (XphpParseException) extend
+                // RuntimeException, so this catches every parse-time failure.
+            }
+        }
+
+        return $global;
     }
 
     private static function relativePath(string $base, string $filepath): string

@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Aliases;
+
+// Cross-file: `Num` is declared in Types.xphp; the whole-program alias table makes it usable here in
+// the same build. If cross-file expansion failed, `Num` would emit a phantom type and this would not
+// compile / run.
+class CrossFile
+{
+    public function widen(Num $x): Num { return $x; }
+}
+
+$crossFile = new CrossFile();
+$crossValue = $crossFile->widen('cross');

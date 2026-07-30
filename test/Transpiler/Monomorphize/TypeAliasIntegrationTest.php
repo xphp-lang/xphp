@@ -205,6 +205,42 @@ final class TypeAliasIntegrationTest extends TestCase
         $this->assertCompileThrows($files, 'unsupported body');
     }
 
+    public function testAliasesAreVisibleAcrossFilesInTheSameBuild(): void
+    {
+        // Whole-program alias table: an alias declared in one file is usable in another (union and
+        // plain-class bodies both).
+        $dist = $this->compile([
+            'Types.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|string;\ntype UserId = Ident;\nclass Ident {}\n",
+            'Consumer.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Consumer {\n public function f(Num \$n): UserId { return new UserId(); }\n}\n",
+        ]);
+        $consumer = self::read($dist, 'Consumer.php');
+
+        self::assertStringContainsString('function f(int|string $n): \\App\\Ident', $consumer);
+    }
+
+    public function testAMalformedAliasFileDoesNotCrashTheWholeProgramPrePass(): void
+    {
+        // The pre-pass that builds the whole-program table skips a file whose own aliases are
+        // malformed (a duplicate) rather than crashing the build; `check` still collects that file's
+        // diagnostic (raised for real when the file is parsed), and a valid alias elsewhere compiles.
+        $files = [
+            'Bad.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Dup = int;\ntype Dup = string;\nfunction bad(): int { return 1; }\n",
+            'Good.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|string;\nfunction good(Num \$n): int { return 1; }\n",
+        ];
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_DUPLICATE, 'declared more than once');
+    }
+
+    public function testAliasFileWithASyntaxErrorIsCollectedNotCrashed(): void
+    {
+        // The pre-pass re-parses an alias-bearing file to collect its aliases; a nikic SYNTAX error
+        // there (a PhpParserError, not an xphp RuntimeException) must be caught/skipped too, so check
+        // collects it for real rather than crashing the whole-program alias collection.
+        $files = [
+            'Broken.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int;\nclass C { public function f(: int {} }\n",
+        ];
+        self::assertTrue($this->check($files)->hasErrors(), 'a syntax error in an alias file is collected, not crashed');
+    }
+
     public function testCyclicAliasIsRejectedInBothModes(): void
     {
         // A directly-or-transitively self-referential alias would expand without bound; it is

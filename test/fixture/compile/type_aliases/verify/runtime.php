@@ -18,6 +18,7 @@ use XPHP\TestSupport\CompiledFixture;
 
 return function (CompiledFixture $fixture): void {
     require $fixture->targetDir . '/Types.php';
+    require $fixture->targetDir . '/Consumer.php';
 
     // Pair<int, User> === Dict<int, Bag<User>>: the value is a Bag specialization holding a User.
     Assert::assertInstanceOf('App\\Aliases\\User', $pair->value()->get(), 'Pair<int,User> expanded to Dict<int, Bag<User>>');
@@ -39,4 +40,7 @@ return function (CompiledFixture $fixture): void {
     // Union / nullable slots executed: `num('hi')` typed `int|string`, `maybe()` typed `?User`.
     Assert::assertSame('hi', $numValue, 'union alias Num expanded to int|string in the param/return slots');
     Assert::assertNull($maybeValue, 'nullable alias MaybeUser expanded to ?User');
+
+    // Cross-file: Consumer.xphp used `Num` declared in Types.xphp.
+    Assert::assertSame('cross', $crossValue, 'an alias declared in Types.xphp was usable in Consumer.xphp');
 };
