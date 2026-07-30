@@ -35,4 +35,8 @@ return function (CompiledFixture $fixture): void {
 
     // Bag<Elem> === Bag<User>: an alias in generic-argument position expanded; the item is a User.
     Assert::assertInstanceOf('App\\Aliases\\User', $elemBag->get(), 'Bag<Elem> expanded to Bag<User>');
+
+    // Union / nullable slots executed: `num('hi')` typed `int|string`, `maybe()` typed `?User`.
+    Assert::assertSame('hi', $numValue, 'union alias Num expanded to int|string in the param/return slots');
+    Assert::assertNull($maybeValue, 'nullable alias MaybeUser expanded to ?User');
 };

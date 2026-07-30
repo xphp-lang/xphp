@@ -186,12 +186,12 @@ PHP;
     }
 
     /**
-     * A union / nullable body is a RECOGNIZED (but unsupported) alias: the whole statement is
-     * stripped at scan (so `strip()` never produces a raw PHP parse error), and the
-     * `xphp.alias_unsupported_body` diagnostic is raised later at parse time (see the integration
-     * test). A reserved-word head is not a recognized alias at all and is left byte-for-byte intact.
+     * Every recognized alias body — a single head, a union, a nullable, and even an unsupported
+     * intersection — is stripped at scan (so `strip()` never produces a raw PHP parse error; an
+     * unsupported body's diagnostic is raised later at parse time). A reserved-word head is not a
+     * recognized alias at all and is left byte-for-byte intact.
      */
-    public function testUnsupportedAliasBodyIsStrippedWhileReservedNameIsDeclined(): void
+    public function testRecognizedAliasBodiesAreStrippedWhileReservedNameIsDeclined(): void
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
 
@@ -199,6 +199,8 @@ PHP;
         self::assertSame(self::withBlanked($union, 'type Num = int|float;'), $parser->strip($union));
         $nullable = "<?php\ntype Maybe = ?Box;\n";
         self::assertSame(self::withBlanked($nullable, 'type Maybe = ?Box;'), $parser->strip($nullable));
+        $intersection = "<?php\ntype Both = A&B;\n";
+        self::assertSame(self::withBlanked($intersection, 'type Both = A&B;'), $parser->strip($intersection));
 
         // A reserved word (`array`, T_ARRAY) is not a valid alias head, so the declaration is not
         // recognized and is left byte-for-byte intact.

@@ -161,6 +161,50 @@ final class TypeAliasIntegrationTest extends TestCase
         self::assertStringContainsString('Ident', $out);
     }
 
+    public function testUnionAndNullableBodiesExpandInWholeSlots(): void
+    {
+        // A union body expands into a param/property/return/class-const slot as a real `int|string`;
+        // a nullable body as `?\App\Ident`; a three-member union incl. null stays a `UnionType` (not
+        // `?int`); and a single-head alias transitively resolving to a union expands too.
+        $use = self::read($this->compile([
+            'Lib.xphp' => self::LIB,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|string;\ntype MaybeIdent = ?Ident;\ntype Tri = int|string|null;\ntype Aliased = Num;\nclass Svc {\n public Num \$a;\n const Num LIMIT = 1;\n public function f(Num \$n): MaybeIdent { return null; }\n public function g(Aliased \$x): Tri { return \$x; }\n}\n",
+        ]), 'Use.php');
+
+        self::assertStringContainsString('public int|string $a', $use);
+        self::assertStringContainsString('const int|string LIMIT', $use);
+        self::assertStringContainsString('function f(int|string $n): ?\\App\\Ident', $use);
+        self::assertStringContainsString('function g(int|string $x): int|string|null', $use);
+    }
+
+    public function testCompoundAliasInNonSlotPositionsAreRejectedInBothModes(): void
+    {
+        // A union alias is representable only as the WHOLE type of a param / property / return /
+        // class-const slot; as a generic argument, in a `new`, in `extends`, or nested inside another
+        // nullable/union at the use site it rejects loudly (in both modes).
+        $needle = 'the whole type of a parameter, property, return, or class-constant slot';
+        foreach ([
+            'generic-arg' => "class Bag<T> {}\ntype Num = int|string;\nfunction f(): Bag<Num> { return new Bag::<Num>(); }",
+            'new' => "type Num = int|string;\nfunction f(): int { \$x = new Num(); return 1; }",
+            'extends' => "type Num = int|string;\nclass C extends Num {}",
+            'nested-in-nullable' => "type Num = int|string;\nfunction f(?Num \$x): int { return 1; }",
+            'nested-in-union' => "class Extra {}\ntype Num = int|string;\nfunction f(Num|Extra \$x): int { return 1; }",
+        ] as $body) {
+            $files = ['C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n{$body}\n"];
+            self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT, $needle);
+            $this->assertCompileThrows($files, $needle);
+        }
+    }
+
+    public function testNullableFollowedByUnionIsDeclinedAsUnsupported(): void
+    {
+        // `?A|B` is illegal PHP (`?` cannot precede a union); the body is declined (not mis-read as
+        // `?A`), so the declaration is an unsupported-body error rather than a wrong acceptance.
+        $files = ['C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass A {} class B {}\ntype Bad = ?A|B;\nfunction f(): Bad { return new A(); }\n"];
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, 'unsupported body');
+        $this->assertCompileThrows($files, 'unsupported body');
+    }
+
     public function testCyclicAliasIsRejectedInBothModes(): void
     {
         // A directly-or-transitively self-referential alias would expand without bound; it is
@@ -183,11 +227,11 @@ final class TypeAliasIntegrationTest extends TestCase
 
     public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
     {
-        // A union / nullable / intersection / closure body is recognized (stripped) but rejected with
-        // a clear diagnostic — not a raw PHP parse error. The full message is asserted so a reworded
-        // or truncated diagnostic is caught.
+        // An intersection (and DNF / closure) body is recognized (stripped) but rejected with a clear
+        // diagnostic — not a raw PHP parse error. (Union and nullable bodies ARE supported — see the
+        // union tests.) The full message is asserted so a reworded or truncated diagnostic is caught.
         $files = [
-            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|float;\nfunction f(): Num { return 1; }\n",
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass A {} class B {}\ntype Both = A & B;\nfunction f(): Both { return new A(); }\n",
         ];
         $message = 'single class or generic type (unions, intersections, nullables, and closure '
             . 'signatures are not supported). Use a bare type';
