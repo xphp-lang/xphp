@@ -31,6 +31,8 @@ use XPHP\FileSystem\FilepathArray;
  *  4. Emit rewritten user code — rewrite each original source AST (strip generic class defs,
  *     rewrite generic Name references), pretty-print, and write to the target directory.
  *  5. Persist registry — write .xphp-cache/registry.json.
+ *
+ * @phpstan-import-type BoundDict from XphpSourceParser
  */
 final readonly class Compiler
 {
@@ -603,7 +605,7 @@ final readonly class Compiler
      * re-surfaces (and, in check mode, is collected) when that file is parsed for real.
      *
      * @param array<string, string> $contents filepath => source
-     * @return array<string, array{paramNames:list<string>, body:list<\XPHP\Transpiler\Monomorphize\TypeRef>}>
+     * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?\XPHP\Transpiler\Monomorphize\TypeRef, variance:\XPHP\Transpiler\Monomorphize\Variance}>, body:list<\XPHP\Transpiler\Monomorphize\TypeRef>}>
      */
     private function collectGlobalAliases(array $contents): array
     {

@@ -261,6 +261,57 @@ final class TypeAliasIntegrationTest extends TestCase
         $this->assertCompileThrows($files, 'expects 2 type argument(s), 1 given');
     }
 
+    public function testAliasParameterDefaultReferencingAnEarlierParameterIsFilled(): void
+    {
+        // `type P<A, B = A>` used as `P<int>` fills the omitted B with A (= int), so it specializes to
+        // the SAME Dict as the explicit `P<int, int>`, and NOT the same as `P<int, string>`. The
+        // specialization hash is non-deterministic, but equality between two emitted FQNs is exact.
+        $use = self::read($this->compile([
+            'Lib.xphp' => self::LIB,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype P<A, B = A> = Dict<A, B>;\nclass C {\n public function omitted(): P<int> { return new Dict::<int, int>(1, 2); }\n public function explicitSame(): P<int, int> { return new Dict::<int, int>(1, 2); }\n public function explicitDiff(): P<int, string> { return new Dict::<int, string>(1, 'x'); }\n}\n",
+        ]), 'Use.php');
+
+        self::assertSame(self::specFqn($use, 'explicitSame'), self::specFqn($use, 'omitted'), 'P<int> fills B = A = int, matching P<int, int>');
+        self::assertNotSame(self::specFqn($use, 'explicitDiff'), self::specFqn($use, 'omitted'), 'P<int> is not P<int, string>');
+    }
+
+    public function testAliasParameterConcreteDefaultIsFilled(): void
+    {
+        // A concrete (non-param-referencing) default: `type Q<A, B = string>` used as `Q<int>` fills B
+        // with string, matching the explicit `Q<int, string>` and differing from `Q<int, int>`.
+        $use = self::read($this->compile([
+            'Lib.xphp' => self::LIB,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Q<A, B = string> = Dict<A, B>;\nclass C {\n public function omitted(): Q<int> { return new Dict::<int, string>(1, 'x'); }\n public function explicitSame(): Q<int, string> { return new Dict::<int, string>(1, 'x'); }\n public function explicitDiff(): Q<int, int> { return new Dict::<int, int>(1, 2); }\n}\n",
+        ]), 'Use.php');
+
+        self::assertSame(self::specFqn($use, 'explicitSame'), self::specFqn($use, 'omitted'), 'Q<int> fills B = string, matching Q<int, string>');
+        self::assertNotSame(self::specFqn($use, 'explicitDiff'), self::specFqn($use, 'omitted'), 'Q<int> is not Q<int, int>');
+    }
+
+    public function testAliasDefaultChainFillsTransitively(): void
+    {
+        // A default may reference an earlier param that is itself defaulted: `P<A, B = A, C = B>` used
+        // as `P<int>` fills B = A = int, then C = B = int — the same specialization as `P<int, int, int>`.
+        $use = self::read($this->compile([
+            'Lib.xphp' => self::LIB,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Trip<X, Y, Z> { public function __construct(public X \$x, public Y \$y, public Z \$z) {} }\ntype P<A, B = A, C = B> = Trip<A, B, C>;\nclass C {\n public function omitted(): P<int> { return new Trip::<int, int, int>(1, 2, 3); }\n public function explicitFull(): P<int, int, int> { return new Trip::<int, int, int>(1, 2, 3); }\n}\n",
+        ]), 'Use.php');
+
+        self::assertSame(self::specFqn($use, 'explicitFull'), self::specFqn($use, 'omitted'), 'P<int> fills B = A = int then C = B = int');
+    }
+
+    public function testAliasArityRangeMessageAppearsOnlyWithDefaults(): void
+    {
+        // With a default present the valid arity is a RANGE (required..total); too many args reports
+        // the "between R and N" form. (A no-default alias keeps the exact "expects N" form — pinned by
+        // testAliasArityMismatchIsRejectedInBothModes.)
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype P<A, B = A> = Dict<A, B>;\nclass Dict<K, V> { public function __construct(public K \$k, public V \$v) {} }\nfunction f(): P<int, int, int> { return new Dict::<int, int>(1, 2); }\n",
+        ];
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_ARITY, 'expects between 1 and 2 type argument(s), 3 given');
+        $this->assertCompileThrows($files, 'expects between 1 and 2 type argument(s), 3 given');
+    }
+
     public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
     {
         // An intersection (and DNF / closure) body is recognized (stripped) but rejected with a clear
@@ -401,6 +452,21 @@ final class TypeAliasIntegrationTest extends TestCase
     {
         $path = $dir . '/' . $file;
         return is_file($path) ? (file_get_contents($path) ?: '') : '';
+    }
+
+    /**
+     * The emitted specialization FQN (`\XPHP\Generated\…`) a given method returns. The hash is
+     * non-deterministic, so callers compare two of these for equality rather than asserting a literal.
+     */
+    private static function specFqn(string $emitted, string $method): string
+    {
+        self::assertSame(
+            1,
+            preg_match('/function ' . preg_quote($method, '/') . '\(\): (\\\\XPHP\\\\Generated\\\\[^\s{]+)/', $emitted, $m),
+            "method {$method}() specialization not found in emitted source",
+        );
+
+        return $m[1];
     }
 
     private static function rrmdir(string $dir): void

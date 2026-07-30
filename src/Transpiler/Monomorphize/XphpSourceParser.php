@@ -144,7 +144,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @param array<string, array{paramNames:list<string>, body:list<TypeRef>}>|null $externalAliases
+     * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
      *        a whole-program alias table (from {@see aliasTableOf} across every source) used for
      *        cross-file expansion; null keeps aliases file-local (standalone parse / LSP).
      * @return list<Node\Stmt>
@@ -161,7 +161,7 @@ final class XphpSourceParser
      * Same-file duplicate / class-collision / unsupported-body rejections still fire (per file) via
      * the main parse; the caller catches and skips a file that raises one here.
      *
-     * @return array<string, array{paramNames:list<string>, body:list<TypeRef>}>
+     * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>
      */
     public function aliasTableOf(string $source): array
     {
@@ -188,7 +188,7 @@ final class XphpSourceParser
      * Returns the identity map when no length-changing replacements fired
      * (the common case for files without `T[]` array-suffix sugar).
      *
-     * @param array<string, array{paramNames:list<string>, body:list<TypeRef>}>|null $externalAliases
+     * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
      * @return array{0: list<Node\Stmt>, 1: ByteOffsetMap}
      */
     public function parseWithMap(string $source, ?array $externalAliases = null): array
@@ -349,7 +349,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, paramNames:list<string>, body:?list<TypeRef>, bytePosition:int, line:int}>}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -363,7 +363,7 @@ final class XphpSourceParser
         $methodMarkers = [];
         /** @var list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers */
         $closureMarkers = [];
-        /** @var list<array{name:string, paramNames:list<string>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers */
+        /** @var list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers */
         $aliasMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
@@ -2469,7 +2469,7 @@ final class XphpSourceParser
      * a member (`Foo::type`, `$x->type`, `new type()`) is never mistaken for a declaration.
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: array{name:string, paramNames:list<string>, body:?list<TypeRef>, bytePosition:int, line:int}, 1: int}|null
+     * @return array{0: array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}, 1: int}|null
      */
     private static function tryParseAliasDeclaration(array $tokens, int $typeIdx): ?array
     {
@@ -2497,9 +2497,10 @@ final class XphpSourceParser
         }
 
         // Optional `<A, B>` parameter list. Parsed permissively (defaults + variance allowed, as on
-        // a class header) so recognition never throws; whether an alias param may carry a default or
-        // variance marker is a semantic question for the expansion step, not for scan-time stripping.
-        $paramNames = [];
+        // a class header) so recognition never throws. The full per-param entries — carrying each
+        // param's optional bound and default — are retained (not just the names): expansion applies
+        // the defaults (fewer args than params) and enforces the bounds.
+        $params = [];
         $afterName = self::skipWs($tokens, $nameIdx + 1);
         $afterNameTok = $tokens[$afterName] ?? null;
         if ($afterNameTok === null) {
@@ -2510,8 +2511,7 @@ final class XphpSourceParser
             if ($parsed === null) {
                 return null;
             }
-            [$paramEntries, $paramsEndIdx] = $parsed;
-            $paramNames = array_map(static fn (array $entry): string => $entry['name'], $paramEntries);
+            [$params, $paramsEndIdx] = $parsed;
             // @infection-ignore-all IncrementInteger -- the `>` closing the param list is followed
             // by whitespace-then-`=` in every reachable shape (a no-space `>=` is the comparison
             // operator, not this position), so skipWs(+1) and skipWs(+2) reach the same token.
@@ -2543,7 +2543,7 @@ final class XphpSourceParser
         return [
             [
                 'name' => $nameTok->text,
-                'paramNames' => $paramNames,
+                'params' => $params,
                 'body' => $body,
                 'bytePosition' => $tokens[$typeIdx]->pos,
                 'line' => $tokens[$typeIdx]->line,
@@ -2921,8 +2921,8 @@ final class XphpSourceParser
      * duplicate-alias diagnostic lands in a later change).
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{name:string, paramNames:list<string>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
-     * @return array<string, array{paramNames:list<string>, body:list<TypeRef>}>
+     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
+     * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>
      */
     private static function buildAliasTable(array $ast, array $aliasMarkers, ByteOffsetMap $byteOffsetMap): array
     {
@@ -2983,7 +2983,7 @@ final class XphpSourceParser
                     self::CODE_ALIAS_CLASS_COLLISION,
                 );
             }
-            $table[$fqn] = ['paramNames' => $marker['paramNames'], 'body' => $marker['body']];
+            $table[$fqn] = ['params' => $marker['params'], 'body' => $marker['body']];
         }
         return $table;
     }
@@ -3039,8 +3039,8 @@ final class XphpSourceParser
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
-     * @param list<array{name:string, paramNames:list<string>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
-     * @param array<string, array{paramNames:list<string>, body:list<TypeRef>}>|null $externalAliases
+     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
+     * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?array $externalAliases = null): ?string
     {
@@ -3069,7 +3069,7 @@ final class XphpSourceParser
              * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
              * @param array<int, array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
-             * @param array<string, array{paramNames:list<string>, body:list<TypeRef>}> $aliasTable file-local
+             * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}> $aliasTable file-local
              *        type aliases keyed by FQN; body is the raw (unresolved) TypeRef.
              */
             public function __construct(
@@ -3090,6 +3090,14 @@ final class XphpSourceParser
              * @var array<string, list<TypeRef>>
              */
             private array $aliasBodyCache = [];
+
+            /**
+             * Cache of resolved alias parameter defaults keyed by alias FQN — aligned by position to
+             * the alias's params, null where a param has no default. Resolved once, like the body.
+             *
+             * @var array<string, list<?TypeRef>>
+             */
+            private array $aliasDefaultsCache = [];
 
             // Returns a replacement Node when a type-alias use is expanded in place (the traverser
             // swaps it into the parent slot); null in every other case leaves the node untouched.
@@ -4173,17 +4181,10 @@ final class XphpSourceParser
                         XphpSourceParser::CODE_ALIAS_CYCLE,
                     );
                 }
-                if (count($expandedArgs) !== count($entry['paramNames'])) {
-                    throw new XphpParseException(
-                        "Type alias `{$ref->name}` expects " . count($entry['paramNames'])
-                        . ' type argument(s), ' . count($expandedArgs) . ' given.',
-                        $line,
-                        XphpSourceParser::CODE_ALIAS_ARITY,
-                    );
-                }
+                $paddedArgs = $this->padAliasArgs($ref->name, $entry, $expandedArgs, $line);
                 $subst = [];
-                foreach ($entry['paramNames'] as $k => $paramName) {
-                    $subst[$paramName] = $expandedArgs[$k];
+                foreach (array_column($entry['params'], 'name') as $k => $paramName) {
+                    $subst[$paramName] = $paddedArgs[$k];
                 }
                 $members = [];
                 foreach ($this->resolveAliasBody($ref->name, $entry) as $bodyMember) {
@@ -4196,11 +4197,61 @@ final class XphpSourceParser
             }
 
             /**
+             * Reconcile the supplied type arguments against an alias's parameters, filling missing
+             * trailing arguments from the parameters' defaults. A default may reference an earlier
+             * parameter (`B = A`), so each is substituted with the arguments already positioned. The
+             * required (default-less) parameters form a prefix (enforced by `parseTypeParamList`), so a
+             * valid supply count is `required <= given <= total`; anything else is `xphp.alias_arity`.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @param list<TypeRef> $expandedArgs
+             * @return list<TypeRef>
+             */
+            private function padAliasArgs(string $fqn, array $entry, array $expandedArgs, int $line): array
+            {
+                $total = count($entry['params']);
+                $required = 0;
+                foreach ($entry['params'] as $param) {
+                    if ($param['default'] === null) {
+                        $required++;
+                    }
+                }
+                $given = count($expandedArgs);
+                if ($given < $required || $given > $total) {
+                    // @infection-ignore-all CastString -- $total is interpolated into the message
+                    // either way; the cast only keeps both ternary branches typed `string`.
+                    $expected = $required === $total
+                        ? (string) $total
+                        : "between {$required} and {$total}";
+                    throw new XphpParseException(
+                        "Type alias `{$fqn}` expects {$expected} type argument(s), {$given} given.",
+                        $line,
+                        XphpSourceParser::CODE_ALIAS_ARITY,
+                    );
+                }
+                $defaults = $this->resolveAliasDefaults($fqn, $entry);
+                $paramNames = array_column($entry['params'], 'name');
+                $padded = $expandedArgs;
+                for ($i = $given; $i < $total; $i++) {
+                    $subst = [];
+                    foreach ($padded as $k => $arg) {
+                        $subst[$paramNames[$k]] = $arg;
+                    }
+                    // @infection-ignore-all CoalesceRemoval -- indices [$given,$total) are exactly the
+                    // trailing params, every one of which has a default (required params form a prefix),
+                    // so $defaults[$i] is never null here; the coalesce is a defensive floor.
+                    $default = $defaults[$i] ?? throw new \LogicException('padded slot without a default');
+                    $padded[] = self::substituteTypeRef($default, $subst);
+                }
+                return $padded;
+            }
+
+            /**
              * Resolve an alias's raw body against the current namespace context, with the alias's own
              * type parameters pushed so `A` / `B` become type-param references rather than qualified
              * class names. Cached per alias FQN.
              *
-             * @param array{paramNames:list<string>, body:list<TypeRef>} $entry
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
              * @return list<TypeRef>
              */
             private function resolveAliasBody(string $fqn, array $entry): array
@@ -4214,10 +4265,38 @@ final class XphpSourceParser
                 // exact prior scope stack — so the alias's params never leak into later resolution.
                 // Restore by saved-copy assignment (not a pop) so the restore is exact and unconditional.
                 $saved = $this->typeParamStack;
-                $this->typeParamStack[] = $entry['paramNames'];
+                $this->typeParamStack[] = array_column($entry['params'], 'name');
                 $resolved = array_map(fn (TypeRef $m): TypeRef => $this->resolveTypeRef($m), $entry['body']);
                 $this->typeParamStack = $saved;
                 return $this->aliasBodyCache[$fqn] = $resolved;
+            }
+
+            /**
+             * Resolve an alias's raw parameter DEFAULTS against the current namespace context, with the
+             * alias's own parameters in scope so a default that references an earlier param (`B = A`)
+             * resolves to a type-param leaf. Returns one entry per parameter, aligned by position:
+             * the resolved default TypeRef, or null where the parameter has no default. Cached per FQN.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @return list<?TypeRef>
+             */
+            private function resolveAliasDefaults(string $fqn, array $entry): array
+            {
+                // @infection-ignore-all ReturnRemoval -- the cache is an optimization; resolveTypeRef
+                // is deterministic for a fixed context, so re-resolving on a cache miss is equivalent.
+                if (isset($this->aliasDefaultsCache[$fqn])) {
+                    return $this->aliasDefaultsCache[$fqn];
+                }
+                $saved = $this->typeParamStack;
+                $this->typeParamStack[] = array_column($entry['params'], 'name');
+                $resolved = array_map(
+                    fn (array $param): ?TypeRef => $param['default'] === null
+                        ? null
+                        : $this->resolveTypeRef($param['default']),
+                    $entry['params'],
+                );
+                $this->typeParamStack = $saved;
+                return $this->aliasDefaultsCache[$fqn] = $resolved;
             }
 
             /**
