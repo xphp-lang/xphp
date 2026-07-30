@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Type aliases.** `type Name<A, B> = Body;` (generic) and `type Name = Body;`
+  (non-generic) give a type a reusable name. An alias is a compile-time
+  substitution — expanded into its body before specialization, with no runtime
+  existence, so the emitted PHP never mentions the alias. It expands in every type
+  position, including as a generic argument (`Bag<UserId>`), and composes with
+  nested and concrete-instantiation aliases (`type UserMap = Pair<int, User>`).
+  v1 is file-local with single-head bodies; a cyclic (`xphp.alias_cycle`),
+  arity-mismatched (`xphp.alias_arity`), class-colliding
+  (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`), or
+  unsupported-body (`xphp.alias_unsupported_body`, e.g. a union/nullable/closure
+  body) alias is a loud error in both `xphp compile` and `xphp check`. See
+  [type aliases](docs/syntax/type-aliases.md).
 - **Type-argument inference (optional turbofish).** A generic call or `new` whose
   type parameters are determined by the argument values no longer needs the `::<>`
   turbofish: `identity(5)` infers `identity::<int>`, `new Box($product)` infers

@@ -89,6 +89,54 @@ wherever inference can't see the type. It's always accepted, and an inferred
 call is identical to the turbofished one — so adding a turbofish never changes
 behavior, only makes the type explicit.
 
+## Type aliases are file-local and single-head
+
+[Type aliases](syntax/type-aliases.md) (`type Name<…> = Body;`) are a compile-time
+substitution — a deliberately small first step, with three boundaries.
+
+### ❌ What doesn't work
+
+```php
+// File Types.xphp
+type UserId = Ident;
+
+// File Other.xphp — a DIFFERENT file
+function f(): UserId { /* ... */ }   // ✗ UserId is not visible here (file-local)
+
+type Num   = int|string;             // ✗ xphp.alias_unsupported_body — union body
+type Maybe = ?Box;                   // ✗ xphp.alias_unsupported_body — nullable body
+type Fn    = Closure(int): int;      // ✗ xphp.alias_unsupported_body — closure signature
+```
+
+An alias colliding with a class in **another** file is also not detected (a
+same-file collision is — `xphp.alias_class_collision`).
+
+### Why
+
+An alias is expanded before specialization, during the per-file parse: it has no
+runtime existence, and the parse has no cross-file symbol table, so an alias is
+scoped to the file (and namespace) that declares it. The body is restricted to a
+single class or generic *head* because that is the shape the monomorphizer can
+substitute directly into a type position; a union / intersection / nullable /
+closure body has no single identity to carry through specialization, so it is
+rejected loudly rather than mis-compiled. Both boundaries are the same "make the
+safe subset solid first" trade the rest of xphp makes — they are candidates to
+lift later, not permanent design limits.
+
+### ✅ Workaround
+
+- Keep an alias and its uses in the **same file**. For a shared vocabulary,
+  declare the alias in each file that needs it (it's a zero-cost substitution).
+- For a non-single-head type, write the type directly, or wrap it in a named
+  class or interface and alias *that*:
+
+```php
+type UserId = int|string;                       // ✗ rejected
+interface UserId { /* marker */ }               // ✓ a named type you can alias/reference
+```
+
+---
+
 ## `$this`-capturing arrows and closures rejected
 
 ### ❌ What doesn't work

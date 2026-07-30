@@ -50,6 +50,9 @@ timeline
         Reified T
                 : runtime instanceof T
                 : marker interface per template
+        Type aliases
+                : compile-time substitution
+                : file-local single-head bodies
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
@@ -61,7 +64,6 @@ timeline
                 : PHPStan over the compiled output
     section Discovery
         Generic surface
-                : Generic type aliases
                 : Variance edges on trait-owned templates
                 : Branching narrowing precision
         Generic completeness
@@ -219,6 +221,20 @@ upcoming one.
 - Marker interface per template so `$x instanceof App\Box` works
   across every `Box<...>` specialization.
 
+### Type aliases
+
+- `type Name<A, B> = Body;` and `type Name = Body;` — a compile-time
+  substitution expanded into its body before specialization, with no
+  runtime existence (the emitted PHP never mentions the alias).
+- Expands in every type position, including as a generic argument
+  (`Bag<UserId>`); composes with nested and concrete-instantiation
+  aliases (`type UserMap = Pair<int, User>`).
+- File-local, single-head bodies (v1). Cyclic, arity-mismatched,
+  class-colliding, duplicate, and unsupported-body aliases are loud
+  compile errors in both `compile` and `check`, each with a stable code.
+- See the [type aliases](syntax/type-aliases.md) tour and the
+  [file-local / single-head caveat](caveats.md#type-aliases-are-file-local-and-single-head).
+
 ### Naming and collisions
 
 - SHA-256-based generated FQCN; namespace mirrors the template.
@@ -264,7 +280,6 @@ to ship.
 
 ### Generic surface
 
-- Generic type aliases (e.g. `type Pair<A, B> = ...`).
 - Variance edges on trait-owned templates.
 - Branching narrowing precision: today a turbofish call on a receiver
   whose branch arms disagree is a compile error; could track unions with
