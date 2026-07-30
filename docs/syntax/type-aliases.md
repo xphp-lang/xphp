@@ -70,8 +70,16 @@ no separate code path and no runtime cost.
   argument (`Bag<UserId>`), `new`, `extends`, and a bound. A **union /
   nullable** body expands only as the *whole* type of a parameter,
   property, return, or class-constant slot (see caveats).
-- **Cross-file**: an alias declared in one file is usable in another file
-  of the same build (the whole program shares one alias table).
+- **Parameters** may carry **defaults** and **bounds**, like a generic
+  class: `type P<A, B = A> = Dict<A, B>;` (a use may omit trailing
+  defaulted arguments — `P<int>` fills `B = A = int`), and
+  `type B<T : Named> = Bag<T>;` (a use whose argument does not satisfy the
+  bound is a compile error, the same `xphp.bound_violation` a class
+  instantiation raises).
+- **Cross-file**: a **non-generic** alias declared in one file is usable in
+  another of the same build (the whole program shares one alias table). A
+  **generic** alias (one with type parameters) is **file-local** — use it
+  in the file that declares it (see caveats).
 - Aliases compose: an alias body may reference another alias
   (`type UserMap = Pair<int, User>`), and an alias may take type
   parameters used inside its body (`type Pair<A, B> = Dict<A, Bag<B>>`).
@@ -81,8 +89,11 @@ no separate code path and no runtime cost.
   both `xphp compile` and `xphp check`):
   - `xphp.alias_cycle` — an alias defined, directly or transitively, in
     terms of itself (`type A = B; type B = A;`).
-  - `xphp.alias_arity` — a use whose type-argument count differs from the
-    alias's parameter count (`type P<A, B> = …;` used as `P<int>`).
+  - `xphp.alias_arity` — a use whose type-argument count is outside the
+    alias's accepted range (`type P<A, B> = …;` used as `P<int>`; with a
+    default the range widens — `type P<A, B = A>` accepts one or two).
+  - `xphp.bound_violation` — a use whose argument does not satisfy a
+    parameter's bound (`type B<T : Named> = …;` used as `B<int>`).
   - `xphp.alias_class_collision` — an alias whose name collides with a
     class, interface, or trait of the same name (no silent shadowing).
   - `xphp.alias_duplicate` — the same alias name declared twice.

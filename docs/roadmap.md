@@ -231,11 +231,15 @@ upcoming one.
   A single head expands in every type position (incl. as a generic
   argument, `Bag<UserId>`); a union/nullable expands as the whole type of a
   slot. Composes with nested and concrete-instantiation aliases.
-- **Cross-file**: an alias declared in one file is usable in another
-  (whole-program alias table).
+- Parameters carry **defaults** (`type P<A, B = A>` — a use may omit
+  trailing defaulted arguments) and **bounds** (`type B<T : Named>` — an
+  argument that violates the bound is a compile error), like a generic class.
+- **Cross-file**: a non-generic alias declared in one file is usable in
+  another (whole-program alias table); a generic alias is file-local.
 - Cyclic, arity-mismatched, class-colliding, duplicate, unsupported-body
-  (intersection / DNF / closure), and compound-in-non-slot uses are loud
-  compile errors in both `compile` and `check`, each with a stable code.
+  (intersection / DNF / closure), compound-in-non-slot, and
+  bound-violating uses are loud compile errors in both `compile` and
+  `check`, each with a stable code.
 - See the [type aliases](syntax/type-aliases.md) tour and the
   [body / position limits caveat](caveats.md#type-alias-body-and-position-limits).
 

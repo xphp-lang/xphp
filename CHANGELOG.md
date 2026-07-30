@@ -18,14 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a single head expands in every type position (incl. as a generic argument,
   `Bag<UserId>`), while a union/nullable expands as the whole type of a parameter,
   property, return, or class-constant slot. Aliases compose (nested and
-  concrete-instantiation, `type UserMap = Pair<int, User>`), and an alias declared
-  in one file is usable in another (**cross-file**, whole-program). A cyclic
-  (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`), class-colliding
-  (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`),
+  concrete-instantiation, `type UserMap = Pair<int, User>`); parameters carry
+  **defaults** (`type P<A, B = A>` — a use may omit trailing defaulted arguments)
+  and **bounds** (`type B<T : Named>` — an argument that violates the bound is a
+  compile error), like a generic class. A non-generic alias declared in one file is
+  usable in another (**cross-file**, whole-program); a generic alias is file-local.
+  A cyclic (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`),
+  class-colliding (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`),
   unsupported-body (`xphp.alias_unsupported_body` — intersection / DNF / closure),
-  or compound-in-non-slot (`xphp.alias_compound_in_non_slot`) alias is a loud error
-  in both `xphp compile` and `xphp check`. See
-  [type aliases](docs/syntax/type-aliases.md).
+  compound-in-non-slot (`xphp.alias_compound_in_non_slot`), or bound-violating
+  (`xphp.bound_violation`) alias is a loud error in both `xphp compile` and
+  `xphp check`. See [type aliases](docs/syntax/type-aliases.md).
 - **Type-argument inference (optional turbofish).** A generic call or `new` whose
   type parameters are determined by the argument values no longer needs the `::<>`
   turbofish: `identity(5)` infers `identity::<int>`, `new Box($product)` infers

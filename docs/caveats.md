@@ -93,8 +93,8 @@ behavior, only makes the type explicit.
 
 [Type aliases](syntax/type-aliases.md) are a compile-time substitution. A single
 head (`Ident`, `Box<int>`), a union (`int|string`), and a nullable (`?Box`) body
-are all supported, and an alias declared in one file is usable in another. Three
-limits remain.
+are all supported; parameters may carry defaults and bounds; and a **non-generic**
+alias declared in one file is usable in another. Three limits remain.
 
 ### ❌ What doesn't work
 
@@ -109,6 +109,12 @@ function f(Num $n): void {}       // ✓ whole param slot
 function g(Bag<Num> $x): void {}  // ✗ xphp.alias_compound_in_non_slot — generic argument
 function h(Num&Extra $x): void {} // ✗ nested in another intersection/union
 $b = new Num();                   // ✗ compound alias in `new` / extends / a bound
+
+// A GENERIC alias (one with type parameters) is file-local:
+// File Types.xphp
+type Pair<A, B> = Dict<A, B>;
+// File Other.xphp — a DIFFERENT file
+function f(): Pair<int, User> { /* … */ }   // ✗ Pair is not visible here (generic alias is file-local)
 ```
 
 Cross-file, an alias colliding with a **class in another file**, or the same alias
@@ -123,9 +129,11 @@ lower cleanly into a PHP type node. An intersection or DNF pulls in *distributio
 anchor, so it is representable only as the whole type of a param / property /
 return / class-constant slot — anywhere else it is rejected loudly rather than
 mis-compiled. Cross-file expansion is a whole-program pre-pass that merges each
-file's alias table; global duplicate/collision checking across that merge is a
-later refinement. These are "make the safe subset solid first" trades, not
-permanent design limits.
+file's alias table; a *generic* alias use is expanded before that table is
+consulted for arguments, so a generic alias resolves only within its own file
+(and its declared parameter bounds are enforced there). Global duplicate/collision
+checking across the merge is a later refinement. These are "make the safe subset
+solid first" trades, not permanent design limits.
 
 ### ✅ Workaround
 
@@ -133,6 +141,8 @@ permanent design limits.
   a named class or interface and alias *that*.
 - Use a union/nullable alias as the whole type of a slot; write the union directly
   where you need it as a generic argument or nested in another compound type.
+- Declare a generic alias in each file that uses it (a zero-cost substitution), or
+  reference the underlying generic type directly across files.
 
 ---
 
