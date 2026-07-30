@@ -186,22 +186,22 @@ PHP;
     }
 
     /**
-     * v1 recognizes only a single (possibly-generic) head body. A union / intersection / nullable
-     * body is declined at scan (left intact), to become an explicit diagnostic in a later change —
-     * it must never be half-stripped.
+     * A union / nullable body is a RECOGNIZED (but unsupported) alias: the whole statement is
+     * stripped at scan (so `strip()` never produces a raw PHP parse error), and the
+     * `xphp.alias_unsupported_body` diagnostic is raised later at parse time (see the integration
+     * test). A reserved-word head is not a recognized alias at all and is left byte-for-byte intact.
      */
-    public function testNonSingleHeadAliasBodiesAreDeclined(): void
+    public function testUnsupportedAliasBodyIsStrippedWhileReservedNameIsDeclined(): void
     {
         $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
 
-        // Union / nullable bodies: parseTypeArg stops at `|` / returns null on `?`, leaving a
-        // non-`;` token after the head, so the declaration is declined and left byte-for-byte intact.
         $union = "<?php\ntype Num = int|float;\n";
-        self::assertSame($union, $parser->strip($union));
+        self::assertSame(self::withBlanked($union, 'type Num = int|float;'), $parser->strip($union));
         $nullable = "<?php\ntype Maybe = ?Box;\n";
-        self::assertSame($nullable, $parser->strip($nullable));
-        // The alias name must be a real identifier (T_STRING). A reserved word like `array`
-        // (T_ARRAY) is not a valid alias head, so the declaration is declined and left intact.
+        self::assertSame(self::withBlanked($nullable, 'type Maybe = ?Box;'), $parser->strip($nullable));
+
+        // A reserved word (`array`, T_ARRAY) is not a valid alias head, so the declaration is not
+        // recognized and is left byte-for-byte intact.
         $reserved = "<?php\ntype array = int;\n";
         self::assertSame($reserved, $parser->strip($reserved));
     }

@@ -478,11 +478,12 @@ final readonly class Compiler
             } catch (XphpParseException $e) {
                 // xphp-specific parse-time rejections from the scanner (e.g. variance markers
                 // on methods, malformed generic defaults) — these carry the offending token's
-                // original-source line so the diagnostic points at the real site.
+                // original-source line so the diagnostic points at the real site, and optionally a
+                // stable diagnostic code (e.g. a type-alias rejection) in place of the generic one.
                 $line = $e->sourceLine();
                 $diagnostics->add(new Diagnostic(
                     Severity::Error,
-                    self::CODE_PARSE_ERROR,
+                    $e->diagnosticCode() ?? self::CODE_PARSE_ERROR,
                     $e->getMessage(),
                     // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- every
                     // current throw site supplies a real token line (>= 1), so this `> 0` guard is

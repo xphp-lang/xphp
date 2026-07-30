@@ -168,7 +168,7 @@ final class TypeAliasIntegrationTest extends TestCase
         $files = [
             'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype A<T> = B<T>;\ntype B<T> = A<T>;\nclass Box<T> { public function __construct(public T \$v) {} }\nfunction f(): A<int> { return new Box::<int>(1); }\n",
         ];
-        self::assertRejected($this->check($files), 'in terms of itself');
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_CYCLE, 'in terms of itself');
         $this->assertCompileThrows($files, 'in terms of itself');
     }
 
@@ -177,13 +177,72 @@ final class TypeAliasIntegrationTest extends TestCase
         $files = [
             'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype P<A, B> = Dict<A, B>;\nclass Dict<K, V> { public function __construct(public K \$k, public V \$v) {} }\nfunction f(): P<int> { return new Dict::<int, int>(1, 2); }\n",
         ];
-        self::assertRejected($this->check($files), 'expects 2 type argument(s), 1 given');
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_ARITY, 'expects 2 type argument(s), 1 given');
         $this->assertCompileThrows($files, 'expects 2 type argument(s), 1 given');
     }
 
-    private static function assertRejected(DiagnosticCollector $collector, string $needle): void
+    public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
+    {
+        // A union / nullable / intersection / closure body is recognized (stripped) but rejected with
+        // a clear diagnostic — not a raw PHP parse error. The full message is asserted so a reworded
+        // or truncated diagnostic is caught.
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|float;\nfunction f(): Num { return 1; }\n",
+        ];
+        $message = 'single class or generic type (unions, intersections, nullables, and closure '
+            . 'signatures are not supported). Use a bare type';
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $message);
+        $this->assertCompileThrows($files, $message);
+    }
+
+    public function testNoSpaceAliasBodyExpands(): void
+    {
+        // `type Id=Ident;` (no spaces around `=`) is a valid single-head alias, not an unsupported
+        // body — the body-start scan must land on `Ident`, not the `;`.
+        $use = self::read($this->compile([
+            'Lib.xphp' => self::LIB,
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Id=Ident;\nfunction f(): Id { return new Id(); }\n",
+        ]), 'Use.php');
+
+        // Id → \App\Ident in both the return type and the `new`; a mis-scanned body-start would
+        // instead reject `type Id=Ident;` as an unsupported body and never reach here.
+        self::assertStringContainsString('function f(): \\App\\Ident', $use);
+        self::assertStringContainsString('return new \\App\\Ident()', $use);
+    }
+
+    public function testAliasCollidingWithAClassIsRejectedInBothModes(): void
+    {
+        // An alias FQN that collides with a class of the same name must be a loud error, never a
+        // silent shadow. The colliding class is declared after another class (so detection can't rely
+        // on only the first declaration), in both a namespaced and a global file.
+        $namespaced = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Other {}\nclass Box {}\ntype Box = Ident;\nclass Ident {}\n",
+        ];
+        self::assertRejected($this->check($namespaced), XphpSourceParser::CODE_ALIAS_CLASS_COLLISION, 'collides with a class');
+        $this->assertCompileThrows($namespaced, 'collides with a class');
+
+        // Global namespace (no `namespace` statement): the top-level class-declaration branch.
+        $global = [
+            'G.xphp' => "<?php\nclass Other {}\nclass Box {}\ntype Box = Ident;\nclass Ident {}\n",
+        ];
+        self::assertRejected($this->check($global), XphpSourceParser::CODE_ALIAS_CLASS_COLLISION, 'collides with a class');
+        $this->assertCompileThrows($global, 'collides with a class');
+    }
+
+    public function testDuplicateAliasIsRejectedInBothModes(): void
+    {
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Id = Ident;\ntype Id = Other;\nclass Ident {}\nclass Other {}\n",
+        ];
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_DUPLICATE, 'declared more than once');
+        $this->assertCompileThrows($files, 'declared more than once');
+    }
+
+    private static function assertRejected(DiagnosticCollector $collector, string $code, string $needle): void
     {
         self::assertTrue($collector->hasErrors(), 'check must collect the alias rejection, not silently pass');
+        $codes = array_map(static fn ($d): string => $d->code, $collector->all());
+        self::assertContains($code, $codes, 'check must report the dedicated alias diagnostic code');
         $messages = array_map(static fn ($d): string => $d->message, $collector->all());
         self::assertStringContainsString($needle, implode("\n", $messages));
     }

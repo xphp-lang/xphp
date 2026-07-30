@@ -110,6 +110,13 @@ final class XphpSourceParser
     // tagged (the escape hatch). Advisory metadata only — not emitted.
     public const ATTR_SUSPECT_UNDECLARED_TYPE = 'xphp:suspectUndeclaredType';
 
+    /** Stable diagnostic codes for type-alias (WI-01) rejections. */
+    public const CODE_ALIAS_CYCLE = 'xphp.alias_cycle';
+    public const CODE_ALIAS_ARITY = 'xphp.alias_arity';
+    public const CODE_ALIAS_DUPLICATE = 'xphp.alias_duplicate';
+    public const CODE_ALIAS_CLASS_COLLISION = 'xphp.alias_class_collision';
+    public const CODE_ALIAS_UNSUPPORTED_BODY = 'xphp.alias_unsupported_body';
+
     /**
      * The reserved PHP type keywords — names PHP forbids as class names. A bare name in this list is
      * unambiguously a builtin, so every site that asks "is this name a builtin keyword or a class?"
@@ -307,7 +314,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, paramNames:list<string>, body:TypeRef, bytePosition:int}>}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, paramNames:list<string>, body:?TypeRef, bytePosition:int, line:int}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -321,7 +328,7 @@ final class XphpSourceParser
         $methodMarkers = [];
         /** @var list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers */
         $closureMarkers = [];
-        /** @var list<array{name:string, paramNames:list<string>, body:TypeRef, bytePosition:int}> $aliasMarkers */
+        /** @var list<array{name:string, paramNames:list<string>, body:?TypeRef, bytePosition:int, line:int}> $aliasMarkers */
         $aliasMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
@@ -2427,7 +2434,7 @@ final class XphpSourceParser
      * a member (`Foo::type`, `$x->type`, `new type()`) is never mistaken for a declaration.
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: array{name:string, paramNames:list<string>, body:TypeRef, bytePosition:int}, 1: int}|null
+     * @return array{0: array{name:string, paramNames:list<string>, body:?TypeRef, bytePosition:int, line:int}, 1: int}|null
      */
     private static function tryParseAliasDeclaration(array $tokens, int $typeIdx): ?array
     {
@@ -2483,20 +2490,24 @@ final class XphpSourceParser
             return null;
         }
 
-        // Single (possibly-generic) head body. A union / intersection / nullable / closure body
-        // leaves a non-`;` token after the head and is declined for v1 (a later change turns that
-        // into an explicit `xphp.alias_unsupported_body` diagnostic rather than a silent decline).
-        $bodyParsed = self::parseTypeArg($tokens, self::skipWs($tokens, $eqIdx + 1));
-        if ($bodyParsed === null) {
+        // The alias statement must be terminated by a `;` before any `{` / `}` / end of input,
+        // otherwise it is truncated (mid-typing) and we decline so the tolerant path and PHP's own
+        // parser handle it.
+        $bodyStart = self::skipWs($tokens, $eqIdx + 1);
+        $semiIdx = self::aliasTerminator($tokens, $bodyStart);
+        if ($semiIdx === null) {
             return null;
         }
-        [$body, $afterBody] = $bodyParsed;
 
-        // Terminating `;` (a single-head body leaves it immediately after the head).
-        $semiIdx = self::skipWs($tokens, $afterBody);
-        if (($tokens[$semiIdx] ?? null)?->text !== ';') {
-            return null;
-        }
+        // A single (possibly-generic) head immediately followed by that `;` is a supported body.
+        // Anything else (union / intersection / nullable / closure) is recorded with a null body:
+        // the whole statement is still stripped here (so `strip()` never produces a PHP parse error),
+        // and `buildAliasTable` rejects the null body with a clear `xphp.alias_unsupported_body`
+        // diagnostic at parse time.
+        $bodyParsed = self::parseTypeArg($tokens, $bodyStart);
+        $body = ($bodyParsed !== null && self::skipWs($tokens, $bodyParsed[1]) === $semiIdx)
+            ? $bodyParsed[0]
+            : null;
 
         return [
             [
@@ -2504,9 +2515,31 @@ final class XphpSourceParser
                 'paramNames' => $paramNames,
                 'body' => $body,
                 'bytePosition' => $tokens[$typeIdx]->pos,
+                'line' => $tokens[$typeIdx]->line,
             ],
             $semiIdx,
         ];
+    }
+
+    /**
+     * The index of the `;` that terminates an alias statement whose body starts at $bodyStart, or
+     * null when a `{` / `}` / end of input is reached first (a truncated, mid-typing declaration).
+     * A type body never contains `;` / `{` / `}`, so the first such token decides.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function aliasTerminator(array $tokens, int $bodyStart): ?int
+    {
+        for ($i = $bodyStart, $n = count($tokens); $i < $n; $i++) {
+            $text = $tokens[$i]->text;
+            if ($text === ';') {
+                return $i;
+            }
+            if ($text === '{' || $text === '}') {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
@@ -2809,7 +2842,7 @@ final class XphpSourceParser
      * duplicate-alias diagnostic lands in a later change).
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{name:string, paramNames:list<string>, body:TypeRef, bytePosition:int}> $aliasMarkers
+     * @param list<array{name:string, paramNames:list<string>, body:?TypeRef, bytePosition:int, line:int}> $aliasMarkers
      * @return array<string, array{paramNames:list<string>, body:TypeRef}>
      */
     private static function buildAliasTable(array $ast, array $aliasMarkers, ByteOffsetMap $byteOffsetMap): array
@@ -2831,6 +2864,7 @@ final class XphpSourceParser
                 ];
             }
         }
+        $classFqns = self::collectClassLikeFqns($ast);
         $table = [];
         foreach ($aliasMarkers as $marker) {
             $namespace = '';
@@ -2847,9 +2881,63 @@ final class XphpSourceParser
                 }
             }
             $fqn = $namespace === '' ? $marker['name'] : $namespace . '\\' . $marker['name'];
+            if ($marker['body'] === null) {
+                throw new XphpParseException(
+                    "Type alias `{$fqn}` has an unsupported body: an alias body must be a single class "
+                    . 'or generic type (unions, intersections, nullables, and closure signatures are '
+                    . 'not supported). Use a bare type or a named class.',
+                    $marker['line'],
+                    self::CODE_ALIAS_UNSUPPORTED_BODY,
+                );
+            }
+            if (isset($table[$fqn])) {
+                throw new XphpParseException(
+                    "Type alias `{$fqn}` is declared more than once in this file.",
+                    $marker['line'],
+                    self::CODE_ALIAS_DUPLICATE,
+                );
+            }
+            if (isset($classFqns[$fqn])) {
+                throw new XphpParseException(
+                    "Type alias `{$fqn}` collides with a class, interface, or trait of the same name.",
+                    $marker['line'],
+                    self::CODE_ALIAS_CLASS_COLLISION,
+                );
+            }
             $table[$fqn] = ['paramNames' => $marker['paramNames'], 'body' => $marker['body']];
         }
         return $table;
+    }
+
+    /**
+     * Collect the fully-qualified names of every class / interface / trait / enum declared in the
+     * file, so a type alias colliding with one can be rejected. Declarations are direct children of a
+     * namespace (or top-level in the global namespace); this matches the file-local (v1) scope — a
+     * collision with a class declared in another file is not detected here.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array<string, true>
+     */
+    private static function collectClassLikeFqns(array $ast): array
+    {
+        $fqns = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                $ns = $stmt->name?->toString() ?? '';
+                foreach ($stmt->stmts as $inner) {
+                    if ($inner instanceof ClassLike && $inner->name !== null) {
+                        $short = $inner->name->toString();
+                        // @infection-ignore-all TrueValue -- a set membership; the value is only ever
+                        // probed with isset(), which is true for any present key (incl. false).
+                        $fqns[$ns === '' ? $short : $ns . '\\' . $short] = true;
+                    }
+                }
+            } elseif ($stmt instanceof ClassLike && $stmt->name !== null) {
+                // @infection-ignore-all TrueValue -- set membership probed only with isset() (above).
+                $fqns[$stmt->name->toString()] = true;
+            }
+        }
+        return $fqns;
     }
 
     /**
@@ -2872,7 +2960,7 @@ final class XphpSourceParser
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
-     * @param list<array{name:string, paramNames:list<string>, body:TypeRef, bytePosition:int}> $aliasMarkers
+     * @param list<array{name:string, paramNames:list<string>, body:?TypeRef, bytePosition:int, line:int}> $aliasMarkers
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers): ?string
     {
@@ -3910,6 +3998,7 @@ final class XphpSourceParser
                     throw new XphpParseException(
                         "Type alias `{$ref->name}` is defined (directly or transitively) in terms of itself.",
                         $line,
+                        XphpSourceParser::CODE_ALIAS_CYCLE,
                     );
                 }
                 if (count($expandedArgs) !== count($entry['paramNames'])) {
@@ -3917,6 +4006,7 @@ final class XphpSourceParser
                         "Type alias `{$ref->name}` expects " . count($entry['paramNames'])
                         . ' type argument(s), ' . count($expandedArgs) . ' given.',
                         $line,
+                        XphpSourceParser::CODE_ALIAS_ARITY,
                     );
                 }
                 $subst = [];
