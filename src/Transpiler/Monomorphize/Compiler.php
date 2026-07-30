@@ -472,8 +472,14 @@ final readonly class Compiler
         $globalAliases = $this->collectGlobalAliases($contents);
         $astPerFile = [];
         foreach ($contents as $filepath => $content) {
+            // Buffer this file's alias-bound obligations and commit them to the shared collector only
+            // once the file has parsed cleanly — a file that aborts mid-parse is dropped from the
+            // hierarchy, so its obligations must not be checked against it (they would reference
+            // now-absent types and mis-report a valid use as a bound violation).
+            $fileObligations = new AliasBoundObligationCollector();
             try {
-                $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases, $filepath, $aliasBoundObligations);
+                $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases, $filepath, $fileObligations);
+                $aliasBoundObligations->absorb($fileObligations);
             } catch (PhpParserError $e) {
                 $line = $e->getStartLine();
                 $diagnostics->add(new Diagnostic(

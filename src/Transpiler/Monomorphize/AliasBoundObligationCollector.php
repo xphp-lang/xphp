@@ -26,6 +26,19 @@ final class AliasBoundObligationCollector
         $this->obligations[] = new AliasBoundObligation($typeParams, $args, $label, $location);
     }
 
+    /**
+     * Commit another (per-file) collector's obligations into this one. Used so a file's obligations
+     * are absorbed only after that file has parsed successfully: a file that aborts mid-parse has its
+     * AST dropped from the hierarchy, so its obligations — which may reference now-absent types —
+     * must be dropped with it rather than checked against a hierarchy that no longer contains them.
+     */
+    public function absorb(self $other): void
+    {
+        foreach ($other->obligations as $obligation) {
+            $this->obligations[] = $obligation;
+        }
+    }
+
     /** @return list<AliasBoundObligation> */
     public function all(): array
     {

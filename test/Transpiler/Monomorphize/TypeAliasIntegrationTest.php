@@ -405,11 +405,27 @@ final class TypeAliasIntegrationTest extends TestCase
         // Obligations are captured only where an alias is USED; an alias declared with a default that
         // would violate its own bound but never instantiated emits nothing (unlike a class template,
         // which is checked at declaration). Documented divergence, not a bug: an unused alias is inert.
-        $dist = $this->compile([
+        $files = [
             'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named = int> = Bag<T>;\nclass C { public function unrelated(): int { return 1; } }\n",
-        ]);
+        ];
+        // No diagnostic of any kind — in particular no bound violation for the (never instantiated)
+        // bad default — and the unrelated code still compiles.
+        self::assertFalse($this->check($files)->hasErrors(), 'an unused alias with a bad default is inert');
+        self::assertStringContainsString('function unrelated(): int', self::read($this->compile($files), 'C.php'));
+    }
 
-        self::assertStringContainsString('function unrelated(): int', self::read($dist, 'C.php'));
+    public function testAValidBoundedUseIsNotFalselyReportedWhenTheSameFileAbortsParsing(): void
+    {
+        // A file that aborts mid-parse (here on an arity error) is dropped from the hierarchy. A VALID
+        // bounded-alias use earlier in the same file must NOT then be checked against that missing
+        // hierarchy — its obligation is discarded with the file, so no spurious bound violation for a
+        // type ("not in the source set") that is in fact declared right there.
+        $files = [
+            'A.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Widget implements Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\nclass Dict<K, V> { public function __construct(public K \$k, public V \$v) {} }\ntype B<T : Named> = Bag<T>;\ntype P<A, B> = Dict<A, B>;\nfunction ok(): B<Widget> { return new Bag::<Widget>(new Widget()); }\nfunction bad(): P<int> { return new Dict::<int, int>(1, 2); }\n",
+        ];
+        $codes = array_map(static fn ($d): string => $d->code, $this->check($files)->all());
+        self::assertContains(XphpSourceParser::CODE_ALIAS_ARITY, $codes, 'the real arity error is still reported');
+        self::assertNotContains(Registry::CODE_BOUND_VIOLATION, $codes, 'the valid bounded use must not be falsely flagged');
     }
 
     public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
