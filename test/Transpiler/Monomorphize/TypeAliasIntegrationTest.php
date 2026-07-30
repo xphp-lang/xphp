@@ -312,6 +312,106 @@ final class TypeAliasIntegrationTest extends TestCase
         $this->assertCompileThrows($files, 'expects between 1 and 2 type argument(s), 3 given');
     }
 
+    public function testAliasParameterBoundViolationIsRejectedInBothModes(): void
+    {
+        // A ground argument that does not satisfy an alias parameter's bound is a loud error, routed
+        // through the SAME check a class instantiation uses — an identical `xphp.bound_violation` with
+        // the "type alias" label. `check` collects it; `compile` throws (a RuntimeException, not the
+        // parse exception, since the check runs post-hierarchy).
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named> = Bag<T>;\nfunction f(): B<int> { return new Bag::<int>(1); }\n",
+        ];
+        $collector = $this->check($files);
+        self::assertRejected($collector, Registry::CODE_BOUND_VIOLATION, 'Generic bound violated while instantiating type alias `App\\B`');
+        // The diagnostic points at the USE-site file — a captured obligation carries a real location.
+        $violations = array_values(array_filter($collector->all(), static fn ($d): bool => $d->code === Registry::CODE_BOUND_VIOLATION));
+        self::assertStringEndsWith('C.xphp', $violations[0]->location?->file ?? '');
+        $this->assertCompileThrowsRuntime($files, '"int" does not extend/implement "App\\Named"');
+    }
+
+    public function testAliasParameterBoundSatisfiedByAGroundArgumentCompiles(): void
+    {
+        // A ground argument that satisfies the bound compiles cleanly — no false positive.
+        $use = self::read($this->compile([
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Widget implements Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named> = Bag<T>;\nclass C { public function f(): B<Widget> { return new Bag::<Widget>(new Widget()); } }\n",
+        ]), 'C.php');
+
+        self::assertStringContainsString('\\XPHP\\Generated\\App\\Bag\\', self::specFqn($use, 'f'));
+    }
+
+    public function testAliasParameterBoundOnATopLevelTypeParameterArgumentIsSkipped(): void
+    {
+        // `B<X>` inside `class G<X>`: the argument's top level is a type parameter, absent from the
+        // hierarchy, so checking it would spuriously reject. It is skipped (the alias erases to
+        // `Bag<X>`, whose own bounds — none here — still apply when G specializes). No false positive.
+        $dist = $this->compile([
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named> = Bag<T>;\nclass G<X> { public function __construct(public X \$x) {} public function f(): B<X> { return new Bag::<X>(\$this->x); } }\nclass H { public function make(): G<int> { return new G::<int>(1); } }\n",
+        ]);
+
+        self::assertStringContainsString('class', self::read($dist, 'C.php'));
+    }
+
+    public function testAliasParameterBoundChecksAConcreteHeadOverATypeParameterInnerArgument(): void
+    {
+        // `B<Coll<X>>` inside `class G<X>`: the argument's TOP LEVEL is the concrete `Coll` (not a type
+        // parameter), so it is checked even though its inner arg is a type parameter — bounds erase
+        // generic arguments. `Coll` does not implement `Named`, so this is a violation, not a skip.
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Coll<E> {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named> = Bag<T>;\nclass G<X> { public function f(): B<Coll<X>> { throw new \\Exception(); } }\nclass H { public function make(): G<int> { return new G::<int>(); } }\n",
+        ];
+        self::assertRejected($this->check($files), Registry::CODE_BOUND_VIOLATION, 'does not extend/implement "App\\Named"');
+    }
+
+    public function testAliasParameterBoundWithAnUnknownGroundClassIsRejected(): void
+    {
+        // A ground class the hierarchy was not built from (e.g. a vendor class) is an UNKNOWN verdict,
+        // which — exactly as for class generics — is rejected (the compiler cannot prove the bound), so
+        // no knowably-unprovable specialization is emitted silently.
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named> = Bag<T>;\nfunction f(): B<\\DateTime> { return new Bag::<\\DateTime>(new \\DateTime()); }\n",
+        ];
+        self::assertRejected($this->check($files), Registry::CODE_BOUND_VIOLATION, 'is not in the source set the hierarchy was built from');
+    }
+
+    public function testAliasParameterSiblingReferencingBoundIsGroundedAndChecked(): void
+    {
+        // A bound referencing an earlier sibling parameter (`<A, T : A>`) is grounded against the
+        // supplied args before checking — `Pair<Named, int>` fails (int is not Named) while
+        // `Pair<Named, Widget>` passes (Widget implements Named).
+        $bad = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Two<A, B> {}\ntype Pair<A, T : A> = Two<A, T>;\nfunction f(): Pair<Named, int> { throw new \\Exception(); }\n",
+        ];
+        self::assertRejected($this->check($bad), Registry::CODE_BOUND_VIOLATION, 'does not extend/implement "App\\Named"');
+
+        $good = self::read($this->compile([
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Widget implements Named {}\nclass Two<A, B> {}\ntype Pair<A, T : A> = Two<A, T>;\nclass C { public function f(): Pair<Named, Widget> { throw new \\Exception(); } }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('\\XPHP\\Generated\\App\\Two\\', self::specFqn($good, 'f'));
+    }
+
+    public function testAliasParameterBoundIsReportedPerGroundUseSite(): void
+    {
+        // Obligations are per use site (no FQN de-dup like the Registry): two ground violating uses of
+        // the same bounded alias yield two collected diagnostics in check mode.
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named> = Bag<T>;\nfunction f(): B<int> { return new Bag::<int>(1); }\nfunction g(): B<string> { return new Bag::<string>('x'); }\n",
+        ];
+        $violations = array_filter($this->check($files)->all(), static fn ($d): bool => $d->code === Registry::CODE_BOUND_VIOLATION);
+        self::assertCount(2, $violations);
+    }
+
+    public function testABadDefaultOnAnUnusedAliasIsNotChecked(): void
+    {
+        // Obligations are captured only where an alias is USED; an alias declared with a default that
+        // would violate its own bound but never instantiated emits nothing (unlike a class template,
+        // which is checked at declaration). Documented divergence, not a bug: an unused alias is inert.
+        $dist = $this->compile([
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Named {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype B<T : Named = int> = Bag<T>;\nclass C { public function unrelated(): int { return 1; } }\n",
+        ]);
+
+        self::assertStringContainsString('function unrelated(): int', self::read($dist, 'C.php'));
+    }
+
     public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
     {
         // An intersection (and DNF / closure) body is recognized (stripped) but rejected with a clear
@@ -385,6 +485,23 @@ final class TypeAliasIntegrationTest extends TestCase
             $this->compile($files);
             self::fail('compile must reject the alias loudly');
         } catch (XphpParseException $e) {
+            self::assertStringContainsString($needle, $e->getMessage());
+        }
+    }
+
+    /**
+     * Like {@see assertCompileThrows}, but for a violation raised AFTER parsing (an alias parameter
+     * bound, checked once the hierarchy exists) — which throws a plain RuntimeException, not the parse
+     * exception.
+     *
+     * @param array<string, string> $files
+     */
+    private function assertCompileThrowsRuntime(array $files, string $needle): void
+    {
+        try {
+            $this->compile($files);
+            self::fail('compile must reject the alias bound violation loudly');
+        } catch (\RuntimeException $e) {
             self::assertStringContainsString($needle, $e->getMessage());
         }
     }

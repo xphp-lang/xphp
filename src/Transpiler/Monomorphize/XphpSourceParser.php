@@ -15,6 +15,7 @@ use PhpParser\NodeVisitorAbstract;
 use PhpParser\Parser;
 use PhpToken;
 use RuntimeException;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Parses .xphp source text into an AST with generic metadata, supporting
@@ -147,11 +148,15 @@ final class XphpSourceParser
      * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
      *        a whole-program alias table (from {@see aliasTableOf} across every source) used for
      *        cross-file expansion; null keeps aliases file-local (standalone parse / LSP).
+     * @param ?string $filepath the source file, threaded only so a captured alias-bound obligation
+     *        can carry an accurate SourceLocation; null on the standalone parse path.
+     * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations,
+     *        verified after the hierarchy is built; null (inert) on the standalone parse path.
      * @return list<Node\Stmt>
      */
-    public function parse(string $source, ?array $externalAliases = null): array
+    public function parse(string $source, ?array $externalAliases = null, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
     {
-        return $this->parseWithMap($source, $externalAliases)[0];
+        return $this->parseWithMap($source, $externalAliases, $filepath, $obligations)[0];
     }
 
     /**
@@ -189,9 +194,10 @@ final class XphpSourceParser
      * (the common case for files without `T[]` array-suffix sugar).
      *
      * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
+     * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      * @return array{0: list<Node\Stmt>, 1: ByteOffsetMap}
      */
-    public function parseWithMap(string $source, ?array $externalAliases = null): array
+    public function parseWithMap(string $source, ?array $externalAliases = null, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
     {
         [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers, $aliasMarkers] = $this->scanAndStrip($source);
 
@@ -211,7 +217,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasMarkers, $externalAliases);
+        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasMarkers, $externalAliases, $filepath, $obligations);
         // @infection-ignore-all — defensive backstop, unreachable from valid input by
         // construction (see unboundDeclarationMarkerMessage): no test can reach a
         // mutant here. The message builder is pinned by direct unit tests; this
@@ -3041,8 +3047,9 @@ final class XphpSourceParser
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
      * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
      * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
+     * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?array $externalAliases = null): ?string
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?array $externalAliases = null, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): ?string
     {
         // buildAliasTable runs the per-file rejections (same-file duplicate / class-collision /
         // unsupported body) regardless; a whole-program table, when injected, is what expansion
@@ -3054,7 +3061,7 @@ final class XphpSourceParser
             /**
              * @phpstan-import-type BoundDict from XphpSourceParser
              */
-            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasTable) extends NodeVisitorAbstract {
+            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasTable, $filepath, $obligations) extends NodeVisitorAbstract {
             private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
@@ -3069,8 +3076,10 @@ final class XphpSourceParser
              * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
              * @param array<int, array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
-             * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}> $aliasTable file-local
-             *        type aliases keyed by FQN; body is the raw (unresolved) TypeRef.
+             * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}> $aliasTable the
+             *        aliases available for expansion (whole-program when injected) keyed by FQN; body is the raw (unresolved) TypeRef.
+             * @param ?string $filepath the source file, for a captured obligation's SourceLocation; null on the standalone parse path
+             * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations; null (inert) on the standalone parse path
              */
             public function __construct(
                 private array $classMarkers,
@@ -3079,6 +3088,8 @@ final class XphpSourceParser
                 private array $closureMarkers,
                 private ByteOffsetMap $byteOffsetMap,
                 private array $aliasTable,
+                private ?string $filepath,
+                private ?AliasBoundObligationCollector $obligations,
             ) {
                 $this->ctx = new NamespaceContext();
             }
@@ -3092,12 +3103,13 @@ final class XphpSourceParser
             private array $aliasBodyCache = [];
 
             /**
-             * Cache of resolved alias parameter defaults keyed by alias FQN — aligned by position to
-             * the alias's params, null where a param has no default. Resolved once, like the body.
+             * Cache of resolved alias parameters keyed by alias FQN — each raw param entry resolved
+             * (against the use-site context, with the alias's params in scope) to a TypeParam carrying
+             * its bound and default. Feeds both default-padding and bound enforcement. Resolved once.
              *
-             * @var array<string, list<?TypeRef>>
+             * @var array<string, list<TypeParam>>
              */
-            private array $aliasDefaultsCache = [];
+            private array $aliasParamsCache = [];
 
             // Returns a replacement Node when a type-alias use is expanded in place (the traverser
             // swaps it into the parent slot); null in every other case leaves the node untouched.
@@ -4182,6 +4194,7 @@ final class XphpSourceParser
                     );
                 }
                 $paddedArgs = $this->padAliasArgs($ref->name, $entry, $expandedArgs, $line);
+                $this->captureAliasBoundObligation($ref->name, $entry, $paddedArgs, $line);
                 $subst = [];
                 foreach (array_column($entry['params'], 'name') as $k => $paramName) {
                     $subst[$paramName] = $paddedArgs[$k];
@@ -4194,6 +4207,47 @@ final class XphpSourceParser
                     }
                 }
                 return $members;
+            }
+
+            /**
+             * Record a deferred bound-check for a used alias whose parameters declare bounds, to be
+             * verified once the whole-program hierarchy exists ({@see AliasBoundValidator}). Captured
+             * only when a collector is threaded in (the compile/check path — inert for standalone / LSP
+             * parse) and every supplied argument is top-level ground: a bare type-param argument
+             * (`B<X>` inside `class C<X>`) is absent from the hierarchy and would be spuriously
+             * rejected, so it is skipped, whereas a concrete head over a type-param inner (`Box<X>`) IS
+             * captured (bounds erase generic arguments).
+             *
+             * Only a generic alias has parameters, hence bounds; and a generic alias only expands where
+             * it is FILE-LOCAL (a cross-file generic-alias use is a separate unsupported case that
+             * hard-errors as an undefined template, never reaching here). So a captured bound always
+             * resolves in the same namespace it was declared in — no cross-file misresolution. When
+             * cross-file generic aliases are supported, that resolution context must be revisited.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @param list<TypeRef> $paddedArgs
+             */
+            private function captureAliasBoundObligation(string $fqn, array $entry, array $paddedArgs, int $line): void
+            {
+                if ($this->obligations === null) {
+                    return;
+                }
+                // A top-level type-param argument (`B<X>` in `class C<X>`) is absent from the hierarchy
+                // and would be spuriously rejected; skip the whole obligation. A concrete head over a
+                // type-param inner (`Coll<X>`) is kept — bounds erase generic arguments. (An alias with
+                // no bounds is captured harmlessly: checkBounds is a no-op for a param without a bound,
+                // so gating on "has a bound" would be an unobservable optimization.)
+                foreach ($paddedArgs as $arg) {
+                    if ($arg->isTypeParam) {
+                        return;
+                    }
+                }
+                $this->obligations->add(
+                    $this->resolveAliasParams($fqn, $entry),
+                    $paddedArgs,
+                    "type alias `{$fqn}`",
+                    new SourceLocation($this->filepath ?? '', $line),
+                );
             }
 
             /**
@@ -4229,7 +4283,7 @@ final class XphpSourceParser
                         XphpSourceParser::CODE_ALIAS_ARITY,
                     );
                 }
-                $defaults = $this->resolveAliasDefaults($fqn, $entry);
+                $params = $this->resolveAliasParams($fqn, $entry);
                 $paramNames = array_column($entry['params'], 'name');
                 $padded = $expandedArgs;
                 for ($i = $given; $i < $total; $i++) {
@@ -4239,8 +4293,8 @@ final class XphpSourceParser
                     }
                     // @infection-ignore-all CoalesceRemoval -- indices [$given,$total) are exactly the
                     // trailing params, every one of which has a default (required params form a prefix),
-                    // so $defaults[$i] is never null here; the coalesce is a defensive floor.
-                    $default = $defaults[$i] ?? throw new \LogicException('padded slot without a default');
+                    // so $params[$i]->default is never null here; the coalesce is a defensive floor.
+                    $default = $params[$i]->default ?? throw new \LogicException('padded slot without a default');
                     $padded[] = self::substituteTypeRef($default, $subst);
                 }
                 return $padded;
@@ -4272,31 +4326,35 @@ final class XphpSourceParser
             }
 
             /**
-             * Resolve an alias's raw parameter DEFAULTS against the current namespace context, with the
-             * alias's own parameters in scope so a default that references an earlier param (`B = A`)
-             * resolves to a type-param leaf. Returns one entry per parameter, aligned by position:
-             * the resolved default TypeRef, or null where the parameter has no default. Cached per FQN.
+             * Resolve an alias's raw parameter entries against the current namespace context, with the
+             * alias's own parameters in scope so a bound / default that references a param (`T : A`,
+             * `B = A`) resolves to a type-param leaf. Returns one TypeParam per parameter, in order,
+             * carrying the resolved bound and default. Cached per FQN; feeds both default-padding
+             * (`padAliasArgs`) and bound enforcement (`captureAliasBoundObligation`).
              *
              * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
-             * @return list<?TypeRef>
+             * @return list<TypeParam>
              */
-            private function resolveAliasDefaults(string $fqn, array $entry): array
+            private function resolveAliasParams(string $fqn, array $entry): array
             {
-                // @infection-ignore-all ReturnRemoval -- the cache is an optimization; resolveTypeRef
-                // is deterministic for a fixed context, so re-resolving on a cache miss is equivalent.
-                if (isset($this->aliasDefaultsCache[$fqn])) {
-                    return $this->aliasDefaultsCache[$fqn];
+                // @infection-ignore-all ReturnRemoval -- the cache is an optimization; resolution is
+                // deterministic for a fixed context, so re-resolving on a cache miss is equivalent.
+                if (isset($this->aliasParamsCache[$fqn])) {
+                    return $this->aliasParamsCache[$fqn];
                 }
                 $saved = $this->typeParamStack;
                 $this->typeParamStack[] = array_column($entry['params'], 'name');
                 $resolved = array_map(
-                    fn (array $param): ?TypeRef => $param['default'] === null
-                        ? null
-                        : $this->resolveTypeRef($param['default']),
+                    fn (array $param): TypeParam => new TypeParam(
+                        $param['name'],
+                        $this->buildBoundExpr($param),
+                        $this->buildDefault($param),
+                        $param['variance'],
+                    ),
                     $entry['params'],
                 );
                 $this->typeParamStack = $saved;
-                return $this->aliasDefaultsCache[$fqn] = $resolved;
+                return $this->aliasParamsCache[$fqn] = $resolved;
             }
 
             /**

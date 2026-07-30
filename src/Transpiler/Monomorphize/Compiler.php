@@ -69,7 +69,8 @@ final readonly class Compiler
         // Phase 0: parse every source up front. The TypeHierarchy (used to validate generic
         // bounds at recordInstantiation time) needs to see every class/interface/trait
         // declaration *before* any instantiation is recorded, so parsing has to finish first.
-        $astPerFile = $this->parseAll($sources);
+        $aliasBoundObligations = new AliasBoundObligationCollector();
+        $astPerFile = $this->parseAll($sources, $aliasBoundObligations);
 
         $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
         $registry = new Registry($this->hashLength, $hierarchy);
@@ -126,6 +127,9 @@ final readonly class Compiler
         // reaches emission as broken PHP.
         $registry->validateUndeclaredTypeParameters();
         $registry->validateDefaultsAgainstBounds();
+        // Enforce type-alias parameter bounds now that the hierarchy exists (the obligations were
+        // captured during parse, before it did) — compile mode has no collector, so a violation throws.
+        AliasBoundValidator::validate($aliasBoundObligations, $hierarchy);
         // Inner-template variance composition: every template's variance
         // markers are known by now, so cases the parse-time validator
         // couldn't catch (e.g. `class P<out T> { f(): Container<T> }` where
@@ -457,6 +461,7 @@ final readonly class Compiler
     public function check(FilepathArray $sources): DiagnosticCollector
     {
         $diagnostics = new DiagnosticCollector();
+        $aliasBoundObligations = new AliasBoundObligationCollector();
         // Read every source up front — OUTSIDE the try so an I/O failure surfaces as itself, not a
         // mislabeled "parse error" — then merge a whole-program alias table so a cross-file alias use
         // resolves. Only parsing is treated as a per-file, recoverable diagnostic.
@@ -468,7 +473,7 @@ final readonly class Compiler
         $astPerFile = [];
         foreach ($contents as $filepath => $content) {
             try {
-                $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases);
+                $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases, $filepath, $aliasBoundObligations);
             } catch (PhpParserError $e) {
                 $line = $e->getStartLine();
                 $diagnostics->add(new Diagnostic(
@@ -528,6 +533,9 @@ final readonly class Compiler
         $registry->validateUndeclaredTypeParameters();
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);
         $registry->validateDefaultsAgainstBounds();
+        // Enforce type-alias parameter bounds (obligations captured during parse) now the hierarchy
+        // exists; check mode collects each violation as an xphp.bound_violation and continues.
+        AliasBoundValidator::validate($aliasBoundObligations, $hierarchy, $diagnostics);
         $registry->validateInnerVariance();
         // Closure-signature conformance at the statically-visible literal site
         // (a `Closure(...)` return handing back a closure literal). In
@@ -582,7 +590,7 @@ final readonly class Compiler
      *
      * @return array<string, list<\PhpParser\Node\Stmt>>
      */
-    private function parseAll(FilepathArray $sources): array
+    private function parseAll(FilepathArray $sources, ?AliasBoundObligationCollector $obligations = null): array
     {
         $contents = [];
         foreach ($sources->filepaths as $filepath) {
@@ -592,7 +600,7 @@ final readonly class Compiler
 
         $astPerFile = [];
         foreach ($contents as $filepath => $content) {
-            $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases);
+            $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases, $filepath, $obligations);
         }
 
         return $astPerFile;
