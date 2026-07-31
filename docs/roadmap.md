@@ -51,9 +51,9 @@ timeline
                 : runtime instanceof T
                 : marker interface per template
         Type aliases
-                : compile-time substitution
+                : compile-time substitution, file-local
                 : single-head union and nullable bodies
-                : whole-program cross-file use
+                : parameter defaults and bounds
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
@@ -234,8 +234,8 @@ upcoming one.
 - Parameters carry **defaults** (`type P<A, B = A>` — a use may omit
   trailing defaulted arguments) and **bounds** (`type B<T : Named>` — an
   argument that violates the bound is a compile error), like a generic class.
-- **Cross-file**: a non-generic alias declared in one file is usable in
-  another (whole-program alias table); a generic alias is file-local.
+- **File-local by design**: an alias is visible only in the file that
+  declares it (like a `use` alias); declare it per file to share it.
 - Cyclic, arity-mismatched, class-colliding, duplicate, unsupported-body
   (intersection / DNF / closure), compound-in-non-slot, and
   bound-violating uses are loud compile errors in both `compile` and

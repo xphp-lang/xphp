@@ -77,10 +77,10 @@ no separate code path and no runtime cost.
   bound is a compile error, the same `xphp.bound_violation` a class
   instantiation raises). A bound may itself name an alias — `type Named =
   Face; type B<T : Named>` checks against `Face`.
-- **Cross-file**: a **non-generic** alias declared in one file is usable in
-  another of the same build (the whole program shares one alias table). A
-  **generic** alias (one with type parameters) is **file-local** — use it
-  in the file that declares it (see caveats).
+- **File-local**: an alias is visible only in the file that declares it,
+  like a PHP `use` alias. To share a vocabulary, declare the alias in each
+  file that uses it (a zero-cost substitution), or reference the underlying
+  type directly (see caveats).
 - Aliases compose: an alias body may reference another alias
   (`type UserMap = Pair<int, User>`), and an alias may take type
   parameters used inside its body (`type Pair<A, B> = Dict<A, Bag<B>>`).
@@ -105,20 +105,21 @@ no separate code path and no runtime cost.
 
 ## Caveats
 
-Union and nullable bodies and cross-file use all work; the remaining
+An alias is **file-local by design** (like a `use` alias). The remaining
 limits are the body shape and the positions a compound alias can take. See
 [caveats → type-alias body and position limits](../caveats.md#type-alias-body-and-position-limits)
 for the details and the reasons:
 
+- **File-local.** An alias is visible only in its own file — declare it in
+  each file that uses it, or reference the underlying type directly. (Because
+  scoping is per-file there is no cross-file collision/duplicate to detect;
+  same-file ones *are* caught.)
 - **Intersection / DNF / closure bodies** (`A&B`, `(A&B)|C`,
   `Closure(int): int`) are rejected with `xphp.alias_unsupported_body` —
   write the type directly or wrap it in a named class/interface.
 - **A union / nullable alias is a whole-slot type only.** As a generic
   argument, in `new` / `extends` / a bound, or nested inside another
   union/intersection, it is `xphp.alias_compound_in_non_slot`.
-- **Cross-file collision / duplicate not detected.** An alias colliding
-  with a class, or the same alias declared, in a *different* file is not
-  flagged (both are within one file).
 
 ## See also
 
