@@ -75,7 +75,8 @@ no separate code path and no runtime cost.
   defaulted arguments — `P<int>` fills `B = A = int`), and
   `type B<T : Named> = Bag<T>;` (a use whose argument does not satisfy the
   bound is a compile error, the same `xphp.bound_violation` a class
-  instantiation raises).
+  instantiation raises). A bound may itself name an alias — `type Named =
+  Face; type B<T : Named>` checks against `Face`.
 - **Cross-file**: a **non-generic** alias declared in one file is usable in
   another of the same build (the whole program shares one alias table). A
   **generic** alias (one with type parameters) is **file-local** — use it

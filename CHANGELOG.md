@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concrete-instantiation, `type UserMap = Pair<int, User>`); parameters carry
   **defaults** (`type P<A, B = A>` — a use may omit trailing defaulted arguments)
   and **bounds** (`type B<T : Named>` — an argument that violates the bound is a
-  compile error), like a generic class. A non-generic alias declared in one file is
+  compile error; the bound may itself name an alias), like a generic class. A non-generic alias declared in one file is
   usable in another (**cross-file**, whole-program); a generic alias is file-local.
   A cyclic (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`),
   class-colliding (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`),

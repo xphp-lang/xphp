@@ -121,6 +121,13 @@ Cross-file, an alias colliding with a **class in another file**, or the same ali
 declared in **two files**, is not detected (both are within one file —
 `xphp.alias_class_collision` / `xphp.alias_duplicate`).
 
+A generic alias's **body, parameter bounds, and defaults resolve in the file that
+*uses* the alias**, not the one that declares it. Under one `namespace {}` per file
+(the PSR norm) these are the same, so it never bites; but in a file with multiple
+namespace blocks, a bare (non-qualified) name in an alias's body/bound/default is
+resolved against the using namespace and can mis-resolve. Keep one namespace per
+file, or fully-qualify such names.
+
 ### Why
 
 The body is limited to a single head, a flat union, or a nullable because those
