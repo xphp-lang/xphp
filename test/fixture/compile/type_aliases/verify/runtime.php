@@ -41,6 +41,6 @@ return function (CompiledFixture $fixture): void {
     Assert::assertSame('hi', $numValue, 'union alias Num expanded to int|string in the param/return slots');
     Assert::assertNull($maybeValue, 'nullable alias MaybeUser expanded to ?User');
 
-    // Cross-file: Consumer.xphp used `Num` declared in Types.xphp.
-    Assert::assertSame('cross', $crossValue, 'an alias declared in Types.xphp was usable in Consumer.xphp');
+    // File-local: Consumer.xphp declares its OWN `Num` and it expands independently of Types.xphp.
+    Assert::assertSame('local', $localValue, 'a file-local alias in a second file expands there');
 };

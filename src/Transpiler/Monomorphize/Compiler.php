@@ -31,8 +31,6 @@ use XPHP\FileSystem\FilepathArray;
  *  4. Emit rewritten user code — rewrite each original source AST (strip generic class defs,
  *     rewrite generic Name references), pretty-print, and write to the target directory.
  *  5. Persist registry — write .xphp-cache/registry.json.
- *
- * @phpstan-import-type BoundDict from XphpSourceParser
  */
 final readonly class Compiler
 {
@@ -463,13 +461,11 @@ final readonly class Compiler
         $diagnostics = new DiagnosticCollector();
         $aliasBoundObligations = new AliasBoundObligationCollector();
         // Read every source up front — OUTSIDE the try so an I/O failure surfaces as itself, not a
-        // mislabeled "parse error" — then merge a whole-program alias table so a cross-file alias use
-        // resolves. Only parsing is treated as a per-file, recoverable diagnostic.
+        // mislabeled "parse error". Only parsing is treated as a per-file, recoverable diagnostic.
         $contents = [];
         foreach ($sources->filepaths as $filepath) {
             $contents[$filepath] = $this->fileReader->read($filepath);
         }
-        $globalAliases = $this->collectGlobalAliases($contents);
         $astPerFile = [];
         foreach ($contents as $filepath => $content) {
             // Buffer this file's alias-bound obligations and commit them to the shared collector only
@@ -478,7 +474,7 @@ final readonly class Compiler
             // now-absent types and mis-report a valid use as a bound violation).
             $fileObligations = new AliasBoundObligationCollector();
             try {
-                $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases, $filepath, $fileObligations);
+                $astPerFile[$filepath] = $this->sourceParser->parse($content, $filepath, $fileObligations);
                 $aliasBoundObligations->absorb($fileObligations);
             } catch (PhpParserError $e) {
                 $line = $e->getStartLine();
@@ -598,46 +594,12 @@ final readonly class Compiler
      */
     private function parseAll(FilepathArray $sources, ?AliasBoundObligationCollector $obligations = null): array
     {
-        $contents = [];
-        foreach ($sources->filepaths as $filepath) {
-            $contents[$filepath] = $this->fileReader->read($filepath);
-        }
-        $globalAliases = $this->collectGlobalAliases($contents);
-
         $astPerFile = [];
-        foreach ($contents as $filepath => $content) {
-            $astPerFile[$filepath] = $this->sourceParser->parse($content, $globalAliases, $filepath, $obligations);
+        foreach ($sources->filepaths as $filepath) {
+            $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath), $filepath, $obligations);
         }
 
         return $astPerFile;
-    }
-
-    /**
-     * Merge every source's file-local type-alias table into one whole-program table, so an alias
-     * declared in one file can be used in another. A file whose own aliases are malformed (same-file
-     * duplicate / collision / unsupported body) raises here and is skipped — the same error
-     * re-surfaces (and, in check mode, is collected) when that file is parsed for real.
-     *
-     * @param array<string, string> $contents filepath => source
-     * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?\XPHP\Transpiler\Monomorphize\TypeRef, variance:\XPHP\Transpiler\Monomorphize\Variance}>, body:list<\XPHP\Transpiler\Monomorphize\TypeRef>}>
-     */
-    private function collectGlobalAliases(array $contents): array
-    {
-        $global = [];
-        foreach ($contents as $content) {
-            try {
-                foreach ($this->sourceParser->aliasTableOf($content) as $fqn => $entry) {
-                    $global[$fqn] = $entry;
-                }
-            } catch (RuntimeException) {
-                // Any parse-time rejection — skip this file's aliases; the same error re-surfaces (and
-                // is collected in check mode) when the file is parsed for real. Both a nikic syntax
-                // error (PhpParser\Error) and an xphp scanner/alias error (XphpParseException) extend
-                // RuntimeException, so this catches every parse-time failure.
-            }
-        }
-
-        return $global;
     }
 
     private static function relativePath(string $base, string $filepath): string

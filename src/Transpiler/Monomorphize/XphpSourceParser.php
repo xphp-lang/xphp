@@ -145,43 +145,18 @@ final class XphpSourceParser
     }
 
     /**
-     * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
-     *        a whole-program alias table (from {@see aliasTableOf} across every source) used for
-     *        cross-file expansion; null keeps aliases file-local (standalone parse / LSP).
+     * A type alias is file-local: only the aliases declared in `$source` are visible to it, mirroring
+     * PHP's `use`-alias scoping. There is no whole-program alias table.
+     *
      * @param ?string $filepath the source file, threaded only so a captured alias-bound obligation
      *        can carry an accurate SourceLocation; null on the standalone parse path.
      * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations,
      *        verified after the hierarchy is built; null (inert) on the standalone parse path.
      * @return list<Node\Stmt>
      */
-    public function parse(string $source, ?array $externalAliases = null, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
+    public function parse(string $source, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
     {
-        return $this->parseWithMap($source, $externalAliases, $filepath, $obligations)[0];
-    }
-
-    /**
-     * The file-local type-alias table for a single source — its `type` declarations
-     * keyed by FQN, bodies unresolved — WITHOUT expanding any uses. The Compiler merges these across
-     * every source into a whole-program table so an alias declared in one file is usable in another.
-     * Same-file duplicate / class-collision / unsupported-body rejections still fire (per file) via
-     * the main parse; the caller catches and skips a file that raises one here.
-     *
-     * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>
-     */
-    public function aliasTableOf(string $source): array
-    {
-        [, , , $cleaned, $byteOffsetMap, , $aliasMarkers] = $this->scanAndStrip($source);
-        // @infection-ignore-all ReturnRemoval -- optimization: an alias-free file (the common case)
-        // skips the re-parse; without it buildAliasTable([]) returns [] anyway.
-        if ($aliasMarkers === []) {
-            return [];
-        }
-        $ast = $this->parser->parse($cleaned);
-        if ($ast === null) {
-            return [];
-        }
-        /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; keys are always 0..N-1. */
-        return self::buildAliasTable($ast, $aliasMarkers, $byteOffsetMap);
+        return $this->parseWithMap($source, $filepath, $obligations)[0];
     }
 
     /**
@@ -193,11 +168,10 @@ final class XphpSourceParser
      * Returns the identity map when no length-changing replacements fired
      * (the common case for files without `T[]` array-suffix sugar).
      *
-     * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
      * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      * @return array{0: list<Node\Stmt>, 1: ByteOffsetMap}
      */
-    public function parseWithMap(string $source, ?array $externalAliases = null, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
+    public function parseWithMap(string $source, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
     {
         [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers, $aliasMarkers] = $this->scanAndStrip($source);
 
@@ -217,7 +191,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasMarkers, $externalAliases, $filepath, $obligations);
+        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasMarkers, $filepath, $obligations);
         // @infection-ignore-all — defensive backstop, unreachable from valid input by
         // construction (see unboundDeclarationMarkerMessage): no test can reach a
         // mutant here. The message builder is pinned by direct unit tests; this
@@ -3046,16 +3020,14 @@ final class XphpSourceParser
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
      * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
-     * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>|null $externalAliases
      * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?array $externalAliases = null, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): ?string
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): ?string
     {
         // buildAliasTable runs the per-file rejections (same-file duplicate / class-collision /
-        // unsupported body) regardless; a whole-program table, when injected, is what expansion
-        // actually looks aliases up in so a use can reach an alias declared in another file.
-        $fileTable = self::buildAliasTable($ast, $aliasMarkers, $byteOffsetMap);
-        $aliasTable = $externalAliases ?? $fileTable;
+        // unsupported body). A type alias is file-local, so this file's own table is the only one
+        // expansion consults — an alias declared in another file is simply not visible here.
+        $aliasTable = self::buildAliasTable($ast, $aliasMarkers, $byteOffsetMap);
         $traverser = new NodeTraverser();
         $visitor = new
             /**

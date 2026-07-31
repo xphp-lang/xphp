@@ -205,40 +205,38 @@ final class TypeAliasIntegrationTest extends TestCase
         $this->assertCompileThrows($files, 'unsupported body');
     }
 
-    public function testAliasesAreVisibleAcrossFilesInTheSameBuild(): void
+    public function testAnAliasIsFileLocalAndNotVisibleInAnotherFile(): void
     {
-        // Whole-program alias table: an alias declared in one file is usable in another (union and
-        // plain-class bodies both).
-        $dist = $this->compile([
-            'Types.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|string;\ntype UserId = Ident;\nclass Ident {}\n",
-            'Consumer.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Consumer {\n public function f(Num \$n): UserId { return new UserId(); }\n}\n",
+        // A type alias is file-local, like a `use` alias — an alias declared in one file is NOT
+        // visible in another. A non-generic use is left unexpanded (a bare reference the later
+        // PHP/PHPStan pass would flag); a generic use surfaces loudly as an undefined template.
+        $nonGeneric = $this->compile([
+            'Types.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Ident {}\ntype UserId = Ident;\n",
+            'Consumer.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction f(): UserId { return new Ident(); }\n",
         ]);
-        $consumer = self::read($dist, 'Consumer.php');
+        // `UserId` is not an alias in Consumer.xphp, so it is left as-is, NOT expanded to `\App\Ident`.
+        $consumer = self::read($nonGeneric, 'Consumer.php');
+        self::assertStringContainsString('function f(): UserId', $consumer);
+        self::assertStringNotContainsString('App\\Ident', $consumer);
 
-        self::assertStringContainsString('function f(int|string $n): \\App\\Ident', $consumer);
+        $generic = [
+            'Types.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Dict<K, V> { public function __construct(public K \$k, public V \$v) {} }\ntype Pair<A, B> = Dict<A, B>;\n",
+            'Consumer.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction f(): Pair<int, string> { return new Dict::<int, string>(1, 'x'); }\n",
+        ];
+        self::assertRejected($this->check($generic), 'xphp.undefined_template', 'App\\Pair');
     }
 
-    public function testAMalformedAliasFileDoesNotCrashTheWholeProgramPrePass(): void
+    public function testRedeclaringAnAliasPerFileSharesItAsFileLocal(): void
     {
-        // The pre-pass that builds the whole-program table skips a file whose own aliases are
-        // malformed (a duplicate) rather than crashing the build; `check` still collects that file's
-        // diagnostic (raised for real when the file is parsed), and a valid alias elsewhere compiles.
-        $files = [
-            'Bad.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Dup = int;\ntype Dup = string;\nfunction bad(): int { return 1; }\n",
-            'Good.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int|string;\nfunction good(Num \$n): int { return 1; }\n",
-        ];
-        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_DUPLICATE, 'declared more than once');
-    }
+        // The share-a-vocabulary pattern under file-local scoping: declare the alias in each file that
+        // uses it (a zero-cost substitution). The target class is a normal cross-file class reference.
+        $dist = $this->compile([
+            'Types.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Ident {}\ntype UserId = Ident;\n",
+            'Consumer.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype UserId = Ident;\nfunction f(): UserId { return new UserId(); }\n",
+        ]);
 
-    public function testAliasFileWithASyntaxErrorIsCollectedNotCrashed(): void
-    {
-        // The pre-pass re-parses an alias-bearing file to collect its aliases; a nikic SYNTAX error
-        // there (a PhpParserError, not an xphp RuntimeException) must be caught/skipped too, so check
-        // collects it for real rather than crashing the whole-program alias collection.
-        $files = [
-            'Broken.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Num = int;\nclass C { public function f(: int {} }\n",
-        ];
-        self::assertTrue($this->check($files)->hasErrors(), 'a syntax error in an alias file is collected, not crashed');
+        // Consumer.xphp's own `type UserId = Ident;` expands here to the shared class \App\Ident.
+        self::assertStringContainsString('function f(): \\App\\Ident', self::read($dist, 'Consumer.php'));
     }
 
     public function testCyclicAliasIsRejectedInBothModes(): void
