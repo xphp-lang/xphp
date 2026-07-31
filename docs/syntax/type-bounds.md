@@ -70,7 +70,9 @@ once it sees `public int $value`.
 
 ## Rules
 
-- A bound can be any valid PHP class or interface name.
+- A bound can be any valid PHP class or interface name, or a
+  [type alias](type-aliases.md) that resolves to one (`type Named = Face;
+  T : Named` checks against `Face`; a union alias becomes a union bound).
 - Intersection: `T : A & B` — concrete must satisfy both.
 - Union: `T : A | B` — any operand suffices.
 - DNF: `T : (A & B) | C` — outer OR of inner ANDs.
