@@ -428,6 +428,86 @@ final class TypeAliasIntegrationTest extends TestCase
         self::assertNotContains(Registry::CODE_BOUND_VIOLATION, $codes, 'the valid bounded use must not be falsely flagged');
     }
 
+    public function testAnAliasUsedAsAParameterBoundIsExpanded(): void
+    {
+        // `type Named = Face` used as a bound must check against Face, not a phantom `App\Named`. A
+        // satisfying argument compiles; a violating one is rejected against the REAL type.
+        $ok = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Face {}\nclass Widget implements Face {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype Named = Face;\ntype B<T : Named> = Bag<T>;\nfunction f(): B<Widget> { return new Bag::<Widget>(new Widget()); }\n",
+        ];
+        self::assertFalse($this->check($ok)->hasErrors(), 'a class satisfying the aliased bound compiles');
+
+        $bad = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Face {}\nclass Plain {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype Named = Face;\ntype B<T : Named> = Bag<T>;\nfunction f(): B<Plain> { return new Bag::<Plain>(new Plain()); }\n",
+        ];
+        $collector = $this->check($bad);
+        self::assertRejected($collector, Registry::CODE_BOUND_VIOLATION, 'does not extend/implement "App\\Face"');
+        $messages = implode("\n", array_map(static fn ($d): string => $d->message, $collector->all()));
+        self::assertStringNotContainsString('App\\Named', $messages, 'the bound must name the expanded type, not the alias');
+    }
+
+    public function testAnAliasUsedAsAClassParameterBoundIsExpanded(): void
+    {
+        // The same expansion fixes the pre-existing class-parameter case (previously an
+        // xphp.undeclared_type on the phantom alias name): a satisfying arg compiles, a violating one
+        // is rejected against the real type.
+        $ok = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Face {}\nclass Widget implements Face {}\ntype Named = Face;\nclass Box<T : Named> { public function __construct(public T \$i) {} }\nfunction f(): Box<Widget> { return new Box::<Widget>(new Widget()); }\n",
+        ];
+        self::assertFalse($this->check($ok)->hasErrors(), 'a class satisfying the aliased class bound compiles');
+
+        $bad = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Face {}\nclass Plain {}\ntype Named = Face;\nclass Box<T : Named> { public function __construct(public T \$i) {} }\nfunction f(): Box<Plain> { return new Box::<Plain>(new Plain()); }\n",
+        ];
+        self::assertRejected($this->check($bad), Registry::CODE_BOUND_VIOLATION, 'does not extend/implement "App\\Face"');
+    }
+
+    public function testAMethodGenericAliasBoundIsExpanded(): void
+    {
+        // A generic METHOD's parameter bound also routes through the fix (the GenericMethodCompiler
+        // path) — an aliased bound satisfied by the argument compiles.
+        $ok = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Face {}\nclass Widget implements Face {}\ntype Named = Face;\nclass C {\n public function m<T : Named>(T \$x): T { return \$x; }\n public function call(): void { \$this->m::<Widget>(new Widget()); }\n}\n",
+        ];
+        self::assertFalse($this->check($ok)->hasErrors(), 'a method-generic aliased bound satisfied by the argument compiles');
+    }
+
+    public function testAUnionAliasUsedAsABoundIsAnyOf(): void
+    {
+        // A union alias `type Either = X|Y` as a bound means "arg is X or Y" (BoundUnion any-of): an
+        // argument implementing either passes; one implementing neither is rejected against the union.
+        $ok = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface X {}\ninterface Y {}\nclass AX implements X {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype Either = X|Y;\ntype B<T : Either> = Bag<T>;\nfunction f(): B<AX> { return new Bag::<AX>(new AX()); }\n",
+        ];
+        self::assertFalse($this->check($ok)->hasErrors(), 'an argument implementing one member of the union bound compiles');
+
+        $bad = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface X {}\ninterface Y {}\nclass Neither {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype Either = X|Y;\ntype B<T : Either> = Bag<T>;\nfunction f(): B<Neither> { return new Bag::<Neither>(new Neither()); }\n",
+        ];
+        self::assertRejected($this->check($bad), Registry::CODE_BOUND_VIOLATION, 'does not satisfy "App\\X | App\\Y"');
+    }
+
+    public function testAnAliasToAliasBoundResolvesTransitively(): void
+    {
+        // A bound naming an alias whose body is itself an alias resolves through to the real type.
+        $ok = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Face {}\nclass Widget implements Face {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype Named = Face;\ntype Alias = Named;\ntype B<T : Alias> = Bag<T>;\nfunction f(): B<Widget> { return new Bag::<Widget>(new Widget()); }\n",
+        ];
+        self::assertFalse($this->check($ok)->hasErrors(), 'an alias-to-alias bound resolves to the real type');
+    }
+
+    public function testASelfReferentialGenericAliasBoundIsRejectedAsACycleNotACrash(): void
+    {
+        // A generic alias whose own parameter bound refers back to itself would recurse without bound
+        // through resolveAliasParams; the in-flight guard turns it into a clean xphp.alias_cycle in
+        // both modes rather than a stack overflow.
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass User {}\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype A<T : A = User> = Bag<T>;\nfunction f(): A<User> { return new Bag::<User>(new User()); }\n",
+        ];
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_CYCLE, 'in terms of itself');
+        $this->assertCompileThrows($files, 'in terms of itself');
+    }
+
     public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
     {
         // An intersection (and DNF / closure) body is recognized (stripped) but rejected with a clear

@@ -3111,6 +3111,16 @@ final class XphpSourceParser
              */
             private array $aliasParamsCache = [];
 
+            /**
+             * Alias FQNs whose parameter resolution has begun. Checked only after {@see $aliasParamsCache}
+             * misses, so a re-entry recorded here (but not yet cached) is an alias resolving through its
+             * own parameter bound — a self-referential cycle. Not cleared: once cached, the cache check
+             * short-circuits before this guard, so a lingering flag never yields a false positive.
+             *
+             * @var array<string, true>
+             */
+            private array $aliasParamsInFlight = [];
+
             // Returns a replacement Node when a type-alias use is expanded in place (the traverser
             // swaps it into the parent slot); null in every other case leaves the node untouched.
             public function enterNode(Node $node): ?Node
@@ -3970,6 +3980,20 @@ final class XphpSourceParser
                     $fqn = $node['isFq']
                         ? $node['name']
                         : $this->resolveNameOnly($node['name']);
+                    // If the bound names a type alias, expand it exactly as a type position would, so
+                    // the check runs against the real type: a single-head alias (`Named = Face`)
+                    // becomes that head, a union / nullable alias (`Num = int|string`) becomes a union
+                    // bound (any-of). Without this the alias name is a phantom class and every argument
+                    // is wrongly rejected. Reaches class-, method-, and alias-parameter bounds alike.
+                    if (isset($this->aliasTable[$fqn])) {
+                        // @infection-ignore-all IncrementInteger -- buildBoundExprNode carries no source
+                        // line; a cycle/arity error while expanding a *bound* alias is reported at the
+                        // check-mode line-1 fallback whether the seed is 0 or 1, so the value is inert.
+                        $members = $this->expandAliasToUnion(new TypeRef($fqn, $resolvedArgs), [], 0);
+                        return count($members) === 1
+                            ? new BoundLeaf($members[0])
+                            : new BoundUnion(...array_map(static fn (TypeRef $m): BoundLeaf => new BoundLeaf($m), $members));
+                    }
                     $suspect = !$node['isFq']
                         && $this->isSuspectUndeclared($node['name']);
                     return new BoundLeaf(new TypeRef($fqn, $resolvedArgs, suspectUndeclared: $suspect));
@@ -4243,7 +4267,7 @@ final class XphpSourceParser
                     }
                 }
                 $this->obligations->add(
-                    $this->resolveAliasParams($fqn, $entry),
+                    $this->resolveAliasParams($fqn, $entry, $line),
                     $paddedArgs,
                     "type alias `{$fqn}`",
                     new SourceLocation($this->filepath ?? '', $line),
@@ -4283,7 +4307,7 @@ final class XphpSourceParser
                         XphpSourceParser::CODE_ALIAS_ARITY,
                     );
                 }
-                $params = $this->resolveAliasParams($fqn, $entry);
+                $params = $this->resolveAliasParams($fqn, $entry, $line);
                 $paramNames = array_column($entry['params'], 'name');
                 $padded = $expandedArgs;
                 for ($i = $given; $i < $total; $i++) {
@@ -4332,16 +4356,33 @@ final class XphpSourceParser
              * carrying the resolved bound and default. Cached per FQN; feeds both default-padding
              * (`padAliasArgs`) and bound enforcement (`captureAliasBoundObligation`).
              *
+             * A parameter's bound may itself name an alias (`type B<T : Named>`), which expands here via
+             * `buildBoundExpr`. If that bound refers (directly or transitively) back to this alias, the
+             * `$inFlight` guard turns the otherwise-unbounded recursion into a clean `xphp.alias_cycle`
+             * — the body-cycle `$visited` guard in `expandAliasToUnion` does not cover the bound axis.
+             *
              * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
              * @return list<TypeParam>
              */
-            private function resolveAliasParams(string $fqn, array $entry): array
+            private function resolveAliasParams(string $fqn, array $entry, int $line): array
             {
                 // @infection-ignore-all ReturnRemoval -- the cache is an optimization; resolution is
                 // deterministic for a fixed context, so re-resolving on a cache miss is equivalent.
                 if (isset($this->aliasParamsCache[$fqn])) {
                     return $this->aliasParamsCache[$fqn];
                 }
+                if (isset($this->aliasParamsInFlight[$fqn])) {
+                    throw new XphpParseException(
+                        "Type alias `{$fqn}` is defined (directly or transitively) in terms of itself.",
+                        $line,
+                        XphpSourceParser::CODE_ALIAS_CYCLE,
+                    );
+                }
+                // @infection-ignore-all TrueValue -- a presence set: the isset() guard above reads key
+                // existence, not the value, so true vs false is unobservable. Never cleared, and it
+                // needn't be: the cache check above short-circuits a COMPLETED alias before this guard,
+                // so a lingering flag can only ever mark an alias still mid-resolution (a real cycle).
+                $this->aliasParamsInFlight[$fqn] = true;
                 $saved = $this->typeParamStack;
                 $this->typeParamStack[] = array_column($entry['params'], 'name');
                 $resolved = array_map(
