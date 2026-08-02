@@ -250,6 +250,18 @@ final class TypeAliasIntegrationTest extends TestCase
         $this->assertCompileThrows($files, 'in terms of itself');
     }
 
+    public function testCycleThroughAGenericArgumentIsRejectedNotACrash(): void
+    {
+        // The cycle passes through the generic ARGUMENT of a non-alias class (`Bag<A<T>>`), not the
+        // head. Argument expansion must carry the same visited chain as the body, so this is a clean
+        // xphp.alias_cycle in both modes rather than unbounded recursion / a stack overflow.
+        $files = [
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Bag<T> { public function __construct(public T \$i) {} }\ntype A<T> = Bag<A<T>>;\nfunction f(): A<int> { throw new \\Exception(); }\n",
+        ];
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_CYCLE, 'in terms of itself');
+        $this->assertCompileThrows($files, 'in terms of itself');
+    }
+
     public function testAliasArityMismatchIsRejectedInBothModes(): void
     {
         $files = [
@@ -514,8 +526,8 @@ final class TypeAliasIntegrationTest extends TestCase
         $files = [
             'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass A {} class B {}\ntype Both = A & B;\nfunction f(): Both { return new A(); }\n",
         ];
-        $message = 'single class or generic type (unions, intersections, nullables, and closure '
-            . 'signatures are not supported). Use a bare type';
+        $message = 'single class or generic type, a union, or a nullable (intersection, DNF, and '
+            . 'closure-signature bodies are not supported). Use a bare type';
         self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $message);
         $this->assertCompileThrows($files, $message);
     }

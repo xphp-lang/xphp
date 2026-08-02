@@ -2897,8 +2897,9 @@ final class XphpSourceParser
      * namespace is found by locating the `Namespace_` node whose (original-source) byte span contains
      * the `type` keyword, so a real class sharing an alias's short name in another namespace never
      * collides. Bodies stay raw (unresolved) — they resolve lazily at expansion, when the use-site
-     * namespace context is available. A duplicate FQN keeps the last declaration (a dedicated
-     * duplicate-alias diagnostic lands in a later change).
+     * namespace context is available. A duplicate FQN is rejected with `xphp.alias_duplicate` (never
+     * silently overwritten), and a name colliding with a class/interface/trait with
+     * `xphp.alias_class_collision`.
      *
      * @param list<Node\Stmt> $ast
      * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
@@ -2943,8 +2944,8 @@ final class XphpSourceParser
             if ($marker['body'] === null) {
                 throw new XphpParseException(
                     "Type alias `{$fqn}` has an unsupported body: an alias body must be a single class "
-                    . 'or generic type (unions, intersections, nullables, and closure signatures are '
-                    . 'not supported). Use a bare type or a named class.',
+                    . 'or generic type, a union, or a nullable (intersection, DNF, and closure-signature '
+                    . 'bodies are not supported). Use a bare type or a named class.',
                     $marker['line'],
                     self::CODE_ALIAS_UNSUPPORTED_BODY,
                 );
@@ -4140,10 +4141,10 @@ final class XphpSourceParser
              * Recursively expand a type reference against the file-local alias table. A non-alias
              * head is returned with its arguments expanded; an alias head is substituted with its
              * body (params → arguments) and re-expanded, so nested and concrete-instantiation aliases
-             * (`type UserMap = Pair<int, User>`) resolve fully. A head that recurs into itself is a
-             * cycle, and a use whose argument count differs from the alias's parameter count is an
-             * arity error — both fail loudly (refined into `xphp.alias_cycle` / `xphp.alias_arity`
-             * diagnostics in a later change).
+             * (`type UserMap = Pair<int, User>`) resolve fully. A head that recurs into itself
+             * (through its body or a generic argument) is a cycle, and a use whose argument count
+             * differs from the alias's parameter count is an arity error — both fail loudly with
+             * `xphp.alias_cycle` / `xphp.alias_arity`.
              *
              * @param list<string> $visited alias FQNs already entered on this expansion chain
              */
@@ -4177,7 +4178,10 @@ final class XphpSourceParser
              */
             private function expandAliasToUnion(TypeRef $ref, array $visited, int $line): array
             {
-                $expandedArgs = array_map(fn (TypeRef $a): TypeRef => $this->expandAlias($a, [], $line), $ref->args);
+                // Expand each argument on the SAME visited chain — an argument that refers back to an
+                // alias already being expanded (`type A<T> = Bag<A<T>>`) is a cycle through the
+                // argument path; passing an empty chain here would miss it and recurse without bound.
+                $expandedArgs = array_map(fn (TypeRef $a): TypeRef => $this->expandAlias($a, $visited, $line), $ref->args);
                 $entry = $this->aliasTable[$ref->name] ?? null;
                 if ($entry === null) {
                     return [new TypeRef($ref->name, $expandedArgs, $ref->isScalar, $ref->isTypeParam, $ref->suspectUndeclared)];
