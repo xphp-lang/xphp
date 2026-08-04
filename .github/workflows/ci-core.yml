@@ -132,7 +132,7 @@ jobs:
   # `mutation-gate` is the single required check to protect the branch with.
   mutation-coverage:
     name: Mutation coverage (generate once)
-    runs-on: ubuntu-latest-64gb
+    runs-on: ubuntu-latest
     needs: phpunit
     steps:
       - uses: actions/checkout@v4
@@ -160,7 +160,7 @@ jobs:
 
   mutation:
     name: Mutation shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest-64gb
+    runs-on: ubuntu-latest
     needs: mutation-coverage
     strategy:
       # One machine per shard. Bump this list and the top-level SHARD_TOTAL
@@ -187,6 +187,20 @@ jobs:
           extensions: dom, json, mbstring, tokenizer, :pcov
           coverage: none
           tools: composer:v2
+          # Bound each mutant worker's memory. Infection normally caps workers
+          # at 2x the initial test run's usage, but that measurement only
+          # happens during the initial run -- which shards skip
+          # (--skip-initial-tests) -- so no cap is applied and workers inherit
+          # an unlimited memory_limit. XphpSourceParser has mutants that turn a
+          # bounded loop unbounded; with no cap one allocates until it exhausts
+          # the runner's RAM and takes the runner agent down (the job reports
+          # "canceled / runner shutdown"). A bigger runner only delays this. A
+          # normal worker uses ~200M, so 1G fatals a runaway cleanly as one
+          # killed mutant while leaving legit mutants untouched (MSI unchanged:
+          # these were already being killed, just via the 120s timeout).
+          # Workers read php.ini directly, so it must be set here, not via a -d
+          # flag on the Infection command (that reaches only the coordinator).
+          ini-values: memory_limit=1G
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
