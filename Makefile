@@ -85,11 +85,11 @@ test/mutation/coverage:
 # Stage 2: run one shard. SHARD_INDEX is 0-based in [0, SHARD_TOTAL).
 #
 # The slice is computed automatically -- there is no hand-maintained file
-# list. Source files are greedily bin-packed by byte size, largest first,
-# into SHARD_TOTAL balanced buckets (longest-processing-time scheduling);
-# this shard runs bucket SHARD_INDEX. Byte size is a cheap proxy for mutant
-# count, so buckets finish in roughly equal wall time, which is what caps the
-# fan-out. Adding or removing source files just reshuffles the buckets.
+# list. infection-shard-files.php greedily bin-packs the source files by byte
+# size (a cheap proxy for mutant count) into SHARD_TOTAL balanced buckets and
+# prints bucket SHARD_INDEX; adding or removing source files just reshuffles
+# the buckets. The packing is done in PHP rather than shell so it runs on any
+# OS (no GNU `find -printf`) and is deterministic across runners.
 #
 # Reuses stage 1's coverage (--skip-initial-tests), so no coverage driver is
 # needed here and no initial suite runs. The shard is a pure worker: it sets
@@ -99,10 +99,7 @@ test/mutation/coverage:
 SHARD_TOTAL ?= 1
 SHARD_INDEX ?= 0
 test/mutation/shard:
-	@files=$$(find src -name '*.php' -printf '%s %p\n' | sort -rn | \
-	  awk -v total=$(SHARD_TOTAL) -v idx=$(SHARD_INDEX) '\
-	    { min = 0; for (b = 1; b < total; b++) if (load[b] < load[min]) min = b; \
-	      load[min] += $$1; if (min == idx) print $$2 }' | paste -sd,); \
+	@files=$$(php .github/scripts/infection-shard-files.php $(SHARD_TOTAL) $(SHARD_INDEX)); \
 	if [ -z "$$files" ]; then \
 	  echo "shard $(SHARD_INDEX)/$(SHARD_TOTAL): empty slice, nothing to mutate"; \
 	  exit 0; \
