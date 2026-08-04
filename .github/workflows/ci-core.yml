@@ -13,6 +13,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Number of mutation shards. MUST equal the length of the `mutation` job's
+  # matrix list below (GitHub can't derive a matrix from an env var). The gate
+  # asserts it received exactly this many summaries, so if the two ever drift
+  # the gate fails loudly instead of scoring over a subset of src/.
+  SHARD_TOTAL: 10
+
 jobs:
   phpunit:
     # 8.4 is the supported/default runtime and runs the full suite minus the
@@ -125,7 +132,7 @@ jobs:
   # `mutation-gate` is the single required check to protect the branch with.
   mutation-coverage:
     name: Mutation coverage (generate once)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-64gb
     needs: phpunit
     steps:
       - uses: actions/checkout@v4
@@ -153,16 +160,15 @@ jobs:
 
   mutation:
     name: Mutation shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-64gb
     needs: mutation-coverage
     strategy:
-      # One machine per shard. Bump this list and SHARD_TOTAL together to add
-      # horizontal capacity; the slice packer rebalances automatically.
+      # One machine per shard. Bump this list and the top-level SHARD_TOTAL
+      # together to add capacity; the slice packer rebalances automatically,
+      # and the gate fails if the two ever disagree.
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    env:
-      SHARD_TOTAL: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -220,4 +226,6 @@ jobs:
           merge-multiple: true
 
       - name: Enforce aggregate Covered MSI >= 95%
-        run: make test/mutation/gate
+        # EXPECTED_SHARDS asserts every shard's summary made it here; a missing
+        # one fails the gate rather than scoring over a subset of src/.
+        run: make test/mutation/gate EXPECTED_SHARDS=${{ env.SHARD_TOTAL }}

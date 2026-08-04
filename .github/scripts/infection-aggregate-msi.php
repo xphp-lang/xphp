@@ -20,24 +20,46 @@ declare(strict_types=1);
  * numerically identical to the single-machine `--min-covered-msi` gate.
  *
  * Usage:
- *   php .github/scripts/infection-aggregate-msi.php [minCoveredMsi] [glob]
+ *   php .github/scripts/infection-aggregate-msi.php [minCoveredMsi] [glob] [expectedShards]
  *
- *   minCoveredMsi  Gate threshold as a percentage (default 95, or the
- *                  MIN_COVERED_MSI env var if set).
- *   glob           Glob for the summary files
- *                  (default "var/infection-summary-*.json").
+ *   minCoveredMsi   Gate threshold as a percentage (default 95, or the
+ *                   MIN_COVERED_MSI env var if set).
+ *   glob            Glob for the summary files
+ *                   (default "var/infection-summary-*.json").
+ *   expectedShards  Assert exactly this many summaries were found; 0/absent
+ *                   disables the check (or the EXPECTED_SHARDS env var).
+ *
+ * The EXPECTED_SHARDS env var, when set to a positive integer, asserts that
+ * exactly that many summaries were found. The gate reports over whatever
+ * shards uploaded a summary; if one shard silently produced none (empty
+ * slice, a dropped `if-no-files-found: ignore` artifact, an Infection that
+ * wrote no log), the aggregate would cover only a subset yet still pass. This
+ * turns that missing data into an explicit failure.
  *
  * Exit code: 0 if aggregate Covered MSI >= threshold, 1 otherwise (or if no
- * summary files are found -- a missing shard must never look like a pass).
+ * summary files are found, or fewer than EXPECTED_SHARDS -- missing data must
+ * never look like a pass).
  */
 
 $min = (float) ($argv[1] ?? getenv('MIN_COVERED_MSI') ?: '95');
 $glob = $argv[2] ?? 'var/infection-summary-*.json';
+$expected = (int) (($argv[3] ?? '') !== '' ? $argv[3] : (getenv('EXPECTED_SHARDS') ?: '0'));
 
 $files = glob($glob) ?: [];
 
 if ($files === []) {
     fwrite(STDERR, "FAIL: no shard summaries matched \"{$glob}\" -- did every shard run?\n");
+    exit(1);
+}
+
+echo sprintf("Found %d shard %s%s\n", count($files), count($files) === 1 ? 'summary' : 'summaries', $expected > 0 ? " (expected {$expected})" : '');
+
+if ($expected > 0 && count($files) < $expected) {
+    fwrite(STDERR, sprintf(
+        "FAIL: only %d of %d expected shard summaries present -- a shard was skipped or its upload was lost; refusing to gate on partial data\n",
+        count($files),
+        $expected,
+    ));
     exit(1);
 }
 
@@ -55,6 +77,19 @@ foreach ($files as $file) {
     }
 
     $stats = $decoded['stats'];
+
+    // Guard every key we read. A missing key would emit only an E_WARNING and
+    // coerce to 0 -- and a silent 0 for escapedCount shrinks the denominator,
+    // inflating the aggregate MSI so the gate passes with real escapes
+    // uncounted. On a gate, an unrecognised schema must fail loudly, not
+    // fail open, so we bail rather than trust a partial summary.
+    foreach (['killedCount', 'errorCount', 'timeOutCount', 'escapedCount'] as $key) {
+        if (!array_key_exists($key, $stats)) {
+            fwrite(STDERR, "FAIL: {$file} is missing stats.{$key} -- Infection schema mismatch?\n");
+            exit(1);
+        }
+    }
+
     $killed += $stats['killedCount'];
     $errored += $stats['errorCount'];
     $timedOut += $stats['timeOutCount'];

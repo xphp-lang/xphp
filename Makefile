@@ -119,9 +119,12 @@ test/mutation/shard:
 .PHONY: test/mutation/gate
 # Stage 3: fold every shard's summary JSON into the project-wide Covered MSI
 # and fail if it is below the gate. See the script header for the math.
+# EXPECTED_SHARDS (optional) makes the gate fail if fewer summaries than
+# shards arrived, so a silently-skipped shard can't pass on partial data.
 MIN_COVERED_MSI ?= 95
+EXPECTED_SHARDS ?=
 test/mutation/gate:
-	MIN_COVERED_MSI=$(MIN_COVERED_MSI) php .github/scripts/infection-aggregate-msi.php
+	php .github/scripts/infection-aggregate-msi.php $(MIN_COVERED_MSI) 'var/infection-summary-*.json' $(EXPECTED_SHARDS)
 
 .PHONY: test/check
 # End-to-end self-test of the `check` gate: runs the real bin/xphp binary
