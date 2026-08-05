@@ -36,12 +36,92 @@ lint/phpstan:
 	php vendor/bin/phpstan analyse --memory-limit=2G --no-progress
 
 .PHONY: test/mutation
-# Gate at 95% (current is 100%): keeps a small headroom so a single
-# new mutation can land in a follow-up commit and still pass while
-# the test that kills it is being written.  Raise to 100% once the
-# repo is stable enough that no new test gaps are expected.
+# Single-machine full run (local dev / one-shot). Gate at 95% (current is
+# 100%): keeps a small headroom so a single new mutation can land in a
+# follow-up commit and still pass while the test that kills it is being
+# written.  Raise to 100% once the repo is stable enough that no new test
+# gaps are expected.  CI does NOT use this target -- it splits the work
+# across parallel shards via the three targets below.
 test/mutation:
 	php -d memory_limit=-1 vendor/bin/infection --show-mutations=max --threads=max --min-covered-msi=95
+
+# ---------------------------------------------------------------------------
+# Sharded mutation testing (horizontal scaling for CI)
+#
+# The single run above is decomposed into three stages so CI can fan the
+# mutant analysis out across many machines:
+#
+#   1. test/mutation/coverage  (run once)  -- generate the code coverage +
+#      junit that every shard reuses, so no shard pays for an initial test
+#      run or needs a coverage driver.
+#   2. test/mutation/shard     (run N x)   -- each shard mutates a disjoint,
+#      auto-balanced slice of src/ against the shared coverage.
+#   3. test/mutation/gate      (run once)  -- aggregate the shards' summary
+#      JSON into the true project-wide Covered MSI and enforce the gate.
+#
+# Because Covered MSI is a ratio, aggregating numerators/denominators makes
+# the distributed gate numerically identical to the single-machine one.
+# ---------------------------------------------------------------------------
+
+# Where the reusable coverage lives; shared by the coverage + shard targets.
+INFECTION_COVERAGE_DIR ?= var/infection-coverage
+
+.PHONY: test/mutation/coverage
+# Stage 1: generate the coverage Infection reuses across shards, in the
+# layout its `--coverage` option expects (a directory containing
+# coverage-xml/ and junit.xml). Runs the FULL default suite -- the same set
+# `test/mutation` mutates against -- so every source line an integration or
+# @group phpstan test touches in-process is recorded. pcov is used instead of
+# xdebug: for line coverage (all Infection needs) it is several times faster
+# and far lighter on memory, which is the point of moving this off the
+# critical path.
+test/mutation/coverage:
+	php -d memory_limit=-1 -d pcov.enabled=1 vendor/bin/phpunit \
+	  --coverage-filter src \
+	  --coverage-xml $(INFECTION_COVERAGE_DIR)/coverage-xml \
+	  --log-junit $(INFECTION_COVERAGE_DIR)/junit.xml
+
+.PHONY: test/mutation/shard
+# Stage 2: run one shard. SHARD_INDEX is 0-based in [0, SHARD_TOTAL).
+#
+# The slice is computed automatically -- there is no hand-maintained file
+# list. infection-shard-files.php greedily bin-packs the source files by byte
+# size (a cheap proxy for mutant count) into SHARD_TOTAL balanced buckets and
+# prints bucket SHARD_INDEX; adding or removing source files just reshuffles
+# the buckets. The packing is done in PHP rather than shell so it runs on any
+# OS (no GNU `find -printf`) and is deterministic across runners.
+#
+# Reuses stage 1's coverage (--skip-initial-tests), so no coverage driver is
+# needed here and no initial suite runs. The shard is a pure worker: it sets
+# NO --min-covered-msi (an all-ignored slice would spuriously fail that) and
+# writes a summary JSON for stage 3 to aggregate. Escaped mutants are surfaced
+# inline as GitHub annotations.
+SHARD_TOTAL ?= 1
+SHARD_INDEX ?= 0
+test/mutation/shard:
+	@files=$$(php .github/scripts/infection-shard-files.php $(SHARD_TOTAL) $(SHARD_INDEX)); \
+	if [ -z "$$files" ]; then \
+	  echo "shard $(SHARD_INDEX)/$(SHARD_TOTAL): empty slice, nothing to mutate"; \
+	  exit 0; \
+	fi; \
+	echo "shard $(SHARD_INDEX)/$(SHARD_TOTAL) mutating: $$files"; \
+	php -d memory_limit=-1 vendor/bin/infection \
+	  --coverage=$(INFECTION_COVERAGE_DIR) \
+	  --skip-initial-tests \
+	  --filter="$$files" \
+	  --threads=max \
+	  --logger-summary-json=var/infection-summary-$(SHARD_INDEX).json \
+	  --logger-github
+
+.PHONY: test/mutation/gate
+# Stage 3: fold every shard's summary JSON into the project-wide Covered MSI
+# and fail if it is below the gate. See the script header for the math.
+# EXPECTED_SHARDS (optional) makes the gate fail if fewer summaries than
+# shards arrived, so a silently-skipped shard can't pass on partial data.
+MIN_COVERED_MSI ?= 95
+EXPECTED_SHARDS ?=
+test/mutation/gate:
+	php .github/scripts/infection-aggregate-msi.php $(MIN_COVERED_MSI) 'var/infection-summary-*.json' $(EXPECTED_SHARDS)
 
 .PHONY: test/check
 # End-to-end self-test of the `check` gate: runs the real bin/xphp binary

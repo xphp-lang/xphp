@@ -13,6 +13,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Number of mutation shards. MUST equal the length of the `mutation` job's
+  # matrix list below (GitHub can't derive a matrix from an env var). The gate
+  # asserts it received exactly this many summaries, so if the two ever drift
+  # the gate fails loudly instead of scoring over a subset of src/.
+  SHARD_TOTAL: 10
+
 jobs:
   phpunit:
     # 8.4 is the supported/default runtime and runs the full suite minus the
@@ -113,36 +120,132 @@ jobs:
       - name: Run xphp check self-test
         run: make test/check
 
-  infection:
-    name: Mutation testing
+  # Mutation testing is split into three stages so the slow part -- running
+  # every mutant -- fans out across many machines instead of one:
+  #
+  #   mutation-coverage  ->  mutation (x10, matrix)  ->  mutation-gate
+  #
+  # Stage 1 generates the code coverage once (pcov). Each stage-2 shard reuses
+  # it (no per-shard initial test run, no coverage driver) and mutates a
+  # disjoint, auto-balanced slice of src/. Stage 3 folds the shards' summaries
+  # into the true project-wide Covered MSI and enforces the 95% gate once.
+  # `mutation-gate` is the single required check to protect the branch with.
+  mutation-coverage:
+    name: Mutation coverage (generate once)
     runs-on: ubuntu-latest
     needs: phpunit
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup PHP 8.4 (with Xdebug for coverage)
+      - name: Setup PHP 8.4 (with pcov for fast coverage)
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
           extensions: dom, json, mbstring, tokenizer
-          coverage: xdebug
+          coverage: pcov
           tools: composer:v2
 
       - name: Install dependencies
         uses: ramsey/composer-install@v3
 
-      - name: Run Infection
-        # --min-covered-msi=95 fails CI if the mutation score drops below
-        # the gate.  Threads=max parallelises mutant runs.
-        run: make test/mutation
+      - name: Generate coverage for Infection
+        run: make test/mutation/coverage
 
-      - name: Upload Infection report
+      - name: Upload coverage for shards
+        uses: actions/upload-artifact@v4
+        with:
+          name: infection-coverage
+          path: var/infection-coverage
+          retention-days: 1
+
+  mutation:
+    name: Mutation shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    needs: mutation-coverage
+    strategy:
+      # One machine per shard. Bump this list and the top-level SHARD_TOTAL
+      # together to add capacity; the slice packer rebalances automatically,
+      # and the gate fails if the two ever disagree.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        # Shards reuse the coverage artifact and skip the initial test run, so
+        # they need no coverage driver at all. `:pcov` disables the pcov
+        # extension (present on the runner image): with it loaded Infection
+        # both prints a "running with PCOV enabled" notice and instruments
+        # every mutant's PHPUnit process for coverage we never collect. The
+        # mutant workers launch a fresh PHP that reads php.ini, so this must be
+        # disabled at the extension level -- a `-d pcov.enabled=0` on the
+        # Infection command would only reach the coordinator, not the workers.
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer, :pcov
+          coverage: none
+          tools: composer:v2
+          # Bound each mutant worker's memory. Infection normally caps workers
+          # at 2x the initial test run's usage, but that measurement only
+          # happens during the initial run -- which shards skip
+          # (--skip-initial-tests) -- so no cap is applied and workers inherit
+          # an unlimited memory_limit. XphpSourceParser has mutants that turn a
+          # bounded loop unbounded; with no cap one allocates until it exhausts
+          # the runner's RAM and takes the runner agent down (the job reports
+          # "canceled / runner shutdown"). A bigger runner only delays this. A
+          # normal worker uses ~200M, so 1G fatals a runaway cleanly as one
+          # killed mutant while leaving legit mutants untouched (MSI unchanged:
+          # these were already being killed, just via the 120s timeout).
+          # Workers read php.ini directly, so it must be set here, not via a -d
+          # flag on the Infection command (that reaches only the coordinator).
+          ini-values: memory_limit=1G
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Download shared coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: infection-coverage
+          path: var/infection-coverage
+
+      - name: Run mutation shard ${{ matrix.shard }}
+        run: make test/mutation/shard SHARD_TOTAL=${{ env.SHARD_TOTAL }} SHARD_INDEX=${{ matrix.shard }}
+
+      - name: Upload shard summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: infection-report
-          path: |
-            var/infection.log
-            var/infection.html
+          name: infection-summary-${{ matrix.shard }}
+          path: var/infection-summary-${{ matrix.shard }}.json
           if-no-files-found: ignore
           retention-days: 14
+
+  mutation-gate:
+    name: Mutation gate (aggregate MSI)
+    runs-on: ubuntu-latest
+    needs: mutation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, json, mbstring, tokenizer
+          coverage: none
+          tools: composer:v2
+
+      - name: Download all shard summaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: infection-summary-*
+          path: var
+          merge-multiple: true
+
+      - name: Enforce aggregate Covered MSI >= 95%
+        # EXPECTED_SHARDS asserts every shard's summary made it here; a missing
+        # one fails the gate rather than scoring over a subset of src/.
+        run: make test/mutation/gate EXPECTED_SHARDS=${{ env.SHARD_TOTAL }}
