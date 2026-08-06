@@ -57,6 +57,7 @@ timeline
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
+                : optional turbofish via type-argument inference
         Validation and diagnostics
                 : xphp check validate-only gate
                 : collect-all diagnostics with text json github renderers
@@ -146,6 +147,15 @@ upcoming one.
   per instantiation), so a forwarded self-call
   (`probe<U : E>{ $this->contains::<U>(…) }`) compiles and runs; a forward to
   a non-erasable method is a compile error (`xphp.unspecializable_self_call`).
+- Enclosing-parameter turbofish grounding: a turbofish whose type argument is
+  supplied by the enclosing generic scope (`identity::<T>($v)` inside `wrap<T>`,
+  `self::gen::<T>()` / `Maker::wrap::<T>()`, `$this->dup::<T>()`) grounds **per
+  specialization** and runs, instead of being rejected by the emitted-marker
+  backstop. Freshly specialized bodies are re-grounded transitively so
+  multi-hop and mutually recursive forwards converge; a strictly-growing chain
+  (`grow<T>` calling `grow::<Box<T>>`) is rejected as non-convergent
+  (`xphp.unconverged_method_specialization`). `compile` and `check` report this
+  identically.
 
 ### Anonymous templates
 
@@ -254,6 +264,16 @@ upcoming one.
 
 - RFC-aligned call-site syntax (`Name::<...>` turbofish).
 - Empty turbofish (`Name::<>`) for all-defaults templates.
+- **Type-argument inference (optional turbofish)**: a generic call or `new`
+  whose type parameters are fixed by the argument values drops the turbofish
+  — `identity(5)` infers `identity::<int>`, `new Box($product)` infers
+  `new Box::<Product>` — compiling to the exact specialization the turbofish
+  would have selected. Free functions, static/instance methods, and `new`.
+  Where the arguments don't determine the type (a parameter only in the return
+  type, an unknown or conflicting argument type), the explicit turbofish is
+  still required. See the
+  [turbofish → inference](syntax/turbofish.md#type-argument-inference) tour and
+  [caveats](caveats.md#type-argument-inference-is-partial).
 
 ### Validation and diagnostics
 
