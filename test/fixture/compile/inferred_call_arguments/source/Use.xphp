@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Inference;
+
+// Free-function inference: from a scalar literal, and from a `new` argument.
+$intId = identity(5);
+$objId = identity(new Plastic());
+
+// Static-method inference from a string literal.
+$made = Factory::make('hi');
+
+// Instance-method inference from a scalar literal (receiver via explicit `new` turbofish).
+$box = new Box::<int>(7);
+$dupped = $box->dup(9);
+
+// Free-function inference from a class-typed property and a class-typed parameter.
+$consumer = new Consumer();
+$viaProp = $consumer->viaProp();
+$viaParam = $consumer->viaParam(new Plastic());

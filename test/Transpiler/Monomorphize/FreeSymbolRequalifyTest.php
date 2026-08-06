@@ -31,7 +31,8 @@ final class FreeSymbolRequalifyTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App\\FreeSym');
-            require __DIR__ . '/../../fixture/compile/free_symbol_requalify/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/free_symbol_requalify/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -49,7 +50,8 @@ final class FreeSymbolRequalifyTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App', 'Vendor');
-            require __DIR__ . '/../../fixture/compile/free_symbol_use_import/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/free_symbol_use_import/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -67,7 +69,8 @@ final class FreeSymbolRequalifyTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App', 'Vendor');
-            require __DIR__ . '/../../fixture/compile/free_symbol_group_use_import/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/free_symbol_group_use_import/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -86,7 +89,8 @@ final class FreeSymbolRequalifyTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_gapfill_free_symbol/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_gapfill_free_symbol/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

@@ -8,9 +8,12 @@ declare(strict_types=1);
  * `contains_<Tuple<Book,Product>>` sibling unimplemented) and fataled at class load. That it loads and
  * `probe` returns proves the gap-fill supplied every diamond obligation.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 use PHPUnit\Framework\Assert;
-require $fixture->targetDir . '/Use.php';
-Assert::assertFalse($found, 'the diamond upcast contains-call must resolve, run, and report the tuple absent');
-echo "OK\n";
+use XPHP\TestSupport\CompiledFixture;
+
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
+    Assert::assertFalse($found, 'the diamond upcast contains-call must resolve, run, and report the tuple absent');
+};

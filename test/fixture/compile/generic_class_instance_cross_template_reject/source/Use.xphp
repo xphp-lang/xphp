@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A non-erasable method-generic on a receiver of a DIFFERENT generic template:
+// its grounded member would belong on that template's own specializations, which the
+// grounding pass must not touch — the marker is kept and the emitted-marker backstop
+// rejects loudly.
+class Box<S>
+{
+    /** @return array<int, mixed> */
+    public function dup<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+}
+
+class Holder<T>
+{
+    /** @return array<int, mixed> */
+    public function m(Box<int> $b, T $v): array
+    {
+        return $b->dup::<T>($v);
+    }
+}
+
+$h = new Holder::<int>();
+$h->m(new Box::<int>(), 1);

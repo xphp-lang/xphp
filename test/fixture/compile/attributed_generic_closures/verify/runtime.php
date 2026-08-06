@@ -7,15 +7,18 @@ declare(strict_types=1);
  * static generic closures and arrows must specialize (not silently keep
  * raw type-param hints), and the emitted program must execute.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(7, $a);
-Assert::assertSame('b', $b);
-Assert::assertSame(3, $c);
-Assert::assertSame('d', $d);
-Assert::assertSame(11, $e);
+    Assert::assertSame(7, $a);
+    Assert::assertSame('b', $b);
+    Assert::assertSame(3, $c);
+    Assert::assertSame('d', $d);
+    Assert::assertSame(11, $e);
+};

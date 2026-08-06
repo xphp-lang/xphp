@@ -31,7 +31,8 @@ final class UseClosureSpecializationTest extends TestCase
             'use-byval',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_use_by_value/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_use_by_value/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -45,7 +46,8 @@ final class UseClosureSpecializationTest extends TestCase
             'use-byref',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_use_by_ref/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_use_by_ref/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -83,7 +85,8 @@ final class UseClosureSpecializationTest extends TestCase
             'use-mixed',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_use_multiple_mixed_captures/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_use_multiple_mixed_captures/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -109,7 +112,8 @@ final class UseClosureSpecializationTest extends TestCase
                 $out,
             );
 
-            require __DIR__ . '/../../fixture/compile/closure_use_multiple_arg_tuples/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_use_multiple_arg_tuples/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -173,7 +177,8 @@ final class UseClosureSpecializationTest extends TestCase
             'use-reserved',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_use_capture_named_xphp_args/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_use_capture_named_xphp_args/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

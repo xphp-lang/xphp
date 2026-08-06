@@ -1,0 +1,35 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\NeverInstantiated;
+
+final class Consumer
+{
+    public function poke(): string
+    {
+        return 'alive';
+    }
+}
+
+// A deferred enclosing-param turbofish inside a generic class that is NEVER
+// instantiated: no specialization exists to ground it, the template lowers to a
+// marker interface (its body is dropped), and the program compiles and runs —
+// unreachable code draws no diagnostic. Deliberate acceptance-surface choice.
+final class Holder<T>
+{
+    /** @return array<int, mixed> */
+    public function viaThis(T $v): array
+    {
+        return $this->dup::<T>($v);
+    }
+
+    /** @return array<int, mixed> */
+    public function dup<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+}
+
+$c = new Consumer();
+$out = $c->poke();

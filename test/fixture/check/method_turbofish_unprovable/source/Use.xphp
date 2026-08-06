@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A class-param bound on a STATIC method-generic is genuinely unprovable in a static
+// context (no receiver grounds `T` for the bound check) — the pre-existing rejection
+// must survive the grounding pass unchanged, in check as in compile.
+class Box<T>
+{
+    public function m(T $v): T
+    {
+        return self::gen::<T>($v);
+    }
+
+    public static function gen<U : T>(U $x): U
+    {
+        return $x;
+    }
+}
+
+$b = new Box::<int>();
+$b->m(1);

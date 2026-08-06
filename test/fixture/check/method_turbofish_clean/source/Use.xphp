@@ -1,0 +1,60 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\MethodTurbofish;
+
+// Method turbofish grounded by an enclosing class type parameter: `self::gen::<T>`
+// and `Maker::wrap::<T>` are abstract inside the `Box<T>` template and only become
+// concrete when `Box<int>` / `Box<string>` specialize. Each specialization grounds and
+// dispatches them: the own-template member `gen_T_<hash>` lands on the specialization
+// itself (dispatched via `self::`, appended once per spec even with two call sites),
+// and the shared non-generic target gets one `wrap_T_<hash>` per unique argument tuple
+// regardless of how many generic classes forward to it.
+class Box<T>
+{
+    public function make(T $v): T
+    {
+        return self::gen::<T>($v);
+    }
+
+    public function makeAgain(T $v): T
+    {
+        // Same target + same grounded args as make(): per-spec dedup must
+        // append a single member, not one per call site.
+        return self::gen::<T>($v);
+    }
+
+    /** @return array<int, mixed> */
+    public function viaMaker(T $v): array
+    {
+        return Maker::wrap::<T>($v);
+    }
+
+    public static function gen<U>(U $x): U
+    {
+        return $x;
+    }
+}
+
+class CoBox<T>
+{
+    /** @return array<int, mixed> */
+    public function viaMaker(T $v): array
+    {
+        // Second generic class forwarding the same argument tuple to Maker:
+        // the shared wrap_T_<hash> member must be appended exactly once.
+        return Maker::wrap::<T>($v);
+    }
+}
+
+$b = new Box::<int>();
+$r1 = $b->make(5);
+$r2 = $b->makeAgain(6);
+$r3 = $b->viaMaker(7);
+
+$s = new Box::<string>();
+$r4 = $s->make('hi');
+
+$c = new CoBox::<int>();
+$r5 = $c->viaMaker(8);

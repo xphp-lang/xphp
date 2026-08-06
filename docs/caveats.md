@@ -7,6 +7,157 @@ each with the underlying reason and the workaround.
 Pages in the [syntax tour](syntax/) link back to specific sections
 here using anchor links — search this page for the same heading text.
 
+## Type-argument inference is partial
+
+xphp infers a generic call's or `new`'s type arguments from the values you
+pass, so the `::<>` turbofish is optional where the arguments determine the
+type. But inference reads argument types conservatively — deliberately, so it
+never emits a specialization the runtime value can't match — and where it
+can't see a concrete type, you still write the turbofish.
+
+### ❌ What isn't inferred
+
+```php
+function first<T>(): T { /* ... */ }      // T is only in the return type
+$x = first();                              // ✗ nothing to infer from — needs first::<Foo>()
+
+function pair<T>(T $a, T $b): array { /* ... */ }
+$p = pair(1, 'x');                         // ✗ int vs string disagree — needs pair::<...>()
+
+$val = $repo->find();                      // a scalar-returning call assigned to a local
+$b = new Box($val);                        // ✗ local-from-call isn't tracked — needs new Box::<int>()
+
+function f(Fruit $x): void {
+    $x = pickAnother();                    // $x reassigned...
+    $b = new Box($x);                      // ✗ reassigned param isn't trusted — needs the turbofish
+}
+
+$g = function<T>(T $x): T { return $x; };
+$g(5);                                     // ✗ generic *closure* calls aren't inferred (deferred)
+```
+
+### ✅ What is inferred
+
+```php
+identity(5);                    // ✓ T = int, from the literal
+wrap(new Plastic());            // ✓ T = Plastic, from the `new`
+Factory::make($p);              // ✓ from $p's declared (class) type
+$box->put($this->item);         // ✓ from the declared property type
+wrap($factory->make());         // ✓ from make()'s class return type (call path)
+new Box(5);                     // ✓ T = int
+new Pair($a, new Plastic());    // ✓ from a typed parameter + a `new`
+```
+
+Inference sources differ slightly between the two paths, because a **call**
+reuses the monomorphizer's receiver/flow tracking while **`new`** runs a
+lighter standalone pass:
+
+- **Calls** infer from: literals, `new X(...)`, `$this->prop` (declared type),
+  a plain parameter, a local whose type is statically tracked (assigned from a
+  `new` or a class-returning call), and a call whose declared return type is a
+  determinable class.
+- **`new`** infers from the conservative set only: literals, `new X(...)`,
+  `$this->prop`, and a non-reassigned typed parameter — not locals or call
+  returns.
+
+In both, a reassigned parameter, a *scalar*-returning-call value held in a
+local, a union-typed value, or a value typed by a still-abstract type parameter
+yields no inference.
+
+One conservative edge: inference is skipped when an argument's *simple* type
+name coincides with an in-scope type parameter — e.g. a class imported as
+`use Other\U as U` (or a same-named `U` in the current namespace) passed inside
+`f<U>(...)`. The name is treated as the type parameter (which shadows it), so
+the call falls back. It never mis-infers — write the explicit turbofish there.
+
+### Why
+
+Monomorphization needs the *concrete* type to pick a specialization, and an
+inferred call must compile to exactly what the turbofish would have. So
+inference only fires when it can prove the concrete type from the argument
+itself: it derives the type arguments by unifying each parameter's declared
+type against the argument's static type, then dispatches through the identical
+path an explicit turbofish uses (same bounds, variance, and mangling). A value
+whose type it can't prove statically — or can't prove *soundly*, like a
+reassigned parameter — is left alone rather than guessed, because a wrong guess
+would emit a specialization the runtime value fails to satisfy.
+
+### ✅ Workaround
+
+Write the explicit turbofish (`identity::<int>(5)`, `new Box::<int>($val)`)
+wherever inference can't see the type. It's always accepted, and an inferred
+call is identical to the turbofished one — so adding a turbofish never changes
+behavior, only makes the type explicit.
+
+## Type-alias body and position limits
+
+[Type aliases](syntax/type-aliases.md) are a compile-time substitution, and are
+**file-local by design** — an alias is visible only in the file that declares it,
+like a PHP `use` alias. A single head (`Ident`, `Box<int>`), a union (`int|string`),
+and a nullable (`?Box`) body are all supported; parameters may carry defaults and
+bounds. Two limits remain, both on the body shape and its position.
+
+### ❌ What doesn't work
+
+```php
+type Both = A & B;               // ✗ xphp.alias_unsupported_body — intersection
+type Dnf  = (A & B) | C;         // ✗ xphp.alias_unsupported_body — DNF
+type Fn   = Closure(int): int;   // ✗ xphp.alias_unsupported_body — closure signature
+
+// A union / nullable alias is only usable as the WHOLE type of a slot:
+type Num = int|string;
+function f(Num $n): void {}       // ✓ whole param slot
+function g(Bag<Num> $x): void {}  // ✗ xphp.alias_compound_in_non_slot — generic argument
+function h(Num&Extra $x): void {} // ✗ nested in another intersection/union
+$b = new Num();                   // ✗ compound alias in `new` / extends / a bound
+```
+
+### 🔒 File-local (by design)
+
+An alias is scoped to its file, like a `use` alias — not visible in another file:
+
+```php
+// File Types.xphp
+type UserId = Ident;
+type Pair<A, B> = Dict<A, B>;
+// File Other.xphp — a DIFFERENT file
+function f(): UserId { … }            // UserId is a plain unknown type here — not expanded
+function g(): Pair<int, User> { … }   // ✗ Pair is not visible — an undefined template
+```
+
+To share a vocabulary, **declare the alias in each file that uses it** (a zero-cost
+substitution) or reference the underlying type directly. Because scoping is
+per-file there is no cross-file duplicate or collision to detect — two files each
+with `type Id = …` are simply independent local aliases. (Same-file duplicate /
+class-collision *are* caught — `xphp.alias_duplicate` / `xphp.alias_class_collision`.)
+
+An alias's body, bounds, and defaults resolve in the namespace that **uses** it.
+Under one `namespace {}` per file (the PSR norm) that is always the declaring
+namespace; in a file with multiple namespace blocks a bare name can mis-resolve —
+keep one namespace per file, or fully-qualify.
+
+### Why
+
+The body is limited to a single head, a flat union, or a nullable because those
+lower cleanly into a PHP type node. An intersection or DNF pulls in *distribution*
+(`(A|B)&C → (A&C)|(B&C)`), and a union/nullable has no single identity to hash or
+anchor, so it is representable only as the whole type of a param / property /
+return / class-constant slot — anywhere else it is rejected loudly rather than
+mis-compiled. These are "make the safe subset solid first" trades, candidates to
+lift later. File-locality, by contrast, is a deliberate choice — an alias is a
+local naming convenience, like `use`, not a whole-program symbol — not a limit.
+
+### ✅ Workaround
+
+- For an intersection / DNF / closure body, write the type directly, or wrap it in
+  a named class or interface and alias *that*.
+- Use a union/nullable alias as the whole type of a slot; write the union directly
+  where you need it as a generic argument or nested in another compound type.
+- Declare an alias in each file that uses it (a zero-cost substitution), or
+  reference the underlying type directly across files.
+
+---
+
 ## `$this`-capturing arrows and closures rejected
 
 ### ❌ What doesn't work
@@ -762,32 +913,53 @@ so the growing type is never reached through an unbounded chain.
 ## Generic turbofish grounded by an enclosing type parameter
 
 A turbofish whose type argument is supplied by an **enclosing** generic scope — a
-function type parameter or a class type parameter — cannot yet be specialized. Every
-such shape is rejected with a loud compile error rather than emitted as runtime-fatal
-code; the representative cases below are not exhaustive (a named free-function forward
-grounded by an enclosing parameter, `return identity::<T>($v)` inside `wrap<T>`, is the
-same class of shape and rejected the same way). Each may be lifted in a future version.
+function type parameter or a class type parameter — is grounded **per specialization**:
+the call is abstract inside the template, and once the enclosing generic specializes
+(`wrap::<int>`, `new Box::<int>`) the now-concrete call is dispatched to a real
+specialized member or function. The shapes below compile and run:
 
-### ❌ What doesn't work
+```php
+function identity<U>(U $x): U { return $x; }
+function wrap<T>(T $v): T { return identity::<T>($v); }   // ✅ named forward
+wrap::<int>(3);
 
-A generic **closure** grounded by an enclosing function type parameter:
+final class Maker
+{
+    public static function wrap<X>(X $v): array { return [$v]; }
+}
+
+class Box<T>
+{
+    public function make(T $v): T { return self::gen::<T>($v); }        // ✅ own static
+    public function viaMaker(T $v): array { return Maker::wrap::<T>($v); } // ✅ external static
+    public function twice(T $v): array { return $this->dup::<T>($v); }  // ✅ own instance
+    public static function gen<U>(U $x): U { return $x; }
+    public function dup<V>(V $x): array { return [$x, $x]; }
+}
+```
+
+Instance calls also ground on a receiver with a **non-generic** declared type
+(`$maker->wrap::<T>($v)` for a `Maker $maker` parameter), and both call shapes ground
+a target declared on a generic **base** class (`$this->dup::<T>` / `self::gen::<T>`
+where the target lives on `Base<T>` — the member lands on the calling class's
+specialization). Both `xphp check` and `xphp compile`
+agree on every accept and reject below: a bound that only becomes provable after
+specialization (`gen<U : Stringable>` called with the class's `T`) is checked per
+instantiation in both modes.
+
+### ❌ What still doesn't work
+
+A generic **closure** grounded by an enclosing function type parameter — and a
+**concrete** inner closure turbofish written inside a generic function body. Closure
+dispatch is not re-entered per specialization:
 
 ```php
 function relay<S>(S $v): S
 {
     $inner = fn<I>(I $x): I => $x;
-    return $inner::<S>($v);          // ❌ `S` is not concrete here
+    return $inner::<S>($v);          // ❌ xphp.unspecialized_generic_closure
 }
-```
 
-```
-Generic closure call `$inner::<S>(...)` cannot be specialized: its type argument(s)
-are grounded only by an enclosing generic scope and are not concrete here …
-```
-
-A **concrete** inner closure turbofish, but written **inside a generic function body**:
-
-```php
 function outer<T>(T $seed): int
 {
     $f = fn<U>(U $x): U => $x;
@@ -795,55 +967,47 @@ function outer<T>(T $seed): int
 }
 ```
 
-A **method/static turbofish grounded by an enclosing class type parameter**:
+A target declared on a **different generic template** — its specialized member belongs
+on that template's own specializations, which the grounding pass must not touch:
 
 ```php
-class Box<T>
+class Other<S> { public static function gen<U>(U $x): U { return $x; } }
+class Holder<T>
 {
-    public function make(T $v): T { return self::gen::<T>($v); }   // ❌ `T` from the class
-    public static function gen<U>(U $x): U { return $x; }
+    public function m(T $v): T { return Other::gen::<T>($v); }   // ❌ cross-template
 }
 ```
 
+The late-bound `static::` / `parent::` spellings (resolving them statically could
+silently re-route a subclass or parent dispatch — rejecting loudly is the contract),
+a forward to a **bare top-level** (namespace-less) generic function from inside a
+generic class, and a **method-level** parameter forwarded to any generic method
+(`$this->dup::<W>` inside `probe<W>`). A method-level parameter can't be forwarded
+because a generic method is specialized before its class, so `W` has no concrete
+value where the forward would be grounded — a non-erasable target reports
+`xphp.unspecializable_self_call`, an erasable one `xphp.unspecialized_generic_leak`,
+but neither is supported.
+
+A **strictly-growing** forward chain is rejected as non-convergent rather than
+compiled forever:
+
+```php
+function grow<T>(T $v): int
+{
+    return grow::<Box<T>>(new Box::<T>($v));   // ❌ xphp.unconverged_method_specialization
+}
 ```
-A generic turbofish/closure marker survived specialization into the emitted output …
-[xphp.unspecialized_generic_leak]
-```
 
-### Why
+Every rejected shape fails **loudly** — with the diagnostic named above or the
+`xphp.unspecialized_generic_leak` backstop — in both `check` and `compile`; none is
+ever emitted as runtime-fatal PHP.
 
-Variable-turbofish and method-turbofish dispatch is **call-site-driven**: a site is
-specialized only when its type arguments are concrete *at that site*. When the argument
-comes from an enclosing type parameter it is still abstract when the inner site is
-visited, so no concrete dispatch can be built; and the concrete-inner case (`outer`)
-only fails because the closure sits inside a *generic function* body, which the current
-dispatch pass does not re-enter per specialization. Left un-grounded, each would emit
-PHP that names a non-existent type-parameter class (`App\I`, `App\U`, or a stripped
-`gen()` method) and fatal on first use. Rather than emit that, xphp fails the build: the
-closure form is caught at the source seam in both `xphp check` and `xphp compile`
-(`xphp.unspecialized_generic_closure`); the two shapes that reach code generation are
-caught by a compile-time backstop over the emitted output
-(`xphp.unspecialized_generic_leak`). Grounding these shapes so they *run* is tracked
-for a later release; today the guarantee is only that they never miscompile silently.
+### ✅ Workaround (for the still-rejected shapes)
 
-**`xphp check` catches only the closure form.** The two shapes that surface at code
-generation (`outer`, `Box::make`, and the named free-function forward above) are caught
-by the emit-time backstop, which `xphp check` does not run — it validates without
-emitting. So `check` reports **zero** diagnostics for those, while `compile` rejects
-them loudly. A CI pipeline that gates on `xphp compile` (or runs it after `check`) is
-fully covered; one that gates on `xphp check` alone will see green on code that
-`compile` will reject. This is a completeness gap in `check`, never a runtime-safety
-hole: no fatal-able code is ever emitted.
-
-### ✅ Workaround
-
-Call the inner generic with an **explicit concrete** turbofish at a scope where the type
-is known, or lift it out of the enclosing generic scope:
+Call the inner generic with an **explicit concrete** turbofish at a scope where the
+type is known, or lift it out of the enclosing generic scope:
 
 ```php
 $inner = fn<I>(I $x): I => $x;
 echo $inner::<int>(41);              // works at file / plain-function scope
-
-function gen<U>(U $x): U { return $x; }
-Box::useGen(gen::<int>(5));          // ground the generic where the type is concrete
 ```

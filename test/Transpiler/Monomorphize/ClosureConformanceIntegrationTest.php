@@ -25,7 +25,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
             'closure-conformance-run',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_conformance_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_conformance_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -43,7 +44,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
             'closure-conformance-dnf',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_conformance_dnf_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_conformance_dnf_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -61,7 +63,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
             'closure-named-user-fn',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_named_user_function_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_named_user_function_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -78,7 +81,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
             'closure-conformance-sugar',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_conformance_array_sugar_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_conformance_array_sugar_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -96,7 +100,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\ClosureBuiltinOk\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_conformance_builtin_ok/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_conformance_builtin_ok/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -124,7 +129,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\ClosureArgRun\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_arg_instance_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_arg_instance_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -152,7 +158,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\ClosureArgStaticRun\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_arg_static_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_arg_static_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -180,7 +187,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\ClosureArgFnRun\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_arg_free_fn_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_arg_free_fn_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -208,7 +216,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\PlainArgRun\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_arg_plain_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_arg_plain_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -236,7 +245,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\PlainFnArgRun\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_arg_plain_fn_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_arg_plain_fn_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -265,7 +275,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\Bucket3Run\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_arg_bucket3_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_arg_bucket3_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -295,7 +306,8 @@ final class ClosureConformanceIntegrationTest extends TestCase
         );
         $fixture->registerAutoload('App\\ClosureGroundRuntime\\');
         try {
-            require __DIR__ . '/../../fixture/compile/closure_conformance_grounded_runtime/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_conformance_grounded_runtime/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

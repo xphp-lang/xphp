@@ -15,12 +15,14 @@ declare(strict_types=1);
  * covariant chain inherited it. `probe` looks for a fresh Product in a list holding one Book, so the
  * expected answer is false — the point is that the call resolves and runs at all.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertFalse($found, 'the upcast contains-call must resolve, run, and report the Product absent');
-echo "OK\n";
+    Assert::assertFalse($found, 'the upcast contains-call must resolve, run, and report the Product absent');
+};

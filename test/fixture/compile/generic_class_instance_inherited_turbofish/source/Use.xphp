@@ -1,0 +1,38 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\InheritedTurbofish;
+
+// The generic-method target lives on a generic BASE: grounding `$this->dup::<T>`
+// threads Holder's concrete arguments through the extends chain to Base's parameters
+// and lands the member on the HOLDER specialization itself — never on the shared Base
+// template, whose mid-loop mutation would be order-dependent (an earlier-cloned
+// Base<string> spec must not grow an int member).
+class Base<T>
+{
+    /** @return array<int, mixed> */
+    public function dup<V>(V $x): array
+    {
+        return [$x, $x];
+    }
+
+    public function idT(T $v): T
+    {
+        return $v;
+    }
+}
+
+class Holder<T> extends Base<T>
+{
+    /** @return array<int, mixed> */
+    public function viaThis(T $v): array
+    {
+        return $this->dup::<T>($v);
+    }
+}
+
+$b = new Base::<string>();
+$h = new Holder::<int>();
+$r1 = $h->viaThis(3);
+$r2 = $b->idT('s');

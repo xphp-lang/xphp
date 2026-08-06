@@ -83,16 +83,51 @@ $id('T_<hash-of-int>', 42);
   template is all-defaulted.
 - Bare `new Foo;` (no `(` or `::<>`) also works for all-defaulted
   class templates — see [defaults](defaults.md).
-- **The type argument is not inferred from the call arguments.** A
-  turbofish-less call (`$x->pick('a')` instead of
-  `$x->pick::<string>('a')`) is a compile error
-  (`xphp.missing_type_argument`), not a silent skip — `xphp check`
-  catches a forgotten turbofish at build time rather than letting it
-  fatal at runtime. A generic **method** whose type parameters are all
-  defaulted may still be called bare; a named generic **function** or
-  **closure** has no bare or empty-turbofish form, so it always needs
-  an explicit turbofish. (A first-class callable `pick(...)` creates a
-  closure rather than calling, and is left alone.)
+- **The turbofish is optional where the arguments determine the type.**
+  A bare call or `new` whose type parameters are fixed by the argument
+  values is inferred — `$x->pick('a')` infers `$x->pick::<string>('a')`,
+  `new Box(5)` infers `new Box::<int>(5)` — and compiles to exactly the
+  specialization the turbofish would have selected (see
+  [inference](#type-argument-inference), below). When the arguments *don't*
+  determine the type — a type parameter only in the return type, an argument
+  whose static type isn't known, or arguments that disagree — a turbofish-less
+  call is a compile error (`xphp.missing_type_argument`), not a silent skip:
+  `xphp check` catches it at build time rather than letting it fatal at
+  runtime. A generic **method** whose type parameters are all defaulted may
+  still be called bare; a generic **closure** call (`$f($x)`) is not inferred
+  and always needs an explicit turbofish. (A first-class callable `pick(...)`
+  creates a closure rather than calling, and is left alone.)
+
+## Type-argument inference
+
+Where the arguments determine the type parameters, you can omit the turbofish
+and xphp infers it:
+
+```php
+$r = identity(5);                 // identity::<int>
+$b = new Box(new Plastic());      // new Box::<Plastic>
+$m = Factory::make($product);     // from $product's declared type
+$d = $bag->put($this->item);      // from the declared property type
+```
+
+Inference derives the type arguments by matching each parameter's declared
+type against the argument's static type, then dispatches through the identical
+path an explicit turbofish uses — so an inferred call is byte-for-byte the same
+specialization, with the same bound and variance checks. It never *weakens*
+anything: adding a turbofish to an inferred call can only make the type
+explicit, never change behavior.
+
+Argument types are read from: literals, `new X(...)`, `$this->prop` (declared
+type), and a plain parameter with a concrete declared type that isn't reassigned.
+A **call** additionally infers from a statically-tracked local (assigned from a
+`new` or a class-returning call) and from a call whose declared return type is a
+determinable class, because the call path reuses the monomorphizer's receiver/flow
+tracking; **`new`** inference is limited to the conservative set (no locals or call
+returns). A reassigned parameter, a scalar-returning-call value, a union-typed
+value, or a value typed by a still-abstract type parameter is never an inference
+source, and such a site keeps the explicit turbofish. Generic **closure** calls
+(`$f($x)`) and `T[]`-typed parameters are not yet inferred either. See
+[caveats](../caveats.md#type-argument-inference-is-partial).
 
 ## Receiver-type analysis (instance methods)
 
@@ -134,6 +169,14 @@ than a silent pass-through that fatals at runtime.
   branches whose arms disagree; a turbofish call there is a compile
   error (`xphp.undetermined_receiver`), not a silent de-specialization.
   See [caveats](../caveats.md#branching-narrowing-precision-loss).
+
+- > ⚠️ **Enclosing type parameters as turbofish arguments** — a turbofish
+  grounded by an enclosing generic scope (`identity::<T>` inside `wrap<T>`,
+  `self::gen::<T>` / `$this->dup::<T>` / `Maker::wrap::<T>` inside `Box<T>`)
+  is grounded per specialization and runs. Still rejected loudly: closure
+  turbofish inside generic function bodies, targets on a *different*
+  generic template, and `static::`/`parent::` spellings. See
+  [caveats](../caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter).
 
 ## See also
 

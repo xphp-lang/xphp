@@ -5,6 +5,75 @@ All notable changes to `xphp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0]
+
+### Added
+
+- **Type aliases.** Give a type a reusable name, in two forms:
+  `type Name<A, B> = Body;` (generic) and `type Name = Body;` (non-generic). An
+  alias is a compile-time substitution — expanded into its body before
+  specialization, with no runtime existence, so the emitted PHP never mentions the
+  alias. Bodies may be a single
+  (possibly-generic) head, a **union** (`int|string`), or a **nullable** (`?Box`):
+  a single head expands in every type position (incl. as a generic argument,
+  `Bag<UserId>`), while a union/nullable expands as the whole type of a parameter,
+  property, return, or class-constant slot. Aliases compose (nested and
+  concrete-instantiation, `type UserMap = Pair<int, User>`); parameters carry
+  **defaults** (`type P<A, B = A>` — a use may omit trailing defaulted arguments)
+  and **bounds** (`type B<T : Named>` — an argument that violates the bound is a
+  compile error; the bound may itself name an alias), like a generic class. An alias
+  is **file-local** — visible only in the file that declares it, like a `use` alias.
+  A cyclic (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`),
+  class-colliding (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`),
+  unsupported-body (`xphp.alias_unsupported_body` — intersection / DNF / closure),
+  compound-in-non-slot (`xphp.alias_compound_in_non_slot`), or bound-violating
+  (`xphp.bound_violation`) alias is a loud error in both `xphp compile` and
+  `xphp check`. See [type aliases](docs/syntax/type-aliases.md).
+- **Type-argument inference (optional turbofish).** A generic call or `new` whose
+  type parameters are determined by the argument values no longer needs the `::<>`
+  turbofish: `identity(5)` infers `identity::<int>`, `new Box($product)` infers
+  `new Box::<Product>`, `$factory->make($p)` and `$box->put($this->item)` infer
+  from the argument's type. Works for free functions, static and instance methods,
+  and class instantiation. An inferred call compiles to exactly the specialization
+  the turbofish would have selected — the type arguments are unified from the
+  arguments' static types and dispatched through the identical path, so bounds,
+  variance, mangling, and check/compile parity are unchanged. Argument types are
+  read conservatively (literals, `new`, `$this` properties, and non-reassigned
+  typed parameters); where they don't determine the type — a type parameter only in
+  the return type, an unknown argument type, or conflicting arguments — the explicit
+  turbofish is still required and omitting it remains the same `xphp.missing_type_argument`
+  error. Generic closure calls (`$f($x)`) and `T[]`-typed parameters are not yet
+  inference sources. See [turbofish → inference](docs/syntax/turbofish.md#type-argument-inference).
+- **Method-generic turbofish grounded by an enclosing type parameter.** A turbofish
+  whose type argument is supplied by the enclosing generic scope now grounds **per
+  specialization** and runs, instead of being rejected by the emitted-marker backstop:
+  a named free-function forward (`identity::<T>($v)` inside `wrap<T>`), a static call
+  (`self::gen::<T>()`, `Maker::wrap::<T>()` inside `Box<T>` — the idiomatic "delegate
+  to a shared static generic helper" shape), and an instance call (`$this->dup::<T>()`,
+  `$m->dup::<T>()` on a non-generic receiver, including a target declared on a generic
+  base class). Freshly specialized bodies are re-grounded transitively, so multi-hop
+  forwards and mutually recursive generics converge; a member grounded onto the
+  program's classes is deduplicated per unique argument tuple, and an instantiation
+  that first appears inside a grounded body is discovered like any other. A bound that
+  only becomes provable after specialization (`gen<U : Stringable>` receiving the
+  class's `T`) is checked per instantiation, and a strictly-growing forward chain
+  (`grow<T>` calling `grow::<Box<T>>`) is rejected as non-convergent
+  (`xphp.unconverged_method_specialization`) instead of specializing forever. See
+  [turbofish](docs/syntax/turbofish.md) and the
+  [remaining caveats](docs/caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter)
+  (closure turbofish in generic function bodies, cross-template targets, and the
+  late-bound `static::`/`parent::` spellings still fail loudly).
+
+### Fixed
+
+- **`xphp check` / `xphp compile` parity on enclosing-parameter turbofish.** `check`
+  previously reported nothing for the shapes only the compile-time emitted-marker
+  backstop rejected — a pipeline gating on `check` alone saw green on code `compile`
+  refused. The validate-only pass now grounds each specialization the same way
+  `compile` does and collects the same diagnostics (a violated grounded bound, a
+  non-convergent chain, a surviving marker), located at the template's real source
+  line.
+
 ## [0.3.0]
 
 ### Added
@@ -593,6 +662,7 @@ These are documented in full in the [caveats](docs/caveats.md):
 - Build-time hash-collision detection and a configurable
   `XPHP_HASH_LENGTH` (16–64).
 
+[0.4.0]: https://github.com/xphp-lang/xphp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xphp-lang/xphp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/xphp-lang/xphp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/xphp-lang/xphp/compare/v0.1.0...v0.2.0

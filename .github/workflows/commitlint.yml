@@ -1,0 +1,38 @@
+name: Commitlint
+
+# Gate every PR on Conventional Commit messages. Same tool, same version, same
+# config as the local .githooks/commit-msg hook: commitlint pinned by
+# package-lock.json, rules in commitlint.config.mjs.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commitlint:
+    name: Conventional commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # commitlint needs the full PR range, not a shallow tip.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          # Keep in step with the compose `node` service image.
+          node-version: 24
+          cache: npm
+      - name: Install commitlint (lockfile-pinned)
+        run: npm ci --no-audit --no-fund
+      - name: Lint PR commit messages
+        run: >
+          npx --no-install commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose

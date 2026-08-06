@@ -1,0 +1,61 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Aliases;
+
+// A generic alias, a non-generic (plain-class) alias, and a concrete-instantiation alias that
+// references another alias — all erased before specialization. v1 aliases are file-local, so the
+// declarations and every use live in this one file.
+type Pair<A, B> = Dict<A, Bag<B>>;
+type UserId     = Ident;
+type UserMap    = Pair<int, User>;
+type Elem       = User;              // used only as a generic ARGUMENT (`Bag<Elem>`)
+type Num        = int|string;        // union body — expands into a whole slot as `int|string`
+type MaybeUser  = ?User;             // nullable body — expands as `?User`
+type Aliased    = Num;               // single head that transitively resolves to a union
+
+class Ident {}
+class User {}
+
+class Bag<T>
+{
+    public function __construct(public T $item) {}
+    public function get(): T { return $this->item; }
+}
+
+class Dict<K, V>
+{
+    public function __construct(public K $key, public V $value) {}
+    public function value(): V { return $this->value; }
+}
+
+class Service
+{
+    // Alias uses in return-type position (generic + non-generic) must expand before specialization.
+    public function pair(): Pair<int, User>
+    {
+        return new Pair::<int, User>(1, new Bag::<User>(new User()));
+    }
+
+    public function id(): UserId
+    {
+        return new UserId();
+    }
+
+    // Union / nullable / transitively-union alias uses in whole-slot positions.
+    public function num(Num $x): Aliased { return $x; }
+    public function maybe(): MaybeUser { return null; }
+}
+
+// Driver: the runtime verify reads these top-level values after requiring the emitted file.
+$service = new Service();
+$pair = $service->pair();
+$idValue = $service->id();
+$userMap = new UserMap(2, new Bag::<User>(new User()));
+// `Bag<Elem>` — an alias in generic-argument position. If it did not expand to `Bag<User>`, the
+// generated specialization would be typed on the nonexistent class `App\Aliases\Elem` and fatal here.
+$elemBag = new Bag::<Elem>(new User());
+// Union / nullable slot expansion: if `Num` did not become `int|string`, passing a string would fatal.
+$numValue = $service->num('hi');
+$maybeValue = $service->maybe();

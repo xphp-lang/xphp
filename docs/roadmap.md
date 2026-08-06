@@ -50,9 +50,14 @@ timeline
         Reified T
                 : runtime instanceof T
                 : marker interface per template
+        Type aliases
+                : compile-time substitution, file-local
+                : single-head union and nullable bodies
+                : parameter defaults and bounds
         Developer experience
                 : RFC-aligned call-site syntax
                 : empty turbofish for all-defaults templates
+                : optional turbofish via type-argument inference
         Validation and diagnostics
                 : xphp check validate-only gate
                 : collect-all diagnostics with text json github renderers
@@ -61,7 +66,6 @@ timeline
                 : PHPStan over the compiled output
     section Discovery
         Generic surface
-                : Generic type aliases
                 : Variance edges on trait-owned templates
                 : Branching narrowing precision
         Generic completeness
@@ -143,6 +147,15 @@ upcoming one.
   per instantiation), so a forwarded self-call
   (`probe<U : E>{ $this->contains::<U>(…) }`) compiles and runs; a forward to
   a non-erasable method is a compile error (`xphp.unspecializable_self_call`).
+- Enclosing-parameter turbofish grounding: a turbofish whose type argument is
+  supplied by the enclosing generic scope (`identity::<T>($v)` inside `wrap<T>`,
+  `self::gen::<T>()` / `Maker::wrap::<T>()`, `$this->dup::<T>()`) grounds **per
+  specialization** and runs, instead of being rejected by the emitted-marker
+  backstop. Freshly specialized bodies are re-grounded transitively so
+  multi-hop and mutually recursive forwards converge; a strictly-growing chain
+  (`grow<T>` calling `grow::<Box<T>>`) is rejected as non-convergent
+  (`xphp.unconverged_method_specialization`). `compile` and `check` report this
+  identically.
 
 ### Anonymous templates
 
@@ -219,6 +232,27 @@ upcoming one.
 - Marker interface per template so `$x instanceof App\Box` works
   across every `Box<...>` specialization.
 
+### Type aliases
+
+- `type Name<A, B> = Body;` and `type Name = Body;` — a compile-time
+  substitution expanded into its body before specialization, with no
+  runtime existence (the emitted PHP never mentions the alias).
+- Single-head, **union** (`int|string`), and **nullable** (`?Box`) bodies.
+  A single head expands in every type position (incl. as a generic
+  argument, `Bag<UserId>`); a union/nullable expands as the whole type of a
+  slot. Composes with nested and concrete-instantiation aliases.
+- Parameters carry **defaults** (`type P<A, B = A>` — a use may omit
+  trailing defaulted arguments) and **bounds** (`type B<T : Named>` — an
+  argument that violates the bound is a compile error), like a generic class.
+- **File-local by design**: an alias is visible only in the file that
+  declares it (like a `use` alias); declare it per file to share it.
+- Cyclic, arity-mismatched, class-colliding, duplicate, unsupported-body
+  (intersection / DNF / closure), compound-in-non-slot, and
+  bound-violating uses are loud compile errors in both `compile` and
+  `check`, each with a stable code.
+- See the [type aliases](syntax/type-aliases.md) tour and the
+  [body / position limits caveat](caveats.md#type-alias-body-and-position-limits).
+
 ### Naming and collisions
 
 - SHA-256-based generated FQCN; namespace mirrors the template.
@@ -230,6 +264,16 @@ upcoming one.
 
 - RFC-aligned call-site syntax (`Name::<...>` turbofish).
 - Empty turbofish (`Name::<>`) for all-defaults templates.
+- **Type-argument inference (optional turbofish)**: a generic call or `new`
+  whose type parameters are fixed by the argument values drops the turbofish
+  — `identity(5)` infers `identity::<int>`, `new Box($product)` infers
+  `new Box::<Product>` — compiling to the exact specialization the turbofish
+  would have selected. Free functions, static/instance methods, and `new`.
+  Where the arguments don't determine the type (a parameter only in the return
+  type, an unknown or conflicting argument type), the explicit turbofish is
+  still required. See the
+  [turbofish → inference](syntax/turbofish.md#type-argument-inference) tour and
+  [caveats](caveats.md#type-argument-inference-is-partial).
 
 ### Validation and diagnostics
 
@@ -264,7 +308,6 @@ to ship.
 
 ### Generic surface
 
-- Generic type aliases (e.g. `type Pair<A, B> = ...`).
 - Variance edges on trait-owned templates.
 - Branching narrowing precision: today a turbofish call on a receiver
   whose branch arms disagree is a compile error; could track unions with

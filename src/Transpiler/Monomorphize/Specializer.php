@@ -9,6 +9,7 @@ use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
+use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
@@ -331,15 +332,27 @@ final class Specializer
 
             public function leaveNode(Node $node): ?Node
             {
-                // Ground a variable-turbofish call's type arguments in place. An inner
+                // Ground a method-generic turbofish call's type arguments in place. An inner
                 // `$inner::<S>(...)` inside a generic template body parses as a FuncCall on
-                // a Variable whose type args live in ATTR_METHOD_GENERIC_ARGS; when the
-                // enclosing generic specializes (`S → int`) those args must ground too, so
-                // the per-specialization closure-grounding pass sees `$inner::<int>` and can
-                // dispatch it. Left un-substituted the closure keeps a raw `I` hint and
-                // fatals at runtime. (This substitution is e2e-inert until that grounding
-                // pass runs — it only rewrites the recorded type args, never emits.)
-                if ($node instanceof FuncCall) {
+                // a Variable whose type args live in ATTR_METHOD_GENERIC_ARGS; a static /
+                // instance / nullsafe method turbofish (`Maker::wrap::<T>`, `$this->m::<T>`)
+                // carries the same attribute on its call node. When the enclosing generic
+                // specializes (`T → int`) those recorded args must ground too, so a
+                // downstream grounding pass sees `::<int>` and can dispatch it. Left
+                // un-substituted the call keeps a raw `T` ref and is rejected by the emit
+                // leak guard. (This substitution is e2e-inert until a grounding pass
+                // consumes it — it only rewrites the recorded type args, never emits.)
+                // @infection-ignore-all LogicalOrAllSubExprNegation — node classes are
+                // mutually exclusive, so the all-negated disjunction is a tautology
+                // (every node passes); the arm is still gated on the marker attribute,
+                // which only call nodes carry, so the mutant is observationally
+                // equivalent. The per-kind instanceof checks are pinned positively by
+                // SpecializerMethodGenericArgsTest's call-kind provider.
+                if ($node instanceof FuncCall
+                    || $node instanceof StaticCall
+                    || $node instanceof MethodCall
+                    || $node instanceof NullsafeMethodCall
+                ) {
                     $methodArgs = $node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS);
                     if (is_array($methodArgs) && $methodArgs !== []) {
                         /** @var list<TypeRef> $methodArgs — ATTR_METHOD_GENERIC_ARGS is a TypeRef list (set by XphpSourceParser). */

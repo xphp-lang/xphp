@@ -31,16 +31,23 @@ use XPHP\Transpiler\Monomorphize\XphpSourceParser;
  * `#[RunInSeparateProcess]` (or use `setUpBeforeClass` for an entire
  * `TestCase` that shares one fixture across methods).
  *
- * Failure attribution: when a verify file calls `Assert::*` and it
- * fails, the exception's throw site is the verify file (`path:line`),
- * and the `require` frame is the calling `testFoo` method — PHPUnit
+ * Verify contract: a verify file `return`s a
+ * `function (CompiledFixture $fixture): void` that runs its `Assert::*`
+ * calls when invoked, so the fixture dependency is an explicit typed
+ * parameter rather than an implicit in-scope variable. The driver
+ * loads the closure with `require` and calls it with the fixture.
+ *
+ * Failure attribution: when a verify file's `Assert::*` fails, the
+ * exception's throw site is the verify file (`path:line`), and the
+ * closure-invocation frame is the calling `testFoo` method — PHPUnit
  * reports both.
  *
  * Usage:
  *   $fixture = CompiledFixture::compile($sourceDir, 'array-sugar');
  *   $fixture->registerAutoload('App\\ArraySugar\\');
  *   try {
- *       require __DIR__ . '/../../fixture/compile/array_sugar/verify/foo.php';
+ *       $runtime = require __DIR__ . '/../../fixture/compile/array_sugar/verify/foo.php';
+ *       $runtime($fixture);
  *   } finally {
  *       $fixture->cleanup();
  *   }

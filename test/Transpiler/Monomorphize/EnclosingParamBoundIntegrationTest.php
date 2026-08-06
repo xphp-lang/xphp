@@ -732,7 +732,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_forwarding/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_forwarding/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -749,7 +750,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_two_params/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_two_params/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -766,7 +768,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_map_multiparam/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -783,7 +786,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_param_widening/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_param_widening/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -801,7 +805,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_inherited/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_inherited/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -819,7 +824,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_covariant_chain/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_erasure_covariant_chain/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -839,7 +845,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -859,7 +866,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_direct_emit/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_direct_emit/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -878,7 +886,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_structural_class_param/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_subinterface_structural_class_param/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -896,7 +905,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast_map/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/enclosing_bound_interface_upcast_map/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -916,7 +926,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/variance_edge_preserves_source_parent/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/variance_edge_preserves_source_parent/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1264,7 +1275,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_upcast_nested_generic_diamond/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_upcast_nested_generic_diamond/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1287,7 +1299,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_upcast_multipath_diamond/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_upcast_multipath_diamond/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1307,7 +1320,8 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
         );
         try {
             $fixture->registerAutoload('App');
-            require __DIR__ . '/../../fixture/compile/covariant_upcast_return_enclosing_inherited/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/covariant_upcast_return_enclosing_inherited/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -1700,24 +1714,25 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testBareInstanceMethodGenericCallFailsCompile(): void
     {
-        // A turbofish-less call to a method generic with no all-default params can't infer its type
-        // argument — it must fail compile, not silently emit a call to the stripped `pick_T_<…>`.
+        // A turbofish-less call whose arguments don't determine the type parameter — here `T` appears
+        // only in the return type — cannot be inferred, so it must fail compile, not silently emit a
+        // call to the stripped `pick_T_<…>`.
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessageMatches('/pick/');
 
         $this->compile([
-            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function pick<T>(T \$x): T { return \$x; } }\n",
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$bad = \$b->pick('b');\n",
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function pick<T>(int \$n): T { throw new \\RuntimeException('x'); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$bad = \$b->pick(1);\n",
         ]);
     }
 
     public function testBareInstanceMethodGenericCallIsCollectedInCheck(): void
     {
-        // The same bare call in `check` mode is collected (not thrown), so a whole-program check reports
-        // it instead of a runtime fatal — the gap the ticket is about.
+        // The same non-inferable bare call in `check` mode is collected (not thrown), so a whole-program
+        // check reports it instead of a runtime fatal — the gap the ticket is about.
         $collector = $this->check([
-            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function pick<T>(T \$x): T { return \$x; } }\n",
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$bad = \$b->pick('b');\n",
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public function pick<T>(int \$n): T { throw new \\RuntimeException('x'); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$b = new Box();\n\$bad = \$b->pick(1);\n",
         ]);
         $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
         self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
@@ -1746,10 +1761,11 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testBareStaticMethodGenericCallIsReported(): void
     {
-        // The static path (`Box::pick('b')`) has the identical silent-skip branch — also reported.
+        // The static path (`Box::pick(1)`) has the identical silent-skip branch — a non-inferable
+        // bare call (T only in the return type) is also reported.
         $collector = $this->check([
-            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public static function pick<T>(T \$x): T { return \$x; } }\n",
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = Box::pick('b');\n",
+            'Box.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Box { public static function pick<T>(int \$n): T { throw new \\RuntimeException('x'); } }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = Box::pick(1);\n",
         ]);
         $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
         self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);
@@ -1757,20 +1773,21 @@ final class EnclosingParamBoundIntegrationTest extends TestCase
 
     public function testBareFreeFunctionGenericCallFailsCompile(): void
     {
-        // The free-function path skipped bare calls via a different early return; a bare call to a
-        // generic function must also fail rather than emit a call to the stripped `pick_T_<…>`.
+        // The free-function path skipped bare calls via a different early return; a non-inferable
+        // bare call (T only in the return type) must also fail rather than emit a call to the
+        // stripped `pick_T_<…>`.
         $this->expectException(RuntimeException::class);
         $this->compile([
-            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(T \$x): T { return \$x; }\n",
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = pick('b');\n",
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(int \$n): T { throw new \\RuntimeException('x'); }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = pick(1);\n",
         ]);
     }
 
     public function testBareFreeFunctionGenericCallIsCollectedInCheck(): void
     {
         $collector = $this->check([
-            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(T \$x): T { return \$x; }\n",
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = pick('b');\n",
+            'fns.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nfunction pick<T>(int \$n): T { throw new \\RuntimeException('x'); }\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n\$bad = pick(1);\n",
         ]);
         $codes = array_map(static fn (Diagnostic $d): string => $d->code, $collector->all());
         self::assertContains(Registry::CODE_MISSING_TYPE_ARGUMENT, $codes);

@@ -15,6 +15,7 @@ use PhpParser\NodeVisitorAbstract;
 use PhpParser\Parser;
 use PhpToken;
 use RuntimeException;
+use XPHP\Diagnostics\SourceLocation;
 
 /**
  * Parses .xphp source text into an AST with generic metadata, supporting
@@ -110,6 +111,19 @@ final class XphpSourceParser
     // tagged (the escape hatch). Advisory metadata only — not emitted.
     public const ATTR_SUSPECT_UNDECLARED_TYPE = 'xphp:suspectUndeclaredType';
 
+    // Set on a type-hint Name that is the WHOLE type of a param / property / return / class-const
+    // slot (not nested inside a nullable/union/intersection). A compound-body alias may only expand
+    // here — elsewhere it has no representable form and is rejected.
+    public const ATTR_ALIAS_WHOLE_SLOT = 'xphp:aliasWholeSlot';
+
+    /** Stable diagnostic codes for type-alias rejections. */
+    public const CODE_ALIAS_CYCLE = 'xphp.alias_cycle';
+    public const CODE_ALIAS_ARITY = 'xphp.alias_arity';
+    public const CODE_ALIAS_DUPLICATE = 'xphp.alias_duplicate';
+    public const CODE_ALIAS_CLASS_COLLISION = 'xphp.alias_class_collision';
+    public const CODE_ALIAS_UNSUPPORTED_BODY = 'xphp.alias_unsupported_body';
+    public const CODE_ALIAS_COMPOUND_IN_NON_SLOT = 'xphp.alias_compound_in_non_slot';
+
     /**
      * The reserved PHP type keywords — names PHP forbids as class names. A bare name in this list is
      * unambiguously a builtin, so every site that asks "is this name a builtin keyword or a class?"
@@ -131,11 +145,18 @@ final class XphpSourceParser
     }
 
     /**
+     * A type alias is file-local: only the aliases declared in `$source` are visible to it, mirroring
+     * PHP's `use`-alias scoping. There is no whole-program alias table.
+     *
+     * @param ?string $filepath the source file, threaded only so a captured alias-bound obligation
+     *        can carry an accurate SourceLocation; null on the standalone parse path.
+     * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations,
+     *        verified after the hierarchy is built; null (inert) on the standalone parse path.
      * @return list<Node\Stmt>
      */
-    public function parse(string $source): array
+    public function parse(string $source, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
     {
-        return $this->parseWithMap($source)[0];
+        return $this->parseWithMap($source, $filepath, $obligations)[0];
     }
 
     /**
@@ -147,11 +168,12 @@ final class XphpSourceParser
      * Returns the identity map when no length-changing replacements fired
      * (the common case for files without `T[]` array-suffix sugar).
      *
+     * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      * @return array{0: list<Node\Stmt>, 1: ByteOffsetMap}
      */
-    public function parseWithMap(string $source): array
+    public function parseWithMap(string $source, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): array
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers, $aliasMarkers] = $this->scanAndStrip($source);
 
         try {
             $ast = $this->parser->parse($cleanedSource);
@@ -169,7 +191,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
+        $unbound = $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasMarkers, $filepath, $obligations);
         // @infection-ignore-all — defensive backstop, unreachable from valid input by
         // construction (see unboundDeclarationMarkerMessage): no test can reach a
         // mutant here. The message builder is pinned by direct unit tests; this
@@ -273,7 +295,7 @@ final class XphpSourceParser
      */
     public function parseTolerantWithMap(string $source): ?ParseWithMapResult
     {
-        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers] = $this->scanAndStrip($source);
+        [$classMarkers, $nameMarkers, $methodMarkers, $cleanedSource, $byteOffsetMap, $closureMarkers, $aliasMarkers] = $this->scanAndStrip($source);
 
         $errorHandler = new \PhpParser\ErrorHandler\Collecting();
         $ast = $this->parser->parse($cleanedSource, $errorHandler);
@@ -282,7 +304,7 @@ final class XphpSourceParser
         }
         /** @var list<Node\Stmt> $ast — nikic's parse() returns array<Stmt>; runtime keys are always 0..N-1. */
 
-        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap);
+        $this->resolveAndAttach($ast, $classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasMarkers);
 
         return new ParseWithMapResult($ast, $byteOffsetMap);
     }
@@ -307,7 +329,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -321,12 +343,35 @@ final class XphpSourceParser
         $methodMarkers = [];
         /** @var list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers */
         $closureMarkers = [];
+        /** @var list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers */
+        $aliasMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
 
         $i = 0;
         while ($i < $n) {
             $tok = $tokens[$i];
+
+            // Type-alias declaration: `type Name[<A, B>] = SingleHeadBody;` (WI-01, file-local).
+            // `type` is a contextual keyword (an ordinary T_STRING), so this arm MUST run first —
+            // before the bare `Name<…>` arm below, which would otherwise strip the `<A, B>` off
+            // `type Pair<A, B> = …` and leave the statement half-parsed. `tryParseAliasDeclaration`
+            // gates on statement position (so a `type` used as a constant / function / member name
+            // is never mistaken for a declaration) and consumes the WHOLE `type … ;` statement,
+            // blanking it to equal-length whitespace (the alias has no runtime existence).
+            if ($tok->id === T_STRING && $tok->text === 'type') {
+                $aliasParsed = self::tryParseAliasDeclaration($tokens, $i);
+                if ($aliasParsed !== null) {
+                    [$aliasMarker, $semicolonIdx] = $aliasParsed;
+                    $aliasMarkers[] = $aliasMarker;
+                    $startByte = $tok->pos;
+                    $endByte = $tokens[$semicolonIdx]->pos + strlen($tokens[$semicolonIdx]->text);
+                    $length = $endByte - $startByte;
+                    $replacements[] = [$startByte, $length, self::blank(substr($source, $startByte, $length))];
+                    $i = $semicolonIdx + 1;
+                    continue;
+                }
+            }
 
             // Anonymous closure: `function<T>(...){}` / `fn<T>(...)`.
             // Recognized by T_FUNCTION/T_FN followed immediately by `<` (no
@@ -828,7 +873,7 @@ final class XphpSourceParser
         $cleaned = self::applyReplacements($source, $replacements);
         $byteOffsetMap = ByteOffsetMap::fromReplacements($replacements);
 
-        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap, $closureMarkers];
+        return [$classMarkers, $nameMarkers, $methodMarkers, $cleaned, $byteOffsetMap, $closureMarkers, $aliasMarkers];
     }
 
     /**
@@ -2386,6 +2431,177 @@ final class XphpSourceParser
     }
 
     /**
+     * Recognize a type-alias declaration `type Name [<A, B>] = SingleHeadBody;` beginning at the
+     * `type` token index `$typeIdx`, and return `[marker, semicolonIndex]` — or null when the tokens
+     * are not a well-formed single-head alias declaration, so the `type` token falls through to
+     * ordinary handling (a genuinely malformed shape then reaches nikic / the validators; nothing is
+     * silently eaten). The marker carries the alias short name, its (possibly empty) type-parameter
+     * names, the raw body TypeRef (resolved later against the namespace context), and the `type`
+     * token's byte position for namespace-span attribution.
+     *
+     * v1 (WI-01): file-local; the body must be a single (possibly-generic) head that `parseTypeArg`
+     * accepts. A union / intersection / nullable / closure body leaves a non-`;` token after the head
+     * and is declined here — a dedicated `xphp.alias_unsupported_body` diagnostic lands in a later
+     * change rather than a silent pass-through.
+     *
+     * Gated to STATEMENT position: the previous significant token must be a statement boundary
+     * (`;`, `{`, `}`, or the opening `<?php` tag), so a `type` used as a constant / function name or
+     * a member (`Foo::type`, `$x->type`, `new type()`) is never mistaken for a declaration.
+     *
+     * @param list<PhpToken> $tokens
+     * @return array{0: array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}, 1: int}|null
+     */
+    private static function tryParseAliasDeclaration(array $tokens, int $typeIdx): ?array
+    {
+        // Statement-position guard. `type` always sits at index >= 1 (index 0 is the open tag), so
+        // skipWsBack lands on a real token; the `?? null` is a defensive floor only. A `type` used as
+        // a constant / function / member name (preceded by `->`, `::`, `=`, `(`, …) is declined here.
+        $prevTok = $tokens[self::skipWsBack($tokens, $typeIdx - 1)] ?? null;
+        if ($prevTok === null
+            || !($prevTok->id === T_OPEN_TAG
+                || $prevTok->text === ';'
+                || $prevTok->text === '{'
+                || $prevTok->text === '}')
+        ) {
+            return null;
+        }
+
+        // Alias name.
+        // @infection-ignore-all IncrementInteger -- `type` is always followed by whitespace (else
+        // `typeName` would tokenize as one T_STRING), so skipWs(+1) and skipWs(+2) reach the same
+        // name token: the offset increment is an equivalent mutant.
+        $nameIdx = self::skipWs($tokens, $typeIdx + 1);
+        $nameTok = $tokens[$nameIdx] ?? null;
+        if ($nameTok === null || $nameTok->id !== T_STRING) {
+            return null;
+        }
+
+        // Optional `<A, B>` parameter list. Parsed permissively (defaults + variance allowed, as on
+        // a class header) so recognition never throws. The full per-param entries — carrying each
+        // param's optional bound and default — are retained (not just the names): expansion applies
+        // the defaults (fewer args than params) and enforces the bounds.
+        $params = [];
+        $afterName = self::skipWs($tokens, $nameIdx + 1);
+        $afterNameTok = $tokens[$afterName] ?? null;
+        if ($afterNameTok === null) {
+            return null;
+        }
+        if ($afterNameTok->text === '<') {
+            $parsed = self::parseTypeParamList($tokens, $afterName, allowDefaults: true, allowVariance: true);
+            if ($parsed === null) {
+                return null;
+            }
+            [$params, $paramsEndIdx] = $parsed;
+            // @infection-ignore-all IncrementInteger -- the `>` closing the param list is followed
+            // by whitespace-then-`=` in every reachable shape (a no-space `>=` is the comparison
+            // operator, not this position), so skipWs(+1) and skipWs(+2) reach the same token.
+            $eqIdx = self::skipWs($tokens, $paramsEndIdx + 1);
+        } else {
+            $eqIdx = $afterName;
+        }
+
+        // `=`.
+        if (($tokens[$eqIdx] ?? null)?->text !== '=') {
+            return null;
+        }
+
+        // The alias statement must be terminated by a `;` before any `{` / `}` / end of input,
+        // otherwise it is truncated (mid-typing) and we decline so the tolerant path and PHP's own
+        // parser handle it.
+        $bodyStart = self::skipWs($tokens, $eqIdx + 1);
+        $semiIdx = self::aliasTerminator($tokens, $bodyStart);
+        if ($semiIdx === null) {
+            return null;
+        }
+
+        // The body is a single head or a flat union of single heads (`?X` desugars to `X|null`);
+        // anything else (intersection, DNF, closure signature) yields a null body. The whole
+        // statement is still stripped here (so `strip()` never produces a PHP parse error); a null
+        // body is rejected with `xphp.alias_unsupported_body` at parse time by `buildAliasTable`.
+        $body = self::parseAliasBody($tokens, $bodyStart, $semiIdx);
+
+        return [
+            [
+                'name' => $nameTok->text,
+                'params' => $params,
+                'body' => $body,
+                'bytePosition' => $tokens[$typeIdx]->pos,
+                'line' => $tokens[$typeIdx]->line,
+            ],
+            $semiIdx,
+        ];
+    }
+
+    /**
+     * Parse a type-alias body (between `=`, starting at $bodyStart, and its terminator $semiIdx) as a
+     * flat union of single heads. Returns the union members — a single-head body is one member, and
+     * `?X` desugars to `[X, null]`. Returns null when the body is a shape v1/v2 does not support: an
+     * intersection (`&`), a parenthesised / DNF form, or a closure signature; `buildAliasTable` then
+     * rejects the null body with `xphp.alias_unsupported_body`.
+     *
+     * @param list<PhpToken> $tokens
+     * @return list<TypeRef>|null
+     */
+    private static function parseAliasBody(array $tokens, int $bodyStart, int $semiIdx): ?array
+    {
+        // Leading `?` → nullable: `?<single head>` desugars to `<head> | null`. A `?` in front of a
+        // compound (`?A|B`) is illegal PHP anyway, so only a single head may follow.
+        // @infection-ignore-all NullSafePropertyCall -- `$bodyStart <= $semiIdx < count`, so the token
+        // always exists; the `?? null` / `?->` is a defensive floor that never sees null.
+        if (($tokens[$bodyStart] ?? null)?->text === '?') {
+            $parsed = self::parseTypeArg($tokens, self::skipWs($tokens, $bodyStart + 1));
+            if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
+                return null;
+            }
+            return [$parsed[0], new TypeRef('null')];
+        }
+
+        // Otherwise a union of single heads: `Head ( '|' Head )*`. A non-head member (an intersection
+        // `&`, a `(` DNF group, a closure `(`) leaves a token that is neither the terminator nor `|`,
+        // so the body is declined as unsupported.
+        $members = [];
+        $i = $bodyStart;
+        while (true) {
+            $parsed = self::parseTypeArg($tokens, $i);
+            if ($parsed === null) {
+                return null;
+            }
+            $members[] = $parsed[0];
+            $next = self::skipWs($tokens, $parsed[1]);
+            if ($next === $semiIdx) {
+                return $members;
+            }
+            // @infection-ignore-all NullSafePropertyCall -- `$next <= $semiIdx < count`, so the token
+            // always exists; the `?? null` / `?->` is a defensive floor that never sees null.
+            if (($tokens[$next] ?? null)?->text !== '|') {
+                return null;
+            }
+            $i = self::skipWs($tokens, $next + 1);
+        }
+    }
+
+    /**
+     * The index of the `;` that terminates an alias statement whose body starts at $bodyStart, or
+     * null when a `{` / `}` / end of input is reached first (a truncated, mid-typing declaration).
+     * A type body never contains `;` / `{` / `}`, so the first such token decides.
+     *
+     * @param list<PhpToken> $tokens
+     */
+    private static function aliasTerminator(array $tokens, int $bodyStart): ?int
+    {
+        for ($i = $bodyStart, $n = count($tokens); $i < $n; $i++) {
+            $text = $tokens[$i]->text;
+            if ($text === ';') {
+                return $i;
+            }
+            if ($text === '{' || $text === '}') {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Parse a single type arg: `NAME ( < TypeArgList > )?`.
      *
      * @param list<PhpToken> $tokens
@@ -2677,6 +2893,114 @@ final class XphpSourceParser
     }
 
     /**
+     * Build the file-local type-alias table, keyed by fully-qualified name. Each alias's declaring
+     * namespace is found by locating the `Namespace_` node whose (original-source) byte span contains
+     * the `type` keyword, so a real class sharing an alias's short name in another namespace never
+     * collides. Bodies stay raw (unresolved) — they resolve lazily at expansion, when the use-site
+     * namespace context is available. A duplicate FQN is rejected with `xphp.alias_duplicate` (never
+     * silently overwritten), and a name colliding with a class/interface/trait with
+     * `xphp.alias_class_collision`.
+     *
+     * @param list<Node\Stmt> $ast
+     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
+     * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}>
+     */
+    private static function buildAliasTable(array $ast, array $aliasMarkers, ByteOffsetMap $byteOffsetMap): array
+    {
+        // @infection-ignore-all ReturnRemoval -- optimization only: with no markers the loops below
+        // produce an empty table anyway; the early return just skips the namespace-span walk for the
+        // common alias-free file.
+        if ($aliasMarkers === []) {
+            return [];
+        }
+        /** @var list<array{0: string, 1: int, 2: int}> $spans namespace name + original byte span */
+        $spans = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                $spans[] = [
+                    $stmt->name?->toString() ?? '',
+                    $byteOffsetMap->toOriginal($stmt->getStartFilePos()),
+                    $byteOffsetMap->toOriginal($stmt->getEndFilePos()),
+                ];
+            }
+        }
+        $classFqns = self::collectClassLikeFqns($ast);
+        $table = [];
+        foreach ($aliasMarkers as $marker) {
+            $namespace = '';
+            foreach ($spans as [$name, $start, $end]) {
+                // @infection-ignore-all GreaterThanOrEqualTo LessThanOrEqualTo -- a `type` keyword's
+                // byte sits strictly inside its namespace span (after the `namespace` keyword, before
+                // the closing brace / EOF), so the `>=`/`<=` boundary variants never shift attribution;
+                // the `&&` (a use in an earlier namespace must not match a later one) is exercised.
+                if ($marker['bytePosition'] >= $start && $marker['bytePosition'] <= $end) {
+                    $namespace = $name;
+                    // @infection-ignore-all Break_ -- namespace spans are disjoint, so no later span
+                    // can also contain this byte; continuing the loop is equivalent.
+                    break;
+                }
+            }
+            $fqn = $namespace === '' ? $marker['name'] : $namespace . '\\' . $marker['name'];
+            if ($marker['body'] === null) {
+                throw new XphpParseException(
+                    "Type alias `{$fqn}` has an unsupported body: an alias body must be a single class "
+                    . 'or generic type, a union, or a nullable (intersection, DNF, and closure-signature '
+                    . 'bodies are not supported). Use a bare type or a named class.',
+                    $marker['line'],
+                    self::CODE_ALIAS_UNSUPPORTED_BODY,
+                );
+            }
+            if (isset($table[$fqn])) {
+                throw new XphpParseException(
+                    "Type alias `{$fqn}` is declared more than once in this file.",
+                    $marker['line'],
+                    self::CODE_ALIAS_DUPLICATE,
+                );
+            }
+            if (isset($classFqns[$fqn])) {
+                throw new XphpParseException(
+                    "Type alias `{$fqn}` collides with a class, interface, or trait of the same name.",
+                    $marker['line'],
+                    self::CODE_ALIAS_CLASS_COLLISION,
+                );
+            }
+            $table[$fqn] = ['params' => $marker['params'], 'body' => $marker['body']];
+        }
+        return $table;
+    }
+
+    /**
+     * Collect the fully-qualified names of every class / interface / trait / enum declared in the
+     * file, so a type alias colliding with one can be rejected. Declarations are direct children of a
+     * namespace (or top-level in the global namespace); this matches the file-local (v1) scope — a
+     * collision with a class declared in another file is not detected here.
+     *
+     * @param list<Node\Stmt> $ast
+     * @return array<string, true>
+     */
+    private static function collectClassLikeFqns(array $ast): array
+    {
+        $fqns = [];
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                $ns = $stmt->name?->toString() ?? '';
+                foreach ($stmt->stmts as $inner) {
+                    if ($inner instanceof ClassLike && $inner->name !== null) {
+                        $short = $inner->name->toString();
+                        // @infection-ignore-all TrueValue -- a set membership; the value is only ever
+                        // probed with isset(), which is true for any present key (incl. false).
+                        $fqns[$ns === '' ? $short : $ns . '\\' . $short] = true;
+                    }
+                }
+            } elseif ($stmt instanceof ClassLike && $stmt->name !== null) {
+                // @infection-ignore-all TrueValue -- set membership probed only with isset() (above).
+                $fqns[$stmt->name->toString()] = true;
+            }
+        }
+        return $fqns;
+    }
+
+    /**
      * Walk the AST: attach markers to ClassLike and Name nodes by (line, name) + order; resolve TypeRef names.
      *
      * Marker entries carry both a `name` (for legacy (line, name) matching on
@@ -2696,15 +3020,21 @@ final class XphpSourceParser
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
+     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?list<TypeRef>, bytePosition:int, line:int}> $aliasMarkers
+     * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      */
-    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap): ?string
+    private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): ?string
     {
+        // buildAliasTable runs the per-file rejections (same-file duplicate / class-collision /
+        // unsupported body). A type alias is file-local, so this file's own table is the only one
+        // expansion consults — an alias declared in another file is simply not visible here.
+        $aliasTable = self::buildAliasTable($ast, $aliasMarkers, $byteOffsetMap);
         $traverser = new NodeTraverser();
         $visitor = new
             /**
              * @phpstan-import-type BoundDict from XphpSourceParser
              */
-            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap) extends NodeVisitorAbstract {
+            class($classMarkers, $nameMarkers, $methodMarkers, $closureMarkers, $byteOffsetMap, $aliasTable, $filepath, $obligations) extends NodeVisitorAbstract {
             private NamespaceContext $ctx;
             /** @var list<list<string>> stack of enclosing type-param scopes */
             private array $typeParamStack = [];
@@ -2719,6 +3049,10 @@ final class XphpSourceParser
              * @param array<int, array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
              * @param array<int, array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
              * @param array<int, array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
+             * @param array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>}> $aliasTable the
+             *        aliases available for expansion (whole-program when injected) keyed by FQN; body is the raw (unresolved) TypeRef.
+             * @param ?string $filepath the source file, for a captured obligation's SourceLocation; null on the standalone parse path
+             * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations; null (inert) on the standalone parse path
              */
             public function __construct(
                 private array $classMarkers,
@@ -2726,11 +3060,43 @@ final class XphpSourceParser
                 private array $methodMarkers,
                 private array $closureMarkers,
                 private ByteOffsetMap $byteOffsetMap,
+                private array $aliasTable,
+                private ?string $filepath,
+                private ?AliasBoundObligationCollector $obligations,
             ) {
                 $this->ctx = new NamespaceContext();
             }
 
-            public function enterNode(Node $node): null
+            /**
+             * Cache of resolved alias bodies keyed by alias FQN — the raw body is resolved once
+             * (against the use-site namespace context, with the alias's params in scope) and reused.
+             *
+             * @var array<string, list<TypeRef>>
+             */
+            private array $aliasBodyCache = [];
+
+            /**
+             * Cache of resolved alias parameters keyed by alias FQN — each raw param entry resolved
+             * (against the use-site context, with the alias's params in scope) to a TypeParam carrying
+             * its bound and default. Feeds both default-padding and bound enforcement. Resolved once.
+             *
+             * @var array<string, list<TypeParam>>
+             */
+            private array $aliasParamsCache = [];
+
+            /**
+             * Alias FQNs whose parameter resolution has begun. Checked only after {@see $aliasParamsCache}
+             * misses, so a re-entry recorded here (but not yet cached) is an alias resolving through its
+             * own parameter bound — a self-referential cycle. Not cleared: once cached, the cache check
+             * short-circuits before this guard, so a lingering flag never yields a false positive.
+             *
+             * @var array<string, true>
+             */
+            private array $aliasParamsInFlight = [];
+
+            // Returns a replacement Node when a type-alias use is expanded in place (the traverser
+            // swaps it into the parent slot); null in every other case leaves the node untouched.
+            public function enterNode(Node $node): ?Node
             {
                 if ($node instanceof Use_ || $node instanceof GroupUse) {
                     // Reject a generic clause on a namespace-import BEFORE the blanket
@@ -3055,6 +3421,16 @@ final class XphpSourceParser
                             break;
                         }
                     }
+
+                    // Alias expansion (WI-01): if this type-position Name resolves to a declared
+                    // single-head alias, replace it with the recursively-expanded body so nothing
+                    // downstream (registry, specializer, call-site rewriter) ever sees the alias.
+                    // Runs after marker binding (a generic use's args are on the node by now) and
+                    // after the parent slot's markName (a bare use's ATTR_RESOLVED_FQN is set).
+                    $expansion = $this->expandAliasName($node);
+                    if ($expansion !== null) {
+                        return $expansion;
+                    }
                 }
 
                 // Tag bare class/interface Name references in class-name positions
@@ -3065,7 +3441,9 @@ final class XphpSourceParser
                 // Use_ branches (so $ctx is populated) and after the ClassLike/
                 // method type-param push (so isEnclosingTypeParam sees this scope).
                 if ($node instanceof Node\Stmt\Class_) {
-                    $this->markType($node->extends);
+                    // `extends` needs a single class, so a compound alias there must reject —
+                    // wholeSlot:false (a single-head alias still expands regardless of the flag).
+                    $this->markType($node->extends, false);
                     foreach ($node->implements as $impl) {
                         $this->markName($impl);
                     }
@@ -3091,17 +3469,17 @@ final class XphpSourceParser
                         $this->markName($type);
                     }
                 } elseif ($node instanceof Node\Param) {
-                    $this->markType($node->type);
+                    $this->markType($node->type, true);
                 } elseif ($node instanceof Node\Stmt\Property) {
-                    $this->markType($node->type);
+                    $this->markType($node->type, true);
                 } elseif ($node instanceof Node\Stmt\ClassConst) {
-                    $this->markType($node->type);
+                    $this->markType($node->type, true);
                 } elseif ($node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_
                     || $node instanceof Node\Expr\Closure
                     || $node instanceof Node\Expr\ArrowFunction
                 ) {
-                    $this->markType($node->returnType);
+                    $this->markType($node->returnType, true);
                 }
 
                 return null;
@@ -3112,16 +3490,22 @@ final class XphpSourceParser
              * through nullable/union/intersection wrappers). Scalar `Identifier`
              * leaves and non-Name expressions are left untouched.
              */
-            private function markType(?Node $type): void
+            private function markType(?Node $type, bool $wholeSlot): void
             {
                 if ($type instanceof Name) {
                     $this->attachClosureSig($type);
                     $this->markName($type);
+                    // A Name that IS the whole slot type may expand to a compound (union) alias; a Name
+                    // reached through the nullable/union/intersection recursion below is nested and may
+                    // not (tagged only at the top level).
+                    if ($wholeSlot) {
+                        $type->setAttribute(XphpSourceParser::ATTR_ALIAS_WHOLE_SLOT, true);
+                    }
                 } elseif ($type instanceof Node\NullableType) {
-                    $this->markType($type->type);
+                    $this->markType($type->type, false);
                 } elseif ($type instanceof Node\UnionType || $type instanceof Node\IntersectionType) {
                     foreach ($type->types as $inner) {
-                        $this->markType($inner);
+                        $this->markType($inner, false);
                     }
                 }
             }
@@ -3569,6 +3953,20 @@ final class XphpSourceParser
                     $fqn = $node['isFq']
                         ? $node['name']
                         : $this->resolveNameOnly($node['name']);
+                    // If the bound names a type alias, expand it exactly as a type position would, so
+                    // the check runs against the real type: a single-head alias (`Named = Face`)
+                    // becomes that head, a union / nullable alias (`Num = int|string`) becomes a union
+                    // bound (any-of). Without this the alias name is a phantom class and every argument
+                    // is wrongly rejected. Reaches class-, method-, and alias-parameter bounds alike.
+                    if (isset($this->aliasTable[$fqn])) {
+                        // @infection-ignore-all IncrementInteger -- buildBoundExprNode carries no source
+                        // line; a cycle/arity error while expanding a *bound* alias is reported at the
+                        // check-mode line-1 fallback whether the seed is 0 or 1, so the value is inert.
+                        $members = $this->expandAliasToUnion(new TypeRef($fqn, $resolvedArgs), [], 0);
+                        return count($members) === 1
+                            ? new BoundLeaf($members[0])
+                            : new BoundUnion(...array_map(static fn (TypeRef $m): BoundLeaf => new BoundLeaf($m), $members));
+                    }
                     $suspect = !$node['isFq']
                         && $this->isSuspectUndeclared($node['name']);
                     return new BoundLeaf(new TypeRef($fqn, $resolvedArgs, suspectUndeclared: $suspect));
@@ -3634,6 +4032,368 @@ final class XphpSourceParser
                     $this->ctx->resolveAgainstContext($name),
                     $resolvedArgs,
                     suspectUndeclared: $this->isSuspectUndeclared($name),
+                );
+            }
+
+            /**
+             * If this type-position Name resolves to a declared single-head alias, return the AST
+             * node for its fully-expanded body; otherwise null (leave the node untouched). The use's
+             * head + arguments come from the attributes already attached: a generic use carries
+             * ATTR_GENERIC_ARGS + ATTR_TEMPLATE_FQN, a bare use carries ATTR_RESOLVED_FQN. A Name in a
+             * non-type position (a plain function call) has neither and is skipped.
+             */
+            private function expandAliasName(Name $node): ?Node
+            {
+                // @infection-ignore-all ReturnRemoval -- optimization only: with an empty table the
+                // `isset($this->aliasTable[$head])` guard below already returns null for every name.
+                if ($this->aliasTable === []) {
+                    return null;
+                }
+                $genericArgs = $node->getAttribute(XphpSourceParser::ATTR_GENERIC_ARGS);
+                $templateFqn = $node->getAttribute(XphpSourceParser::ATTR_TEMPLATE_FQN);
+                $resolvedFqn = $node->getAttribute(XphpSourceParser::ATTR_RESOLVED_FQN);
+                // @infection-ignore-all LogicalAnd -- ATTR_GENERIC_ARGS and ATTR_TEMPLATE_FQN are
+                // attached together by the generic-marker binding (never one without the other), so
+                // `&&` and `||` select the same branch here.
+                if (is_array($genericArgs) && is_string($templateFqn)) {
+                    /** @var list<TypeRef> $genericArgs */
+                    $head = ltrim($templateFqn, '\\');
+                    $useArgs = $genericArgs;
+                } elseif (is_string($resolvedFqn)) {
+                    $head = ltrim($resolvedFqn, '\\');
+                    $useArgs = [];
+                } else {
+                    return null;
+                }
+                // Expand the head AND (recursively) the arguments — an alias can appear as a generic
+                // argument of a non-alias type (`Bag<Elem>`), not just as the head. The expansion is a
+                // union of members: one member is a single head (leave a non-alias untouched, else
+                // replace); two or more is a compound (union) alias, representable only as the whole
+                // type of a slot (`ATTR_ALIAS_WHOLE_SLOT`).
+                $useRef = new TypeRef($head, $useArgs);
+                $members = $this->expandAliasToUnion($useRef, [], $node->getStartLine());
+                // Drop the pre-expansion xphp attributes; the builders re-add the right ones (position
+                // attributes are preserved so diagnostics still map back).
+                $attrs = $node->getAttributes();
+                unset(
+                    $attrs[XphpSourceParser::ATTR_GENERIC_ARGS],
+                    $attrs[XphpSourceParser::ATTR_TEMPLATE_FQN],
+                    $attrs[XphpSourceParser::ATTR_RESOLVED_FQN],
+                    $attrs[XphpSourceParser::ATTR_SUSPECT_UNDECLARED_TYPE],
+                    $attrs[XphpSourceParser::ATTR_ALIAS_WHOLE_SLOT],
+                );
+                if (count($members) === 1) {
+                    if ($members[0]->canonical() === $useRef->canonical()) {
+                        return null;
+                    }
+                    return Specializer::typeRefToNode($members[0], $attrs);
+                }
+                if ($node->getAttribute(XphpSourceParser::ATTR_ALIAS_WHOLE_SLOT) !== true) {
+                    throw new XphpParseException(
+                        "Type alias `{$head}` is a union type, which is only usable as the whole type "
+                        . 'of a parameter, property, return, or class-constant slot.',
+                        $node->getStartLine(),
+                        XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT,
+                    );
+                }
+                return self::unionMembersToNode($members, $attrs);
+            }
+
+            /**
+             * Build the PHP type node for an expanded union: a `NullableType` when the sole non-null
+             * member is atomic (`?X` ≡ `X|null`), otherwise a `UnionType` (with a `null` member when
+             * the union is nullable). Members are single heads, so `?X` never wraps a compound —
+             * `?(A&B)` would be a fatal PHP parse error.
+             *
+             * @param list<TypeRef> $members
+             * @param array<string, mixed> $attrs
+             */
+            private static function unionMembersToNode(array $members, array $attrs): Node
+            {
+                $hasNull = false;
+                /** @var list<TypeRef> $nonNull */
+                $nonNull = [];
+                foreach ($members as $m) {
+                    // @infection-ignore-all UnwrapStrToLower -- resolveTypeRef already lowercases a
+                    // scalar keyword, so a `null` leaf's name is always lowercase here; strtolower is
+                    // a belt-and-suspenders guard.
+                    if (!$m->isGeneric() && strtolower($m->name) === 'null') {
+                        $hasNull = true;
+                    } else {
+                        $nonNull[] = $m;
+                    }
+                }
+                // A single-head member always lowers to an atomic Identifier (scalar) or Name (class),
+                // never a compound node — so it is valid inside a UnionType and (for the `?X` case) a
+                // NullableType.
+                /** @var list<Node\Identifier|Name> $nodes */
+                $nodes = array_map(static fn (TypeRef $m): Node => Specializer::typeRefToNode($m, []), $nonNull);
+                if ($hasNull && count($nodes) === 1) {
+                    return new Node\NullableType($nodes[0], $attrs);
+                }
+                if ($hasNull) {
+                    $nodes[] = new Node\Identifier('null');
+                }
+                return new Node\UnionType($nodes, $attrs);
+            }
+
+            /**
+             * Recursively expand a type reference against the file-local alias table. A non-alias
+             * head is returned with its arguments expanded; an alias head is substituted with its
+             * body (params → arguments) and re-expanded, so nested and concrete-instantiation aliases
+             * (`type UserMap = Pair<int, User>`) resolve fully. A head that recurs into itself
+             * (through its body or a generic argument) is a cycle, and a use whose argument count
+             * differs from the alias's parameter count is an arity error — both fail loudly with
+             * `xphp.alias_cycle` / `xphp.alias_arity`.
+             *
+             * @param list<string> $visited alias FQNs already entered on this expansion chain
+             */
+            private function expandAlias(TypeRef $ref, array $visited, int $line): TypeRef
+            {
+                $members = $this->expandAliasToUnion($ref, $visited, $line);
+                if (count($members) !== 1) {
+                    // A union alias reached where only a single head is representable — a generic
+                    // argument, a `new` / turbofish / `extends` / bound, or a nested type position.
+                    throw new XphpParseException(
+                        "Type alias `{$ref->name}` is a union type, which is only usable as the whole "
+                        . 'type of a parameter, property, return, or class-constant slot.',
+                        $line,
+                        XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT,
+                    );
+                }
+                return $members[0];
+            }
+
+            /**
+             * Expand a type reference to its **union members** (a single-head result is one member),
+             * fully resolving aliases. A non-alias head yields itself with its generic arguments
+             * expanded (single-head — a union cannot be a generic argument, so an alias argument that
+             * expands to a union throws via `expandAlias`). An alias head substitutes its body's union
+             * members (params → arguments) and expands each recursively, concatenating — so a
+             * single-head alias whose body transitively resolves to a union becomes a union too, and a
+             * union member that is itself a union alias flattens in. A cycle or arity mismatch throws.
+             *
+             * @param list<string> $visited alias FQNs already entered on this expansion chain
+             * @return list<TypeRef>
+             */
+            private function expandAliasToUnion(TypeRef $ref, array $visited, int $line): array
+            {
+                // Expand each argument on the SAME visited chain — an argument that refers back to an
+                // alias already being expanded (`type A<T> = Bag<A<T>>`) is a cycle through the
+                // argument path; passing an empty chain here would miss it and recurse without bound.
+                $expandedArgs = array_map(fn (TypeRef $a): TypeRef => $this->expandAlias($a, $visited, $line), $ref->args);
+                $entry = $this->aliasTable[$ref->name] ?? null;
+                if ($entry === null) {
+                    return [new TypeRef($ref->name, $expandedArgs, $ref->isScalar, $ref->isTypeParam, $ref->suspectUndeclared)];
+                }
+                if (in_array($ref->name, $visited, true)) {
+                    throw new XphpParseException(
+                        "Type alias `{$ref->name}` is defined (directly or transitively) in terms of itself.",
+                        $line,
+                        XphpSourceParser::CODE_ALIAS_CYCLE,
+                    );
+                }
+                $paddedArgs = $this->padAliasArgs($ref->name, $entry, $expandedArgs, $line);
+                $this->captureAliasBoundObligation($ref->name, $entry, $paddedArgs, $line);
+                $subst = [];
+                foreach (array_column($entry['params'], 'name') as $k => $paramName) {
+                    $subst[$paramName] = $paddedArgs[$k];
+                }
+                $members = [];
+                foreach ($this->resolveAliasBody($ref->name, $entry) as $bodyMember) {
+                    $substituted = self::substituteTypeRef($bodyMember, $subst);
+                    foreach ($this->expandAliasToUnion($substituted, [...$visited, $ref->name], $line) as $m) {
+                        $members[] = $m;
+                    }
+                }
+                return $members;
+            }
+
+            /**
+             * Record a deferred bound-check for a used alias whose parameters declare bounds, to be
+             * verified once the whole-program hierarchy exists ({@see AliasBoundValidator}). Captured
+             * only when a collector is threaded in (the compile/check path — inert for standalone / LSP
+             * parse) and every supplied argument is top-level ground: a bare type-param argument
+             * (`B<X>` inside `class C<X>`) is absent from the hierarchy and would be spuriously
+             * rejected, so it is skipped, whereas a concrete head over a type-param inner (`Box<X>`) IS
+             * captured (bounds erase generic arguments).
+             *
+             * Only a generic alias has parameters, hence bounds; and a generic alias only expands where
+             * it is FILE-LOCAL (a cross-file generic-alias use is a separate unsupported case that
+             * hard-errors as an undefined template, never reaching here). So a captured bound always
+             * resolves in the same namespace it was declared in — no cross-file misresolution. When
+             * cross-file generic aliases are supported, that resolution context must be revisited.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @param list<TypeRef> $paddedArgs
+             */
+            private function captureAliasBoundObligation(string $fqn, array $entry, array $paddedArgs, int $line): void
+            {
+                if ($this->obligations === null) {
+                    return;
+                }
+                // A top-level type-param argument (`B<X>` in `class C<X>`) is absent from the hierarchy
+                // and would be spuriously rejected; skip the whole obligation. A concrete head over a
+                // type-param inner (`Coll<X>`) is kept — bounds erase generic arguments. (An alias with
+                // no bounds is captured harmlessly: checkBounds is a no-op for a param without a bound,
+                // so gating on "has a bound" would be an unobservable optimization.)
+                foreach ($paddedArgs as $arg) {
+                    if ($arg->isTypeParam) {
+                        return;
+                    }
+                }
+                $this->obligations->add(
+                    $this->resolveAliasParams($fqn, $entry, $line),
+                    $paddedArgs,
+                    "type alias `{$fqn}`",
+                    new SourceLocation($this->filepath ?? '', $line),
+                );
+            }
+
+            /**
+             * Reconcile the supplied type arguments against an alias's parameters, filling missing
+             * trailing arguments from the parameters' defaults. A default may reference an earlier
+             * parameter (`B = A`), so each is substituted with the arguments already positioned. The
+             * required (default-less) parameters form a prefix (enforced by `parseTypeParamList`), so a
+             * valid supply count is `required <= given <= total`; anything else is `xphp.alias_arity`.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @param list<TypeRef> $expandedArgs
+             * @return list<TypeRef>
+             */
+            private function padAliasArgs(string $fqn, array $entry, array $expandedArgs, int $line): array
+            {
+                $total = count($entry['params']);
+                $required = 0;
+                foreach ($entry['params'] as $param) {
+                    if ($param['default'] === null) {
+                        $required++;
+                    }
+                }
+                $given = count($expandedArgs);
+                if ($given < $required || $given > $total) {
+                    // @infection-ignore-all CastString -- $total is interpolated into the message
+                    // either way; the cast only keeps both ternary branches typed `string`.
+                    $expected = $required === $total
+                        ? (string) $total
+                        : "between {$required} and {$total}";
+                    throw new XphpParseException(
+                        "Type alias `{$fqn}` expects {$expected} type argument(s), {$given} given.",
+                        $line,
+                        XphpSourceParser::CODE_ALIAS_ARITY,
+                    );
+                }
+                $params = $this->resolveAliasParams($fqn, $entry, $line);
+                $paramNames = array_column($entry['params'], 'name');
+                $padded = $expandedArgs;
+                for ($i = $given; $i < $total; $i++) {
+                    $subst = [];
+                    foreach ($padded as $k => $arg) {
+                        $subst[$paramNames[$k]] = $arg;
+                    }
+                    // @infection-ignore-all CoalesceRemoval -- indices [$given,$total) are exactly the
+                    // trailing params, every one of which has a default (required params form a prefix),
+                    // so $params[$i]->default is never null here; the coalesce is a defensive floor.
+                    $default = $params[$i]->default ?? throw new \LogicException('padded slot without a default');
+                    $padded[] = self::substituteTypeRef($default, $subst);
+                }
+                return $padded;
+            }
+
+            /**
+             * Resolve an alias's raw body against the current namespace context, with the alias's own
+             * type parameters pushed so `A` / `B` become type-param references rather than qualified
+             * class names. Cached per alias FQN.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @return list<TypeRef>
+             */
+            private function resolveAliasBody(string $fqn, array $entry): array
+            {
+                // @infection-ignore-all ReturnRemoval -- the cache is an optimization; resolveTypeRef
+                // is deterministic for a fixed context, so re-resolving on a cache miss is equivalent.
+                if (isset($this->aliasBodyCache[$fqn])) {
+                    return $this->aliasBodyCache[$fqn];
+                }
+                // Resolve each union member with the alias's own parameters in scope, then restore the
+                // exact prior scope stack — so the alias's params never leak into later resolution.
+                // Restore by saved-copy assignment (not a pop) so the restore is exact and unconditional.
+                $saved = $this->typeParamStack;
+                $this->typeParamStack[] = array_column($entry['params'], 'name');
+                $resolved = array_map(fn (TypeRef $m): TypeRef => $this->resolveTypeRef($m), $entry['body']);
+                $this->typeParamStack = $saved;
+                return $this->aliasBodyCache[$fqn] = $resolved;
+            }
+
+            /**
+             * Resolve an alias's raw parameter entries against the current namespace context, with the
+             * alias's own parameters in scope so a bound / default that references a param (`T : A`,
+             * `B = A`) resolves to a type-param leaf. Returns one TypeParam per parameter, in order,
+             * carrying the resolved bound and default. Cached per FQN; feeds both default-padding
+             * (`padAliasArgs`) and bound enforcement (`captureAliasBoundObligation`).
+             *
+             * A parameter's bound may itself name an alias (`type B<T : Named>`), which expands here via
+             * `buildBoundExpr`. If that bound refers (directly or transitively) back to this alias, the
+             * `$inFlight` guard turns the otherwise-unbounded recursion into a clean `xphp.alias_cycle`
+             * — the body-cycle `$visited` guard in `expandAliasToUnion` does not cover the bound axis.
+             *
+             * @param array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:list<TypeRef>} $entry
+             * @return list<TypeParam>
+             */
+            private function resolveAliasParams(string $fqn, array $entry, int $line): array
+            {
+                // @infection-ignore-all ReturnRemoval -- the cache is an optimization; resolution is
+                // deterministic for a fixed context, so re-resolving on a cache miss is equivalent.
+                if (isset($this->aliasParamsCache[$fqn])) {
+                    return $this->aliasParamsCache[$fqn];
+                }
+                if (isset($this->aliasParamsInFlight[$fqn])) {
+                    throw new XphpParseException(
+                        "Type alias `{$fqn}` is defined (directly or transitively) in terms of itself.",
+                        $line,
+                        XphpSourceParser::CODE_ALIAS_CYCLE,
+                    );
+                }
+                // @infection-ignore-all TrueValue -- a presence set: the isset() guard above reads key
+                // existence, not the value, so true vs false is unobservable. Never cleared, and it
+                // needn't be: the cache check above short-circuits a COMPLETED alias before this guard,
+                // so a lingering flag can only ever mark an alias still mid-resolution (a real cycle).
+                $this->aliasParamsInFlight[$fqn] = true;
+                $saved = $this->typeParamStack;
+                $this->typeParamStack[] = array_column($entry['params'], 'name');
+                $resolved = array_map(
+                    fn (array $param): TypeParam => new TypeParam(
+                        $param['name'],
+                        $this->buildBoundExpr($param),
+                        $this->buildDefault($param),
+                        $param['variance'],
+                    ),
+                    $entry['params'],
+                );
+                $this->typeParamStack = $saved;
+                return $this->aliasParamsCache[$fqn] = $resolved;
+            }
+
+            /**
+             * Replace type-parameter leaves in a resolved TypeRef tree using a name → concrete map.
+             *
+             * @param array<string, TypeRef> $subst
+             */
+            private static function substituteTypeRef(TypeRef $ref, array $subst): TypeRef
+            {
+                // @infection-ignore-all LogicalAnd -- a resolved body's type-param leaves are exactly
+                // the alias's parameters, every one present in $subst; and a class leaf's FQN name
+                // never equals a bare parameter-name key. So both operands are always true together or
+                // false together, and `&&`/`||` select the same result.
+                if ($ref->isTypeParam && isset($subst[$ref->name])) {
+                    return $subst[$ref->name];
+                }
+                return new TypeRef(
+                    $ref->name,
+                    array_map(static fn (TypeRef $a): TypeRef => self::substituteTypeRef($a, $subst), $ref->args),
+                    $ref->isScalar,
+                    $ref->isTypeParam,
+                    $ref->suspectUndeclared,
                 );
             }
 

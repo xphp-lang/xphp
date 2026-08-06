@@ -1,0 +1,62 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Inference;
+
+function identity<T>(T $x): T
+{
+    return $x;
+}
+
+function wrap<T>(T $x): T
+{
+    return $x;
+}
+
+final class Box<T>
+{
+    public function __construct(private T $value)
+    {
+    }
+
+    public function get(): T
+    {
+        return $this->value;
+    }
+
+    public function dup<U>(U $x): U
+    {
+        return $x;
+    }
+}
+
+final class Factory
+{
+    public static function make<T>(T $x): T
+    {
+        return $x;
+    }
+}
+
+final class Consumer
+{
+    private Plastic $p;
+
+    public function __construct()
+    {
+        $this->p = new Plastic();
+    }
+
+    // Argument typed from a class-typed property (`$this->p`).
+    public function viaProp(): Plastic
+    {
+        return wrap($this->p);
+    }
+
+    // Argument typed from a class-typed parameter (`$q`).
+    public function viaParam(Plastic $q): Plastic
+    {
+        return wrap($q);
+    }
+}

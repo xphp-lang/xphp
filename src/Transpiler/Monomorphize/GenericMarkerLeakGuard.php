@@ -11,7 +11,13 @@ use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\NullsafeMethodCall;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Name;
+use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\NodeFinder;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor;
+use PhpParser\NodeVisitorAbstract;
 use RuntimeException;
 
 /**
@@ -45,39 +51,119 @@ final class GenericMarkerLeakGuard
     public const CODE = 'xphp.unspecialized_generic_leak';
 
     /**
-     * Throw if any generic marker survives into a specialized AST subtree.
+     * Find the first surviving generic marker in a specialized AST subtree, or null when
+     * the subtree is clean. The scan is the guard's single source of truth — `assertNoLeak`
+     * throws on it, and `check`-mode callers degrade it to a collected diagnostic so the
+     * validate-only pass reports the same shapes the compile-time backstop rejects.
+     *
+     * `$includeClosureTemplates` toggles the defense-in-depth arm. The compile-time
+     * assert keeps it on. The check-mode drain turns it off: an un-specialized closure
+     * template inside a drained body always accompanies either a source-seam diagnostic
+     * on its call site (a different line — the template node's own line would dodge the
+     * caller's already-reported dedupe) or an orphan diagnostic from the
+     * declared-but-never-specialized check, so re-flagging the template node itself only
+     * double-reports; the call-site marker arm is what carries new information there.
+     *
+     * `$includeVariableTurbofish` toggles variable-turbofish FuncCalls (`$f::<int>`).
+     * The check-mode CLASS-spec backstop turns it off: check's validate-only walk never
+     * materializes closure dispatchers, so a class-spec clone legitimately carries the
+     * variable marker that compile's dispatcher pass grounds — flagging it would reject
+     * code compile accepts. Every genuinely-broken variable-turbofish shape is caught
+     * elsewhere (the source seam in both modes, or the append-drain backstop, whose
+     * check side keeps this arm on because compile's drain rejects the same body).
+     *
+     * `$skipUnspecializedTemplates` skips the SUBTREES of function/method/closure
+     * declarations still carrying their generic-template marker. Same check-mode
+     * class-spec backstop rationale: check never strips templates, so a spec clone
+     * retains e.g. `a<U>` whose body legitimately holds a `self::b::<U>` marker — the
+     * template as a whole is dispatch machinery, not emitted output, and flagging its
+     * interior would reject code compile accepts. Compile-mode specs never contain
+     * such declarations, so the assert path is unaffected.
      *
      * @param Node|list<Node> $specialized  the emitted specialized node(s)
-     * @param string          $label        the specialization's identity, for the error message
      */
-    public static function assertNoLeak(Node|array $specialized, string $label): void
-    {
+    public static function findLeak(
+        Node|array $specialized,
+        bool $includeClosureTemplates = true,
+        bool $includeVariableTurbofish = true,
+        bool $skipUnspecializedTemplates = false,
+    ): ?Node {
         $nodes = is_array($specialized) ? $specialized : [$specialized];
-        $finder = new NodeFinder();
 
-        $leak = $finder->findFirst($nodes, static function (Node $n): bool {
+        $matcher = static function (Node $n) use ($includeClosureTemplates, $includeVariableTurbofish): bool {
             if ($n instanceof FuncCall
                 || $n instanceof MethodCall
                 || $n instanceof StaticCall
                 || $n instanceof NullsafeMethodCall
             ) {
+                if (!$includeVariableTurbofish && $n instanceof FuncCall && !$n->name instanceof Name) {
+                    return false;
+                }
                 return $n->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_ARGS) !== null;
             }
-            if ($n instanceof Closure || $n instanceof ArrowFunction) {
+            if ($includeClosureTemplates && ($n instanceof Closure || $n instanceof ArrowFunction)) {
                 return is_array($n->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS));
             }
 
             return false;
-        });
+        };
 
-        if ($leak === null) {
-            return;
+        if (!$skipUnspecializedTemplates) {
+            return (new NodeFinder())->findFirst($nodes, $matcher);
         }
 
+        // Subtree-skipping scan: NodeFinder can't prune, so walk with a traverser that
+        // refuses to descend into declarations still carrying the template marker.
+        // Preorder like findFirst, so both paths report the same first leak.
+        $visitor = new class($matcher) extends NodeVisitorAbstract {
+            public ?Node $leak = null;
+
+            /** @param \Closure(Node): bool $matcher */
+            public function __construct(private readonly \Closure $matcher)
+            {
+            }
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($this->leak !== null) {
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+                if (($node instanceof ClassMethod || $node instanceof Function_
+                        || $node instanceof Closure || $node instanceof ArrowFunction)
+                    && is_array($node->getAttribute(XphpSourceParser::ATTR_METHOD_GENERIC_PARAMS))
+                ) {
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+                if (($this->matcher)($node)) {
+                    $this->leak = $node;
+                    // @infection-ignore-all ReturnRemoval — descending into the found
+                    // leak's children is a no-op: the leak-set early-exit above prunes
+                    // every subsequent node before the matcher can overwrite. The
+                    // prune is an optimization; first-leak-wins is pinned by
+                    // GenericMarkerLeakGuardTest's document-order test.
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($nodes);
+
+        return $visitor->leak;
+    }
+
+    /**
+     * Build the guard's diagnostic message for a found leak. Shared verbatim between the
+     * compile-time throw and the check-mode collected diagnostic so both modes name the
+     * same site the same way.
+     */
+    public static function leakMessage(Node $leak, string $label): string
+    {
         // @infection-ignore-all Concat ConcatOperandRemoval — the diagnostic wording is not
         // behavior: the tests pin that a leak throws and that the message names the label, the
         // line, and the code; reordering or dropping a prose clause changes none of those.
-        throw new RuntimeException(sprintf(
+        return sprintf(
             'A generic turbofish/closure marker survived specialization into the emitted output for %s '
             . '(near line %d). This site could not be grounded to a concrete type, so its type-parameter '
             . 'hints would reach the emitted PHP as references to non-existent classes — a runtime TypeError. '
@@ -87,6 +173,23 @@ final class GenericMarkerLeakGuard
             $label,
             $leak->getStartLine(),
             self::CODE,
-        ));
+        );
+    }
+
+    /**
+     * Throw if any generic marker survives into a specialized AST subtree.
+     *
+     * @param Node|list<Node> $specialized  the emitted specialized node(s)
+     * @param string          $label        the specialization's identity, for the error message
+     */
+    public static function assertNoLeak(Node|array $specialized, string $label): void
+    {
+        $leak = self::findLeak($specialized);
+
+        if ($leak === null) {
+            return;
+        }
+
+        throw new RuntimeException(self::leakMessage($leak, $label));
     }
 }

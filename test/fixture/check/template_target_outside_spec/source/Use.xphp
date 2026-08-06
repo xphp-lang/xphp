@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+// A generic-template-owned static generic called from OUTSIDE the template's own body:
+// grounding Holder<int> drains Maker's freshly appended wrap member, whose body names
+// Holder::gen::<X>. Dispatching that through the spec's `self::` would emit a call to
+// a member Maker doesn't have (a runtime fatal) — the marker is kept and the
+// emitted-marker backstop rejects loudly instead.
+final class Maker
+{
+    /** @return array<int, mixed> */
+    public static function wrap<X>(X $v): array
+    {
+        return Holder::gen::<X>($v);
+    }
+}
+
+final class Holder<T>
+{
+    /** @return array<int, mixed> */
+    public static function gen<U>(U $x): array
+    {
+        return [$x, $x];
+    }
+
+    /** @return array<int, mixed> */
+    public function go(T $v): array
+    {
+        return Maker::wrap::<T>($v);
+    }
+}
+
+$h = new Holder::<int>();
+$h->go(7);

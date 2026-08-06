@@ -67,7 +67,8 @@ final readonly class Compiler
         // Phase 0: parse every source up front. The TypeHierarchy (used to validate generic
         // bounds at recordInstantiation time) needs to see every class/interface/trait
         // declaration *before* any instantiation is recorded, so parsing has to finish first.
-        $astPerFile = $this->parseAll($sources);
+        $aliasBoundObligations = new AliasBoundObligationCollector();
+        $astPerFile = $this->parseAll($sources, $aliasBoundObligations);
 
         $hierarchy = TypeHierarchy::fromAstPerFile($astPerFile);
         $registry = new Registry($this->hashLength, $hierarchy);
@@ -86,16 +87,27 @@ final readonly class Compiler
         // AST in compile-mode, so this must precede it).
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy);
 
-        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
-        $methodCompiler->process($astPerFile);
-
         // Phase 1b.i: collect class definitions across every source file. Splitting
         // definitions ahead of instantiations gives bare-`new Foo;` synthesis (added
         // in 1b.ii) a complete template registry so it can recognize Foo as an
-        // all-defaulted template regardless of the file-walk order.
+        // all-defaulted template regardless of the file-walk order. Collected BEFORE the
+        // method compiler runs so the type-argument inference pass below has the full
+        // template registry AND sees the original (un-stripped, un-appended) user ASTs —
+        // the same shape `check()` runs it against, keeping the two modes in parity.
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectDefinitions($ast, $filepath);
         }
+
+        // Optional turbofish on `new`: infer a bare `new Box($x)`'s type arguments from its
+        // constructor arguments and annotate it, so the instantiation collector + call-site
+        // rewriter treat it as an explicit turbofish. A `new` it can't resolve is left bare
+        // (all-defaults synthesis / missing-type-argument error). Runs before `process` so it
+        // never sees appended specializations (which `check` can't), and before
+        // collectInstantiations so the annotation is picked up.
+        (new NewInferencePass($registry, $hierarchy))->run($astPerFile);
+
+        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy);
+        $methodCompiler->process($astPerFile);
 
         // Phase 1b.ii: validate defaults-against-bounds at the source level (so a
         // bad declaration like `class Box<T : Stringable = int>` fails BEFORE any
@@ -113,6 +125,9 @@ final readonly class Compiler
         // reaches emission as broken PHP.
         $registry->validateUndeclaredTypeParameters();
         $registry->validateDefaultsAgainstBounds();
+        // Enforce type-alias parameter bounds now that the hierarchy exists (the obligations were
+        // captured during parse, before it did) — compile mode has no collector, so a violation throws.
+        AliasBoundValidator::validate($aliasBoundObligations, $hierarchy);
         // Inner-template variance composition: every template's variance
         // markers are known by now, so cases the parse-time validator
         // couldn't catch (e.g. `class P<out T> { f(): Container<T> }` where
@@ -135,8 +150,10 @@ final readonly class Compiler
 
         // Phase 2: fixed-point specialization loop. Fail-fast (an undefined template
         // or an exceeded depth throws) — the emit path must not proceed on a set it
-        // couldn't fully build.
-        $specializedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: false);
+        // couldn't fully build. The method compiler rides along: each fresh
+        // specialization is grounded (enclosing-param method-generic turbofish
+        // dispatched against the retained Phase-1a template index) before collection.
+        $specializedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: false, methodCompiler: $methodCompiler);
 
         // Phase 2.3: re-qualify free-function calls and const fetches in every specialization
         // produced by the fixed-point loop. Each body was relocated out of its origin namespace
@@ -202,12 +219,12 @@ final readonly class Compiler
             $specializedAsts[$generatedFqn] = $first;
         }
 
-        // Note for future-proofing (review F9): method-level specialization runs in Phase 1a
-        // against the raw user-file ASTs, NOT against the specialized cache classes. That's
-        // safe under the current MVP limit ("generic methods on non-generic classes only" —
-        // see GenericMethodCompiler's docblock). If that limit ever relaxes, the specialized
-        // class ASTs would need to be fed back through the method compiler with their
-        // enclosing namespace preserved so FQN keying still works.
+        // Method-level specialization runs twice-shaped: Phase 1a against the raw
+        // user-file ASTs, then per-specialization inside the Phase-2 loop
+        // (GenericMethodCompiler::groundSpecializedClass, fed the retained template
+        // index with the spec's identity threaded — the F9 wiring note this replaces).
+        // Anything neither pass could ground still carries its marker and is rejected
+        // by the backstop below.
         foreach ($specializedAsts as $generatedFqn => $classAst) {
             // Last-resort safety net: no generic marker may survive into emitted output. A
             // surviving turbofish/closure marker is a site the pipeline could not ground —
@@ -305,6 +322,7 @@ final readonly class Compiler
         RegistryCollector $collector,
         TypeHierarchy $hierarchy,
         bool $resilient,
+        ?GenericMethodCompiler $methodCompiler = null,
     ): array {
         /** @var array<string, \PhpParser\Node\Stmt\ClassLike> $specializedAsts keyed by generated FQCN */
         $specializedAsts = [];
@@ -365,6 +383,44 @@ final readonly class Compiler
                 }
 
                 $specializedAsts[$generatedFqn] = $specialized;
+
+                // Ground method-generic turbofish markers the class substitution just
+                // made concrete (`self::gen::<T>` → `::<int>`) BEFORE collecting: an
+                // own-template member appended onto the spec is then swept by the
+                // collect below, and externally-appended members (onto a non-generic
+                // user class or a function namespace — invisible to spec collection)
+                // are collected explicitly, so nested instantiation needs discovered by
+                // grounding converge through this same fixed point.
+                if ($methodCompiler !== null) {
+                    if ($resilient) {
+                        try {
+                            $externalAppends = $methodCompiler->groundSpecializedClass(
+                                $specialized,
+                                $generatedFqn,
+                                $instantiation->templateFqn,
+                                $instantiation->concreteTypes,
+                                emit: false,
+                            );
+                        } catch (RuntimeException) {
+                            // Grounding failures surface as collected diagnostics in
+                            // check mode; a residual throw must not abort the resilient
+                            // pass over the remaining instantiations.
+                            $externalAppends = [];
+                        }
+                    } else {
+                        $externalAppends = $methodCompiler->groundSpecializedClass(
+                            $specialized,
+                            $generatedFqn,
+                            $instantiation->templateFqn,
+                            $instantiation->concreteTypes,
+                            emit: true,
+                        );
+                    }
+                    if ($externalAppends !== []) {
+                        $collector->collect($externalAppends, "<grounded:{$generatedFqn}>");
+                    }
+                }
+
                 $collector->collect([$specialized], "<specialized:{$generatedFqn}>");
             }
 
@@ -381,6 +437,10 @@ final readonly class Compiler
             }
 
             if ($countAfter === $countBefore) {
+                // @infection-ignore-all Continue_ -- break vs continue reconverges: an
+                // unchanged count means this pass recorded no new instantiations, so the
+                // next iteration processes nothing new and exits via the !newlyProcessed
+                // break; the mutant merely skips that no-op pass.
                 continue;
             }
 
@@ -399,13 +459,23 @@ final readonly class Compiler
     public function check(FilepathArray $sources): DiagnosticCollector
     {
         $diagnostics = new DiagnosticCollector();
-        $astPerFile = [];
+        $aliasBoundObligations = new AliasBoundObligationCollector();
+        // Read every source up front — OUTSIDE the try so an I/O failure surfaces as itself, not a
+        // mislabeled "parse error". Only parsing is treated as a per-file, recoverable diagnostic.
+        $contents = [];
         foreach ($sources->filepaths as $filepath) {
-            // Read OUTSIDE the try so an I/O failure surfaces as itself, not a mislabeled
-            // "parse error" — only parsing is treated as a per-file, recoverable diagnostic.
-            $content = $this->fileReader->read($filepath);
+            $contents[$filepath] = $this->fileReader->read($filepath);
+        }
+        $astPerFile = [];
+        foreach ($contents as $filepath => $content) {
+            // Buffer this file's alias-bound obligations and commit them to the shared collector only
+            // once the file has parsed cleanly — a file that aborts mid-parse is dropped from the
+            // hierarchy, so its obligations must not be checked against it (they would reference
+            // now-absent types and mis-report a valid use as a bound violation).
+            $fileObligations = new AliasBoundObligationCollector();
             try {
-                $astPerFile[$filepath] = $this->sourceParser->parse($content);
+                $astPerFile[$filepath] = $this->sourceParser->parse($content, $filepath, $fileObligations);
+                $aliasBoundObligations->absorb($fileObligations);
             } catch (PhpParserError $e) {
                 $line = $e->getStartLine();
                 $diagnostics->add(new Diagnostic(
@@ -422,11 +492,12 @@ final readonly class Compiler
             } catch (XphpParseException $e) {
                 // xphp-specific parse-time rejections from the scanner (e.g. variance markers
                 // on methods, malformed generic defaults) — these carry the offending token's
-                // original-source line so the diagnostic points at the real site.
+                // original-source line so the diagnostic points at the real site, and optionally a
+                // stable diagnostic code (e.g. a type-alias rejection) in place of the generic one.
                 $line = $e->sourceLine();
                 $diagnostics->add(new Diagnostic(
                     Severity::Error,
-                    self::CODE_PARSE_ERROR,
+                    $e->diagnosticCode() ?? self::CODE_PARSE_ERROR,
                     $e->getMessage(),
                     // @infection-ignore-all GreaterThan/IncrementInteger/DecrementInteger -- every
                     // current throw site supplies a real token line (>= 1), so this `> 0` guard is
@@ -456,10 +527,17 @@ final readonly class Compiler
         foreach ($astPerFile as $filepath => $ast) {
             $collector->collectDefinitions($ast, $filepath);
         }
+        // Optional turbofish on `new` (see compile()): infer bare `new` type arguments before
+        // instantiations are collected. Same pipeline position as compile — after definitions,
+        // before collectInstantiations — so check and compile infer identically.
+        (new NewInferencePass($registry, $hierarchy))->run($astPerFile);
         $registry->validateVariancePositions();
         $registry->validateUndeclaredTypeParameters();
         UndeclaredTypeParameterValidator::assertMethodLevel($astPerFile, $hierarchy, $diagnostics);
         $registry->validateDefaultsAgainstBounds();
+        // Enforce type-alias parameter bounds (obligations captured during parse) now the hierarchy
+        // exists; check mode collects each violation as an xphp.bound_violation and continues.
+        AliasBoundValidator::validate($aliasBoundObligations, $hierarchy, $diagnostics);
         $registry->validateInnerVariance();
         // Closure-signature conformance at the statically-visible literal site
         // (a `Closure(...)` return handing back a closure literal). In
@@ -481,8 +559,12 @@ final readonly class Compiler
         // validation calls (which produce the diagnostics) run in BOTH modes; `emit` only governs
         // append/strip/finalize side-effects on `$astPerFile`, which is local and discarded. So
         // flipping it changes only wasted work, not the collected diagnostics. `emit: false` is the
-        // correct (no-wasted-work, no-mutation) choice.
-        (new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics))->process($astPerFile, emit: false);
+        // correct (no-wasted-work, no-mutation) choice. The instance is held: the resilient
+        // specialization pass below feeds each spec back through it (groundSpecializedClass) so
+        // enclosing-param turbofish diagnostics only provable after substitution are collected —
+        // keeping check's verdicts aligned with compile's.
+        $methodCompiler = new GenericMethodCompiler($this->hashLength, $hierarchy, $diagnostics);
+        $methodCompiler->process($astPerFile, emit: false);
 
         // Grounded closure-signature conformance. A `Closure(T $x)` target whose
         // type parameter is still abstract above is gradually accepted; grounding it
@@ -497,7 +579,7 @@ final readonly class Compiler
         // by-ref) mismatches were already collected by the abstract pre-loop above, so
         // the grounded pass skips them to avoid a duplicate report at the specialized
         // location.
-        $groundedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: true);
+        $groundedAsts = $this->specializeToFixedPoint($registry, $collector, $hierarchy, resilient: true, methodCompiler: $methodCompiler);
         foreach ($groundedAsts as $generatedFqn => $classAst) {
             $closureValidator->validateFile([$classAst], "<specialized:{$generatedFqn}>", $diagnostics, groundedTypesOnly: true);
         }
@@ -510,11 +592,11 @@ final readonly class Compiler
      *
      * @return array<string, list<\PhpParser\Node\Stmt>>
      */
-    private function parseAll(FilepathArray $sources): array
+    private function parseAll(FilepathArray $sources, ?AliasBoundObligationCollector $obligations = null): array
     {
         $astPerFile = [];
         foreach ($sources->filepaths as $filepath) {
-            $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath));
+            $astPerFile[$filepath] = $this->sourceParser->parse($this->fileReader->read($filepath), $filepath, $obligations);
         }
 
         return $astPerFile;

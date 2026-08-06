@@ -10,12 +10,15 @@ declare(strict_types=1);
  * (Banana, Cherry) both lower to that single member, which accepts each as a Fruit. Both calls
  * running proves the per-E collapse and the param widening.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope, autoload registered.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`, autoload registered.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertTrue($banana, 'contains::<Banana> runs on the widened Fruit-typed member');
-Assert::assertTrue($cherry, 'contains::<Cherry> runs on the SAME widened member');
+    Assert::assertTrue($banana, 'contains::<Banana> runs on the widened Fruit-typed member');
+    Assert::assertTrue($cherry, 'contains::<Cherry> runs on the SAME widened member');
+};

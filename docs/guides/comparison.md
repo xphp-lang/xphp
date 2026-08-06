@@ -25,24 +25,25 @@ than erasure can.
 | Feature                                  | xphp                    | RFC              | TS               | Kotlin        | Rust                  |
 |------------------------------------------|-------------------------|------------------|------------------|---------------|-----------------------|
 | Generic classes / interfaces / traits    | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Generic functions / methods              | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Generic closures + arrow functions       | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Typed closure signatures (`Closure(int): bool`) | ✅ (erases to `\Closure`; literal conformance checked at compile time) | ✅ (runtime-lenient) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
+| Generic functions / methods              | ⚠️ (can't forward a method-level param, target another generic template, or use `static::`/`parent::`) | ✅ | ✅ | ✅ | ✅ |
+| Generic closures + arrow functions       | ⚠️ (no `$this` capture or `static function` closures; reflection/serializers see the dispatcher rewrite) | ✅ | ✅ | ✅ | ✅ |
+| Typed closure signatures (`Closure(int): bool`) | ⚠️ (param/return/property only — not a generic arg or bound; erases to `\Closure`, literal conformance checked) | ❌ (only untyped `callable` / `\Closure`; noted as future work) | ✅ (function types) | ✅ (`(Int) -> Bool`) | ✅ (`Fn(i32) -> bool`) |
+| Type-argument inference (call without `::<>`) | ⚠️ (inferred from the arguments for calls and `new` where they determine the type; otherwise the explicit turbofish is still required) | ❌ (turbofish optional; omitting runs unvalidated) | ✅ | ✅ | ✅ (turbofish is the fallback) |
 | Upper bounds                             | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Multiple bounds (intersection)           | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Union bounds + DNF                       | ✅                      | ✅               | ✅               | ❌ (intersection only via `where`) | n/a |
 | F-bounded recursion (`T : Box<T>`)       | ✅                      | ✅               | ✅               | ✅            | ✅                    |
 | Default type parameters                  | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Declaration-site variance (`out T` / `in T`)  | ✅                      | ✅               | ✅               | ✅            | ⚠️ inferred (lifetime-driven; PhantomData for unused type params) |
+| Declaration-site variance (`out T` / `in T`)  | ⚠️ (class-level only; violations inside trait-`use`d methods go unchecked) | ✅ | ✅ | ✅ | ⚠️ inferred (lifetime-driven; PhantomData for unused type params) |
 | Inner-template variance composition      | ✅                      | ✅               | ✅               | ✅            | ✅                    |
-| Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ✅ (inline)   | ✅ (monomorphic)      |
+| Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ⚠️ (`inline fun` only — can't reify a class type parameter) | ✅ (monomorphic)      |
 | `instanceof OriginalFqn` works           | ✅                      | ✅ (trivially: only one class exists at runtime) | n/a | n/a | n/a |
-| Real subtype edges between specializations | ✅                    | ❌ (erased)      | n/a              | n/a           | n/a                   |
-| Generic type aliases                     | ❌                      | ❌               | ✅               | ✅            | ✅                    |
+| Real subtype edges between specializations | ⚠️ (common case works; some covariant upcasts are unschedulable or may not converge) | ❌ (erased) | n/a | n/a | n/a |
+| Generic type aliases                     | ⚠️ (compile-time substitution; single-head / union / nullable bodies, parameter defaults + bounds, aliases usable as bounds; aliases are file-local, and intersection / DNF / closure-signature bodies aren't supported) | ❌ | ✅ | ✅ | ✅ |
 | Wildcard / `*` (use-site existential)    | ⚠️ partial (via marker) | n/a (erased)     | ⚠️ via `any` (bivariant escape hatch — loses type discipline) | ✅ (`Box<*>`) | n/a |
 | Use-site variance                        | ❌                      | ❌               | ❌               | ✅            | n/a                   |
 | Variadic generics                        | ❌                      | ❌               | ✅               | ❌            | ⚠️ tuples              |
-| Generic enums / sum types                | ❌                      | ❌               | ✅               | ✅            | ✅                    |
+| Generic enums / sum types                | ❌                      | ❌               | ✅ (via discriminated unions; `enum` can't be generic) | ✅ (via `sealed` classes; `enum class` can't be generic) | ✅                    |
 | Per-arg specialization                   | ❌                      | ❌ (erasure)     | ❌               | ❌            | ⚠️ nightly             |
 | Associated types                         | ❌                      | n/a              | ❌               | ❌            | ✅                    |
 | `T[]` array sugar                        | ✅                      | ❌               | ✅               | ❌            | ❌                    |
@@ -52,6 +53,30 @@ no comparable concept to align to. For the RFC, the `(erased)` notes
 mark features that simply can't exist under bound erasure: there are
 no specialized classes at runtime, so subtype edges, reified-T
 operations, and a wildcard sigil all lose their meaning.
+
+**Type-argument inference.** xphp infers the type arguments from the
+values passed when they determine the type, so the turbofish is
+optional there: `identity(5)` infers `identity::<int>`, `new Box($product)`
+infers `new Box::<Product>`, `$factory->make($p)` infers from `$p`'s
+type. An inferred call compiles to exactly the specialization the
+turbofish would have selected — inference only writes the turbofish for
+you, so bounds, variance, and mangling are unchanged. When the arguments
+*don't* determine the type — a type parameter used only in the return
+type, an argument whose static type isn't known, or two arguments that
+disagree — you still write the turbofish, and omitting it is the same
+compile error as before (`xphp.missing_type_argument`). Argument types are
+read conservatively (literals, `new`, `$this` properties, and non-reassigned
+typed parameters); generic *closure* calls (`$f($x)`) and `T[]`-typed
+parameters are not yet inference sources and keep the explicit turbofish.
+See [caveats](../caveats.md#type-argument-inference-is-partial).
+
+This is the same `::<>` turbofish Rust uses, and xphp now works like Rust
+in spirit: infer by default, reach for the turbofish to disambiguate or
+where inference can't see the type. TypeScript and Kotlin infer too. The
+bound-erasure RFC has no inference, and diverges in the other direction —
+there the turbofish is *optional* in a different sense: omit it and the
+call runs unvalidated with erased-to-`mixed` semantics rather than
+inferring or failing to compile.
 
 ## Where the monomorphic and erasure paths diverge
 
@@ -96,6 +121,12 @@ runtime check.
 Erasure-based runtimes can't do this because their specializations
 don't exist as distinct classes.
 
+> ⚠️ Not universal — see [supported with caveats](#supported-with-caveats).
+> A covariant upcast to an interface with an *erased* element-consuming
+> method can be unschedulable (a loud `xphp.unschedulable_covariant_upcast`,
+> never wrong code), and a self-reintroducing derivation can fail to
+> converge.
+
 ### `instanceof OriginalFqn` works
 
 Every generic template emits a marker interface at the original FQN.
@@ -103,6 +134,51 @@ Every generic template emits a marker interface at the original FQN.
 and any other specialization, even though they're physically
 unrelated classes. You get the "polymorphic over T" mental model
 without losing instance checks.
+
+## Supported with caveats
+
+The features marked ⚠️ for xphp in the grid work, but with limits worth
+knowing before you lean on them. Each links to the full write-up (with a
+reproduction and workaround) in [caveats](../caveats.md).
+
+- **Generic closures + arrow functions.** A generic closure/arrow can't
+  capture `$this` ([caveat](../caveats.md#this-capturing-arrows-and-closures-rejected)),
+  the `static function` closure form isn't supported
+  ([caveat](../caveats.md#static-closures-not-supported)), and — because
+  each call site is rewritten to a dispatcher closure — reflection and
+  closure serializers see the dispatcher's shape rather than your original
+  body ([caveat](../caveats.md#reflection-on-rewritten-generic-closures)).
+  Plain (non-`static`, non-`$this`) generic closures and arrows work.
+- **Typed closure signatures.** Accepted only in parameter, return, and
+  property positions. A signature as a generic argument
+  (`Box<Closure(int): int>`) or a bound is a compile error, and a signature
+  parameter can't be defaulted or untyped
+  ([caveat](../caveats.md#closure-signature-types-only-in-parameter-return-and-property-slots)).
+- **Generic functions / methods.** The base feature is solid; *composition*
+  is where the gaps are. Type arguments are inferred where the call arguments
+  determine them, and otherwise the turbofish is required (see the grid row).
+  And a turbofish grounded by an enclosing type parameter can't forward a
+  *method-level* parameter, target a *different* generic template, or use the
+  `static::`/`parent::` spellings
+  ([caveat](../caveats.md#generic-turbofish-grounded-by-an-enclosing-type-parameter)).
+  Receiver-type tracking also gives up across branches that disagree on the
+  type, and on a local assigned from a free function
+  ([caveat](../caveats.md#branching-narrowing-precision-loss)).
+- **Declaration-site variance.** Variance is enforced on methods declared
+  directly on the class, but a violation inside a **trait-`use`d** method
+  slips through unchecked
+  ([caveat](../caveats.md#variance-validator-and-trait-use)) — audit traits
+  on variant classes. Variance is class-level only; there's no
+  method/function-level variance.
+- **Real subtype edges.** Emitted for the common case (and a genuine
+  strength — see above), but not universal: some covariant upcasts to an
+  interface with an erased element-consuming method are **unschedulable**
+  and fail loudly (`xphp.unschedulable_covariant_upcast`), a
+  self-reintroducing list-↔-map derivation can fail to converge
+  ([caveat](../caveats.md#self-reintroducing-specialization-list--map-derivations)), and a
+  covariant `array`-backed collection trips the optional PHPStan pass at
+  level 6+
+  ([caveat](../caveats.md#covariant-array-backed-collections-trip-the-xphp-check-phpstan-pass)).
 
 ## What's missing today
 

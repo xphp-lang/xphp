@@ -29,7 +29,8 @@ final class ClosureArrowDefaultsTest extends TestCase
             'cdef-single',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_defaults_single/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_defaults_single/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -43,7 +44,8 @@ final class ClosureArrowDefaultsTest extends TestCase
             'adef-single',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/arrow_defaults_single/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_defaults_single/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -135,7 +137,8 @@ final class ClosureArrowDefaultsTest extends TestCase
             'cdef-use',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/closure_defaults_with_use/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_defaults_with_use/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }
@@ -150,7 +153,8 @@ final class ClosureArrowDefaultsTest extends TestCase
             'adef-cap',
         );
         try {
-            require __DIR__ . '/../../fixture/compile/arrow_defaults_with_implicit_capture/verify/runtime.php';
+            $runtime = require __DIR__ . '/../../fixture/compile/arrow_defaults_with_implicit_capture/verify/runtime.php';
+            $runtime($fixture);
         } finally {
             $fixture->cleanup();
         }

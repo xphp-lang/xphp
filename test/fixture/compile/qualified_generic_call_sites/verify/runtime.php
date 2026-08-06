@@ -8,22 +8,25 @@ declare(strict_types=1);
  * `new` against the marker interface, no doubled-namespace template),
  * route to the SAME specializations as the bare forms, and execute.
  *
- * Driver contract: `$fixture` (CompiledFixture) in scope.
+ * Driver contract: the driver invokes the returned closure with the `CompiledFixture`.
  */
 
 use PHPUnit\Framework\Assert;
+use XPHP\TestSupport\CompiledFixture;
 
-require $fixture->targetDir . '/Use.php';
+return function (CompiledFixture $fixture): void {
+    require $fixture->targetDir . '/Use.php';
 
-Assert::assertSame(1, $a->v);
-Assert::assertSame('r', $b->v);
-Assert::assertSame('k', $c->key);
-Assert::assertSame(5, $d->v);
-Assert::assertSame(9, $e->v);
-Assert::assertSame(3, $f);
-Assert::assertSame('g', $g);
+    Assert::assertSame(1, $a->v);
+    Assert::assertSame('r', $b->v);
+    Assert::assertSame('k', $c->key);
+    Assert::assertSame(5, $d->v);
+    Assert::assertSame(9, $e->v);
+    Assert::assertSame(3, $f);
+    Assert::assertSame('g', $g);
 
-// FQ, in-template, and same-line-relative int instantiations must all be
-// the one int specialization.
-Assert::assertSame(get_class($a), get_class($d));
-Assert::assertSame(get_class($a), get_class($e));
+    // FQ, in-template, and same-line-relative int instantiations must all be
+    // the one int specialization.
+    Assert::assertSame(get_class($a), get_class($d));
+    Assert::assertSame(get_class($a), get_class($e));
+};

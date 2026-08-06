@@ -1,0 +1,48 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App;
+
+interface Labeled
+{
+    public function label(): string;
+}
+
+final class Pair<P : Labeled>
+{
+    public function __construct(public readonly P $v)
+    {
+    }
+}
+
+class Producer<out W>
+{
+    public function __construct(public readonly mixed $seed)
+    {
+    }
+}
+
+final class Book
+{
+}
+
+// A WARNING and a deferred turbofish share one source line: the position dedupe is
+// severity-aware, so the warning must not suppress grounding — the bound violation
+// nested in gen's grounded body still surfaces (check-green here while compile
+// rejects would be the dangerous direction).
+final class Holder<T>
+{
+    public function go(T $v): mixed
+    {
+        $x = [new Producer::<Book>(1), self::gen::<T>($v)]; return $x;
+    }
+
+    public static function gen<U>(U $x): mixed
+    {
+        return new Pair::<U>($x);
+    }
+}
+
+$h = new Holder::<int>();
+$h->go(1);

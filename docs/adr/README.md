@@ -40,3 +40,4 @@ should be added here as a new numbered file; copy
 | [0020](0020-diagnose-and-restructure-self-reintroducing-specialization.md) | Diagnose and restructure self-reintroducing specialization (erased seam deferred) | Accepted |
 | [0021](0021-compile-runs-the-check-gate-by-default.md) | `xphp compile` runs the check gate by default | Accepted |
 | [0022](0022-bounds-are-upper-only.md) | Bounds are upper-only (no supertype/lower bounds) | Accepted |
+| [0023](0023-type-alias-declaration-syntax.md) | Type-alias syntax is the declaration form `type Name<…> = Body` | Accepted |

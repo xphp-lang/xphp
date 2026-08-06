@@ -1,0 +1,38 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\TurbofishDiscovery;
+
+final class Pair<P>
+{
+    public function __construct(
+        public readonly P $first,
+        public readonly P $second,
+    ) {
+    }
+}
+
+final class Maker
+{
+    // `Pair<X>` is abstract on this template: no source-visible site instantiates
+    // Pair concretely. `Pair<int>` first exists inside the `twin_T_<hash>` member
+    // that post-specialization grounding appends onto Maker — its instantiation must
+    // be collected from that appended body, or the emitted call references a
+    // generated class that was never specialized.
+    public static function twin<X>(X $v): Pair<X>
+    {
+        return new Pair::<X>($v, $v);
+    }
+}
+
+final class Holder<T>
+{
+    public function make(T $v): mixed
+    {
+        return Maker::twin::<T>($v);
+    }
+}
+
+$h = new Holder::<int>();
+$p = $h->make(9);

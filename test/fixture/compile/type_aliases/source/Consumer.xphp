@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Aliases;
+
+// A type alias is file-local: this second file declares its OWN `Num` (the one in Types.xphp is not
+// visible here). If the alias didn't expand, `Num` would emit a phantom type and this would not run.
+type Num = int|string;
+
+class LocalAlias
+{
+    public function widen(Num $x): Num { return $x; }
+}
+
+$localAlias = new LocalAlias();
+$localValue = $localAlias->widen('local');
