@@ -123,6 +123,8 @@ final class XphpSourceParser
     public const CODE_ALIAS_CLASS_COLLISION = 'xphp.alias_class_collision';
     public const CODE_ALIAS_UNSUPPORTED_BODY = 'xphp.alias_unsupported_body';
     public const CODE_ALIAS_COMPOUND_IN_NON_SLOT = 'xphp.alias_compound_in_non_slot';
+    public const CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION = 'xphp.alias_compound_needs_distribution';
+    public const CODE_ALIAS_SCALAR_IN_INTERSECTION = 'xphp.alias_scalar_in_intersection';
 
     /**
      * The reserved PHP type keywords — names PHP forbids as class names. A bare name in this list is
@@ -329,7 +331,7 @@ final class XphpSourceParser
     }
 
     /**
-     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bytePosition:int, line:int}>}
+     * @return array{0: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 1: list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}>, 2: list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}>, 3: string, 4: ByteOffsetMap, 5: list<array{bytePosition:int, signature:ClosureSignature}>, 6: list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bodyNeedsDistribution:bool, bytePosition:int, line:int}>}
      */
     private function scanAndStrip(string $source): array
     {
@@ -343,7 +345,7 @@ final class XphpSourceParser
         $methodMarkers = [];
         /** @var list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers */
         $closureMarkers = [];
-        /** @var list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bytePosition:int, line:int}> $aliasMarkers */
+        /** @var list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bodyNeedsDistribution:bool, bytePosition:int, line:int}> $aliasMarkers */
         $aliasMarkers = [];
         /** @var list<array{int, int, string}> $replacements [byte offset, original length, replacement text] */
         $replacements = [];
@@ -2449,7 +2451,7 @@ final class XphpSourceParser
      * a member (`Foo::type`, `$x->type`, `new type()`) is never mistaken for a declaration.
      *
      * @param list<PhpToken> $tokens
-     * @return array{0: array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bytePosition:int, line:int}, 1: int}|null
+     * @return array{0: array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bodyNeedsDistribution:bool, bytePosition:int, line:int}, 1: int}|null
      */
     private static function tryParseAliasDeclaration(array $tokens, int $typeIdx): ?array
     {
@@ -2514,17 +2516,19 @@ final class XphpSourceParser
             return null;
         }
 
-        // The body is a single head or a flat union of single heads (`?X` desugars to `X|null`);
-        // anything else (intersection, DNF, closure signature) yields a null body. The whole
-        // statement is still stripped here (so `strip()` never produces a PHP parse error); a null
-        // body is rejected with `xphp.alias_unsupported_body` at parse time by `buildAliasTable`.
-        $body = self::parseAliasBody($tokens, $bodyStart, $semiIdx);
+        // The body is a single head, union, nullable, intersection, or DNF (`?X` desugars to `X|null`);
+        // an unsupported shape (closure signature / garbage) yields a null body, and a shape needing
+        // distribution ((A|B)&C) yields a null body with the distribution flag set. The whole statement
+        // is still stripped here (so `strip()` never produces a PHP parse error); `buildAliasTable`
+        // raises the right diagnostic from the null body + flag.
+        [$body, $bodyNeedsDistribution] = self::parseAliasBody($tokens, $bodyStart, $semiIdx);
 
         return [
             [
                 'name' => $nameTok->text,
                 'params' => $params,
                 'body' => $body,
+                'bodyNeedsDistribution' => $bodyNeedsDistribution,
                 'bytePosition' => $tokens[$typeIdx]->pos,
                 'line' => $tokens[$typeIdx]->line,
             ],
@@ -2534,51 +2538,115 @@ final class XphpSourceParser
 
     /**
      * Parse a type-alias body (between `=`, starting at $bodyStart, and its terminator $semiIdx) into
-     * an {@see AliasBody} (a DNF — union of intersection-clauses). Today only a flat union of single
-     * heads and a leading-`?` nullable are read, so every clause is single-leaf; intersection / DNF
-     * bodies land later. Returns null when the body is a shape not supported (an intersection `&`, a
-     * parenthesised / DNF form, or a closure signature); `buildAliasTable` then rejects the null body
-     * with `xphp.alias_unsupported_body`.
+     * an {@see AliasBody} (a DNF — union of intersection-clauses). Reads a single head, a union
+     * (`A|B`), a nullable (`?X`), an intersection (`A&B`), and an already-DNF form (`(A&B)|C`).
+     *
+     * Returns `[body, needsDistribution]`:
+     *  - `[AliasBody, false]` — a supported body.
+     *  - `[null, false]` — an unsupported shape (a closure signature, or garbage); `buildAliasTable`
+     *    raises `xphp.alias_unsupported_body`.
+     *  - `[null, true]` — a well-formed body that would require distribution (`(A|B)&C`, a union nested
+     *    inside an intersection); `buildAliasTable` raises `xphp.alias_compound_needs_distribution`.
+     *
+     * The diagnostics are raised in `buildAliasTable` (which has the alias FQN + line), not here.
      *
      * @param list<PhpToken> $tokens
+     * @return array{0: ?AliasBody, 1: bool}
      */
-    private static function parseAliasBody(array $tokens, int $bodyStart, int $semiIdx): ?AliasBody
+    private static function parseAliasBody(array $tokens, int $bodyStart, int $semiIdx): array
     {
-        // Leading `?` → nullable: `?<single head>` desugars to `<head> | null`. A `?` in front of a
-        // compound (`?A|B`) is illegal PHP anyway, so only a single head may follow.
+        // Leading `?` → nullable single head: `?X` ≡ `X | null`. Only a single atomic head may follow;
+        // `?(A&B)` is a PHP parse error, so a `?` before anything parseTypeArg can't read declines to
+        // unsupported (`(A&B)|null` is the supported spelling for that shape).
         // @infection-ignore-all NullSafePropertyCall -- `$bodyStart <= $semiIdx < count`, so the token
         // always exists; the `?? null` / `?->` is a defensive floor that never sees null.
         if (($tokens[$bodyStart] ?? null)?->text === '?') {
             $parsed = self::parseTypeArg($tokens, self::skipWs($tokens, $bodyStart + 1));
             if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
-                return null;
+                return [null, false];
             }
-            return new AliasBody([[$parsed[0]], [new TypeRef('null')]]);
+            return [new AliasBody([[$parsed[0]], [new TypeRef('null')]]), false];
         }
 
-        // Otherwise a union of single heads: `Head ( '|' Head )*`. A non-head member (an intersection
-        // `&`, a `(` DNF group, a closure `(`) leaves a token that is neither the terminator nor `|`,
-        // so the body is declined as unsupported. Each head is its own single-leaf clause — the DNF is
-        // a pure union until intersection / DNF bodies land.
-        $clauses = [];
-        $i = $bodyStart;
-        while (true) {
-            $parsed = self::parseTypeArg($tokens, $i);
-            if ($parsed === null) {
-                return null;
-            }
-            $clauses[] = [$parsed[0]];
-            $next = self::skipWs($tokens, $parsed[1]);
-            if ($next === $semiIdx) {
-                return new AliasBody($clauses);
-            }
-            // @infection-ignore-all NullSafePropertyCall -- `$next <= $semiIdx < count`, so the token
-            // always exists; the `?? null` / `?->` is a defensive floor that never sees null.
-            if (($tokens[$next] ?? null)?->text !== '|') {
-                return null;
-            }
-            $i = self::skipWs($tokens, $next + 1);
+        // Otherwise read a full `|` / `&` type expression (with `(` … `)` groups) via the shared
+        // bound-expression reader, then normalize to DNF. The reader raises for a `Closure(...)`
+        // signature (its own feature) — an alias body treats that as an unsupported body rather than
+        // surfacing a bound-specific error. A body that would need distribution (a union inside an
+        // intersection) declines with the distribution flag set.
+        try {
+            $parsed = self::parseBoundExpr($tokens, $bodyStart);
+        } catch (XphpParseException) {
+            return [null, false];
         }
+        if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
+            return [null, false];
+        }
+        $dnf = self::boundTreeToDnf($parsed[0]);
+        if ($dnf === null) {
+            return [null, true];
+        }
+        // @infection-ignore-all FalseValue -- the distribution flag rides alongside a NON-null body
+        // here; `buildAliasTable` reads the flag only when the body is null, so its value on a valid
+        // body is unobservable (true vs false selects the same accept path).
+        return [new AliasBody($dnf), false];
+    }
+
+    /**
+     * Normalize a bound-expression tree (union / intersection / leaf, as produced by
+     * {@see parseBoundExpr}) to DNF clauses — a union of intersection-clauses. A `|` concatenates its
+     * operands' clauses; a `&` merges its operands' leaves into one clause but only when every operand
+     * is itself a single clause. A union nested inside an intersection (`(A|B)&C`) would require
+     * distribution and returns null instead — the alias machinery rejects it loudly rather than
+     * distribute.
+     *
+     * @param BoundDict $tree
+     * @return list<list<TypeRef>>|null null when the tree needs distribution
+     */
+    private static function boundTreeToDnf(array $tree): ?array
+    {
+        if ($tree['kind'] === 'leaf') {
+            return [[self::boundLeafToTypeRef($tree)]];
+        }
+        if ($tree['kind'] === 'or') {
+            $clauses = [];
+            foreach ($tree['operands'] as $operand) {
+                /** @var BoundDict $operand — operands lose precision at the recursion boundary */
+                $sub = self::boundTreeToDnf($operand);
+                if ($sub === null) {
+                    return null;
+                }
+                foreach ($sub as $clause) {
+                    $clauses[] = $clause;
+                }
+            }
+            return $clauses;
+        }
+        // 'and' — each operand must reduce to a single clause (no union), and their leaves merge into
+        // one intersection-clause; an operand that is a union needs distribution.
+        $merged = [];
+        foreach ($tree['operands'] as $operand) {
+            /** @var BoundDict $operand — operands lose precision at the recursion boundary */
+            $sub = self::boundTreeToDnf($operand);
+            if ($sub === null || count($sub) > 1) {
+                return null;
+            }
+            foreach ($sub[0] as $leaf) {
+                $merged[] = $leaf;
+            }
+        }
+        return [$merged];
+    }
+
+    /**
+     * Build a raw (unresolved) TypeRef from a bound-expression leaf, matching {@see parseTypeArg}'s
+     * encoding (a fully-qualified name keeps its leading backslash) so a body read through the bound
+     * reader resolves identically to one read head-by-head.
+     *
+     * @param array{kind: 'leaf', name: string, isFq: bool, args: list<TypeRef>} $leaf
+     */
+    private static function boundLeafToTypeRef(array $leaf): TypeRef
+    {
+        return new TypeRef($leaf['isFq'] ? '\\' . $leaf['name'] : $leaf['name'], $leaf['args']);
     }
 
     /**
@@ -2903,7 +2971,7 @@ final class XphpSourceParser
      * `xphp.alias_class_collision`.
      *
      * @param list<Node\Stmt> $ast
-     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bytePosition:int, line:int}> $aliasMarkers
+     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bodyNeedsDistribution:bool, bytePosition:int, line:int}> $aliasMarkers
      * @return array<string, array{params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:AliasBody}>
      */
     private static function buildAliasTable(array $ast, array $aliasMarkers, ByteOffsetMap $byteOffsetMap): array
@@ -2943,9 +3011,18 @@ final class XphpSourceParser
             }
             $fqn = $namespace === '' ? $marker['name'] : $namespace . '\\' . $marker['name'];
             if ($marker['body'] === null) {
+                if ($marker['bodyNeedsDistribution']) {
+                    throw new XphpParseException(
+                        "Type alias `{$fqn}` has a body that would require distribution: a union nested "
+                        . 'inside an intersection (`(A|B)&C`) is not supported. Rewrite it in disjunctive '
+                        . 'normal form (`(A&C)|(B&C)`), or introduce a named type for the union.',
+                        $marker['line'],
+                        self::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION,
+                    );
+                }
                 throw new XphpParseException(
                     "Type alias `{$fqn}` has an unsupported body: an alias body must be a single class "
-                    . 'or generic type, a union, or a nullable (intersection, DNF, and closure-signature '
+                    . 'or generic type, a union, an intersection, a nullable, or a DNF (closure-signature '
                     . 'bodies are not supported). Use a bare type or a named class.',
                     $marker['line'],
                     self::CODE_ALIAS_UNSUPPORTED_BODY,
@@ -3021,7 +3098,7 @@ final class XphpSourceParser
      * @param list<array{line:int, anchorLine:int, name:string, kind:string, bytePosition:int, args:list<TypeRef>}> $nameMarkers
      * @param list<array{line:int, name:string, kind:string, bytePosition:int, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>}> $methodMarkers
      * @param list<array{bytePosition:int, signature:ClosureSignature}> $closureMarkers
-     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bytePosition:int, line:int}> $aliasMarkers
+     * @param list<array{name:string, params:list<array{name:string, bound:?BoundDict, default:?TypeRef, variance:Variance}>, body:?AliasBody, bodyNeedsDistribution:bool, bytePosition:int, line:int}> $aliasMarkers
      * @param ?AliasBoundObligationCollector $obligations sink for alias parameter-bound obligations (null = inert)
      */
     private function resolveAndAttach(array $ast, array $classMarkers, array $nameMarkers, array $methodMarkers, array $closureMarkers, ByteOffsetMap $byteOffsetMap, array $aliasMarkers, ?string $filepath = null, ?AliasBoundObligationCollector $obligations = null): ?string
@@ -3964,12 +4041,17 @@ final class XphpSourceParser
                         // line; a cycle/arity error while expanding a *bound* alias is reported at the
                         // check-mode line-1 fallback whether the seed is 0 or 1, so the value is inert.
                         $body = $this->expandAliasToDnf(new TypeRef($fqn, $resolvedArgs), [], 0);
-                        // Every clause is single-leaf today, so this stays a leaf (one clause) / any-of
-                        // union (many clauses); an intersection clause becomes a BoundIntersection when
-                        // intersection / DNF bodies land.
-                        return $body->isSingleHead()
-                            ? new BoundLeaf($body->head())
-                            : new BoundUnion(...array_map(static fn (array $c): BoundLeaf => new BoundLeaf($c[0]), $body->clauses));
+                        // Each clause becomes a leaf (one member) or an all-of BoundIntersection (an
+                        // `A&B` clause); the whole DNF is a lone clause or an any-of BoundUnion of the
+                        // clause bounds. A single head is the one-clause-one-leaf case — a plain
+                        // BoundLeaf; a union alias stays any-of, exactly as before.
+                        $clauseBounds = array_map(
+                            static fn (array $c): BoundExpr => count($c) === 1
+                                ? new BoundLeaf($c[0])
+                                : new BoundIntersection(...array_map(static fn (TypeRef $l): BoundLeaf => new BoundLeaf($l), $c)),
+                            $body->clauses,
+                        );
+                        return count($clauseBounds) === 1 ? $clauseBounds[0] : new BoundUnion(...$clauseBounds);
                     }
                     $suspect = !$node['isFq']
                         && $this->isSuspectUndeclared($node['name']);
@@ -4101,48 +4183,89 @@ final class XphpSourceParser
                         XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT,
                     );
                 }
-                return self::dnfToNode($body->clauses, $attrs);
+                return self::dnfToNode($body->clauses, $attrs, $node->getStartLine());
             }
 
             /**
-             * Build the PHP type node for an expanded DNF. Every clause is a single head today, so this
-             * lowers to a `NullableType` when the sole non-null member is atomic (`?X` ≡ `X|null`) or a
-             * `UnionType` otherwise; intersection clauses (which lower to an `IntersectionType`, and a
-             * DNF to a `UnionType` of them) land with intersection / DNF bodies.
+             * Build the PHP type node for an expanded compound DNF (the whole type of a slot). A `null`
+             * leaf (`?X` ≡ `X|null`) is split off: when the sole non-null clause is a single atomic head
+             * the result is a `NullableType`, otherwise a `UnionType` with a `null` member (`?(A&B)` is a
+             * PHP parse error, so a compound is never `?`-wrapped). A lone intersection clause (`A&B` as a
+             * whole slot) emits the `IntersectionType` directly; a DNF emits a `UnionType` of clause
+             * nodes (PHP's union-of-intersections shape).
              *
-             * @param list<list<TypeRef>> $clauses each clause single-leaf for now
+             * @param list<list<TypeRef>> $clauses
              * @param array<string, mixed> $attrs
              */
-            private static function dnfToNode(array $clauses, array $attrs): Node
+            private static function dnfToNode(array $clauses, array $attrs, int $line): Node
             {
-                // Collapse each (single-leaf) clause to its head; a union / nullable is built from the
-                // heads exactly as before.
-                $members = array_map(static fn (array $clause): TypeRef => $clause[0], $clauses);
                 $hasNull = false;
-                /** @var list<TypeRef> $nonNull */
+                /** @var list<list<TypeRef>> $nonNull the non-null clauses */
                 $nonNull = [];
-                foreach ($members as $m) {
+                foreach ($clauses as $clause) {
                     // @infection-ignore-all UnwrapStrToLower -- resolveTypeRef already lowercases a
                     // scalar keyword, so a `null` leaf's name is always lowercase here; strtolower is
                     // a belt-and-suspenders guard.
-                    if (!$m->isGeneric() && strtolower($m->name) === 'null') {
+                    if (count($clause) === 1 && !$clause[0]->isGeneric() && strtolower($clause[0]->name) === 'null') {
                         $hasNull = true;
                     } else {
-                        $nonNull[] = $m;
+                        $nonNull[] = $clause;
                     }
                 }
-                // A single-head member always lowers to an atomic Identifier (scalar) or Name (class),
-                // never a compound node — so it is valid inside a UnionType and (for the `?X` case) a
-                // NullableType.
-                /** @var list<Node\Identifier|Name> $nodes */
-                $nodes = array_map(static fn (TypeRef $m): Node => Specializer::typeRefToNode($m, []), $nonNull);
-                if ($hasNull && count($nodes) === 1) {
-                    return new Node\NullableType($nodes[0], $attrs);
+                if ($hasNull && count($nonNull) === 1 && count($nonNull[0]) === 1) {
+                    // `?X` — the sole non-null member is a single atomic head; emit a NullableType.
+                    /** @var Node\Identifier|Name $atomic — a single non-generic head lowers to an atomic node */
+                    $atomic = Specializer::typeRefToNode($nonNull[0][0], []);
+                    return new Node\NullableType($atomic, $attrs);
                 }
+                if (!$hasNull && count($nonNull) === 1) {
+                    // A lone clause (an intersection `A&B` as the whole slot) is the slot type itself,
+                    // not wrapped in a UnionType.
+                    return self::clauseToNode($nonNull[0], $attrs, $line);
+                }
+                $nodes = array_map(static fn (array $clause): Node => self::clauseToNode($clause, [], $line), $nonNull);
                 if ($hasNull) {
                     $nodes[] = new Node\Identifier('null');
                 }
                 return new Node\UnionType($nodes, $attrs);
+            }
+
+            /**
+             * Build the node for one DNF clause: a single-leaf clause is its atomic head (Identifier /
+             * Name); a multi-leaf clause is an `IntersectionType`. A scalar or built-in keyword in an
+             * intersection is a PHP load-time fatal (`int&B`), so it is rejected here — after
+             * substitution, where a type-parameter leaf's concrete type is known
+             * (`type Pair<T> = T & Countable; Pair<int>`).
+             *
+             * @param list<TypeRef> $clause non-empty, and never the bare `null` leaf
+             * @param array<string, mixed> $attrs
+             */
+            private static function clauseToNode(array $clause, array $attrs, int $line): Node\Identifier|Name|Node\IntersectionType
+            {
+                if (count($clause) === 1) {
+                    /** @var Node\Identifier|Name $atomic — a single non-generic head lowers to an atomic node */
+                    $atomic = Specializer::typeRefToNode($clause[0], $attrs);
+                    return $atomic;
+                }
+                /** @var list<Node\Identifier|Name> $nodes — each intersection member is a single atomic head */
+                $nodes = [];
+                foreach ($clause as $leaf) {
+                    // @infection-ignore-all UnwrapStrToLower -- resolveTypeRef already lowercases a
+                    // scalar keyword before it reaches here, so strtolower is a belt-and-suspenders
+                    // guard whose removal is unobservable.
+                    if (in_array(strtolower($leaf->name), XphpSourceParser::SCALAR_TYPES, true)) {
+                        throw new XphpParseException(
+                            "Type alias intersection member `{$leaf->name}` is a scalar or built-in type; "
+                            . 'only class-like types can be intersected.',
+                            $line,
+                            XphpSourceParser::CODE_ALIAS_SCALAR_IN_INTERSECTION,
+                        );
+                    }
+                    /** @var Node\Identifier|Name $leafNode */
+                    $leafNode = Specializer::typeRefToNode($leaf, []);
+                    $nodes[] = $leafNode;
+                }
+                return new Node\IntersectionType($nodes, $attrs);
             }
 
             /**
@@ -4182,8 +4305,9 @@ final class XphpSourceParser
              * union becomes a union too, and a union member that is itself a union alias flattens in. A
              * cycle or arity mismatch throws.
              *
-             * Today every body clause is single-leaf (a union member), so this is the prior union-flatten
-             * behavior; multi-leaf (intersection) clause composition lands with intersection / DNF bodies.
+             * A single-leaf (union-member) body clause may expand to any DNF; a multi-leaf (intersection)
+             * clause merges each leaf's single-clause expansion (`&`-associativity), and a leaf that
+             * expands to a union inside an intersection is a distribution, rejected loudly.
              *
              * @param list<string> $visited alias FQNs already entered on this expansion chain
              */
@@ -4212,12 +4336,38 @@ final class XphpSourceParser
                 }
                 $clauses = [];
                 foreach ($this->resolveAliasBody($ref->name, $entry)->clauses as $bodyClause) {
-                    // Each body clause is single-leaf today; substitute its head and expand, flattening
-                    // the resulting clauses in — exactly the prior union-member behavior.
-                    $substituted = self::substituteTypeRef($bodyClause[0], $subst);
-                    foreach ($this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line)->clauses as $c) {
-                        $clauses[] = $c;
+                    if (count($bodyClause) === 1) {
+                        // A single-leaf clause (a union member) may expand to any DNF — its clauses
+                        // flatten into the union.
+                        $substituted = self::substituteTypeRef($bodyClause[0], $subst);
+                        foreach ($this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line)->clauses as $c) {
+                            $clauses[] = $c;
+                        }
+                        continue;
                     }
+                    // A multi-leaf (intersection) clause: expand each leaf; each must reduce to a single
+                    // clause (an intersection cannot contain a union without distribution). A leaf that
+                    // is itself an intersection alias contributes its own leaves (`&`-associativity:
+                    // `Inner=A&B` inside `Outer=Inner&C` → `A&B&C`); a leaf that expands to a union is a
+                    // distribution the alias machinery rejects.
+                    $merged = [];
+                    foreach ($bodyClause as $leaf) {
+                        $substituted = self::substituteTypeRef($leaf, $subst);
+                        $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
+                        if (count($expanded->clauses) > 1) {
+                            throw new XphpParseException(
+                                "Type alias `{$ref->name}` has a body that would require distribution: a "
+                                . 'member of an intersection expands to a union. Rewrite it in disjunctive '
+                                . 'normal form, or introduce a named type for the union.',
+                                $line,
+                                XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION,
+                            );
+                        }
+                        foreach ($expanded->clauses[0] as $mergedLeaf) {
+                            $merged[] = $mergedLeaf;
+                        }
+                    }
+                    $clauses[] = $merged;
                 }
                 return new AliasBody($clauses);
             }
