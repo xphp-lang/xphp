@@ -85,10 +85,10 @@ genuinely [hard work](https://thephp.foundation/blog/2024/08/19/state-of-generic
 The object model that's served the ecosystem for two decades doesn't bend
 easily.
 
-Supporting generics proves that the compile-to-vanilla model handles non-trivial
-type-system additions. The remaining features are on
+Supporting generics — and now type aliases — proves that the compile-to-vanilla
+model handles non-trivial type-system additions. Further features are on
 the [roadmap](docs/roadmap.md):
-type aliases, literal types, mapped and conditional types to name a few.
+literal types, mapped and conditional types to name a few.
 
 ## Quick start
 

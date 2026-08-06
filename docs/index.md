@@ -57,6 +57,6 @@ and the gap is explicit in [comparison](guides/comparison.md) and
 
 Generics are the first substantial chunk of work in xphp, but the
 roadmap is much broader. See [roadmap](roadmap.md) for what's
-shipped and for the discovery items under exploration (type aliases,
-mapped types, variadic generics, generic enums, source maps, AST
-macros, and more).
+shipped — generics and, now, [type aliases](syntax/type-aliases.md) —
+and for the discovery items under exploration (mapped types, variadic
+generics, generic enums, source maps, AST macros, and more).

@@ -85,6 +85,171 @@ PHP;
         self::assertStringNotContainsString('trait HasTimestamps', $printed);
     }
 
+    public function testTypeAliasDeclarationsAreStrippedAndParseCleanly(): void
+    {
+        // WI-01 (Commit 1): a `type Name[<…>] = SingleHead;` declaration is recognized at scan and
+        // blanked to equal-length whitespace, so the (otherwise invalid) statement never reaches
+        // nikic. The alias arm MUST run before the bare `Name<…>` arm, or the `<A, B>` clauses on
+        // `Pair`/`Map` get half-stripped and the RHS is left dangling (CRITICAL-4, design review).
+        $source = <<<'PHP'
+<?php
+namespace App;
+
+type Pair<A, B> = Map<A, B>;
+type UserId = \App\Id;
+type Ints = Bag<int>;
+
+class Repo
+{
+}
+PHP;
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        // Each declaration span becomes equal-length whitespace; everything else is byte-identical.
+        self::assertSame(
+            self::withBlanked(
+                $source,
+                'type Pair<A, B> = Map<A, B>;',
+                'type UserId = \App\Id;',
+                'type Ints = Bag<int>;',
+            ),
+            $parser->strip($source),
+        );
+
+        // The whole file still parses; the alias statements are gone, the class remains.
+        $class = self::findFirstClass($parser->parse($source));
+        self::assertNotNull($class);
+        self::assertSame('Repo', $class->name?->toString());
+    }
+
+    public function testNonGenericTypeAliasWithoutParamsIsStripped(): void
+    {
+        // The no-`<…>` shape (`type Name = Body;`) must strip too, and the trailing statement
+        // survives untouched.
+        $source = "<?php\ntype UserId = int;\n\$x = 1;\n";
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        self::assertSame(self::withBlanked($source, 'type UserId = int;'), $parser->strip($source));
+        $parser->parse($source); // must not throw
+    }
+
+    /**
+     * A type-alias declaration is recognized at every statement boundary (open tag, `;`, `{`, `}`),
+     * including with no separating whitespace — the statement-position guard must accept each.
+     */
+    public function testTypeAliasRecognizedAtEveryStatementBoundary(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        // `{` boundary, no space before `type` (guards the skipWsBack offset + the `{` branch).
+        $braceOpen = "<?php\nnamespace App{type Inner = int;}\n";
+        self::assertSame(self::withBlanked($braceOpen, 'type Inner = int;'), $parser->strip($braceOpen));
+
+        // `}` boundary, right after a class close (guards the `}` branch).
+        $braceClose = "<?php\nclass A {}\ntype After = int;\n";
+        self::assertSame(self::withBlanked($braceClose, 'type After = int;'), $parser->strip($braceClose));
+
+        // `;` boundary — a second alias directly after the first; both spans are blanked.
+        $semi = "<?php\ntype First = int;type Second = int;\n";
+        self::assertSame(
+            self::withBlanked($semi, 'type First = int;', 'type Second = int;'),
+            $parser->strip($semi),
+        );
+
+        // Parameter lists are parsed permissively (defaults + variance), so these are recognized
+        // and blanked rather than throwing — the `allowDefaults` / `allowVariance` flags.
+        $defaulted = "<?php\ntype P<A, B = A> = Bag<A>;\n";
+        self::assertSame(self::withBlanked($defaulted, 'type P<A, B = A> = Bag<A>;'), $parser->strip($defaulted));
+        $variant = "<?php\ntype B<out T> = Bag<T>;\n";
+        self::assertSame(self::withBlanked($variant, 'type B<out T> = Bag<T>;'), $parser->strip($variant));
+    }
+
+    /**
+     * `type` is a contextual keyword: only a statement-position `type Name = …` is a declaration.
+     * A property/constant/expression use named `type` must be left byte-for-byte untouched — and a
+     * `type` reached in a non-statement position must never be read as a declaration head even when
+     * a `Name = Body` pattern follows it.
+     */
+    public function testTypeOutsideStatementPositionIsNeverAnAliasDeclaration(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $memberish = "<?php\n\$a = \$obj->type;\n\$b = Foo::type;\n";
+        self::assertSame($memberish, $parser->strip($memberish), '`type` in member/constant position must not be stripped');
+
+        // `->type Foo = int` is not a statement; without the guard it would be mis-read as a
+        // declaration and wrongly stripped. It must be left intact.
+        $notADecl = "<?php\n\$x->type Foo = int;\n";
+        self::assertSame($notADecl, $parser->strip($notADecl));
+
+        $parser->parse($memberish); // must not throw
+    }
+
+    /**
+     * Every recognized alias body — a single head, a union, a nullable, and even an unsupported
+     * intersection — is stripped at scan (so `strip()` never produces a raw PHP parse error; an
+     * unsupported body's diagnostic is raised later at parse time). A reserved-word head is not a
+     * recognized alias at all and is left byte-for-byte intact.
+     */
+    public function testRecognizedAliasBodiesAreStrippedWhileReservedNameIsDeclined(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        $union = "<?php\ntype Num = int|float;\n";
+        self::assertSame(self::withBlanked($union, 'type Num = int|float;'), $parser->strip($union));
+        $nullable = "<?php\ntype Maybe = ?Box;\n";
+        self::assertSame(self::withBlanked($nullable, 'type Maybe = ?Box;'), $parser->strip($nullable));
+        $intersection = "<?php\ntype Both = A&B;\n";
+        self::assertSame(self::withBlanked($intersection, 'type Both = A&B;'), $parser->strip($intersection));
+
+        // A reserved word (`array`, T_ARRAY) is not a valid alias head, so the declaration is not
+        // recognized and is left byte-for-byte intact.
+        $reserved = "<?php\ntype array = int;\n";
+        self::assertSame($reserved, $parser->strip($reserved));
+    }
+
+    /**
+     * Whitespace around the `=` and after the head is optional — a tightly-spelled `type X=Y;` is
+     * recognized and stripped just like the spaced form. And a generic-parameter head that runs out
+     * at end of input (no `=`) is declined without crashing on the (missing) `=` token.
+     */
+    public function testTightlySpelledAndGenericEofAliasShapes(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        // No spaces around `=` — still a single-head body, recognized and blanked.
+        $tight = "<?php\ntype X=Y;\n";
+        self::assertSame(self::withBlanked($tight, 'type X=Y;'), $parser->strip($tight));
+
+        // The separator must be `=`; the rejected colon spelling `type X : Foo` is declined intact.
+        $colon = "<?php\ntype X : Foo;\n";
+        self::assertSame($colon, $parser->strip($colon));
+
+        // Generic params then EOF (no `=`): the alias arm declines at the `=` check without
+        // dereferencing the missing token; only the bare `<A, B>` is cleaned by the downstream name
+        // arm, so the `type X` head survives.
+        $eof = "<?php\ntype X<A, B>";
+        self::assertSame(self::withBlanked($eof, '<A, B>'), $parser->strip($eof));
+    }
+
+    /**
+     * A truncated / unterminated `type …` at end of input is declined without crashing — the token
+     * stream simply runs out at each parse step. Guards the end-of-stream floors in the recognizer
+     * (each step's `?? null`), which the tolerant LSP path relies on for half-typed code.
+     */
+    public function testTruncatedTypeAliasAtEndOfInputIsDeclinedWithoutCrashing(): void
+    {
+        $parser = new XphpSourceParser((new ParserFactory())->createForHostVersion());
+
+        foreach ([
+            "<?php\ntype",              // runs out at the name
+            "<?php\ntype X",            // runs out after the name (no `=`)
+            "<?php\ntype X = Y",        // runs out after the body (no `;`)
+        ] as $truncated) {
+            self::assertSame($truncated, $parser->strip($truncated), 'truncated alias must be left intact');
+        }
+    }
+
     public function testAttachesGenericParamsToTraitDefinition(): void
     {
         // Traits ride the same ClassLike pathway as classes/interfaces. Locks the
@@ -1040,6 +1205,19 @@ PHP;
             return [];
         }
         return array_map(static fn (TypeParam $p): string => $p->name, $params);
+    }
+
+    /**
+     * Return `$source` with each (single-line) `$span` replaced by equal-length spaces — the exact
+     * transformation `XphpSourceParser::strip()` applies to a recognized declaration. Lets a strip
+     * assertion state the full expected output deterministically rather than a substring check.
+     */
+    private static function withBlanked(string $source, string ...$spans): string
+    {
+        foreach ($spans as $span) {
+            $source = str_replace($span, str_repeat(' ', strlen($span)), $source);
+        }
+        return $source;
     }
 
     /** @param array<int, mixed> $ast */

@@ -749,6 +749,34 @@ final class Registry
     }
 
     /**
+     * Bound-check a used type alias's parameters against its concrete arguments — the same check
+     * {@see validateBounds} runs for a class instantiation, grounding any sibling-referencing bound
+     * (`<A, T : A>`) against the supplied args first. Exposed statically so the post-hierarchy
+     * {@see AliasBoundValidator} pass reports through the identical `checkBounds` seam (a violation
+     * surfaces as the same `xphp.bound_violation`).
+     *
+     * @param list<TypeParam> $typeParams
+     * @param list<TypeRef> $args
+     */
+    public static function checkAliasBounds(
+        array $typeParams,
+        array $args,
+        TypeHierarchy $hierarchy,
+        string $label,
+        ?DiagnosticCollector $diagnostics = null,
+        ?SourceLocation $callSite = null,
+    ): void {
+        self::checkBounds(
+            self::groundSiblingBounds($typeParams, $args),
+            $args,
+            $hierarchy,
+            $label,
+            $diagnostics,
+            $callSite,
+        );
+    }
+
+    /**
      * Reusable bound check for any (typeParams, concreteArgs) pair against a hierarchy.
      *
      * Used both by `validateBounds` (class/interface instantiation) and by

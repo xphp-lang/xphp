@@ -89,6 +89,75 @@ wherever inference can't see the type. It's always accepted, and an inferred
 call is identical to the turbofished one — so adding a turbofish never changes
 behavior, only makes the type explicit.
 
+## Type-alias body and position limits
+
+[Type aliases](syntax/type-aliases.md) are a compile-time substitution, and are
+**file-local by design** — an alias is visible only in the file that declares it,
+like a PHP `use` alias. A single head (`Ident`, `Box<int>`), a union (`int|string`),
+and a nullable (`?Box`) body are all supported; parameters may carry defaults and
+bounds. Two limits remain, both on the body shape and its position.
+
+### ❌ What doesn't work
+
+```php
+type Both = A & B;               // ✗ xphp.alias_unsupported_body — intersection
+type Dnf  = (A & B) | C;         // ✗ xphp.alias_unsupported_body — DNF
+type Fn   = Closure(int): int;   // ✗ xphp.alias_unsupported_body — closure signature
+
+// A union / nullable alias is only usable as the WHOLE type of a slot:
+type Num = int|string;
+function f(Num $n): void {}       // ✓ whole param slot
+function g(Bag<Num> $x): void {}  // ✗ xphp.alias_compound_in_non_slot — generic argument
+function h(Num&Extra $x): void {} // ✗ nested in another intersection/union
+$b = new Num();                   // ✗ compound alias in `new` / extends / a bound
+```
+
+### 🔒 File-local (by design)
+
+An alias is scoped to its file, like a `use` alias — not visible in another file:
+
+```php
+// File Types.xphp
+type UserId = Ident;
+type Pair<A, B> = Dict<A, B>;
+// File Other.xphp — a DIFFERENT file
+function f(): UserId { … }            // UserId is a plain unknown type here — not expanded
+function g(): Pair<int, User> { … }   // ✗ Pair is not visible — an undefined template
+```
+
+To share a vocabulary, **declare the alias in each file that uses it** (a zero-cost
+substitution) or reference the underlying type directly. Because scoping is
+per-file there is no cross-file duplicate or collision to detect — two files each
+with `type Id = …` are simply independent local aliases. (Same-file duplicate /
+class-collision *are* caught — `xphp.alias_duplicate` / `xphp.alias_class_collision`.)
+
+An alias's body, bounds, and defaults resolve in the namespace that **uses** it.
+Under one `namespace {}` per file (the PSR norm) that is always the declaring
+namespace; in a file with multiple namespace blocks a bare name can mis-resolve —
+keep one namespace per file, or fully-qualify.
+
+### Why
+
+The body is limited to a single head, a flat union, or a nullable because those
+lower cleanly into a PHP type node. An intersection or DNF pulls in *distribution*
+(`(A|B)&C → (A&C)|(B&C)`), and a union/nullable has no single identity to hash or
+anchor, so it is representable only as the whole type of a param / property /
+return / class-constant slot — anywhere else it is rejected loudly rather than
+mis-compiled. These are "make the safe subset solid first" trades, candidates to
+lift later. File-locality, by contrast, is a deliberate choice — an alias is a
+local naming convenience, like `use`, not a whole-program symbol — not a limit.
+
+### ✅ Workaround
+
+- For an intersection / DNF / closure body, write the type directly, or wrap it in
+  a named class or interface and alias *that*.
+- Use a union/nullable alias as the whole type of a slot; write the union directly
+  where you need it as a generic argument or nested in another compound type.
+- Declare an alias in each file that uses it (a zero-cost substitution), or
+  reference the underlying type directly across files.
+
+---
+
 ## `$this`-capturing arrows and closures rejected
 
 ### ❌ What doesn't work

@@ -39,7 +39,7 @@ than erasure can.
 | Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ⚠️ (`inline fun` only — can't reify a class type parameter) | ✅ (monomorphic)      |
 | `instanceof OriginalFqn` works           | ✅                      | ✅ (trivially: only one class exists at runtime) | n/a | n/a | n/a |
 | Real subtype edges between specializations | ⚠️ (common case works; some covariant upcasts are unschedulable or may not converge) | ❌ (erased) | n/a | n/a | n/a |
-| Generic type aliases                     | ❌                      | ❌               | ✅               | ✅            | ✅                    |
+| Generic type aliases                     | ⚠️ (compile-time substitution; single-head / union / nullable bodies, parameter defaults + bounds, aliases usable as bounds; aliases are file-local, and intersection / DNF / closure-signature bodies aren't supported) | ❌ | ✅ | ✅ | ✅ |
 | Wildcard / `*` (use-site existential)    | ⚠️ partial (via marker) | n/a (erased)     | ⚠️ via `any` (bivariant escape hatch — loses type discipline) | ✅ (`Box<*>`) | n/a |
 | Use-site variance                        | ❌                      | ❌               | ❌               | ✅            | n/a                   |
 | Variadic generics                        | ❌                      | ❌               | ✅               | ❌            | ⚠️ tuples              |
