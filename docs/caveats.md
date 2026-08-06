@@ -94,22 +94,29 @@ behavior, only makes the type explicit.
 [Type aliases](syntax/type-aliases.md) are a compile-time substitution, and are
 **file-local by design** — an alias is visible only in the file that declares it,
 like a PHP `use` alias. A single head (`Ident`, `Box<int>`), a union (`int|string`),
-and a nullable (`?Box`) body are all supported; parameters may carry defaults and
-bounds. Two limits remain, both on the body shape and its position.
+a nullable (`?Box`), an intersection (`A & B`), and a DNF (`(A & B) | C`) body are
+all supported; parameters may carry defaults and bounds. The remaining limits are on
+the body shape (closure signatures, distribution) and the positions a compound alias
+can take.
 
 ### ❌ What doesn't work
 
 ```php
-type Both = A & B;               // ✗ xphp.alias_unsupported_body — intersection
-type Dnf  = (A & B) | C;         // ✗ xphp.alias_unsupported_body — DNF
-type Fn   = Closure(int): int;   // ✗ xphp.alias_unsupported_body — closure signature
+type Fn = Closure(int): int;     // ✗ xphp.alias_unsupported_body — closure signature
 
-// A union / nullable alias is only usable as the WHOLE type of a slot:
+// No distribution: a union nested inside an intersection:
+type Bad = (A | B) & C;          // ✗ xphp.alias_compound_needs_distribution
+                                 //   (write it in DNF: (A & C) | (B & C))
+type Nope = int & A;             // ✗ xphp.alias_scalar_in_intersection — scalar in intersection
+
+// A compound alias (union / intersection / nullable / DNF) is only usable as the
+// WHOLE type of a slot:
 type Num = int|string;
 function f(Num $n): void {}       // ✓ whole param slot
 function g(Bag<Num> $x): void {}  // ✗ xphp.alias_compound_in_non_slot — generic argument
 function h(Num&Extra $x): void {} // ✗ nested in another intersection/union
-$b = new Num();                   // ✗ compound alias in `new` / extends / a bound
+$b = new Num();                   // ✗ compound alias in `new` / extends
+// (as a *bound* a compound DOES expand — `type B<T : A & Named>` is all-of.)
 ```
 
 ### 🔒 File-local (by design)
@@ -138,19 +145,21 @@ keep one namespace per file, or fully-qualify.
 
 ### Why
 
-The body is limited to a single head, a flat union, or a nullable because those
-lower cleanly into a PHP type node. An intersection or DNF pulls in *distribution*
-(`(A|B)&C → (A&C)|(B&C)`), and a union/nullable has no single identity to hash or
-anchor, so it is representable only as the whole type of a param / property /
-return / class-constant slot — anywhere else it is rejected loudly rather than
-mis-compiled. These are "make the safe subset solid first" trades, candidates to
-lift later. File-locality, by contrast, is a deliberate choice — an alias is a
-local naming convenience, like `use`, not a whole-program symbol — not a limit.
+A compound body (union / intersection / nullable / DNF) lowers cleanly into a PHP
+type node, but only as the whole type of a param / property / return /
+class-constant slot — it has no single identity to hash or anchor, so anywhere else
+(a generic argument, `new`, `extends`, or nested in another compound) it is rejected
+loudly rather than mis-compiled. Two body shapes stay out: a **closure signature**
+(its own feature), and a shape that would need **distribution** (`(A|B)&C`) — xphp
+requires you to write the disjunctive normal form yourself rather than distribute
+(and expand) silently. These are "make the safe subset solid first" trades.
+File-locality, by contrast, is a deliberate choice — an alias is a local naming
+convenience, like `use`, not a whole-program symbol — not a limit.
 
 ### ✅ Workaround
 
-- For an intersection / DNF / closure body, write the type directly, or wrap it in
-  a named class or interface and alias *that*.
+- For a closure body, write the type directly, or wrap it in a named class or
+  interface and alias *that*. For a `(A|B)&C` body, write the DNF `(A&C)|(B&C)`.
 - Use a union/nullable alias as the whole type of a slot; write the union directly
   where you need it as a generic argument or nested in another compound type.
 - Declare an alias in each file that uses it (a zero-cost substitution), or

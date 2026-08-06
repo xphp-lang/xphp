@@ -14,19 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias is a compile-time substitution — expanded into its body before
   specialization, with no runtime existence, so the emitted PHP never mentions the
   alias. Bodies may be a single
-  (possibly-generic) head, a **union** (`int|string`), or a **nullable** (`?Box`):
+  (possibly-generic) head, a **union** (`int|string`), a **nullable** (`?Box`), an
+  **intersection** (`A&B`), or a **DNF** — a union of intersections (`(A&B)|C`):
   a single head expands in every type position (incl. as a generic argument,
-  `Bag<UserId>`), while a union/nullable expands as the whole type of a parameter,
-  property, return, or class-constant slot. Aliases compose (nested and
-  concrete-instantiation, `type UserMap = Pair<int, User>`); parameters carry
-  **defaults** (`type P<A, B = A>` — a use may omit trailing defaulted arguments)
-  and **bounds** (`type B<T : Named>` — an argument that violates the bound is a
-  compile error; the bound may itself name an alias), like a generic class. An alias
-  is **file-local** — visible only in the file that declares it, like a `use` alias.
-  A cyclic (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`),
+  `Bag<UserId>`), while a compound (union / nullable / intersection / DNF) expands as
+  the whole type of a parameter, property, return, or class-constant slot — or, as a
+  **bound**, all-of for an intersection and any-of for a union. Aliases compose
+  (nested and concrete-instantiation, `type UserMap = Pair<int, User>`); parameters
+  carry **defaults** (`type P<A, B = A>` — a use may omit trailing defaulted
+  arguments) and **bounds** (`type B<T : Named>` — an argument that violates the
+  bound is a compile error; the bound may itself name an alias), like a generic
+  class. An alias is **file-local** — visible only in the file that declares it, like
+  a `use` alias. A cyclic (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`),
   class-colliding (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`),
-  unsupported-body (`xphp.alias_unsupported_body` — intersection / DNF / closure),
-  compound-in-non-slot (`xphp.alias_compound_in_non_slot`), or bound-violating
+  unsupported-body (`xphp.alias_unsupported_body` — a closure signature),
+  compound-in-non-slot (`xphp.alias_compound_in_non_slot`), distribution-requiring
+  (`xphp.alias_compound_needs_distribution` — a union nested in an intersection),
+  scalar-in-intersection (`xphp.alias_scalar_in_intersection`), or bound-violating
   (`xphp.bound_violation`) alias is a loud error in both `xphp compile` and
   `xphp check`. See [type aliases](docs/syntax/type-aliases.md).
 - **Type-argument inference (optional turbofish).** A generic call or `new` whose
