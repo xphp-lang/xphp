@@ -20,26 +20,43 @@ namespace XPHP\Transpiler\Monomorphize;
  * are `TypeRef`s either way. The two-condition single-head predicate lives here
  * (not inlined at each expander consumer) so it stays in one place and carries
  * mutation coverage.
+ *
+ * A **closure-signature** body (`type Handler = Closure(int): bool;`) is the one
+ * shape a DNF cannot represent: it sets {@see $signature} (and carries no clauses).
+ * Like every other compound, it is usable only as the whole type of a slot, where
+ * it erases to a bare `\Closure` carrying the signature for conformance checking.
  */
 final readonly class AliasBody
 {
     /**
-     * @param list<list<TypeRef>> $clauses union of intersection-clauses (DNF); never empty,
-     *                                     and no inner clause is empty
+     * @param list<list<TypeRef>> $clauses  union of intersection-clauses (DNF); non-empty (with no
+     *                                       empty inner clause) UNLESS this is a closure-signature body
+     * @param ?ClosureSignature   $signature set for a closure-signature body; then $clauses is empty
      */
-    public function __construct(public array $clauses)
-    {
+    public function __construct(
+        public array $clauses,
+        public ?ClosureSignature $signature = null,
+    ) {
     }
 
     /**
-     * A single (possibly-generic) head — exactly one clause with exactly one leaf.
-     * Only this shape may expand anywhere a plain type name can (a generic argument,
-     * `new`, `extends`/`implements`, a bound); a compound body is representable only
+     * A closure-signature body — erases to `\Closure` with the signature carried for conformance.
+     * A DNF (clause) body never sets this.
+     */
+    public function isClosureSignature(): bool
+    {
+        return $this->signature !== null;
+    }
+
+    /**
+     * A single (possibly-generic) head — exactly one clause with exactly one leaf. A closure-signature
+     * body is never a single head. Only a single head may expand anywhere a plain type name can (a
+     * generic argument, `new`, `extends`/`implements`, a bound); a compound body is representable only
      * as the whole type of a param / property / return / class-constant slot.
      */
     public function isSingleHead(): bool
     {
-        return count($this->clauses) === 1 && count($this->clauses[0]) === 1;
+        return $this->signature === null && count($this->clauses) === 1 && count($this->clauses[0]) === 1;
     }
 
     public function isCompound(): bool

@@ -1,0 +1,45 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Clo;
+
+// A closure-signature body erases to a bare `\Closure` in the emitted slot; the signature rides the
+// alias for conformance checking. A generic alias grounds its signature per use.
+type Handler = Closure(int $x): bool;
+type Mapper<T, R> = Closure(T): R;
+// A single-head alias to a closure-signature alias must itself behave as that signature (it must
+// emit `\Closure`, not un-loadable / untyped PHP).
+type Aliased = Handler;
+
+class Registry
+{
+    public Handler $check;
+    public Aliased $alias;
+
+    public function __construct(Handler $check, Aliased $alias)
+    {
+        $this->check = $check;
+        $this->alias = $alias;
+    }
+
+    public function run(int $n): bool
+    {
+        return ($this->check)($n);
+    }
+
+    public function viaAlias(int $n): bool
+    {
+        return ($this->alias)($n);
+    }
+
+    public function map(Mapper<int, string> $f, int $n): string
+    {
+        return $f($n);
+    }
+}
+
+$reg = new Registry(fn(int $x): bool => $x > 0, fn(int $x): bool => $x < 0);
+$ok = $reg->run(5);
+$aliasOk = $reg->viaAlias(-2);
+$mapped = $reg->map(fn(int $x): string => "n{$x}", 3);
