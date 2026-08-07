@@ -4064,6 +4064,19 @@ final class XphpSourceParser
                         // line; a cycle/arity error while expanding a *bound* alias is reported at the
                         // check-mode line-1 fallback whether the seed is 0 or 1, so the value is inert.
                         $body = $this->expandAliasToDnf(new TypeRef($fqn, $resolvedArgs), [], 0);
+                        if ($body->signature !== null) {
+                            // A closure-signature alias has no bound representation (a bound is a
+                            // subtype constraint over named types); it is usable only as a whole slot.
+                            // @infection-ignore-all IncrementInteger -- as with the cycle/arity errors on
+                            // this bound path, buildBoundExprNode carries no source line; the value is the
+                            // check-mode line-1 fallback and is inert.
+                            throw new XphpParseException(
+                                "Type alias `{$fqn}` is a compound type, which is only usable as the whole "
+                                . 'type of a parameter, property, return, or class-constant slot.',
+                                1,
+                                XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT,
+                            );
+                        }
                         // Each clause becomes a leaf (one member) or an all-of BoundIntersection (an
                         // `A&B` clause); the whole DNF is a lone clause or an any-of BoundUnion of the
                         // clause bounds. A single head is the one-clause-one-leaf case — a plain
@@ -4392,7 +4405,23 @@ final class XphpSourceParser
                         // A single-leaf clause (a union member) may expand to any DNF — its clauses
                         // flatten into the union.
                         $substituted = self::substituteTypeRef($bodyClause[0], $subst);
-                        foreach ($this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line)->clauses as $c) {
+                        $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
+                        if ($expanded->signature !== null) {
+                            // The leaf resolves to a closure signature. That is representable only when
+                            // the WHOLE body is this one leaf (`type B = A` where A is a closure-sig alias
+                            // — B is then that same signature). Combined with any other clause (a union)
+                            // a closure signature has no representation.
+                            if (count($resolved->clauses) === 1) {
+                                return $expanded;
+                            }
+                            throw new XphpParseException(
+                                "Type alias `{$ref->name}` has an unsupported body: a closure signature "
+                                . 'cannot be combined with another type in a union or intersection.',
+                                $line,
+                                XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY,
+                            );
+                        }
+                        foreach ($expanded->clauses as $c) {
                             $clauses[] = $c;
                         }
                         continue;
@@ -4406,6 +4435,14 @@ final class XphpSourceParser
                     foreach ($bodyClause as $leaf) {
                         $substituted = self::substituteTypeRef($leaf, $subst);
                         $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
+                        if ($expanded->signature !== null) {
+                            throw new XphpParseException(
+                                "Type alias `{$ref->name}` has an unsupported body: a closure signature "
+                                . 'cannot be combined with another type in a union or intersection.',
+                                $line,
+                                XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY,
+                            );
+                        }
                         if (count($expanded->clauses) > 1) {
                             throw new XphpParseException(
                                 "Type alias `{$ref->name}` has a body that would require distribution: a "

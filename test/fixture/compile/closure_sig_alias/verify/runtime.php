@@ -21,6 +21,10 @@ return function (CompiledFixture $fixture): void {
     // The `Handler` (`Closure(int): bool`) property slot held a closure that was invoked: 5 > 0.
     Assert::assertTrue($ok, 'Handler-typed closure slot was invoked and returned bool');
 
+    // A single-head alias to a closure-sig alias (`Aliased = Handler`) also erases to `\Closure` and
+    // loads — proving the transitive case emits a real type, not un-loadable / untyped PHP: -2 < 0.
+    Assert::assertTrue($aliasOk, 'transitive closure-sig alias slot loaded and was invoked');
+
     // The generic `Mapper<int, string>` param slot held a closure invoked with an int, returning a string.
     Assert::assertSame('n3', $mapped, 'Mapper<int, string> closure slot was invoked and returned a string');
 };

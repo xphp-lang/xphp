@@ -307,6 +307,44 @@ final class TypeAliasIntegrationTest extends TestCase
         self::assertRejected($this->check($bad), 'xphp.closure_conformance', 'is not a subtype of');
     }
 
+    public function testTransitiveClosureSignatureAliasPropagatesInASlotAndRejectsElsewhere(): void
+    {
+        // A single-head alias to a closure-sig alias (`type B = A`) IS that signature: in a whole slot
+        // it erases to `\Closure` and its conformance rides through; combined in a union, or used as a
+        // bound, it rejects loudly (never silently dropping the `\Closure` type — which would emit
+        // un-loadable / untyped PHP).
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Foo {}\ntype A = Closure(int \$x): bool;\ntype B = A;\n";
+
+        // Whole-slot: erases to `\Closure`, conformance rides through the indirection.
+        $use = self::read($this->compile([
+            'C.xphp' => $header . "class Svc { public B \$h; public function make(): B { return fn(int \$x): bool => true; } }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('public \\Closure $h', $use);
+        self::assertStringContainsString('function make(): \\Closure', $use);
+
+        $bad = ['C.xphp' => $header . "function make(): B { return fn(int \$x): int => \$x; }\n"];
+        self::assertRejected($this->check($bad), 'xphp.closure_conformance', 'is not a subtype of bool');
+        $this->assertCompileThrowsRuntime($bad, 'is not a subtype of bool');
+
+        // A closure signature combined in a union or an intersection has no representation —
+        // unsupported. The full message is asserted so a reworded / reordered diagnostic is caught.
+        $combinedMessage = 'has an unsupported body: a closure signature cannot be combined with '
+            . 'another type in a union or intersection.';
+        foreach ([
+            'union' => 'type U = A | Foo;',
+            'intersection' => 'type U = A & Foo;',
+        ] as $decl) {
+            $combined = ['C.xphp' => $header . "{$decl}\nclass Svc { public U \$h; }\n"];
+            self::assertRejected($this->check($combined), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $combinedMessage);
+            $this->assertCompileThrows($combined, $combinedMessage);
+        }
+
+        // A closure-sig alias has no bound representation — compound-in-non-slot.
+        $bound = ['C.xphp' => $header . "class Bag<T : A> {}\nfunction f(): int { \$b = new Bag::<int>(); return 1; }\n"];
+        self::assertRejected($this->check($bound), XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT, 'the whole type of a parameter');
+        $this->assertCompileThrows($bound, 'the whole type of a parameter');
+    }
+
     public function testClosureSignatureAliasInNonSlotIsRejectedInBothModes(): void
     {
         // A closure-signature alias is a whole-slot type only — as a generic argument or in `new` it is
