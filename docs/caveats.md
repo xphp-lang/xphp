@@ -95,16 +95,19 @@ behavior, only makes the type explicit.
 **file-local by design** — an alias is visible only in the file that declares it,
 like a PHP `use` alias. A single head (`Ident`, `Box<int>`), a union (`int|string`),
 a nullable (`?Box`), an intersection (`A & B`), a DNF (`(A & B) | C`), and a closure
-signature (`Closure(int): bool`) body are all supported; parameters may carry defaults
-and bounds. The remaining limits are on the body shape (a closure combined with a
-union/nullable, distribution) and the positions a compound alias can take.
+signature (`Closure(int): bool`, and as a nullable / union / intersection member) body
+are all supported; parameters may carry defaults and bounds. The remaining limits are
+on the body shape (at most one closure per body, distribution) and the positions a
+compound alias can take.
 
 ### ❌ What doesn't work
 
 ```php
-type Fn = Closure(int): int;     // ✓ closure signature — erases to \Closure in a whole slot
-type Bad = A | Closure(int): int;// ✗ xphp.alias_unsupported_body — closure combined with a union
-type Nul = ?Closure(int): int;   // ✗ xphp.alias_unsupported_body — nullable closure signature
+type Fn  = Closure(int): int;    // ✓ closure signature — erases to \Closure
+type N   = ?Closure(int): bool;  // ✓ nullable closure — erases to ?\Closure
+type U   = A | Closure(int): int;// ✓ union member — erases to \A|\Closure
+type Two = (Closure(int): bool) | (Closure(string): int); // ✗ xphp.alias_unsupported_body — two
+                                 //   closures both erase to \Closure (PHP forbids \Closure|\Closure)
 
 // No distribution: a union nested inside an intersection:
 type Bad = (A | B) & C;          // ✗ xphp.alias_compound_needs_distribution
@@ -151,18 +154,19 @@ A compound body (union / intersection / nullable / DNF / closure signature) lowe
 cleanly into a PHP type node, but only as the whole type of a param / property /
 return / class-constant slot — it has no single identity to hash or anchor, so
 anywhere else (a generic argument, `new`, `extends`, or nested in another compound)
-it is rejected loudly rather than mis-compiled. What stays out: a **closure signature
-mixed into a union/nullable** (a plain `Closure(...)` body works; `A | Closure(...)`
-does not — the signature rides a bare `\Closure` only), and a shape that would need
-**distribution** (`(A|B)&C`) — xphp requires you to write the disjunctive normal form
-yourself rather than distribute (and expand) silently. These are "make the safe subset
-solid first" trades. File-locality, by contrast, is a deliberate choice — an alias is
-a local naming convenience, like `use`, not a whole-program symbol — not a limit.
+it is rejected loudly rather than mis-compiled. What stays out: **two closures in one
+body** (both erase to the same `\Closure`, and PHP forbids a duplicate `\Closure|\Closure`),
+and a shape that would need **distribution** (`(A|B)&C`) — xphp requires you to write the
+disjunctive normal form yourself rather than distribute (and expand) silently. These are
+"make the safe subset solid first" trades. File-locality, by contrast, is a deliberate
+choice — an alias is a local naming convenience, like `use`, not a whole-program symbol —
+not a limit.
 
 ### ✅ Workaround
 
-- For a closure body mixed with a union/nullable, use a bare `\Closure` in the
-  union, or write the type directly. For a `(A|B)&C` body, write the DNF `(A&C)|(B&C)`.
+- A closure signature composes freely as a nullable / union / intersection member, but
+  a body may hold at most one — every closure erases to `\Closure`. For a `(A|B)&C` body,
+  write the DNF `(A&C)|(B&C)`.
 - Use a union/nullable alias as the whole type of a slot; write the union directly
   where you need it as a generic argument or nested in another compound type.
 - Declare an alias in each file that uses it (a zero-cost substitution), or

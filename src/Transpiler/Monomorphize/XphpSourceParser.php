@@ -58,7 +58,7 @@ use XPHP\Diagnostics\SourceLocation;
  * the `operands` recursion bottoms out at `array<string, mixed>` and the
  * shape-narrowing happens dynamically at access sites.
  *
- * @phpstan-type BoundDict array{kind: 'leaf', name: string, isFq: bool, args: list<TypeRef>}|array{kind: 'and'|'or', operands: list<array<string, mixed>>}
+ * @phpstan-type BoundDict array{kind: 'leaf', name: string, isFq: bool, args: list<TypeRef>}|array{kind: 'closureSig', signature: ClosureSignature}|array{kind: 'and'|'or', operands: list<array<string, mixed>>}
  */
 final class XphpSourceParser
 {
@@ -1990,7 +1990,7 @@ final class XphpSourceParser
             $afterName = self::skipWs($tokens, $i);
             if ($afterName < $n && $tokens[$afterName]->text === ':') {
                 $afterColon = self::skipWs($tokens, $afterName + 1);
-                $parsedBound = self::parseBoundExpr($tokens, $afterColon);
+                $parsedBound = self::parseBoundExpr($tokens, $afterColon, allowClosureSig: false, source: null);
                 if ($parsedBound === null) {
                     return null;
                 }
@@ -2194,6 +2194,11 @@ final class XphpSourceParser
                 && !$bound['isFq']
                 && $bound['args'] === [];
         }
+        // @infection-ignore-all -- a `closureSig` leaf is only produced for alias bodies (allowClosureSig),
+        // never for the real generic bounds this reader walks; it cannot self-reference a type parameter.
+        if ($bound['kind'] === 'closureSig') {
+            return false;
+        }
         foreach ($bound['operands'] as $operand) {
             /** @var BoundDict $operand — operands at the recursion boundary lose precision in the alias; the parser guarantees the shape. */
             if (self::boundContainsSelfReference($operand, $paramName)) {
@@ -2220,18 +2225,18 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseBoundExpr(array $tokens, int $startIdx): ?array
+    private static function parseBoundExpr(array $tokens, int $startIdx, bool $allowClosureSig, ?string $source): ?array
     {
-        return self::parseOrBound($tokens, $startIdx);
+        return self::parseOrBound($tokens, $startIdx, $allowClosureSig, $source);
     }
 
     /**
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseOrBound(array $tokens, int $idx): ?array
+    private static function parseOrBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
-        $first = self::parseAndBound($tokens, $idx);
+        $first = self::parseAndBound($tokens, $idx, $allowClosureSig, $source);
         if ($first === null) {
             return null;
         }
@@ -2243,7 +2248,7 @@ final class XphpSourceParser
             if ($peek >= count($tokens) || $tokens[$peek]->text !== '|') {
                 break;
             }
-            $next = self::parseAndBound($tokens, self::skipWs($tokens, $peek + 1));
+            $next = self::parseAndBound($tokens, self::skipWs($tokens, $peek + 1), $allowClosureSig, $source);
             if ($next === null) {
                 return null;
             }
@@ -2261,9 +2266,9 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseAndBound(array $tokens, int $idx): ?array
+    private static function parseAndBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
-        $first = self::parsePrimaryBound($tokens, $idx);
+        $first = self::parsePrimaryBound($tokens, $idx, $allowClosureSig, $source);
         if ($first === null) {
             return null;
         }
@@ -2275,7 +2280,7 @@ final class XphpSourceParser
             if ($peek >= count($tokens) || $tokens[$peek]->text !== '&') {
                 break;
             }
-            $next = self::parsePrimaryBound($tokens, self::skipWs($tokens, $peek + 1));
+            $next = self::parsePrimaryBound($tokens, self::skipWs($tokens, $peek + 1), $allowClosureSig, $source);
             if ($next === null) {
                 return null;
             }
@@ -2293,14 +2298,14 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parsePrimaryBound(array $tokens, int $idx): ?array
+    private static function parsePrimaryBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
         $n = count($tokens);
         if ($idx >= $n) {
             return null;
         }
         if ($tokens[$idx]->text === '(') {
-            $inner = self::parseBoundExpr($tokens, self::skipWs($tokens, $idx + 1));
+            $inner = self::parseBoundExpr($tokens, self::skipWs($tokens, $idx + 1), $allowClosureSig, $source);
             if ($inner === null) {
                 return null;
             }
@@ -2311,7 +2316,7 @@ final class XphpSourceParser
             }
             return [$boundInside, $closeIdx + 1];
         }
-        return self::parseLeafBound($tokens, $idx);
+        return self::parseLeafBound($tokens, $idx, $allowClosureSig, $source);
     }
 
     /**
@@ -2322,7 +2327,7 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseLeafBound(array $tokens, int $idx): ?array
+    private static function parseLeafBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
         $n = count($tokens);
         if ($idx >= $n || !self::isNameToken($tokens[$idx])) {
@@ -2339,11 +2344,26 @@ final class XphpSourceParser
         // a clear reject here is safe — a bare `\Closure` bound (no signature) is
         // untouched, and an ordinary user type is keyed out by the name check. The
         // opener is a plain `(` or a scalar cast token (`Closure(int)` lexes `(int)`
-        // as one T_INT_CAST), mirroring the closure-signature scanner.
+        // as one T_INT_CAST), mirroring the closure-signature scanner. In an ALIAS
+        // BODY ($allowClosureSig) a `Closure(...)` leaf is instead read as a signature
+        // leaf that erases to `\Closure`.
         if (ltrim($rawName, '\\') === 'Closure'
             && $afterName < $n
             && ($tokens[$afterName]->text === '(' || self::isCastToken($tokens[$afterName]))
         ) {
+            if ($allowClosureSig && $source !== null) {
+                $spanEnd = self::findClosureSigEnd($tokens, $afterName);
+                if ($spanEnd === null) {
+                    return null;
+                }
+                // @infection-ignore-all FalseValue -- the `nullable` flag on the built signature is dead
+                // for conformance (never read by the validator); alias-body nullability is carried by a
+                // separate `null` clause, so true vs false here is unobservable.
+                return [
+                    ['kind' => 'closureSig', 'signature' => self::buildClosureSignature($tokens, $afterName, $source, false)],
+                    $spanEnd + 1,
+                ];
+            }
             throw new XphpParseException(
                 'A Closure(...) signature type is not supported as a generic bound (closure signatures are allowed only in parameter, return, and property types). Use a bare \\Closure, or introduce a named type alias.',
                 // @infection-ignore-all Minus/IncrementInteger/DecrementInteger -- the `Closure`
@@ -2555,63 +2575,60 @@ final class XphpSourceParser
      */
     private static function parseAliasBody(array $tokens, int $bodyStart, int $semiIdx, string $source): array
     {
-        // Leading `?` → nullable single head: `?X` ≡ `X | null`. Only a single atomic head may follow;
-        // `?(A&B)` is a PHP parse error, so a `?` before anything parseTypeArg can't read declines to
-        // unsupported (`(A&B)|null` is the supported spelling for that shape). A `?Closure(...)` body
-        // also declines here (a nullable closure signature is out of scope).
+        // Leading `?` → nullable: `?X` ≡ `X | null`, and `?Closure(...)` ≡ `Closure(...) | null`. Only a
+        // single atomic head or a whole-body closure signature may follow; `?(A&B)` is a PHP parse error,
+        // so a `?` before anything readable here declines to unsupported (`(A&B)|null` is the supported
+        // spelling for that shape).
         // @infection-ignore-all NullSafePropertyCall -- `$bodyStart <= $semiIdx < count`, so the token
         // always exists; the `?? null` / `?->` is a defensive floor that never sees null.
         if (($tokens[$bodyStart] ?? null)?->text === '?') {
-            $parsed = self::parseTypeArg($tokens, self::skipWs($tokens, $bodyStart + 1));
-            if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
+            // `?X` ≡ `X | null`; the body after `?` must be a single leaf (a head or a closure
+            // signature). A compound (`?(A&B)`, `?A|B`) is a PHP parse error, so it declines. Read it
+            // through the shared reader so `?Closure(...)` (a signature leaf) works alongside `?X`.
+            $dnf = self::readAliasDnf($tokens, self::skipWs($tokens, $bodyStart + 1), $semiIdx, $source);
+            if ($dnf === null || $dnf === self::DNF_NEEDS_DISTRIBUTION || count($dnf) !== 1 || count($dnf[0]) !== 1) {
                 return [null, false];
             }
-            return [new AliasBody([[$parsed[0]], [new TypeRef('null')]]), false];
+            return [new AliasBody([$dnf[0], [new TypeRef('null')]]), false];
         }
 
-        // A closure-signature body: `Closure(params): return`. The gated tryParseClosureSignature needs
-        // a following `$var` / return slot, which an alias body — ending at `;` — is not; so recognize
-        // it via the ungated core (findClosureSigEnd + buildClosureSignature) and require the signature
-        // to span the WHOLE body (end exactly at the terminator). A partial match (trailing tokens, or a
-        // closure combined with a union) declines as unsupported.
-        if (ltrim($tokens[$bodyStart]->text, '\\') === 'Closure') {
-            $openIdx = self::skipWs($tokens, $bodyStart + 1);
-            // @infection-ignore-all LessThan -- `<` vs `<=` differs only when $openIdx === $semiIdx
-            // (a bare `type X = Closure;`), where $tokens[$openIdx] is the `;` — never `(` / a cast — so
-            // the inner guard is false either way and the branch is skipped identically.
-            if ($openIdx < $semiIdx && ($tokens[$openIdx]->text === '(' || self::isCastToken($tokens[$openIdx]))) {
-                $spanEnd = self::findClosureSigEnd($tokens, $openIdx);
-                if ($spanEnd !== null && self::skipWs($tokens, $spanEnd + 1) === $semiIdx) {
-                    // @infection-ignore-all FalseValue -- the distribution flag rides a NON-null body
-                    // here; buildAliasTable reads the flag only when the body is null, so its value on a
-                    // valid closure body is unobservable.
-                    return [new AliasBody([], self::buildClosureSignature($tokens, $openIdx, $source, false)), false];
-                }
-                return [null, false];
-            }
-        }
-
-        // Otherwise read a full `|` / `&` type expression (with `(` … `)` groups) via the shared
-        // bound-expression reader, then normalize to DNF. The reader raises for a `Closure(...)`
-        // signature nested in a compound (`A | Closure(...)`) — an alias body treats that as unsupported
-        // rather than surfacing a bound-specific error. A body that would need distribution (a union
-        // inside an intersection) declines with the distribution flag set.
-        try {
-            $parsed = self::parseBoundExpr($tokens, $bodyStart);
-        } catch (XphpParseException) {
-            return [null, false];
-        }
-        if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
-            return [null, false];
-        }
-        $dnf = self::boundTreeToDnf($parsed[0]);
+        // Otherwise read a full `|` / `&` type expression (with `(` … `)` groups) via the shared reader.
+        $dnf = self::readAliasDnf($tokens, $bodyStart, $semiIdx, $source);
         if ($dnf === null) {
+            return [null, false];
+        }
+        if ($dnf === self::DNF_NEEDS_DISTRIBUTION) {
             return [null, true];
         }
         // @infection-ignore-all FalseValue -- the distribution flag rides alongside a NON-null body
         // here; `buildAliasTable` reads the flag only when the body is null, so its value on a valid
         // body is unobservable (true vs false selects the same accept path).
         return [new AliasBody($dnf), false];
+    }
+
+    /** Sentinel: the body read fine but needs distribution (a union nested in an intersection). */
+    private const DNF_NEEDS_DISTRIBUTION = 'needs-distribution';
+
+    /**
+     * Read the tokens `[$start, $semiIdx)` as a DNF body via the shared bound-expression reader —
+     * allowing a `Closure(...)` signature leaf (which erases to `\Closure`). Returns the clauses, `null`
+     * when the tokens are not a well-formed body (or don't span exactly to the terminator, or a reader
+     * throw), or {@see DNF_NEEDS_DISTRIBUTION} when the body needs distribution.
+     *
+     * @param list<PhpToken> $tokens
+     * @return list<list<TypeRef|ClosureSignature>>|self::DNF_NEEDS_DISTRIBUTION|null
+     */
+    private static function readAliasDnf(array $tokens, int $start, int $semiIdx, string $source): array|string|null
+    {
+        try {
+            $parsed = self::parseBoundExpr($tokens, $start, allowClosureSig: true, source: $source);
+        } catch (XphpParseException) {
+            return null;
+        }
+        if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
+            return null;
+        }
+        return self::boundTreeToDnf($parsed[0]) ?? self::DNF_NEEDS_DISTRIBUTION;
     }
 
     /**
@@ -2623,10 +2640,13 @@ final class XphpSourceParser
      * distribute.
      *
      * @param BoundDict $tree
-     * @return list<list<TypeRef>>|null null when the tree needs distribution
+     * @return list<list<TypeRef|ClosureSignature>>|null null when the tree needs distribution
      */
     private static function boundTreeToDnf(array $tree): ?array
     {
+        if ($tree['kind'] === 'closureSig') {
+            return [[$tree['signature']]];
+        }
         if ($tree['kind'] === 'leaf') {
             return [[self::boundLeafToTypeRef($tree)]];
         }
@@ -4024,10 +4044,26 @@ final class XphpSourceParser
             }
 
             /**
+             * Narrow a DNF leaf to a `TypeRef` for a bound. The bound path rejects a body with any
+             * signature leaf before this is reached, so every clause leaf is a `TypeRef`.
+             */
+            private static function boundClauseLeaf(TypeRef|ClosureSignature $leaf): TypeRef
+            {
+                assert($leaf instanceof TypeRef);
+
+                return $leaf;
+            }
+
+            /**
              * @param BoundDict $node
              */
             private function buildBoundExprNode(array $node): BoundExpr
             {
+                // @infection-ignore-all -- a `closureSig` leaf is only produced for alias bodies
+                // (allowClosureSig), never for the real generic bounds this builder walks; defensive.
+                if ($node['kind'] === 'closureSig') {
+                    throw new \LogicException('a closure-signature leaf cannot appear in a generic bound');
+                }
                 if ($node['kind'] === 'leaf') {
                     $resolvedArgs = $this->resolveTypeRefList($node['args']);
                     // A bound that is a bare enclosing type parameter (`U : E`, or `B : A` over an
@@ -4064,9 +4100,11 @@ final class XphpSourceParser
                         // line; a cycle/arity error while expanding a *bound* alias is reported at the
                         // check-mode line-1 fallback whether the seed is 0 or 1, so the value is inert.
                         $body = $this->expandAliasToDnf(new TypeRef($fqn, $resolvedArgs), [], 0);
-                        if ($body->signature !== null) {
-                            // A closure-signature alias has no bound representation (a bound is a
-                            // subtype constraint over named types); it is usable only as a whole slot.
+                        if ($body->closureLeafCount() > 0) {
+                            // A closure signature has no bound representation (a bound is a subtype
+                            // constraint over named types); a body containing one is usable only as a
+                            // whole slot. (A union / intersection alias with no closure stays a valid
+                            // any-of / all-of bound.)
                             // @infection-ignore-all IncrementInteger -- as with the cycle/arity errors on
                             // this bound path, buildBoundExprNode carries no source line; the value is the
                             // check-mode line-1 fallback and is inert.
@@ -4080,11 +4118,12 @@ final class XphpSourceParser
                         // Each clause becomes a leaf (one member) or an all-of BoundIntersection (an
                         // `A&B` clause); the whole DNF is a lone clause or an any-of BoundUnion of the
                         // clause bounds. A single head is the one-clause-one-leaf case — a plain
-                        // BoundLeaf; a union alias stays any-of, exactly as before.
+                        // BoundLeaf; a union alias stays any-of, exactly as before. No clause holds a
+                        // signature leaf here (rejected above), so every leaf is a TypeRef.
                         $clauseBounds = array_map(
                             static fn (array $c): BoundExpr => count($c) === 1
-                                ? new BoundLeaf($c[0])
-                                : new BoundIntersection(...array_map(static fn (TypeRef $l): BoundLeaf => new BoundLeaf($l), $c)),
+                                ? new BoundLeaf(self::boundClauseLeaf($c[0]))
+                                : new BoundIntersection(...array_map(static fn (TypeRef|ClosureSignature $l): BoundLeaf => new BoundLeaf(self::boundClauseLeaf($l)), $c)),
                             $body->clauses,
                         );
                         return count($clauseBounds) === 1 ? $clauseBounds[0] : new BoundUnion(...$clauseBounds);
@@ -4219,13 +4258,16 @@ final class XphpSourceParser
                         XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT,
                     );
                 }
-                if ($body->signature !== null) {
-                    // A closure-signature body erases to a bare `\Closure` carrying the substituted
-                    // signature on ATTR_CLOSURE_SIG — read identically to a directly-written `Closure(...)`
-                    // by the conformance validator, and grounded per specialization by the Specializer.
-                    $closureNode = new Name\FullyQualified('Closure', $attrs);
-                    $closureNode->setAttribute(XphpSourceParser::ATTR_CLOSURE_SIG, $body->signature);
-                    return $closureNode;
+                if ($body->closureLeafCount() > 1) {
+                    // Every closure signature (and a bare `\Closure`) erases to the same `\Closure`, so
+                    // two in one body would emit a `\Closure|\Closure` / `\Closure&\Closure` PHP
+                    // duplicate-type fatal. (Direct `\Closure|\Closure` is itself a PHP error.)
+                    throw new XphpParseException(
+                        "Type alias `{$head}` has an unsupported body: a slot may contain at most one "
+                        . 'closure — every closure signature erases to the same `\\Closure`.',
+                        $node->getStartLine(),
+                        XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY,
+                    );
                 }
                 return self::dnfToNode($body->clauses, $attrs, $node->getStartLine());
             }
@@ -4238,19 +4280,19 @@ final class XphpSourceParser
              * whole slot) emits the `IntersectionType` directly; a DNF emits a `UnionType` of clause
              * nodes (PHP's union-of-intersections shape).
              *
-             * @param list<list<TypeRef>> $clauses
+             * @param list<list<TypeRef|ClosureSignature>> $clauses
              * @param array<string, mixed> $attrs
              */
             private static function dnfToNode(array $clauses, array $attrs, int $line): Node
             {
                 $hasNull = false;
-                /** @var list<list<TypeRef>> $nonNull the non-null clauses */
+                /** @var list<list<TypeRef|ClosureSignature>> $nonNull the non-null clauses */
                 $nonNull = [];
                 foreach ($clauses as $clause) {
                     // @infection-ignore-all UnwrapStrToLower -- resolveTypeRef already lowercases a
                     // scalar keyword, so a `null` leaf's name is always lowercase here; strtolower is
                     // a belt-and-suspenders guard.
-                    if (count($clause) === 1 && !$clause[0]->isGeneric() && strtolower($clause[0]->name) === 'null') {
+                    if (count($clause) === 1 && $clause[0] instanceof TypeRef && !$clause[0]->isGeneric() && strtolower($clause[0]->name) === 'null') {
                         $hasNull = true;
                     } else {
                         $nonNull[] = $clause;
@@ -4261,10 +4303,9 @@ final class XphpSourceParser
                 // clauseToNode.
                 $nonNull = AliasBody::dedupeClauses($nonNull);
                 if ($hasNull && count($nonNull) === 1 && count($nonNull[0]) === 1) {
-                    // `?X` — the sole non-null member is a single atomic head; emit a NullableType.
-                    /** @var Node\Identifier|Name $atomic — a single non-generic head lowers to an atomic node */
-                    $atomic = Specializer::typeRefToNode($nonNull[0][0], []);
-                    return new Node\NullableType($atomic, $attrs);
+                    // `?X` — the sole non-null member is a single atomic node (a head, or a `\Closure`
+                    // signature for `?Closure(...)`); emit a NullableType.
+                    return new Node\NullableType(self::leafToNode($nonNull[0][0], []), $attrs);
                 }
                 if (!$hasNull && count($nonNull) === 1) {
                     // A lone clause (an intersection `A&B` as the whole slot) is the slot type itself,
@@ -4285,21 +4326,19 @@ final class XphpSourceParser
              * substitution, where a type-parameter leaf's concrete type is known
              * (`type Pair<T> = T & Countable; Pair<int>`).
              *
-             * @param list<TypeRef> $clause non-empty, and never the bare `null` leaf
+             * @param list<TypeRef|ClosureSignature> $clause non-empty, and never the bare `null` leaf
              * @param array<string, mixed> $attrs
              */
             private static function clauseToNode(array $clause, array $attrs, int $line): Node\Identifier|Name|Node\IntersectionType
             {
                 if (count($clause) === 1) {
-                    /** @var Node\Identifier|Name $atomic — a single non-generic head lowers to an atomic node */
-                    $atomic = Specializer::typeRefToNode($clause[0], $attrs);
-                    return $atomic;
+                    return self::leafToNode($clause[0], $attrs);
                 }
                 foreach ($clause as $leaf) {
                     // @infection-ignore-all UnwrapStrToLower -- resolveTypeRef already lowercases a
                     // scalar keyword before it reaches here, so strtolower is a belt-and-suspenders
-                    // guard whose removal is unobservable.
-                    if (in_array(strtolower($leaf->name), XphpSourceParser::SCALAR_TYPES, true)) {
+                    // guard whose removal is unobservable. A signature leaf (a `\Closure`) is class-like.
+                    if ($leaf instanceof TypeRef && in_array(strtolower($leaf->name), XphpSourceParser::SCALAR_TYPES, true)) {
                         throw new XphpParseException(
                             "Type alias intersection member `{$leaf->name}` is a scalar or built-in type; "
                             . 'only class-like types can be intersected.',
@@ -4310,19 +4349,37 @@ final class XphpSourceParser
                 }
                 // Dedupe members — a duplicate is a PHP "redundant type" parse fatal; `A&A` ≡ `A` and a
                 // composed alias may reintroduce a member (`Inner=A&B; Outer=Inner&B` → `A&B`, not
-                // `A&B&B`). If dedup collapses to a single member, the slot type is that atomic head.
+                // `A&B&B`). If dedup collapses to a single member, the slot type is that atomic node.
                 $unique = AliasBody::dedupeLeaves($clause);
                 if (count($unique) === 1) {
-                    /** @var Node\Identifier|Name $atomic */
-                    $atomic = Specializer::typeRefToNode($unique[0], $attrs);
                     // @infection-ignore-all ReturnRemoval -- falling through builds a one-member
-                    // IntersectionType, which nikic pretty-prints identically to the bare atomic head,
+                    // IntersectionType, which nikic pretty-prints identically to the bare atomic node,
                     // so removing this early return is output-equivalent; the branch is a clarity guard.
-                    return $atomic;
+                    return self::leafToNode($unique[0], $attrs);
                 }
-                /** @var list<Node\Identifier|Name> $nodes — each intersection member is a single atomic head */
-                $nodes = array_map(static fn (TypeRef $leaf): Node => Specializer::typeRefToNode($leaf, []), $unique);
+                $nodes = array_map(static fn (TypeRef|ClosureSignature $leaf): Node => self::leafToNode($leaf, []), $unique);
                 return new Node\IntersectionType($nodes, $attrs);
+            }
+
+            /**
+             * Build the atomic node for one DNF leaf. A `TypeRef` lowers via {@see Specializer::typeRefToNode}
+             * (an `Identifier` for a scalar, a `Name` for a class). A {@see ClosureSignature} erases to a
+             * fully-qualified `\Closure` `Name` carrying `ATTR_CLOSURE_SIG` — read identically to a
+             * directly-written `Closure(...)` by the conformance validator, and grounded per specialization
+             * by the Specializer.
+             *
+             * @param array<string, mixed> $attrs
+             */
+            private static function leafToNode(TypeRef|ClosureSignature $leaf, array $attrs): Node\Identifier|Name
+            {
+                if ($leaf instanceof ClosureSignature) {
+                    $closure = new Name\FullyQualified('Closure', $attrs);
+                    $closure->setAttribute(XphpSourceParser::ATTR_CLOSURE_SIG, $leaf);
+                    return $closure;
+                }
+                /** @var Node\Identifier|Name $atomic — a single non-generic head lowers to an atomic node */
+                $atomic = Specializer::typeRefToNode($leaf, $attrs);
+                return $atomic;
             }
 
             /**
@@ -4391,69 +4448,51 @@ final class XphpSourceParser
                 foreach (array_column($entry['params'], 'name') as $k => $paramName) {
                     $subst[$paramName] = $paddedArgs[$k];
                 }
-                $resolved = $this->resolveAliasBody($ref->name, $entry);
-                if ($resolved->signature !== null) {
-                    // A closure-signature body: substitute the alias's params into the (already
-                    // namespace-resolved) signature and carry it through as a signature AliasBody. Any
-                    // still-abstract enclosing type-parameter leaf stays `isTypeParam` for the
-                    // Specializer to ground per specialization.
-                    return new AliasBody([], Specializer::substituteClosureSignature($resolved->signature, Substitution::of($subst)));
-                }
+                $aliasSubst = Substitution::of($subst);
                 $clauses = [];
-                foreach ($resolved->clauses as $bodyClause) {
+                foreach ($this->resolveAliasBody($ref->name, $entry)->clauses as $bodyClause) {
                     if (count($bodyClause) === 1) {
-                        // A single-leaf clause (a union member) may expand to any DNF — its clauses
-                        // flatten into the union.
-                        $substituted = self::substituteTypeRef($bodyClause[0], $subst);
-                        $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
-                        if ($expanded->signature !== null) {
-                            // The leaf resolves to a closure signature. That is representable only when
-                            // the WHOLE body is this one leaf (`type B = A` where A is a closure-sig alias
-                            // — B is then that same signature). Combined with any other clause (a union)
-                            // a closure signature has no representation.
-                            if (count($resolved->clauses) === 1) {
-                                return $expanded;
-                            }
-                            throw new XphpParseException(
-                                "Type alias `{$ref->name}` has an unsupported body: a closure signature "
-                                . 'cannot be combined with another type in a union or intersection.',
-                                $line,
-                                XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY,
-                            );
+                        $leaf = $bodyClause[0];
+                        if ($leaf instanceof ClosureSignature) {
+                            // A closure-signature leaf is terminal — it erases to `\Closure`; substitute
+                            // the alias's params into it and keep it as its own clause. (A signature that
+                            // is the whole body — `[[sig]]` — stays compound / whole-slot only.)
+                            $clauses[] = [Specializer::substituteClosureSignature($leaf, $aliasSubst)];
+                            continue;
                         }
-                        foreach ($expanded->clauses as $c) {
+                        // A single-leaf clause (a union member) may expand to any DNF — its clauses
+                        // flatten into the union. A signature reached through it (`type B = A`) flows in
+                        // as a signature-leaf clause.
+                        $substituted = self::substituteTypeRef($leaf, $subst);
+                        foreach ($this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line)->clauses as $c) {
                             $clauses[] = $c;
                         }
                         continue;
                     }
                     // A multi-leaf (intersection) clause: expand each leaf; each must reduce to a single
-                    // clause (an intersection cannot contain a union without distribution). A leaf that
-                    // is itself an intersection alias contributes its own leaves (`&`-associativity:
-                    // `Inner=A&B` inside `Outer=Inner&C` → `A&B&C`); a leaf that expands to a union is a
-                    // distribution the alias machinery rejects.
+                    // clause (an intersection cannot contain a union without distribution). A signature
+                    // leaf is terminal (erases to `\Closure`); a TypeRef leaf that is itself an
+                    // intersection alias contributes its own leaves (`&`-associativity); a leaf that
+                    // expands to a union is a distribution the alias machinery rejects.
                     $merged = [];
                     foreach ($bodyClause as $leaf) {
-                        $substituted = self::substituteTypeRef($leaf, $subst);
-                        $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
-                        if ($expanded->signature !== null) {
-                            throw new XphpParseException(
-                                "Type alias `{$ref->name}` has an unsupported body: a closure signature "
-                                . 'cannot be combined with another type in a union or intersection.',
-                                $line,
-                                XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY,
-                            );
-                        }
-                        if (count($expanded->clauses) > 1) {
-                            throw new XphpParseException(
-                                "Type alias `{$ref->name}` has a body that would require distribution: a "
-                                . 'member of an intersection expands to a union. Rewrite it in disjunctive '
-                                . 'normal form, or introduce a named type for the union.',
-                                $line,
-                                XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION,
-                            );
-                        }
-                        foreach ($expanded->clauses[0] as $mergedLeaf) {
-                            $merged[] = $mergedLeaf;
+                        if ($leaf instanceof ClosureSignature) {
+                            $merged[] = Specializer::substituteClosureSignature($leaf, $aliasSubst);
+                        } else {
+                            $substituted = self::substituteTypeRef($leaf, $subst);
+                            $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
+                            if (count($expanded->clauses) > 1) {
+                                throw new XphpParseException(
+                                    "Type alias `{$ref->name}` has a body that would require distribution: a "
+                                    . 'member of an intersection expands to a union. Rewrite it in disjunctive '
+                                    . 'normal form, or introduce a named type for the union.',
+                                    $line,
+                                    XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION,
+                                );
+                            }
+                            foreach ($expanded->clauses[0] as $mergedLeaf) {
+                                $merged[] = $mergedLeaf;
+                            }
                         }
                     }
                     $clauses[] = $merged;
@@ -4572,13 +4611,15 @@ final class XphpSourceParser
                 // restore is exact and unconditional.
                 $saved = $this->typeParamStack;
                 $this->typeParamStack[] = array_column($entry['params'], 'name');
-                $body = $entry['body'];
-                $resolved = $body->signature !== null
-                    ? new AliasBody([], $this->resolveClosureSignature($body->signature))
-                    : new AliasBody(array_map(
-                        fn (array $clause): array => array_map(fn (TypeRef $m): TypeRef => $this->resolveTypeRef($m), $clause),
-                        $body->clauses,
-                    ));
+                $resolved = new AliasBody(array_map(
+                    fn (array $clause): array => array_map(
+                        fn (TypeRef|ClosureSignature $leaf): TypeRef|ClosureSignature => $leaf instanceof ClosureSignature
+                            ? $this->resolveClosureSignature($leaf)
+                            : $this->resolveTypeRef($leaf),
+                        $clause,
+                    ),
+                    $entry['body']->clauses,
+                ));
                 $this->typeParamStack = $saved;
                 return $this->aliasBodyCache[$fqn] = $resolved;
             }

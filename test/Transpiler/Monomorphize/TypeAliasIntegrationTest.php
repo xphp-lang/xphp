@@ -326,23 +326,59 @@ final class TypeAliasIntegrationTest extends TestCase
         self::assertRejected($this->check($bad), 'xphp.closure_conformance', 'is not a subtype of bool');
         $this->assertCompileThrowsRuntime($bad, 'is not a subtype of bool');
 
-        // A closure signature combined in a union or an intersection has no representation —
-        // unsupported. The full message is asserted so a reworded / reordered diagnostic is caught.
-        $combinedMessage = 'has an unsupported body: a closure signature cannot be combined with '
-            . 'another type in a union or intersection.';
-        foreach ([
-            'union' => 'type U = A | Foo;',
-            'intersection' => 'type U = A & Foo;',
-        ] as $decl) {
-            $combined = ['C.xphp' => $header . "{$decl}\nclass Svc { public U \$h; }\n"];
-            self::assertRejected($this->check($combined), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $combinedMessage);
-            $this->assertCompileThrows($combined, $combinedMessage);
-        }
+        // A closure signature combined with another type IN THE ALIAS BODY now expands (the closure
+        // erases to a bare `\Closure` member) — see testClosureSignatureInCompoundAliasBodies. (A
+        // compound *alias* like `A` still can't be a union member in a slot — that is `Foo|A`, an
+        // xphp.alias_compound_in_non_slot, unchanged from WI-01.)
+        $combined = self::read($this->compile([
+            'C.xphp' => $header . "type U = Foo | Closure(int): bool;\ntype I = Foo & Closure(int): bool;\nclass Svc { public U \$u; public I \$i; }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('public \\App\\Foo|\\Closure $u', $combined);
+        self::assertStringContainsString('public \\App\\Foo&\\Closure $i', $combined);
 
-        // A closure-sig alias has no bound representation — compound-in-non-slot.
+        // A closure-sig alias still has no bound representation — compound-in-non-slot.
         $bound = ['C.xphp' => $header . "class Bag<T : A> {}\nfunction f(): int { \$b = new Bag::<int>(); return 1; }\n"];
         self::assertRejected($this->check($bound), XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT, 'the whole type of a parameter');
         $this->assertCompileThrows($bound, 'the whole type of a parameter');
+    }
+
+    public function testClosureSignatureInCompoundAliasBodies(): void
+    {
+        // A closure signature may be a MEMBER of a compound alias body — nullable, union, intersection —
+        // erasing to a bare `\Closure` inside the `?`/`|`/`&` node, exactly as the directly-written slot
+        // types do. Conformance parity: `?Closure` is enforced (the validator unwraps NullableType) while
+        // a union/intersection member is gradual (it does not descend) — matching the direct forms.
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Foo {}\n";
+
+        $use = self::read($this->compile([
+            'C.xphp' => $header . "type N = ?Closure(int): bool;\ntype U = Foo | Closure(int): bool;\ntype I = Foo & Closure(int): bool;\ntype H = Closure(int): bool;\ntype NAlias = ?H;\nclass Svc { public N \$n; public U \$u; public I \$i; public NAlias \$na; }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('public ?\\Closure $n', $use);
+        self::assertStringContainsString('public \\App\\Foo|\\Closure $u', $use);
+        self::assertStringContainsString('public \\App\\Foo&\\Closure $i', $use);
+        // A single-head alias to a closure-sig alias, nullable: `?H` ≡ `?\Closure`.
+        self::assertStringContainsString('public ?\\Closure $na', $use);
+
+        // `?Closure` conformance IS enforced (a violating literal returned against it fails).
+        $badNullable = ['C.xphp' => $header . "type N = ?Closure(int): bool;\nfunction make(): N { return fn(int \$x): int => \$x; }\n"];
+        self::assertRejected($this->check($badNullable), 'xphp.closure_conformance', 'is not a subtype of bool');
+        // A union member is gradual (not enforced) — parity with a directly-written `Foo|Closure(...)`.
+        $unionGradual = ['C.xphp' => $header . "type U = Foo | Closure(int): bool;\nfunction f(U \$x): int { return 1; }\n"];
+        self::assertFalse($this->check($unionGradual)->hasErrors(), 'a closure in a union member is gradual, like the direct form');
+
+        // Two closures in one body would emit a `\Closure|\Closure` PHP duplicate-type fatal — rejected.
+        foreach ([
+            'two-sigs' => 'type Bad = (Closure(int): bool) | (Closure(string): int);',
+            'sig-and-bare' => 'type Bad = \\Closure | Closure(int): bool;',
+        ] as $decl) {
+            $twoClosure = ['C.xphp' => $header . "{$decl}\nclass Svc { public Bad \$x; }\n"];
+            self::assertRejected($this->check($twoClosure), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, 'at most one closure');
+            $this->assertCompileThrows($twoClosure, 'at most one closure');
+        }
+
+        // A scalar next to a closure in an intersection still rejects on the scalar (PHP forbids it).
+        $scalar = ['C.xphp' => $header . "type Bad = int & Closure(int): bool;\nclass Svc { public Bad \$x; }\n"];
+        self::assertRejected($this->check($scalar), XphpSourceParser::CODE_ALIAS_SCALAR_IN_INTERSECTION, 'scalar or built-in type');
     }
 
     public function testClosureSignatureAliasInNonSlotIsRejectedInBothModes(): void
@@ -769,15 +805,9 @@ final class TypeAliasIntegrationTest extends TestCase
         foreach ([
             // A body the bound-expression reader cannot read (leads with `|`) — declined, not crashed.
             'malformed' => 'type Bad = |A;',
-            // A closure signature combined with a union (`A | Closure(...)`) is out of scope — the
-            // bound-expression reader declines it. (A union RETURN type, `Closure(int): int | A`, is a
-            // valid closure signature and is accepted.)
-            'closure-after-union' => 'type Bad = A | Closure(int): int;',
             // A complete closure signature followed by a trailing token — the span must cover the WHOLE
             // body, so trailing junk declines rather than silently dropping it.
             'closure-trailing-token' => 'type Bad = Closure(int) A;',
-            // A nullable closure signature — out of scope (declined by the leading-`?` reader).
-            'nullable-closure' => 'type Bad = ?Closure(int): int;',
         ] as $body) {
             $files = ['C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {}\n{$body}\nfunction f(): int { return 1; }\n"];
             self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $message);
