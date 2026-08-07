@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Inter;
+
+interface A {}
+interface B {}
+interface C {}
+
+class AB implements A, B {}
+class ABC implements A, B, C {}
+
+// Intersection body as a whole slot (property + param + return), and a DNF body `(A&B)|C`.
+type Both = A & B;
+type Dnf = (A & B) | C;
+
+// A composed alias that reintroduces a member: `Inner & B` is `A&B&B`, which must dedupe to `A&B`
+// (an emitted `A&B&B` is a PHP "Duplicate type … is redundant" load fatal).
+type Inner = A & B;
+type Deduped = Inner & B;
+
+class Holder
+{
+    public Both $both;
+    public Deduped $deduped;
+
+    public function __construct(Both $both, Deduped $deduped)
+    {
+        $this->both = $both;
+        $this->deduped = $deduped;
+    }
+
+    public function dnf(Dnf $x): Dnf
+    {
+        return $x;
+    }
+}
+
+$holder = new Holder(new AB(), new AB());
+$dnfAB = $holder->dnf(new AB());
+$dnfC = $holder->dnf(new ABC());
