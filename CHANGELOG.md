@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (possibly-generic) head, a **union** (`int|string`), a **nullable** (`?Box`), an
   **intersection** (`A&B`), a **DNF** — a union of intersections (`(A&B)|C`) — or a
   **closure signature** (`Closure(int): bool`, generic `Mapper<T, R> = Closure(T): R`,
+  and as a nullable / union / intersection member — `?Closure(...)`, `Foo | Closure(...)`;
   erased to a bare `\Closure` and conformance-checked against the signature):
   a single head expands in every type position (incl. as a generic argument,
   `Bag<UserId>`), while a compound (union / nullable / intersection / DNF / closure
@@ -30,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class. An alias is **file-local** — visible only in the file that declares it, like
   a `use` alias. A cyclic (`xphp.alias_cycle`), arity-mismatched (`xphp.alias_arity`),
   class-colliding (`xphp.alias_class_collision`), duplicate (`xphp.alias_duplicate`),
-  unsupported-body (`xphp.alias_unsupported_body` — e.g. a closure signature mixed
-  into a union/nullable), compound-in-non-slot (`xphp.alias_compound_in_non_slot`), distribution-requiring
+  unsupported-body (`xphp.alias_unsupported_body` — e.g. two closures in one body,
+  both erasing to `\Closure`), compound-in-non-slot (`xphp.alias_compound_in_non_slot`), distribution-requiring
   (`xphp.alias_compound_needs_distribution` — a union nested in an intersection),
   scalar-in-intersection (`xphp.alias_scalar_in_intersection`), or bound-violating
   (`xphp.bound_violation`) alias is a loud error in both `xphp compile` and

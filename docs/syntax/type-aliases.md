@@ -107,8 +107,9 @@ no separate code path and no runtime cost.
     class, interface, or trait of the same name (no silent shadowing).
   - `xphp.alias_duplicate` — the same alias name declared twice.
   - `xphp.alias_unsupported_body` — a body that is none of the supported
-    shapes, e.g. a closure signature combined with a union (`A | Closure(...)`)
-    or nullable (`?Closure(...)`) (see caveats below).
+    shapes, e.g. **two** closures in one body (`(Closure(int): bool) |
+    (Closure(string): int)`), since every closure erases to the same `\Closure`
+    (see caveats below).
   - `xphp.alias_compound_in_non_slot` — a compound alias (union / nullable /
     intersection / DNF) used outside a whole slot (see caveats below).
   - `xphp.alias_compound_needs_distribution` — a union nested inside an
@@ -128,10 +129,14 @@ for the details and the reasons:
   each file that uses it, or reference the underlying type directly. (Because
   scoping is per-file there is no cross-file collision/duplicate to detect;
   same-file ones *are* caught.)
-- **A closure signature combined with a union or nullable**
-  (`A | Closure(int): int`, `?Closure(int): int`) is
-  `xphp.alias_unsupported_body` — a plain `Closure(...)` body works; a mixed
-  one does not. (A bare `\Closure` may be combined freely.)
+- **A closure signature may be a compound member** — nullable
+  (`?Closure(int): bool`), a union (`Foo | Closure(int): bool`), or an
+  intersection (`Foo & Closure(int): bool`) — erasing to a bare `\Closure`
+  inside the `?`/`|`/`&`, just like the directly-written slot type. Its
+  conformance is enforced under `?` and gradual as a union/intersection member
+  (parity with the direct forms). Only **two** closures in one body is
+  rejected (`xphp.alias_unsupported_body`) — both erase to `\Closure`, which
+  PHP forbids as a duplicate.
 - **No distribution.** A union nested inside an intersection (`(A|B)&C`, or an
   intersection member that expands to a union) is
   `xphp.alias_compound_needs_distribution` — rewrite it in DNF. A scalar in an
