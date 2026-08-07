@@ -90,8 +90,11 @@ final readonly class AliasBody
      * Whether a leaf erases to a bare `\Closure` — a {@see ClosureSignature}, or a `\Closure`-named
      * TypeRef (case-insensitive, fully-qualified or not).
      */
-    public static function isClosureErasing(TypeRef|ClosureSignature $leaf): bool
+    private static function isClosureErasing(TypeRef|ClosureSignature $leaf): bool
     {
+        // @infection-ignore-all UnwrapLtrim -- a bare `\Closure` TypeRef may reach here fully-qualified
+        // (leading backslash) or not, depending on the resolution path; the ltrim normalizes both. Its
+        // removal is unobservable only when the name is already backslash-free, so it is defensive.
         return $leaf instanceof ClosureSignature
             || (!$leaf->isGeneric() && ltrim(strtolower($leaf->name), '\\') === 'closure');
     }

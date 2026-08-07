@@ -1990,7 +1990,7 @@ final class XphpSourceParser
             $afterName = self::skipWs($tokens, $i);
             if ($afterName < $n && $tokens[$afterName]->text === ':') {
                 $afterColon = self::skipWs($tokens, $afterName + 1);
-                $parsedBound = self::parseBoundExpr($tokens, $afterColon);
+                $parsedBound = self::parseBoundExpr($tokens, $afterColon, allowClosureSig: false, source: null);
                 if ($parsedBound === null) {
                     return null;
                 }
@@ -2225,7 +2225,7 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseBoundExpr(array $tokens, int $startIdx, bool $allowClosureSig = false, ?string $source = null): ?array
+    private static function parseBoundExpr(array $tokens, int $startIdx, bool $allowClosureSig, ?string $source): ?array
     {
         return self::parseOrBound($tokens, $startIdx, $allowClosureSig, $source);
     }
@@ -2234,7 +2234,7 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseOrBound(array $tokens, int $idx, bool $allowClosureSig = false, ?string $source = null): ?array
+    private static function parseOrBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
         $first = self::parseAndBound($tokens, $idx, $allowClosureSig, $source);
         if ($first === null) {
@@ -2266,7 +2266,7 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseAndBound(array $tokens, int $idx, bool $allowClosureSig = false, ?string $source = null): ?array
+    private static function parseAndBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
         $first = self::parsePrimaryBound($tokens, $idx, $allowClosureSig, $source);
         if ($first === null) {
@@ -2298,7 +2298,7 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parsePrimaryBound(array $tokens, int $idx, bool $allowClosureSig = false, ?string $source = null): ?array
+    private static function parsePrimaryBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
         $n = count($tokens);
         if ($idx >= $n) {
@@ -2327,7 +2327,7 @@ final class XphpSourceParser
      * @param list<PhpToken> $tokens
      * @return array{0: BoundDict, 1: int}|null
      */
-    private static function parseLeafBound(array $tokens, int $idx, bool $allowClosureSig = false, ?string $source = null): ?array
+    private static function parseLeafBound(array $tokens, int $idx, bool $allowClosureSig, ?string $source): ?array
     {
         $n = count($tokens);
         if ($idx >= $n || !self::isNameToken($tokens[$idx])) {
@@ -2356,6 +2356,9 @@ final class XphpSourceParser
                 if ($spanEnd === null) {
                     return null;
                 }
+                // @infection-ignore-all FalseValue -- the `nullable` flag on the built signature is dead
+                // for conformance (never read by the validator); alias-body nullability is carried by a
+                // separate `null` clause, so true vs false here is unobservable.
                 return [
                     ['kind' => 'closureSig', 'signature' => self::buildClosureSignature($tokens, $afterName, $source, false)],
                     $spanEnd + 1,
@@ -2579,33 +2582,22 @@ final class XphpSourceParser
         // @infection-ignore-all NullSafePropertyCall -- `$bodyStart <= $semiIdx < count`, so the token
         // always exists; the `?? null` / `?->` is a defensive floor that never sees null.
         if (($tokens[$bodyStart] ?? null)?->text === '?') {
-            $after = self::skipWs($tokens, $bodyStart + 1);
-            $sig = self::tryWholeBodyClosureSig($tokens, $after, $semiIdx, $source);
-            if ($sig !== null) {
-                return [new AliasBody([[$sig], [new TypeRef('null')]]), false];
-            }
-            $parsed = self::parseTypeArg($tokens, $after);
-            if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
+            // `?X` ≡ `X | null`; the body after `?` must be a single leaf (a head or a closure
+            // signature). A compound (`?(A&B)`, `?A|B`) is a PHP parse error, so it declines. Read it
+            // through the shared reader so `?Closure(...)` (a signature leaf) works alongside `?X`.
+            $dnf = self::readAliasDnf($tokens, self::skipWs($tokens, $bodyStart + 1), $semiIdx, $source);
+            if ($dnf === null || $dnf === self::DNF_NEEDS_DISTRIBUTION || count($dnf) !== 1 || count($dnf[0]) !== 1) {
                 return [null, false];
             }
-            return [new AliasBody([[$parsed[0]], [new TypeRef('null')]]), false];
+            return [new AliasBody([$dnf[0], [new TypeRef('null')]]), false];
         }
 
-        // Otherwise read a full `|` / `&` type expression (with `(` … `)` groups) via the shared
-        // bound-expression reader — allowing a `Closure(...)` signature leaf, which erases to `\Closure`
-        // (so `Closure(...)`, `Foo | Closure(...)`, `Foo & Closure(...)` all read). A body that would
-        // need distribution (a union inside an intersection) declines with the distribution flag set.
-        // Any other reader throw (a malformed closure in a real-bound context can't reach here) declines.
-        try {
-            $parsed = self::parseBoundExpr($tokens, $bodyStart, allowClosureSig: true, source: $source);
-        } catch (XphpParseException) {
-            return [null, false];
-        }
-        if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
-            return [null, false];
-        }
-        $dnf = self::boundTreeToDnf($parsed[0]);
+        // Otherwise read a full `|` / `&` type expression (with `(` … `)` groups) via the shared reader.
+        $dnf = self::readAliasDnf($tokens, $bodyStart, $semiIdx, $source);
         if ($dnf === null) {
+            return [null, false];
+        }
+        if ($dnf === self::DNF_NEEDS_DISTRIBUTION) {
             return [null, true];
         }
         // @infection-ignore-all FalseValue -- the distribution flag rides alongside a NON-null body
@@ -2614,28 +2606,29 @@ final class XphpSourceParser
         return [new AliasBody($dnf), false];
     }
 
+    /** Sentinel: the body read fine but needs distribution (a union nested in an intersection). */
+    private const DNF_NEEDS_DISTRIBUTION = 'needs-distribution';
+
     /**
-     * If a `Closure(params): return` signature begins at $idx and spans exactly to the terminator
-     * $semiIdx (a whole-body closure), return the parsed {@see ClosureSignature}; otherwise null. Uses
-     * the ungated core (the gated `tryParseClosureSignature` needs a following `$var`/return slot, which
-     * a `;`-terminated alias body is not).
+     * Read the tokens `[$start, $semiIdx)` as a DNF body via the shared bound-expression reader —
+     * allowing a `Closure(...)` signature leaf (which erases to `\Closure`). Returns the clauses, `null`
+     * when the tokens are not a well-formed body (or don't span exactly to the terminator, or a reader
+     * throw), or {@see DNF_NEEDS_DISTRIBUTION} when the body needs distribution.
      *
      * @param list<PhpToken> $tokens
+     * @return list<list<TypeRef|ClosureSignature>>|self::DNF_NEEDS_DISTRIBUTION|null
      */
-    private static function tryWholeBodyClosureSig(array $tokens, int $idx, int $semiIdx, string $source): ?ClosureSignature
+    private static function readAliasDnf(array $tokens, int $start, int $semiIdx, string $source): array|string|null
     {
-        if (($tokens[$idx] ?? null) === null || ltrim($tokens[$idx]->text, '\\') !== 'Closure') {
+        try {
+            $parsed = self::parseBoundExpr($tokens, $start, allowClosureSig: true, source: $source);
+        } catch (XphpParseException) {
             return null;
         }
-        $openIdx = self::skipWs($tokens, $idx + 1);
-        if ($openIdx >= $semiIdx || !($tokens[$openIdx]->text === '(' || self::isCastToken($tokens[$openIdx]))) {
+        if ($parsed === null || self::skipWs($tokens, $parsed[1]) !== $semiIdx) {
             return null;
         }
-        $spanEnd = self::findClosureSigEnd($tokens, $openIdx);
-        if ($spanEnd === null || self::skipWs($tokens, $spanEnd + 1) !== $semiIdx) {
-            return null;
-        }
-        return self::buildClosureSignature($tokens, $openIdx, $source, false);
+        return self::boundTreeToDnf($parsed[0]) ?? self::DNF_NEEDS_DISTRIBUTION;
     }
 
     /**
@@ -4485,21 +4478,21 @@ final class XphpSourceParser
                     foreach ($bodyClause as $leaf) {
                         if ($leaf instanceof ClosureSignature) {
                             $merged[] = Specializer::substituteClosureSignature($leaf, $aliasSubst);
-                            continue;
-                        }
-                        $substituted = self::substituteTypeRef($leaf, $subst);
-                        $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
-                        if (count($expanded->clauses) > 1) {
-                            throw new XphpParseException(
-                                "Type alias `{$ref->name}` has a body that would require distribution: a "
-                                . 'member of an intersection expands to a union. Rewrite it in disjunctive '
-                                . 'normal form, or introduce a named type for the union.',
-                                $line,
-                                XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION,
-                            );
-                        }
-                        foreach ($expanded->clauses[0] as $mergedLeaf) {
-                            $merged[] = $mergedLeaf;
+                        } else {
+                            $substituted = self::substituteTypeRef($leaf, $subst);
+                            $expanded = $this->expandAliasToDnf($substituted, [...$visited, $ref->name], $line);
+                            if (count($expanded->clauses) > 1) {
+                                throw new XphpParseException(
+                                    "Type alias `{$ref->name}` has a body that would require distribution: a "
+                                    . 'member of an intersection expands to a union. Rewrite it in disjunctive '
+                                    . 'normal form, or introduce a named type for the union.',
+                                    $line,
+                                    XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION,
+                                );
+                            }
+                            foreach ($expanded->clauses[0] as $mergedLeaf) {
+                                $merged[] = $mergedLeaf;
+                            }
                         }
                     }
                     $clauses[] = $merged;
