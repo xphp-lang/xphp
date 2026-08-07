@@ -61,11 +61,12 @@ and needs no runtime identity.
 - Trade-off: for the *generic* case xphp defines surface ahead of PHP (which deferred it),
   a bet on the declaration-form consensus. The non-generic import form (`use type … as`)
   could be added later as a parity synonym without disturbing this decision.
-- Trade-off: the delivered scope is single-head / union / nullable bodies, **file-local** (an
-  alias is scoped to its file like a `use` alias, by design — see option D below);
-  intersection / DNF / closure bodies and compound-in-non-slot positions are still
-  rejected (see the [caveat](../caveats.md#type-alias-body-and-position-limits)) — a safe
-  subset, with the richer bodies as later work.
+- Trade-off: the initial scope was single-head / union / nullable bodies, **file-local** (an
+  alias is scoped to its file like a `use` alias, by design — see option D below), delivering a
+  safe subset with the richer bodies as later work. (That later work landed in v0.4.0:
+  intersection, DNF, and closure-signature bodies are now supported; compound-in-non-slot
+  positions remain rejected. See the [caveat](../caveats.md#type-alias-body-and-position-limits)
+  and [roadmap](../roadmap.md) for the current state.)
 
 ### Confirmation
 
