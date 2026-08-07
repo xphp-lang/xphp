@@ -261,12 +261,17 @@ final class TypeAliasIntegrationTest extends TestCase
         // A closure-signature body erases to a bare `\Closure` in a param / property / return slot; a
         // generic closure-sig alias erases the same way, with its signature substituted per use.
         $use = self::read($this->compile([
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Handler = Closure(int \$x): bool;\ntype Mapper<T, R> = Closure(T): R;\nclass Svc {\n public Handler \$h;\n public function run(Handler \$c): bool { return \$c(1); }\n public function map(Mapper<int, string> \$f): string { return \$f(1); }\n}\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {}\ntype Handler = Closure(int \$x): bool;\ntype FqHandler = \\Closure(int): bool;\ntype ClosureOrA = \\Closure | A;\ntype Mapper<T, R> = Closure(T): R;\nclass Svc {\n public Handler \$h;\n public FqHandler \$fq;\n public ClosureOrA \$mx;\n public function run(Handler \$c): bool { return \$c(1); }\n public function map(Mapper<int, string> \$f): string { return \$f(1); }\n}\n",
         ]), 'Use.php');
 
         self::assertStringContainsString('public \\Closure $h', $use);
         self::assertStringContainsString('function run(\\Closure $c): bool', $use);
         self::assertStringContainsString('function map(\\Closure $f): string', $use);
+        // A fully-qualified `\Closure(...)` body is recognized (the `\` is stripped) and erases the same.
+        self::assertStringContainsString('public \\Closure $fq', $use);
+        // A bare `\Closure` combined in a UNION is NOT a closure-signature body — it stays a union
+        // (`\Closure|\App\A`); only a `Closure(...)` signature spanning the whole body erases specially.
+        self::assertStringContainsString('public \\Closure|\\App\\A $mx', $use);
         // The alias name never appears in the emitted PHP.
         self::assertStringNotContainsString('Handler', $use);
         self::assertStringNotContainsString('Mapper', $use);
@@ -726,8 +731,13 @@ final class TypeAliasIntegrationTest extends TestCase
         foreach ([
             // A body the bound-expression reader cannot read (leads with `|`) — declined, not crashed.
             'malformed' => 'type Bad = |A;',
-            // A closure signature combined with a union — a mixed body is out of scope.
-            'closure-union' => 'type Bad = A | Closure(int): int;',
+            // A closure signature combined with a union (`A | Closure(...)`) is out of scope — the
+            // bound-expression reader declines it. (A union RETURN type, `Closure(int): int | A`, is a
+            // valid closure signature and is accepted.)
+            'closure-after-union' => 'type Bad = A | Closure(int): int;',
+            // A complete closure signature followed by a trailing token — the span must cover the WHOLE
+            // body, so trailing junk declines rather than silently dropping it.
+            'closure-trailing-token' => 'type Bad = Closure(int) A;',
             // A nullable closure signature — out of scope (declined by the leading-`?` reader).
             'nullable-closure' => 'type Bad = ?Closure(int): int;',
         ] as $body) {

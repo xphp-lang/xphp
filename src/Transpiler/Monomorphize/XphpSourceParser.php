@@ -2576,9 +2576,15 @@ final class XphpSourceParser
         // closure combined with a union) declines as unsupported.
         if (ltrim($tokens[$bodyStart]->text, '\\') === 'Closure') {
             $openIdx = self::skipWs($tokens, $bodyStart + 1);
+            // @infection-ignore-all LessThan -- `<` vs `<=` differs only when $openIdx === $semiIdx
+            // (a bare `type X = Closure;`), where $tokens[$openIdx] is the `;` — never `(` / a cast — so
+            // the inner guard is false either way and the branch is skipped identically.
             if ($openIdx < $semiIdx && ($tokens[$openIdx]->text === '(' || self::isCastToken($tokens[$openIdx]))) {
                 $spanEnd = self::findClosureSigEnd($tokens, $openIdx);
                 if ($spanEnd !== null && self::skipWs($tokens, $spanEnd + 1) === $semiIdx) {
+                    // @infection-ignore-all FalseValue -- the distribution flag rides a NON-null body
+                    // here; buildAliasTable reads the flag only when the body is null, so its value on a
+                    // valid closure body is unobservable.
                     return [new AliasBody([], self::buildClosureSignature($tokens, $openIdx, $source, false)), false];
                 }
                 return [null, false];
