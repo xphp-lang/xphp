@@ -212,6 +212,31 @@ final class TypeAliasIntegrationTest extends TestCase
         self::assertStringContainsString('public \\App\\A&\\DateTimeInterface $fq', $use);
     }
 
+    public function testRedundantIntersectionAndUnionMembersAreDeduped(): void
+    {
+        // A duplicate member in an intersection / union is a PHP "Duplicate type … is redundant" PARSE
+        // fatal — it would take down the whole emitted file. Duplicates are identity-preserving, so they
+        // collapse: `A&A` ≡ `A`, `A&B&B` ≡ `A&B` (a composed alias reintroducing a member), `A|A` ≡ `A`.
+        // The emitted file must load — asserted structurally here and executed in the runtime fixture.
+        $use = self::read($this->compile([
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {}\ntype AandA = A & A;\ntype Inner = A & B;\ntype Outer = Inner & B;\ntype AorA = A | A;\ntype Commuted = (A & B) | (B & A);\ntype ArmDup = (A & B) | (A & B & B);\nclass Svc {\n public AandA \$aa;\n public Outer \$o;\n public AorA \$u;\n public Commuted \$c;\n public ArmDup \$m;\n}\n",
+        ]), 'Use.php');
+
+        // `A&A` and `A|A` collapse to a bare `\App\A`; `Inner&B` collapses `A&B&B` to `\App\A&\App\B`.
+        self::assertStringContainsString('public \\App\\A $aa', $use);
+        self::assertStringContainsString('public \\App\\A&\\App\\B $o', $use);
+        self::assertStringContainsString('public \\App\\A $u', $use);
+        // Order-independent union-arm dedup (`A&B | B&A` ≡ `A&B`) and an arm that is an intra-dup of
+        // another (`A&B | A&B&B` ≡ `A&B`) both collapse to a single `\App\A&\App\B` slot.
+        self::assertStringContainsString('public \\App\\A&\\App\\B $c', $use);
+        self::assertStringContainsString('public \\App\\A&\\App\\B $m', $use);
+        // No emitted duplicate-type fatal shapes.
+        self::assertStringNotContainsString('\\App\\A&\\App\\A', $use);
+        self::assertStringNotContainsString('\\App\\B&\\App\\B', $use);
+        self::assertStringNotContainsString('\\App\\A|\\App\\A', $use);
+        self::assertStringNotContainsString(')|(', $use);
+    }
+
     public function testCompoundNeedsDistributionIsRejectedInBothModes(): void
     {
         // A union nested inside an intersection would require distribution ((A|B)&C → (A&C)|(B&C)),

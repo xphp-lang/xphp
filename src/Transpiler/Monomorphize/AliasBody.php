@@ -54,4 +54,54 @@ final readonly class AliasBody
     {
         return $this->clauses[0][0];
     }
+
+    /**
+     * Dedupe the leaves of an intersection clause by canonical name, order-preserving (keep the first
+     * occurrence). PHP rejects a duplicate type in an intersection ("Duplicate type … is redundant")
+     * at parse time — a load fatal — and `A&A` ≡ `A`, so a composed alias that reintroduces a member
+     * (`type Inner = A & B; type Outer = Inner & B`) collapses cleanly instead of emitting `A&B&B`.
+     *
+     * @param list<TypeRef> $clause
+     * @return list<TypeRef>
+     */
+    public static function dedupeLeaves(array $clause): array
+    {
+        $seen = [];
+        $unique = [];
+        foreach ($clause as $leaf) {
+            $key = $leaf->canonical();
+            if (!isset($seen[$key])) {
+                // @infection-ignore-all TrueValue -- $seen is a presence set read via isset(); the
+                // stored value (true vs false) is never inspected, so it is unobservable.
+                $seen[$key] = true;
+                $unique[] = $leaf;
+            }
+        }
+        return $unique;
+    }
+
+    /**
+     * Dedupe union clauses by their order-independent member set, order-preserving. PHP rejects a
+     * duplicate union arm the same way; `A|A` ≡ `A` and `A&B | B&A` ≡ `A&B`.
+     *
+     * @param list<list<TypeRef>> $clauses
+     * @return list<list<TypeRef>>
+     */
+    public static function dedupeClauses(array $clauses): array
+    {
+        $seen = [];
+        $unique = [];
+        foreach ($clauses as $clause) {
+            $keys = array_map(static fn (TypeRef $leaf): string => $leaf->canonical(), $clause);
+            sort($keys);
+            $key = implode('&', array_unique($keys));
+            if (!isset($seen[$key])) {
+                // @infection-ignore-all TrueValue -- $seen is a presence set read via isset(); the
+                // stored value (true vs false) is never inspected, so it is unobservable.
+                $seen[$key] = true;
+                $unique[] = $clause;
+            }
+        }
+        return $unique;
+    }
 }

@@ -4212,6 +4212,10 @@ final class XphpSourceParser
                         $nonNull[] = $clause;
                     }
                 }
+                // Dedupe union arms — a duplicate arm is a PHP "redundant type" parse fatal; `A|A` ≡ `A`
+                // and `A&B | B&A` ≡ `A&B`. Leaf-level dedup within an intersection arm happens in
+                // clauseToNode.
+                $nonNull = AliasBody::dedupeClauses($nonNull);
                 if ($hasNull && count($nonNull) === 1 && count($nonNull[0]) === 1) {
                     // `?X` — the sole non-null member is a single atomic head; emit a NullableType.
                     /** @var Node\Identifier|Name $atomic — a single non-generic head lowers to an atomic node */
@@ -4247,8 +4251,6 @@ final class XphpSourceParser
                     $atomic = Specializer::typeRefToNode($clause[0], $attrs);
                     return $atomic;
                 }
-                /** @var list<Node\Identifier|Name> $nodes — each intersection member is a single atomic head */
-                $nodes = [];
                 foreach ($clause as $leaf) {
                     // @infection-ignore-all UnwrapStrToLower -- resolveTypeRef already lowercases a
                     // scalar keyword before it reaches here, so strtolower is a belt-and-suspenders
@@ -4261,10 +4263,21 @@ final class XphpSourceParser
                             XphpSourceParser::CODE_ALIAS_SCALAR_IN_INTERSECTION,
                         );
                     }
-                    /** @var Node\Identifier|Name $leafNode */
-                    $leafNode = Specializer::typeRefToNode($leaf, []);
-                    $nodes[] = $leafNode;
                 }
+                // Dedupe members — a duplicate is a PHP "redundant type" parse fatal; `A&A` ≡ `A` and a
+                // composed alias may reintroduce a member (`Inner=A&B; Outer=Inner&B` → `A&B`, not
+                // `A&B&B`). If dedup collapses to a single member, the slot type is that atomic head.
+                $unique = AliasBody::dedupeLeaves($clause);
+                if (count($unique) === 1) {
+                    /** @var Node\Identifier|Name $atomic */
+                    $atomic = Specializer::typeRefToNode($unique[0], $attrs);
+                    // @infection-ignore-all ReturnRemoval -- falling through builds a one-member
+                    // IntersectionType, which nikic pretty-prints identically to the bare atomic head,
+                    // so removing this early return is output-equivalent; the branch is a clarity guard.
+                    return $atomic;
+                }
+                /** @var list<Node\Identifier|Name> $nodes — each intersection member is a single atomic head */
+                $nodes = array_map(static fn (TypeRef $leaf): Node => Specializer::typeRefToNode($leaf, []), $unique);
                 return new Node\IntersectionType($nodes, $attrs);
             }
 

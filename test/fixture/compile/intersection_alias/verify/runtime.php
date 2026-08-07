@@ -22,6 +22,10 @@ return function (CompiledFixture $fixture): void {
     // The `Both $both` property + constructor param (`A&B`) accepted an object implementing both.
     Assert::assertInstanceOf('App\\Inter\\AB', $holder->both, 'intersection slot A&B accepted an A&B object');
 
+    // The composed `Deduped` slot (`Inner & B` = A&B&B → deduped to A&B) loaded and accepted an A&B
+    // object — proving the emitted intersection has no duplicate member (which would fatal at load).
+    Assert::assertInstanceOf('App\\Inter\\AB', $holder->deduped, 'composed intersection deduped to A&B and loaded');
+
     // The `Dnf` slot `(A&B)|C` accepted the A&B arm and the C arm, round-tripping each.
     Assert::assertInstanceOf('App\\Inter\\AB', $dnfAB, 'DNF (A&B)|C accepted the A&B arm');
     Assert::assertInstanceOf('App\\Inter\\ABC', $dnfC, 'DNF (A&B)|C accepted the C arm');

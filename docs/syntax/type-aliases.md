@@ -129,6 +129,10 @@ for the details and the reasons:
   intersection member that expands to a union) is
   `xphp.alias_compound_needs_distribution` — rewrite it in DNF. A scalar in an
   intersection (`int & A`) is `xphp.alias_scalar_in_intersection`.
+- **Redundant members collapse.** A duplicate member in an intersection or union
+  (`A & A`, or a composed `type Outer = Inner & B` where `Inner = A & B`) is
+  identity-preserving, so it is deduped (`A&A` ≡ `A`, `A&B&B` ≡ `A&B`) — an emitted
+  duplicate would be a PHP "redundant type" fatal.
 - **A compound alias is a whole-slot type only.** A union / intersection /
   nullable / DNF alias as a generic argument, in `new` / `extends`, or nested
   inside another compound is `xphp.alias_compound_in_non_slot`. (As a *bound*
