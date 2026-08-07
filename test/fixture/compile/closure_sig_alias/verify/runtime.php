@@ -16,7 +16,7 @@ use PHPUnit\Framework\Assert;
 use XPHP\TestSupport\CompiledFixture;
 
 return function (CompiledFixture $fixture): void {
-    require $fixture->targetDir . '/Handlers.php';
+    require $fixture->targetDir . '/Registry.php';
 
     // The `Handler` (`Closure(int): bool`) property slot held a closure that was invoked: 5 > 0.
     Assert::assertTrue($ok, 'Handler-typed closure slot was invoked and returned bool');
