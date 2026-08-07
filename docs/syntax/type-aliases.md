@@ -66,13 +66,18 @@ no separate code path and no runtime cost.
   separator is `=`.
 - **Bodies**: a single (possibly-generic) head (`Ident`, `Dict<A, B>`), a
   **union** (`int|string`), a **nullable** (`?Box`), an **intersection**
-  (`A & B`), or a **DNF** — a union of intersections (`(A & B) | C`). A
-  single-head or generic body expands in **every** type position, including
-  as a generic argument (`Bag<UserId>`), `new`, `extends`, and a bound. A
-  **compound** body (union / nullable / intersection / DNF) expands only as
-  the *whole* type of a parameter, property, return, or class-constant slot
-  (see caveats) — except as a **bound**, where an intersection is all-of
-  (`type B<T : A & Named>`) and a union is any-of.
+  (`A & B`), a **DNF** — a union of intersections (`(A & B) | C`) — or a
+  **closure signature** (`Closure(int $x): bool`). A single-head or generic
+  body expands in **every** type position, including as a generic argument
+  (`Bag<UserId>`), `new`, `extends`, and a bound. A **compound** body (union /
+  nullable / intersection / DNF / closure signature) expands only as the
+  *whole* type of a parameter, property, return, or class-constant slot (see
+  caveats) — except a union/intersection as a **bound**, where an intersection
+  is all-of (`type B<T : A & Named>`) and a union is any-of.
+- **Closure-signature bodies** (`type Handler = Closure(int): bool;`, and
+  generic `type Mapper<T, R> = Closure(T): R;`) erase to a bare `\Closure` in
+  the slot, carrying the signature for conformance checking — identical to a
+  directly-written `Closure(...)`. A generic one grounds its signature per use.
 - **Parameters** may carry **defaults** and **bounds**, like a generic
   class: `type P<A, B = A> = Dict<A, B>;` (a use may omit trailing
   defaulted arguments — `P<int>` fills `B = A = int`), and
@@ -101,8 +106,9 @@ no separate code path and no runtime cost.
   - `xphp.alias_class_collision` — an alias whose name collides with a
     class, interface, or trait of the same name (no silent shadowing).
   - `xphp.alias_duplicate` — the same alias name declared twice.
-  - `xphp.alias_unsupported_body` — a closure-signature body (see caveats
-    below).
+  - `xphp.alias_unsupported_body` — a body that is none of the supported
+    shapes, e.g. a closure signature combined with a union (`A | Closure(...)`)
+    or nullable (`?Closure(...)`) (see caveats below).
   - `xphp.alias_compound_in_non_slot` — a compound alias (union / nullable /
     intersection / DNF) used outside a whole slot (see caveats below).
   - `xphp.alias_compound_needs_distribution` — a union nested inside an
@@ -122,9 +128,10 @@ for the details and the reasons:
   each file that uses it, or reference the underlying type directly. (Because
   scoping is per-file there is no cross-file collision/duplicate to detect;
   same-file ones *are* caught.)
-- **Closure bodies** (`Closure(int): int`) are rejected with
-  `xphp.alias_unsupported_body` — write the type directly or wrap it in a
-  named class/interface.
+- **A closure signature combined with a union or nullable**
+  (`A | Closure(int): int`, `?Closure(int): int`) is
+  `xphp.alias_unsupported_body` — a plain `Closure(...)` body works; a mixed
+  one does not. (A bare `\Closure` may be combined freely.)
 - **No distribution.** A union nested inside an intersection (`(A|B)&C`, or an
   intersection member that expands to a union) is
   `xphp.alias_compound_needs_distribution` — rewrite it in DNF. A scalar in an
