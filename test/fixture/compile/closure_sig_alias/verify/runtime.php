@@ -25,6 +25,10 @@ return function (CompiledFixture $fixture): void {
     // loads — proving the transitive case emits a real type, not un-loadable / untyped PHP: -2 < 0.
     Assert::assertTrue($aliasOk, 'transitive closure-sig alias slot loaded and was invoked');
 
+    // A closure signature as a compound member (`MaybeCheck = ?Closure(int): bool`) erases to
+    // `?\Closure` and loads — proving a closure-in-compound slot is emitted valid: 0 === 0.
+    Assert::assertTrue($maybeOk, 'nullable closure-sig slot (?\\Closure) loaded and was invoked');
+
     // The generic `Mapper<int, string>` param slot held a closure invoked with an int, returning a string.
     Assert::assertSame('n3', $mapped, 'Mapper<int, string> closure slot was invoked and returned a string');
 };

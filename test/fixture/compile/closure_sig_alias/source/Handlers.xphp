@@ -11,16 +11,25 @@ type Mapper<T, R> = Closure(T): R;
 // A single-head alias to a closure-signature alias must itself behave as that signature (it must
 // emit `\Closure`, not un-loadable / untyped PHP).
 type Aliased = Handler;
+// A closure signature as a MEMBER of a compound body: a nullable closure erases to `?\Closure`.
+type MaybeCheck = ?Closure(int $x): bool;
 
 class Registry
 {
     public Handler $check;
     public Aliased $alias;
+    public MaybeCheck $maybe;
 
-    public function __construct(Handler $check, Aliased $alias)
+    public function __construct(Handler $check, Aliased $alias, MaybeCheck $maybe)
     {
         $this->check = $check;
         $this->alias = $alias;
+        $this->maybe = $maybe;
+    }
+
+    public function viaMaybe(int $n): bool
+    {
+        return ($this->maybe)($n);
     }
 
     public function run(int $n): bool
@@ -39,7 +48,8 @@ class Registry
     }
 }
 
-$reg = new Registry(fn(int $x): bool => $x > 0, fn(int $x): bool => $x < 0);
+$reg = new Registry(fn(int $x): bool => $x > 0, fn(int $x): bool => $x < 0, fn(int $x): bool => $x === 0);
 $ok = $reg->run(5);
 $aliasOk = $reg->viaAlias(-2);
+$maybeOk = $reg->viaMaybe(0);
 $mapped = $reg->map(fn(int $x): string => "n{$x}", 3);
