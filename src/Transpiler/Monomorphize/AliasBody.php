@@ -101,11 +101,13 @@ final readonly class AliasBody
 
     /**
      * The dedup key of a leaf: every signature (and every `\Closure` TypeRef) keys to `\Closure`; a
-     * plain TypeRef keys to its canonical name.
+     * plain TypeRef keys to its canonical name, lowercased. PHP class-like names are case-insensitive
+     * (`\App\Foo` and `\App\foo` are the same class), so the key must be too — otherwise `Foo & foo`
+     * survives dedup and emits `\App\Foo&\App\foo`, which PHP rejects as a duplicate-type load fatal.
      */
     private static function leafKey(TypeRef|ClosureSignature $leaf): string
     {
-        return $leaf instanceof ClosureSignature ? '\\Closure' : $leaf->canonical();
+        return $leaf instanceof ClosureSignature ? '\\closure' : strtolower($leaf->canonical());
     }
 
     /**

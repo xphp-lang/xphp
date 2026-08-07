@@ -236,9 +236,11 @@ final class TypeAliasIntegrationTest extends TestCase
         // A duplicate member in an intersection / union is a PHP "Duplicate type … is redundant" PARSE
         // fatal — it would take down the whole emitted file. Duplicates are identity-preserving, so they
         // collapse: `A&A` ≡ `A`, `A&B&B` ≡ `A&B` (a composed alias reintroducing a member), `A|A` ≡ `A`.
-        // The emitted file must load — asserted structurally here and executed in the runtime fixture.
+        // PHP class-like names are case-insensitive, so `Foo & foo` / `Foo | foo` name the SAME class and
+        // must collapse too — a case-sensitive dedup key would let both survive and emit an `\App\Foo&\App\foo`
+        // duplicate-type fatal. The emitted file must load — asserted structurally here and executed in the runtime fixture.
         $use = self::read($this->compile([
-            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {}\ntype AandA = A & A;\ntype Inner = A & B;\ntype Outer = Inner & B;\ntype AorA = A | A;\ntype Commuted = (A & B) | (B & A);\ntype ArmDup = (A & B) | (A & B & B);\nclass Svc {\n public AandA \$aa;\n public Outer \$o;\n public AorA \$u;\n public Commuted \$c;\n public ArmDup \$m;\n}\n",
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {} interface Foo {}\ntype AandA = A & A;\ntype Inner = A & B;\ntype Outer = Inner & B;\ntype AorA = A | A;\ntype Commuted = (A & B) | (B & A);\ntype ArmDup = (A & B) | (A & B & B);\ntype CaseAnd = Foo & foo;\ntype CaseOr = Foo | foo;\nclass Svc {\n public AandA \$aa;\n public Outer \$o;\n public AorA \$u;\n public Commuted \$c;\n public ArmDup \$m;\n public CaseAnd \$ca;\n public CaseOr \$co;\n}\n",
         ]), 'Use.php');
 
         // `A&A` and `A|A` collapse to a bare `\App\A`; `Inner&B` collapses `A&B&B` to `\App\A&\App\B`.
@@ -249,10 +251,16 @@ final class TypeAliasIntegrationTest extends TestCase
         // another (`A&B | A&B&B` ≡ `A&B`) both collapse to a single `\App\A&\App\B` slot.
         self::assertStringContainsString('public \\App\\A&\\App\\B $c', $use);
         self::assertStringContainsString('public \\App\\A&\\App\\B $m', $use);
+        // Case-insensitive dedup: `Foo & foo` / `Foo | foo` collapse to a single `\App\Foo` slot (the first
+        // occurrence's casing wins), never the `\App\Foo&\App\foo` / `\App\Foo|\App\foo` duplicate fatal.
+        self::assertStringContainsString('public \\App\\Foo $ca', $use);
+        self::assertStringContainsString('public \\App\\Foo $co', $use);
         // No emitted duplicate-type fatal shapes.
         self::assertStringNotContainsString('\\App\\A&\\App\\A', $use);
         self::assertStringNotContainsString('\\App\\B&\\App\\B', $use);
         self::assertStringNotContainsString('\\App\\A|\\App\\A', $use);
+        self::assertStringNotContainsString('\\App\\Foo&\\App\\foo', $use);
+        self::assertStringNotContainsString('\\App\\Foo|\\App\\foo', $use);
         self::assertStringNotContainsString(')|(', $use);
     }
 
