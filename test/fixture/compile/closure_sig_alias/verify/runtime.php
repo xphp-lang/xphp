@@ -31,4 +31,12 @@ return function (CompiledFixture $fixture): void {
 
     // The generic `Mapper<int, string>` param slot held a closure invoked with an int, returning a string.
     Assert::assertSame('n3', $mapped, 'Mapper<int, string> closure slot was invoked and returned a string');
+
+    // The `?\Closure` slot legally held null (the constructor accepted it and the file loaded); invoking
+    // it threw PHP's own "not callable" Error — xphp injects no null-guard around the erased nullable slot.
+    Assert::assertSame(
+        'Value of type null is not callable',
+        $nullCallError,
+        'invoking a null-valued nullable closure slot throws PHP\'s own not-callable Error, un-guarded',
+    );
 };

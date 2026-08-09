@@ -53,3 +53,15 @@ $ok = $reg->run(5);
 $aliasOk = $reg->viaAlias(-2);
 $maybeOk = $reg->viaMaybe(0);
 $mapped = $reg->map(fn(int $x): string => "n{$x}", 3);
+
+// The `MaybeCheck` (`?Closure(int): bool`) slot erases to `?\Closure`, so null is a legal value — the
+// constructor accepts it and the file loads. xphp injects NO null-guard around the erased slot, so
+// invoking a null-valued slot throws PHP's own "not callable" Error, exactly as a hand-written
+// `?\Closure` would. Capturing the message proves the null-callability check is present and un-suppressed.
+$nullReg = new Registry(fn(int $x): bool => $x > 0, fn(int $x): bool => $x < 0, null);
+$nullCallError = null;
+try {
+    $nullReg->viaMaybe(0);
+} catch (\Error $e) {
+    $nullCallError = $e->getMessage();
+}
