@@ -22,7 +22,7 @@ first.
 | [Pseudo-types](pseudo-types.md) | `self<T>` / `static<T>` / `parent<T>` and the `new self::<T>(...)` form |
 | [Turbofish](turbofish.md) | All four call-site shapes plus variable and empty turbofish |
 | [Array sugar](array-sugar.md) | `T[]` shorthand |
-| [Type aliases](type-aliases.md) | `type Pair<A, B> = …;`, compile-time substitution, file-local; union/nullable bodies, parameter defaults + bounds |
+| [Type aliases](type-aliases.md) | `type Pair<A, B> = …;`, compile-time substitution, file-local; union / nullable / intersection / DNF / closure-signature bodies, parameter defaults + bounds |
 | [Exceptions](exceptions.md) | Generic exceptions, `catch (HttpError<NotFound> $e)`, bare and union catch |
 
 ## Quick reference card

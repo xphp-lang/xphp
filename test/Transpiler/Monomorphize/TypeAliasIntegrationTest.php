@@ -54,6 +54,44 @@ final class TypeAliasIntegrationTest extends TestCase
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testIntersectionAndDnfBodiesExpandAndRunAtRuntime(): void
+    {
+        // Execute the emitted output: an intersection body (`A&B`) and a DNF body (`(A&B)|C`) lower to
+        // real PHP type nodes. That the program loads (a malformed node would fatal at class-load) and
+        // the native type check accepts the conforming objects proves the emission is valid.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/intersection_alias/source',
+            'inter',
+        );
+        try {
+            $fixture->registerAutoload('App\\Inter');
+            $runtime = require __DIR__ . '/../../fixture/compile/intersection_alias/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testClosureSignatureBodiesExpandAndRunAtRuntime(): void
+    {
+        // Execute the emitted output: a closure-signature body (`Handler = Closure(int): bool`) and a
+        // generic one (`Mapper<T, R> = Closure(T): R`) erase to bare `\Closure` slots. That the program
+        // loads and a closure flowing through each slot is invoked proves the erasure + dispatch.
+        $fixture = CompiledFixture::compile(
+            __DIR__ . '/../../fixture/compile/closure_sig_alias/source',
+            'clo',
+        );
+        try {
+            $fixture->registerAutoload('App\\Clo');
+            $runtime = require __DIR__ . '/../../fixture/compile/closure_sig_alias/verify/runtime.php';
+            $runtime($fixture);
+        } finally {
+            $fixture->cleanup();
+        }
+    }
+
     public function testGenericAliasExpandsToItsBodySpecialization(): void
     {
         $use = self::read($this->compile([
@@ -177,6 +215,250 @@ final class TypeAliasIntegrationTest extends TestCase
         self::assertStringContainsString('function g(int|string $x): int|string|null', $use);
     }
 
+    public function testIntersectionAndDnfBodiesExpandInWholeSlots(): void
+    {
+        // An intersection body expands into a slot as a real `A&B`; a DNF body as `(A&B)|C`; and a
+        // nested intersection alias flattens by `&`-associativity into `A&B&C` — all as the WHOLE type
+        // of a param / property / return slot.
+        $use = self::read($this->compile([
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {} interface C {}\ntype Both = A & B;\ntype Dnf = (A & B) | C;\ntype Inner = A & B;\ntype Outer = Inner & C;\ntype FqBoth = A & \\DateTimeInterface;\nclass Svc {\n public Both \$b;\n public FqBoth \$fq;\n public function f(Dnf \$d): Outer { return \$d; }\n}\n",
+        ]), 'Use.php');
+
+        self::assertStringContainsString('public \\App\\A&\\App\\B $b', $use);
+        self::assertStringContainsString('function f((\\App\\A&\\App\\B)|\\App\\C $d): \\App\\A&\\App\\B&\\App\\C', $use);
+        // A fully-qualified member keeps its leading `\` (global `\DateTimeInterface`, NOT the relative
+        // `\App\DateTimeInterface`), so the fq encoding of an intersection leaf is exercised.
+        self::assertStringContainsString('public \\App\\A&\\DateTimeInterface $fq', $use);
+    }
+
+    public function testRedundantIntersectionAndUnionMembersAreDeduped(): void
+    {
+        // A duplicate member in an intersection / union is a PHP "Duplicate type … is redundant" PARSE
+        // fatal — it would take down the whole emitted file. Duplicates are identity-preserving, so they
+        // collapse: `A&A` ≡ `A`, `A&B&B` ≡ `A&B` (a composed alias reintroducing a member), `A|A` ≡ `A`.
+        // PHP class-like names are case-insensitive, so `Foo & foo` / `Foo | foo` name the SAME class and
+        // must collapse too — a case-sensitive dedup key would let both survive and emit an `\App\Foo&\App\foo`
+        // duplicate-type fatal. The emitted file must load — asserted structurally here and executed in the runtime fixture.
+        $use = self::read($this->compile([
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {} interface Foo {}\ntype AandA = A & A;\ntype Inner = A & B;\ntype Outer = Inner & B;\ntype AorA = A | A;\ntype Commuted = (A & B) | (B & A);\ntype ArmDup = (A & B) | (A & B & B);\ntype CaseAnd = Foo & foo;\ntype CaseOr = Foo | foo;\nclass Svc {\n public AandA \$aa;\n public Outer \$o;\n public AorA \$u;\n public Commuted \$c;\n public ArmDup \$m;\n public CaseAnd \$ca;\n public CaseOr \$co;\n}\n",
+        ]), 'Use.php');
+
+        // `A&A` and `A|A` collapse to a bare `\App\A`; `Inner&B` collapses `A&B&B` to `\App\A&\App\B`.
+        self::assertStringContainsString('public \\App\\A $aa', $use);
+        self::assertStringContainsString('public \\App\\A&\\App\\B $o', $use);
+        self::assertStringContainsString('public \\App\\A $u', $use);
+        // Order-independent union-arm dedup (`A&B | B&A` ≡ `A&B`) and an arm that is an intra-dup of
+        // another (`A&B | A&B&B` ≡ `A&B`) both collapse to a single `\App\A&\App\B` slot.
+        self::assertStringContainsString('public \\App\\A&\\App\\B $c', $use);
+        self::assertStringContainsString('public \\App\\A&\\App\\B $m', $use);
+        // Case-insensitive dedup: `Foo & foo` / `Foo | foo` collapse to a single `\App\Foo` slot (the first
+        // occurrence's casing wins), never the `\App\Foo&\App\foo` / `\App\Foo|\App\foo` duplicate fatal.
+        self::assertStringContainsString('public \\App\\Foo $ca', $use);
+        self::assertStringContainsString('public \\App\\Foo $co', $use);
+        // No emitted duplicate-type fatal shapes.
+        self::assertStringNotContainsString('\\App\\A&\\App\\A', $use);
+        self::assertStringNotContainsString('\\App\\B&\\App\\B', $use);
+        self::assertStringNotContainsString('\\App\\A|\\App\\A', $use);
+        self::assertStringNotContainsString('\\App\\Foo&\\App\\foo', $use);
+        self::assertStringNotContainsString('\\App\\Foo|\\App\\foo', $use);
+        self::assertStringNotContainsString(')|(', $use);
+    }
+
+    public function testClosureSignatureBodyErasesToClosureInWholeSlots(): void
+    {
+        // A closure-signature body erases to a bare `\Closure` in a param / property / return slot; a
+        // generic closure-sig alias erases the same way, with its signature substituted per use.
+        $use = self::read($this->compile([
+            'Use.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {}\ntype Handler = Closure(int \$x): bool;\ntype FqHandler = \\Closure(int): bool;\ntype ClosureOrA = \\Closure | A;\ntype Mapper<T, R> = Closure(T): R;\nclass Svc {\n public Handler \$h;\n public FqHandler \$fq;\n public ClosureOrA \$mx;\n public function run(Handler \$c): bool { return \$c(1); }\n public function map(Mapper<int, string> \$f): string { return \$f(1); }\n}\n",
+        ]), 'Use.php');
+
+        self::assertStringContainsString('public \\Closure $h', $use);
+        self::assertStringContainsString('function run(\\Closure $c): bool', $use);
+        self::assertStringContainsString('function map(\\Closure $f): string', $use);
+        // A fully-qualified `\Closure(...)` body is recognized (the `\` is stripped) and erases the same.
+        self::assertStringContainsString('public \\Closure $fq', $use);
+        // A bare `\Closure` combined in a UNION is NOT a closure-signature body — it stays a union
+        // (`\Closure|\App\A`); only a `Closure(...)` signature spanning the whole body erases specially.
+        self::assertStringContainsString('public \\Closure|\\App\\A $mx', $use);
+        // The alias name never appears in the emitted PHP.
+        self::assertStringNotContainsString('Handler', $use);
+        self::assertStringNotContainsString('Mapper', $use);
+    }
+
+    public function testClosureSignatureConformanceRidesTheAliasInBothModes(): void
+    {
+        // The signature rides the alias: a closure literal returned against a `Handler` return type is
+        // conformance-checked against `Closure(int): bool`, not just the bare `\Closure`. A provable
+        // mismatch fails in both modes; a conforming literal compiles.
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Handler = Closure(int \$x): bool;\n";
+
+        $bad = ['C.xphp' => $header . "function make(): Handler { return fn(int \$x): int => \$x; }\n"];
+        self::assertRejected($this->check($bad), 'xphp.closure_conformance', 'is not a subtype of bool');
+        // Conformance violations are raised AFTER parsing (a RuntimeException), like a bound violation.
+        $this->assertCompileThrowsRuntime($bad, 'is not a subtype of bool');
+
+        $ok = ['C.xphp' => $header . "function make(): Handler { return fn(int \$x): bool => true; }\n"];
+        self::assertFalse($this->check($ok)->hasErrors(), 'a conforming closure literal against the aliased signature compiles');
+    }
+
+    public function testGenericClosureSignatureAliasGroundsPerSpecialization(): void
+    {
+        // A generic closure-sig alias whose signature references an enclosing class type parameter
+        // (`Mapper<E, int>` inside `class Box<E>`) grounds per specialization: a factory returning a
+        // conforming closure compiles; one returning a mismatched closure is a conformance error.
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ntype Mapper<T, R> = Closure(T): R;\n";
+
+        $ok = ['C.xphp' => $header . "class Box<E> { public function make(): Mapper<E, bool> { return fn(\$x): bool => true; } }\nclass Driver { public function go(): void { \$b = new Box::<int>(); } }\n"];
+        self::assertFalse($this->check($ok)->hasErrors(), 'a grounded closure-sig alias with a conforming factory compiles');
+
+        $bad = ['C.xphp' => $header . "class Box<E> { public function make(): Mapper<E, int> { return fn(\$x): string => 'no'; } }\nclass Driver { public function go(): void { \$b = new Box::<int>(); } }\n"];
+        self::assertRejected($this->check($bad), 'xphp.closure_conformance', 'is not a subtype of');
+    }
+
+    public function testTransitiveClosureSignatureAliasPropagatesInASlotAndRejectsElsewhere(): void
+    {
+        // A single-head alias to a closure-sig alias (`type B = A`) IS that signature: in a whole slot
+        // it erases to `\Closure` and its conformance rides through; combined in a union, or used as a
+        // bound, it rejects loudly (never silently dropping the `\Closure` type — which would emit
+        // un-loadable / untyped PHP).
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Foo {}\ntype A = Closure(int \$x): bool;\ntype B = A;\n";
+
+        // Whole-slot: erases to `\Closure`, conformance rides through the indirection.
+        $use = self::read($this->compile([
+            'C.xphp' => $header . "class Svc { public B \$h; public function make(): B { return fn(int \$x): bool => true; } }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('public \\Closure $h', $use);
+        self::assertStringContainsString('function make(): \\Closure', $use);
+
+        $bad = ['C.xphp' => $header . "function make(): B { return fn(int \$x): int => \$x; }\n"];
+        self::assertRejected($this->check($bad), 'xphp.closure_conformance', 'is not a subtype of bool');
+        $this->assertCompileThrowsRuntime($bad, 'is not a subtype of bool');
+
+        // A closure signature combined with another type IN THE ALIAS BODY now expands (the closure
+        // erases to a bare `\Closure` member) — see testClosureSignatureInCompoundAliasBodies. (A
+        // compound *alias* like `A` still can't be a union member in a slot — that is `Foo|A`, an
+        // xphp.alias_compound_in_non_slot, unchanged from WI-01.)
+        $combined = self::read($this->compile([
+            'C.xphp' => $header . "type U = Foo | Closure(int): bool;\ntype I = Foo & Closure(int): bool;\nclass Svc { public U \$u; public I \$i; }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('public \\App\\Foo|\\Closure $u', $combined);
+        self::assertStringContainsString('public \\App\\Foo&\\Closure $i', $combined);
+
+        // A closure-sig alias still has no bound representation — compound-in-non-slot.
+        $bound = ['C.xphp' => $header . "class Bag<T : A> {}\nfunction f(): int { \$b = new Bag::<int>(); return 1; }\n"];
+        self::assertRejected($this->check($bound), XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT, 'the whole type of a parameter');
+        $this->assertCompileThrows($bound, 'the whole type of a parameter');
+    }
+
+    public function testClosureSignatureInCompoundAliasBodies(): void
+    {
+        // A closure signature may be a MEMBER of a compound alias body — nullable, union, intersection —
+        // erasing to a bare `\Closure` inside the `?`/`|`/`&` node, exactly as the directly-written slot
+        // types do. Conformance parity: `?Closure` is enforced (the validator unwraps NullableType) while
+        // a union/intersection member is gradual (it does not descend) — matching the direct forms.
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface Foo {}\n";
+
+        $use = self::read($this->compile([
+            'C.xphp' => $header . "type N = ?Closure(int): bool;\ntype U = Foo | Closure(int): bool;\ntype I = Foo & Closure(int): bool;\ntype H = Closure(int): bool;\ntype NAlias = ?H;\nclass Svc { public N \$n; public U \$u; public I \$i; public NAlias \$na; }\n",
+        ]), 'C.php');
+        self::assertStringContainsString('public ?\\Closure $n', $use);
+        self::assertStringContainsString('public \\App\\Foo|\\Closure $u', $use);
+        self::assertStringContainsString('public \\App\\Foo&\\Closure $i', $use);
+        // A single-head alias to a closure-sig alias, nullable: `?H` ≡ `?\Closure`.
+        self::assertStringContainsString('public ?\\Closure $na', $use);
+
+        // `?Closure` conformance IS enforced (a violating literal returned against it fails).
+        $badNullable = ['C.xphp' => $header . "type N = ?Closure(int): bool;\nfunction make(): N { return fn(int \$x): int => \$x; }\n"];
+        self::assertRejected($this->check($badNullable), 'xphp.closure_conformance', 'is not a subtype of bool');
+        // A union member is gradual (not enforced) — parity with a directly-written `Foo|Closure(...)`.
+        $unionGradual = ['C.xphp' => $header . "type U = Foo | Closure(int): bool;\nfunction f(U \$x): int { return 1; }\n"];
+        self::assertFalse($this->check($unionGradual)->hasErrors(), 'a closure in a union member is gradual, like the direct form');
+
+        // Two closures in one body would emit a `\Closure|\Closure` PHP duplicate-type fatal — rejected.
+        foreach ([
+            'two-sigs' => 'type Bad = (Closure(int): bool) | (Closure(string): int);',
+            'sig-and-bare' => 'type Bad = \\Closure | Closure(int): bool;',
+        ] as $decl) {
+            $twoClosure = ['C.xphp' => $header . "{$decl}\nclass Svc { public Bad \$x; }\n"];
+            self::assertRejected($this->check($twoClosure), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, 'at most one closure');
+            $this->assertCompileThrows($twoClosure, 'at most one closure');
+        }
+
+        // A scalar next to a closure in an intersection still rejects on the scalar (PHP forbids it).
+        $scalar = ['C.xphp' => $header . "type Bad = int & Closure(int): bool;\nclass Svc { public Bad \$x; }\n"];
+        self::assertRejected($this->check($scalar), XphpSourceParser::CODE_ALIAS_SCALAR_IN_INTERSECTION, 'scalar or built-in type');
+    }
+
+    public function testClosureSignatureAliasInNonSlotIsRejectedInBothModes(): void
+    {
+        // A closure-signature alias is a whole-slot type only — as a generic argument or in `new` it is
+        // `xphp.alias_compound_in_non_slot` (never an un-`new`-able `new \Closure()` or a miscompile).
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Bag<T> {}\ntype Handler = Closure(int): bool;\n";
+        $needle = 'the whole type of a parameter, property, return, or class-constant slot';
+        foreach ([
+            'generic-arg' => 'function f(Bag<Handler> $z): int { return 1; }',
+            'new' => 'function f(): int { $x = new Handler(); return 1; }',
+        ] as $body) {
+            $files = ['C.xphp' => $header . $body . "\n"];
+            self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT, $needle);
+            $this->assertCompileThrows($files, $needle);
+        }
+    }
+
+    public function testCompoundNeedsDistributionIsRejectedInBothModes(): void
+    {
+        // A union nested inside an intersection would require distribution ((A|B)&C → (A&C)|(B&C)),
+        // which the alias machinery rejects loudly rather than distribute — both when written directly
+        // and when a union alias lands inside an intersection at expansion. Never a silent miscompile.
+        // The full messages are asserted (each differs) so a reworded / reordered diagnostic is caught.
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {} interface C {}\n";
+
+        $directly = ['C.xphp' => $header . "type Bad = (A | B) & C;\nfunction f(Bad \$x): int { return 1; }\n"];
+        $directlyMessage = 'has a body that would require distribution: a union nested inside an '
+            . 'intersection (`(A|B)&C`) is not supported. Rewrite it in disjunctive normal form '
+            . '(`(A&C)|(B&C)`), or introduce a named type for the union.';
+        self::assertRejected($this->check($directly), XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION, $directlyMessage);
+        $this->assertCompileThrows($directly, $directlyMessage);
+
+        $expansion = ['C.xphp' => $header . "type U = A | B;\ntype Bad = U & C;\nfunction f(Bad \$x): int { return 1; }\n"];
+        $expansionMessage = 'has a body that would require distribution: a member of an intersection '
+            . 'expands to a union. Rewrite it in disjunctive normal form, or introduce a named type '
+            . 'for the union.';
+        self::assertRejected($this->check($expansion), XphpSourceParser::CODE_ALIAS_COMPOUND_NEEDS_DISTRIBUTION, $expansionMessage);
+        $this->assertCompileThrows($expansion, $expansionMessage);
+    }
+
+    public function testScalarInIntersectionIsRejectedInBothModes(): void
+    {
+        // An intersection with a scalar / built-in member is a PHP load-time fatal (`int&B`), so it is
+        // rejected — including when the scalar arrives only via a type-parameter substitution
+        // (`Pair<int>`), which is why the check runs at emit time, after substitution.
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface Countable2 {}\n";
+        foreach ([
+            'literal-scalar' => "type Bad = int & A;\nfunction f(Bad \$x): int { return 1; }",
+            'substituted-scalar' => "type Pair<T> = T & Countable2;\nfunction f(Pair<int> \$x): int { return 1; }",
+        ] as $body) {
+            $files = ['C.xphp' => $header . $body . "\n"];
+            $message = 'is a scalar or built-in type; only class-like types can be intersected.';
+            self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_SCALAR_IN_INTERSECTION, $message);
+            $this->assertCompileThrows($files, $message);
+        }
+    }
+
+    public function testIntersectionAliasBoundIsAllOf(): void
+    {
+        // An intersection alias used as a type-parameter bound is all-of (`T : A&B`): an argument
+        // implementing both members is accepted, one implementing only a single member is rejected —
+        // not flattened to an any-of union bound (which would unsoundly accept the single-member type).
+        $header = "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {}\ntype Both = A & B;\nclass Box<T : Both> { public function __construct(public T \$v) {} }\nclass AB implements A, B {}\nclass OnlyA implements A {}\n";
+        $ok = ['C.xphp' => $header . "function f(): int { \$b = new Box::<AB>(new AB()); return 1; }\n"];
+        self::assertFalse($this->check($ok)->hasErrors(), 'an argument implementing every member of the intersection bound compiles');
+
+        $bad = ['C.xphp' => $header . "function f(): int { \$b = new Box::<OnlyA>(new OnlyA()); return 1; }\n"];
+        self::assertRejected($this->check($bad), 'xphp.bound_violation', 'does not satisfy');
+        $this->assertCompileThrowsRuntime($bad, 'does not satisfy');
+    }
+
     public function testCompoundAliasInNonSlotPositionsAreRejectedInBothModes(): void
     {
         // A union alias is representable only as the WHOLE type of a param / property / return /
@@ -189,6 +471,8 @@ final class TypeAliasIntegrationTest extends TestCase
             'extends' => "type Num = int|string;\nclass C extends Num {}",
             'nested-in-nullable' => "type Num = int|string;\nfunction f(?Num \$x): int { return 1; }",
             'nested-in-union' => "class Extra {}\ntype Num = int|string;\nfunction f(Num|Extra \$x): int { return 1; }",
+            'intersection-generic-arg' => "class Bag<T> {}\ninterface A {} interface B {}\ntype Both = A & B;\nfunction f(Bag<Both> \$x): int { return 1; }",
+            'intersection-nested' => "interface A {} interface B {} class Extra {}\ntype Both = A & B;\nfunction f(Both|Extra \$x): int { return 1; }",
         ] as $body) {
             $files = ['C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\n{$body}\n"];
             self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_COMPOUND_IN_NON_SLOT, $needle);
@@ -520,16 +804,35 @@ final class TypeAliasIntegrationTest extends TestCase
 
     public function testUnsupportedAliasBodyIsRejectedInBothModes(): void
     {
-        // An intersection (and DNF / closure) body is recognized (stripped) but rejected with a clear
-        // diagnostic — not a raw PHP parse error. (Union and nullable bodies ARE supported — see the
-        // union tests.) The full message is asserted so a reworded or truncated diagnostic is caught.
+        // The remaining unsupported bodies are recognized (stripped) but rejected with a clear
+        // diagnostic — not a raw PHP parse error. (Single-head, union, nullable, intersection, DNF, and
+        // closure-signature bodies ARE supported — see their tests.) The full message is asserted so a
+        // reworded or truncated diagnostic is caught.
+        $message = 'single class or generic type, a union, an intersection, a nullable, a DNF, or a '
+            . 'closure signature. Use a bare type';
+        foreach ([
+            // A body the bound-expression reader cannot read (leads with `|`) — declined, not crashed.
+            'malformed' => 'type Bad = |A;',
+            // A complete closure signature followed by a trailing token — the span must cover the WHOLE
+            // body, so trailing junk declines rather than silently dropping it.
+            'closure-trailing-token' => 'type Bad = Closure(int) A;',
+        ] as $body) {
+            $files = ['C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {}\n{$body}\nfunction f(): int { return 1; }\n"];
+            self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $message);
+            $this->assertCompileThrows($files, $message);
+        }
+    }
+
+    public function testACyclicIntersectionAliasIsRejectedAsACycleNotAnOverflow(): void
+    {
+        // A cycle THROUGH an intersection member — `type X = Y & A; type Y = X & B` — must be caught by
+        // the accumulated visited-set as an xphp.alias_cycle, not recurse without bound. This pins the
+        // visited threading in the multi-leaf (intersection) expansion path.
         $files = [
-            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass A {} class B {}\ntype Both = A & B;\nfunction f(): Both { return new A(); }\n",
+            'C.xphp' => "<?php\ndeclare(strict_types=1);\nnamespace App;\ninterface A {} interface B {}\ntype X = Y & A;\ntype Y = X & B;\nfunction f(X \$v): int { return 1; }\n",
         ];
-        $message = 'single class or generic type, a union, or a nullable (intersection, DNF, and '
-            . 'closure-signature bodies are not supported). Use a bare type';
-        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_UNSUPPORTED_BODY, $message);
-        $this->assertCompileThrows($files, $message);
+        self::assertRejected($this->check($files), XphpSourceParser::CODE_ALIAS_CYCLE, 'in terms of itself');
+        $this->assertCompileThrows($files, 'in terms of itself');
     }
 
     public function testNoSpaceAliasBodyExpands(): void

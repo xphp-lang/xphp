@@ -52,7 +52,8 @@ timeline
                 : marker interface per template
         Type aliases
                 : compile-time substitution, file-local
-                : single-head union and nullable bodies
+                : single-head union nullable intersection and DNF bodies
+                : closure-signature bodies erased to Closure
                 : parameter defaults and bounds
         Developer experience
                 : RFC-aligned call-site syntax
@@ -237,19 +238,27 @@ upcoming one.
 - `type Name<A, B> = Body;` and `type Name = Body;` — a compile-time
   substitution expanded into its body before specialization, with no
   runtime existence (the emitted PHP never mentions the alias).
-- Single-head, **union** (`int|string`), and **nullable** (`?Box`) bodies.
-  A single head expands in every type position (incl. as a generic
-  argument, `Bag<UserId>`); a union/nullable expands as the whole type of a
-  slot. Composes with nested and concrete-instantiation aliases.
+- Single-head, **union** (`int|string`), **nullable** (`?Box`),
+  **intersection** (`A & B`), **DNF** (`(A & B) | C`), and
+  **closure-signature** (`Closure(int): bool`, generic `Mapper<T, R> =
+  Closure(T): R`, and as a nullable / union / intersection member) bodies. A
+  single head expands in every type position (incl. as a generic argument,
+  `Bag<UserId>`); a compound (union / nullable / intersection / DNF / closure
+  signature) expands as the whole type of a slot — a closure signature erasing
+  to a bare `\Closure` carrying the signature for conformance, grounded per
+  specialization. Composes with nested and concrete-instantiation aliases;
+  redundant intersection/union members are deduped, and at most one closure may
+  appear in a body (every one erases to `\Closure`).
 - Parameters carry **defaults** (`type P<A, B = A>` — a use may omit
   trailing defaulted arguments) and **bounds** (`type B<T : Named>` — an
   argument that violates the bound is a compile error), like a generic class.
+  A union/intersection alias as a bound is any-of / all-of.
 - **File-local by design**: an alias is visible only in the file that
   declares it (like a `use` alias); declare it per file to share it.
-- Cyclic, arity-mismatched, class-colliding, duplicate, unsupported-body
-  (intersection / DNF / closure), compound-in-non-slot, and
-  bound-violating uses are loud compile errors in both `compile` and
-  `check`, each with a stable code.
+- Cyclic, arity-mismatched, class-colliding, duplicate, unsupported-body (two
+  closures in one body), compound-in-non-slot, distribution-requiring
+  (`(A|B)&C`), scalar-in-intersection, and bound-violating uses are loud
+  compile errors in both `compile` and `check`, each with a stable code.
 - See the [type aliases](syntax/type-aliases.md) tour and the
   [body / position limits caveat](caveats.md#type-alias-body-and-position-limits).
 

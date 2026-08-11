@@ -1,0 +1,67 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Clo;
+
+// A closure-signature body erases to a bare `\Closure` in the emitted slot; the signature rides the
+// alias for conformance checking. A generic alias grounds its signature per use.
+type Handler = Closure(int $x): bool;
+type Mapper<T, R> = Closure(T): R;
+// A single-head alias to a closure-signature alias must itself behave as that signature (it must
+// emit `\Closure`, not un-loadable / untyped PHP).
+type Aliased = Handler;
+// A closure signature as a MEMBER of a compound body: a nullable closure erases to `?\Closure`.
+type MaybeCheck = ?Closure(int $x): bool;
+
+class Registry
+{
+    public Handler $check;
+    public Aliased $alias;
+    public MaybeCheck $maybe;
+
+    public function __construct(Handler $check, Aliased $alias, MaybeCheck $maybe)
+    {
+        $this->check = $check;
+        $this->alias = $alias;
+        $this->maybe = $maybe;
+    }
+
+    public function viaMaybe(int $n): bool
+    {
+        return ($this->maybe)($n);
+    }
+
+    public function run(int $n): bool
+    {
+        return ($this->check)($n);
+    }
+
+    public function viaAlias(int $n): bool
+    {
+        return ($this->alias)($n);
+    }
+
+    public function map(Mapper<int, string> $f, int $n): string
+    {
+        return $f($n);
+    }
+}
+
+$reg = new Registry(fn(int $x): bool => $x > 0, fn(int $x): bool => $x < 0, fn(int $x): bool => $x === 0);
+$ok = $reg->run(5);
+$aliasOk = $reg->viaAlias(-2);
+$maybeOk = $reg->viaMaybe(0);
+$mapped = $reg->map(fn(int $x): string => "n{$x}", 3);
+
+// The `MaybeCheck` (`?Closure(int): bool`) slot erases to `?\Closure`, so null is a legal value — the
+// constructor accepts it and the file loads. xphp injects NO null-guard around the erased slot, so
+// invoking a null-valued slot throws PHP's own "not callable" Error, exactly as a hand-written
+// `?\Closure` would. Capturing the message proves the null-callability check is present and un-suppressed.
+$nullReg = new Registry(fn(int $x): bool => $x > 0, fn(int $x): bool => $x < 0, null);
+$nullCallError = null;
+try {
+    $nullReg->viaMaybe(0);
+} catch (\Error $e) {
+    $nullCallError = $e->getMessage();
+}

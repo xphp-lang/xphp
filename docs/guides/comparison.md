@@ -39,7 +39,7 @@ than erasure can.
 | Reified T at runtime                     | ✅ (via AOT)            | ❌ (erased)      | ❌               | ⚠️ (`inline fun` only — can't reify a class type parameter) | ✅ (monomorphic)      |
 | `instanceof OriginalFqn` works           | ✅                      | ✅ (trivially: only one class exists at runtime) | n/a | n/a | n/a |
 | Real subtype edges between specializations | ⚠️ (common case works; some covariant upcasts are unschedulable or may not converge) | ❌ (erased) | n/a | n/a | n/a |
-| Generic type aliases                     | ⚠️ (compile-time substitution; single-head / union / nullable bodies, parameter defaults + bounds, aliases usable as bounds; aliases are file-local, and intersection / DNF / closure-signature bodies aren't supported) | ❌ | ✅ | ✅ | ✅ |
+| Generic type aliases                     | ⚠️ (compile-time substitution; single-head / union / nullable / intersection / DNF / closure-signature bodies — a closure may be a nullable / union / intersection member too — parameter defaults + bounds, aliases usable as bounds; aliases are file-local, and a body may hold at most one closure) | ❌ | ✅ | ✅ | ✅ |
 | Wildcard / `*` (use-site existential)    | ⚠️ partial (via marker) | n/a (erased)     | ⚠️ via `any` (bivariant escape hatch — loses type discipline) | ✅ (`Box<*>`) | n/a |
 | Use-site variance                        | ❌                      | ❌               | ❌               | ✅            | n/a                   |
 | Variadic generics                        | ❌                      | ❌               | ✅               | ❌            | ⚠️ tuples              |
@@ -193,8 +193,10 @@ type Pair<A, B> = array{first: A, second: B};
 ```
 
 Substitution at parse time; no new nominal types. Composes naturally
-with PHP's existing union types. On the roadmap as a [Generic surface
-item](../roadmap.md).
+with PHP's existing union types. **Shipped** — single-head, union,
+nullable, intersection, DNF, and closure-signature bodies, file-local,
+with parameter defaults and bounds. See the
+[type aliases tour](../syntax/type-aliases.md).
 
 ### Wildcard / `*` (use-site existential)
 
